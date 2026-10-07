@@ -165,6 +165,12 @@ const STARTUP_SLACK_MS = 30_000;
  * process. Independently stop a stretch that lasts this many times its CPU budget in wall time.
  */
 const WALL_BACKSTOP_FACTOR = 15;
+/**
+ * The CPU budget, in multiples of guardMs, of the engine's own work around a snippet run: building its fresh
+ * realm and releasing finished ones (A-244). It is metered apart from the snippet, so a Bun GC or setup tail that
+ * lands there is not charged to user code, and it stays bounded.
+ */
+const SETUP_BUDGET_FACTOR = 3;
 /** How often the snippet process checks its worker for a stuck run. */
 const WATCH_MS = 50;
 /** How often the snippet process checks that main is still its parent. A main killed mid-start leaves it blocked opening a FIFO nobody will open. */
@@ -188,7 +194,7 @@ const { serialize, deserialize } = require('node:v8');
 const { types } = require('node:util');
 const { promiseHooks } = require('node:v8');
 const { createContext, Script } = require('node:vm');
-const { inFd, outFd, sab, wallFactor, setup, keep, internal, hostFailure, maxDepth, texts } = workerData;
+const { inFd, outFd, sab, wallFactor, setupFactor, setup, keep, internal, hostFailure, maxDepth, texts } = workerData;
 /**
  * [token, waitMs], read by the supervisor's watchdog. The token is odd while this worker is busy and
  * goes up by one on each change. The watchdog stops a busy stretch by swapping the token for -1, so
@@ -213,6 +219,12 @@ function busy(on) {
   const token = Atomics.load(state, 0);
   // Lost to the watchdog: it is reporting this stretch and ending the process.
   if (Atomics.compareExchange(state, 0, token, token + 1) !== token) for (;;) Atomics.wait(state, 0, -1);
+}
+/** Ends the current busy stretch and starts a new one metered against waitMs, so the watchdog's CPU count starts over. */
+function restretch(waitMs) {
+  Atomics.store(state, 1, waitMs);
+  busy(false);
+  busy(true);
 }
 /** One frame: a 4-byte little-endian length, then the v8-serialized message. Built whole before any write. */
 function sendFrame(body) {
@@ -457,6 +469,7 @@ function compile(req) {
   // Evaluate in a throwaway context: a source that closes the parenthesis and adds
   // statements runs there, is rejected, and leaves nothing behind.
   const scratch = newRealm();
+  restretch(req.guardMs);
   const created = [];
   let value;
   try {
@@ -485,6 +498,7 @@ function run(req) {
   // A fresh context per run. The source is exactly one function expression, so evaluating it
   // here only creates the function.
   const { context, realm } = newRealm();
+  restretch(req.guardMs);
   const fn = script.runInContext(context, { timeout: req.guardMs * wallFactor });
   let calls = 0;
   let active = true;
@@ -591,8 +605,9 @@ function run(req) {
 /** Answers one compile or run request. Called from the main loop, or nested while a run waits on a ctx call. */
 function serve(req, nested) {
   const outerWait = Atomics.load(state, 1);
-  // The watchdog meters CPU time against guardMs for both. A compile's vm timeout is only a wall backstop.
-  Atomics.store(state, 1, req.guardMs);
+  // The engine's realm setup runs on its own budget; compile and run restart the stretch at guardMs before any
+  // snippet source is evaluated (A-244). The watchdog meters CPU time; a compile's vm timeout is only a wall backstop.
+  Atomics.store(state, 1, req.guardMs * setupFactor);
   busy(true);
   let out;
   try {
@@ -600,8 +615,12 @@ function serve(req, nested) {
   } catch (e) {
     out = { t: 'runtime_error', message: describeThrown(e) };
   }
-  // Nested requests resume a suspended realm; finish its keepalive only after the outer request ends.
-  if (!nested && releaseWeakRefs !== null) releaseWeakRefs();
+  // Nested requests resume a suspended realm; finish its keepalive only after the outer request ends,
+  // on the engine's budget rather than the snippet's.
+  if (!nested && releaseWeakRefs !== null) {
+    restretch(req.guardMs * setupFactor);
+    releaseWeakRefs();
+  }
   Atomics.store(state, 1, outerWait);
   busy(false);
   const rid = req.rid;
@@ -799,6 +818,7 @@ function startLane(heap: Heap, key: string): Lane {
       code: SNIPPET_WORKER,
       data: {
         wallFactor: WALL_BACKSTOP_FACTOR,
+        setupFactor: SETUP_BUDGET_FACTOR,
         setup: SETUP,
         keep: [...SANDBOX_GLOBALS],
         internal: ENGINE_CALL_SLOT,
