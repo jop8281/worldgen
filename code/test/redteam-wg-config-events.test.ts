@@ -131,6 +131,7 @@ const STOPS: StopReason[] = [
   { kind: 'backtrack_limit', step: 'seed', backtracks: 2 },
   { kind: 'budget_exhausted', spentUsd: 5.25, limitUsd: 5 },
   { kind: 'spend_cap', cap: 'maxTotalUsd', capUsd: 100, spentUsd: 100.5, day: '2026-10-07' },
+  { kind: 'cost_unenforceable', cap: 'maxTotalUsd', claim: 'e1467cfb' },
   { kind: 'time_exhausted', minutes: 30 },
   { kind: 'stage_time_exhausted', step: 'workflow', shareMs: 90_000 },
   { kind: 'model_error', message: 'overloaded' },
@@ -199,7 +200,7 @@ describe('redteam events: JSONL', () => {
       run_started: true, step_started: true, step_skipped: true, attempt: true, backtracked: true, advice: true, call_refused: true, stall_retry: true, call_cancelled: true, step_finished: true, fidelity: true, run_finished: true,
     };
     const stops: Record<StopReason['kind'], true> = {
-      input_rejected: true, attempts_exhausted: true, no_progress: true, backtrack_limit: true, budget_exhausted: true, spend_cap: true, time_exhausted: true, stage_time_exhausted: true, model_error: true, judge_error: true, infra_unavailable: true, transport_stalled: true, cancelled: true,
+      input_rejected: true, attempts_exhausted: true, no_progress: true, backtrack_limit: true, budget_exhausted: true, spend_cap: true, cost_unenforceable: true, time_exhausted: true, stage_time_exhausted: true, model_error: true, judge_error: true, infra_unavailable: true, transport_stalled: true, cancelled: true,
     };
     const outcomes: Record<AttemptOutcome['kind'], true> = { accepted: true, rejected: true, invalid_output: true, share_expired: true, stalled: true, model_error: true, judge_error: true, infra_unavailable: true, judge_expired: true };
     assert.deepEqual(Object.keys(tags).length, 12);
