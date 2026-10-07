@@ -120,7 +120,7 @@ function summarize(e: RunEvent): string {
     case 'call_refused':
       return `${head} ${e.step} call refused: ${describeStop(e.reason)}; estimated $${e.estimateUsd.toFixed(4)} and ${Math.round(e.estimateMs / 1000)}s with ${Math.round(e.remainingMs / 1000)}s left`;
     case 'call_cancelled':
-      return `${head} ${e.step} call cancelled at run deadline: ${e.ms}ms, ${e.costUsd === null ? 'cost unknown' : `$${e.costUsd.toFixed(4)}`}`;
+      return `${head} ${e.step} call cancelled: ${e.ms}ms, ${e.costUsd === null ? 'cost unknown' : `$${e.costUsd.toFixed(4)}`}`;
     case 'advice':
       return `${head} ${e.step} advice: ${e.text}`;
     case 'stall_retry':
