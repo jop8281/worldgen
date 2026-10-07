@@ -1,0 +1,1184 @@
+format: 1
+meta:
+  name: gen_refunds
+  description: A deterministic Stripe-style payments sandbox centred on refunds. Seeded charges can be refunded in full or in part through create_refund. Refunds follow Stripe's status lifecycle (pending, requires_action, succeeded, failed, canceled). Every refund keeps the parent charge's amount_refunded and refunded flag in step. Agents can list, retrieve, create, tag with metadata and cancel refunds, and read charges to find what to refund. Jobs settle pending refunds and expire stale requires_action ones. The world keeps Stripe's refund rules, such as the unrefunded-amount cap, the disputed-charge refusal, cancel only from requires_action, and merge-style metadata updates. It keeps Stripe's list envelope with has_more and starting_after / ending_before paging, but takes JSON bodies instead of form encoding.
+  resembles: Stripe API (Refunds and Charges), version 2024-06-20
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-01-05T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: stripe
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        type: invalid_request_error
+        code: $code
+        message: $message
+entities:
+  charge:
+    description: A card, wallet or bank payment that can be refunded. Seed-only. amount_refunded and refunded are kept in step with the charge's pending, requires_action and succeeded refunds by the refund actions and jobs.
+    idPrefix: ch
+    fields:
+      amount:
+        type: money
+        description: Amount charged in cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 1
+      amount_captured:
+        type: money
+        description: Amount captured in cents. 0 when captured is false.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+        default: 0
+      amount_refunded:
+        type: money
+        description: Sum of the charge's pending, requires_action and succeeded refunds.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+      refunded:
+        type: bool
+        description: True when amount_refunded equals amount_captured and is above 0.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      captured:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+      paid:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+      status:
+        type: enum
+        description: Charge status. Only a captured, succeeded charge can be refunded.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - succeeded
+          - pending
+          - failed
+      payment_method_type:
+        type: enum
+        description: "Decides the status a new refund starts in: card succeeds at once, wallet is pending, bank_transfer is requires_action."
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - card
+          - wallet
+          - bank_transfer
+      disputed:
+        type: bool
+        description: A disputed charge refuses new refunds.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+      customer:
+        type: string
+        description: Customer id text such as cus_...
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 60
+      receipt_email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 200
+        format: email
+      description:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 300
+      payment_intent:
+        type: string
+        description: Payment intent id text such as pi_...
+        required: false
+        nullable: true
+        unique: true
+        readonly: false
+        maxLength: 60
+      currency:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - usd
+        default: usd
+      livemode:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+      failure_code:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 80
+      failure_message:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 300
+      metadata:
+        type: text
+        description: JSON object string of key/value pairs.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        default: "{}"
+  refund:
+    description: A full or partial return of money on one charge. Walks Stripe's refund lifecycle. Created by create_refund, cancelled by cancel_refund, settled or expired by jobs.
+    idPrefix: re
+    fields:
+      charge:
+        type: ref
+        description: The charge being refunded.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: charge
+        onDelete: restrict
+      payment_intent:
+        type: string
+        description: Copied from the charge.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        maxLength: 60
+      amount:
+        type: money
+        description: Refund amount in cents. Never above the charge's unrefunded amount.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 1
+      currency:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        values:
+          - usd
+        default: usd
+      reason:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        values:
+          - duplicate
+          - expired_uncaptured_charge
+          - fraudulent
+          - requested_by_customer
+      status:
+        type: state
+        description: Refund lifecycle. succeeded, failed and canceled are final.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - pending
+          - requires_action
+          - succeeded
+          - failed
+          - canceled
+        initial: pending
+        transitions:
+          pending:
+            - succeeded
+            - failed
+            - requires_action
+            - canceled
+          requires_action:
+            - succeeded
+            - failed
+            - canceled
+          succeeded: []
+          failed: []
+          canceled: []
+      failure_reason:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        values:
+          - lost_or_stolen_card
+          - expired_or_canceled_card
+          - charge_for_pending_refund_disputed
+          - insufficient_funds
+          - declined
+          - merchant_request
+          - unknown
+      receipt_number:
+        type: string
+        description: Set when status becomes succeeded.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        maxLength: 40
+      metadata:
+        type: text
+        description: JSON object string. Written only by create_refund and update_refund, which merge keys.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        default: "{}"
+routes:
+  list_refunds:
+    op: list
+    entity: refund
+    filters:
+      - charge
+    search: []
+    sort: []
+    pageSize: 10
+    method: GET
+    path: /v1/refunds
+    description: List refunds with the charge filter, limit (default 10, max 100) and starting_after cursor.
+  get_refund:
+    op: get
+    entity: refund
+    method: GET
+    path: /v1/refunds/{id}
+    description: Retrieve one refund.
+  list_charges:
+    op: list
+    entity: charge
+    filters:
+      - customer
+      - payment_intent
+      - status
+    search:
+      - receipt_email
+      - description
+    sort: []
+    pageSize: 10
+    method: GET
+    path: /v1/charges
+    description: List charges so an agent can find what to refund.
+  get_charge:
+    op: get
+    entity: charge
+    method: GET
+    path: /v1/charges/{id}
+    description: Retrieve one charge with its amount_captured, amount_refunded and refunded values.
+actions:
+  create_refund:
+    method: POST
+    path: /v1/refunds
+    description: Create a refund on a charge. Give charge or payment_intent. amount defaults to the whole unrefunded balance. A card charge refunds to succeeded at once, a wallet charge to pending and a bank_transfer charge to requires_action. metadata is a JSON object string of string values.
+    input:
+      charge:
+        type: string
+        description: Id of the charge to refund, such as ch_0001.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+      payment_intent:
+        type: string
+        description: Payment intent of the charge to refund. Must match charge when both are given.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+      amount:
+        type: int
+        description: Amount in cents, at least 1. Defaults to the unrefunded balance of the charge.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      reason:
+        type: enum
+        description: Why the refund is made.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - duplicate
+          - expired_uncaptured_charge
+          - fraudulent
+          - requested_by_customer
+      metadata:
+        type: text
+        description: JSON object string of string values, for example {"order_id":"6735"}.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        const q = String.fromCharCode(39);
+        const usd = (n) => '$' + (n / 100).toFixed(2);
+        const txt = (v) => (v === undefined || v === null ? '' : String(v).trim());
+        const parseMeta = (raw) => {
+          if (raw === undefined || raw === null) return {};
+          let v = raw;
+          if (typeof raw === 'string') {
+            if (raw.trim() === '') return {};
+            try { v = JSON.parse(raw); } catch (e) { v = undefined; }
+            if (v === undefined) ctx.fail(400, 'parameter_invalid', 'metadata must be a JSON object string of string values.');
+          }
+          if (v === null || typeof v !== 'object' || Array.isArray(v)) ctx.fail(400, 'parameter_invalid', 'metadata must be a JSON object of string values.');
+          for (const k of Object.keys(v)) {
+            if (typeof v[k] !== 'string') ctx.fail(400, 'parameter_invalid', 'metadata value for key ' + k + ' must be a string.');
+          }
+          return v;
+        };
+        const chId = txt(b.charge);
+        const piId = txt(b.payment_intent);
+        if (chId === '' && piId === '') ctx.fail(400, 'parameter_missing', 'Must provide either charge or payment_intent.');
+        const meta = parseMeta(b.metadata);
+        let ch = null;
+        if (chId !== '') {
+          ch = ctx.db.get('charge', chId);
+          if (ch === null) ctx.fail(400, 'resource_missing', 'No such charge: ' + q + chId + q);
+        }
+        if (piId !== '') {
+          const hit = ctx.db.list('charge', { where: { payment_intent: piId } })[0];
+          if (!hit) ctx.fail(400, 'resource_missing', 'No such payment_intent: ' + q + piId + q);
+          if (ch !== null && ch.id !== hit.id) ctx.fail(400, 'charge_payment_intent_mismatch', 'The payment_intent ' + piId + ' does not belong to charge ' + ch.id + '.');
+          ch = hit;
+        }
+        if (!ch.captured || ch.status !== 'succeeded') ctx.fail(400, 'charge_not_refundable', 'Charge ' + ch.id + ' has not been captured or did not succeed, so it cannot be refunded.');
+        if (ch.disputed) ctx.fail(400, 'charge_disputed', 'Charge ' + ch.id + ' has been disputed and cannot be refunded.');
+        const balance = ch.amount_captured - ch.amount_refunded;
+        if (balance <= 0) ctx.fail(400, 'charge_already_refunded', 'Charge ' + ch.id + ' has already been refunded.');
+        let amount = balance;
+        if (b.amount !== undefined && b.amount !== null) {
+          amount = b.amount;
+          if (!Number.isInteger(amount) || amount < 1) ctx.fail(400, 'parameter_invalid', 'amount must be an integer of at least 1.');
+          if (amount > balance) ctx.fail(400, 'amount_too_large', 'Refund amount (' + usd(amount) + ') is greater than unrefunded amount on charge (' + usd(balance) + ').');
+        }
+        const reason = b.reason === undefined ? null : b.reason;
+        const created = ctx.db.create('refund', {
+          charge: ch.id,
+          payment_intent: ch.payment_intent === undefined ? null : ch.payment_intent,
+          amount,
+          currency: 'usd',
+          reason,
+          metadata: JSON.stringify(meta),
+        });
+        let out = created;
+        if (ch.payment_method_type === 'card') out = ctx.db.update('refund', created.id, { status: 'succeeded', receipt_number: 'rcpt_' + created.id });
+        else if (ch.payment_method_type === 'bank_transfer') out = ctx.db.update('refund', created.id, { status: 'requires_action' });
+        const total = ch.amount_refunded + amount;
+        ctx.db.update('charge', ch.id, { amount_refunded: total, refunded: total === ch.amount_captured && total > 0 });
+        return { status: 200, body: out };
+      }
+  update_refund:
+    method: POST
+    path: /v1/refunds/{id}
+    description: Merge metadata keys into a refund. A key set to an empty string is removed. Without metadata nothing changes. Works on a refund in any status and changes nothing else.
+    input:
+      metadata:
+        type: text
+        description: JSON object string of string values to merge, for example {"ticket_id":"ZD-4821"}. An empty string value removes that key.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const q = String.fromCharCode(39);
+        const r = ctx.db.get('refund', ctx.params.id);
+        if (r === null) ctx.fail(404, 'resource_missing', 'No such refund: ' + q + ctx.params.id + q);
+        const raw = ctx.body.metadata;
+              if (raw === undefined || raw === null) return { status: 200, body: r };
+        let v = raw;
+        if (typeof raw === 'string') {
+          if (raw.trim() === '') ctx.fail(400, 'parameter_invalid', 'metadata must be a JSON object string of string values.');
+          try { v = JSON.parse(raw); } catch (e) { v = undefined; }
+          if (v === undefined) ctx.fail(400, 'parameter_invalid', 'metadata must be a JSON object string of string values.');
+        }
+        if (v === null || typeof v !== 'object' || Array.isArray(v)) ctx.fail(400, 'parameter_invalid', 'metadata must be a JSON object of string values.');
+        for (const k of Object.keys(v)) {
+          if (typeof v[k] !== 'string') ctx.fail(400, 'parameter_invalid', 'metadata value for key ' + k + ' must be a string.');
+        }
+        let cur = {};
+        try {
+          const p = JSON.parse(r.metadata === null || r.metadata === undefined ? '{}' : r.metadata);
+          if (p !== null && typeof p === 'object' && !Array.isArray(p)) cur = p;
+        } catch (e) { cur = {}; }
+        const merged = Object.assign({}, cur);
+        for (const k of Object.keys(v)) {
+          if (v[k] === '') delete merged[k];
+          else merged[k] = v[k];
+        }
+        const out = ctx.db.update('refund', r.id, { metadata: JSON.stringify(merged) });
+        return { status: 200, body: out };
+      }
+  cancel_refund:
+    method: POST
+    path: /v1/refunds/{id}/cancel
+    description: Cancel a refund. Only a refund in requires_action can be canceled. Its amount goes back to the charge's unrefunded balance.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const q = String.fromCharCode(39);
+        const r = ctx.db.get('refund', ctx.params.id);
+        if (r === null) ctx.fail(404, 'resource_missing', 'No such refund: ' + q + ctx.params.id + q);
+        if (r.status !== 'requires_action') ctx.fail(400, 'refund_not_cancelable', 'Refund ' + r.id + ' cannot be canceled because its status is ' + r.status + '. Only refunds with status requires_action can be canceled.');
+        const out = ctx.db.update('refund', r.id, { status: 'canceled' });
+        const ch = ctx.db.get('charge', r.charge);
+        const total = Math.max(0, ch.amount_refunded - r.amount);
+        ctx.db.update('charge', ch.id, { amount_refunded: total, refunded: total === ch.amount_captured && total > 0 });
+        return { status: 200, body: out };
+      }
+jobs:
+  settle_pending_refunds:
+    description: Every hour. A pending refund created 6 or more hours ago succeeds and gets a receipt number. If its charge is disputed by then, it fails with charge_for_pending_refund_disputed and gives its amount back to the charge.
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const r of ctx.db.list('refund', { where: { status: 'pending' } })) {
+          if (ctx.time.minutesBetween(r.created_at, now) < 360) continue;
+          const ch = ctx.db.get('charge', r.charge);
+          if (ch.disputed) {
+            ctx.db.update('refund', r.id, { status: 'failed', failure_reason: 'charge_for_pending_refund_disputed' });
+            const total = Math.max(0, ch.amount_refunded - r.amount);
+            ctx.db.update('charge', ch.id, { amount_refunded: total, refunded: total === ch.amount_captured && total > 0 });
+          } else {
+            ctx.db.update('refund', r.id, { status: 'succeeded', receipt_number: 'rcpt_' + r.id });
+            ctx.db.update('charge', ch.id, { refunded: ch.amount_refunded === ch.amount_captured && ch.amount_refunded > 0 });
+          }
+        }
+      }
+  expire_requires_action:
+    description: Every day. A refund left in requires_action for more than 14 days fails with expired_or_canceled_card and gives its amount back to the charge.
+    every: 1d
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const r of ctx.db.list('refund', { where: { status: 'requires_action' } })) {
+          if (ctx.time.minutesBetween(r.created_at, now) <= 14 * 24 * 60) continue;
+          ctx.db.update('refund', r.id, { status: 'failed', failure_reason: 'expired_or_canceled_card' });
+          const ch = ctx.db.get('charge', r.charge);
+          const total = Math.max(0, ch.amount_refunded - r.amount);
+          ctx.db.update('charge', ch.id, { amount_refunded: total, refunded: total === ch.amount_captured && total > 0 });
+        }
+      }
+fixtures: {}
+seed:
+  charge: |-
+    (ctx) => {
+      const BASE = '2025-01-01T00:00:00.000Z';
+      const X = ctx.time.minutesBetween(BASE, ctx.now());
+      const iso = (ago) => (ago === X ? BASE : ctx.time.plus(BASE, (X - ago) + 'm'));
+      const PLAN = {
+        3:[[50,'s',3000]], 4:[[25,'s'],[20,'c'],[15,'s']], 8:[[35,'s',2400]], 10:[[60,'s',100,{order_id:'6790',channel:'web'}]], 12:[[50,'s',20]],
+        13:[[40,'p',1]], 14:[[30,'r',288],[30,'r',30]], 18:[[40,'p',2]], 22:[[50,'s'],[25,'s']], 23:[[40,'p',2]], 24:[[30,'r',264],[25,'c']],
+        27:[[25,'s'],[25,'s']], 28:[[40,'p',3]], 30:[[50,'f']], 31:[[25,'s'],[25,'f']], 32:[[40,'s'],[20,'s']], 33:[[40,'p',3]],
+        34:[[20,'s'],[20,'r',252],[20,'r',276],[15,'c']], 35:[[50,'s'],[-1,'s']], 36:[[30,'s'],[30,'s']], 38:[[40,'p',4]], 40:[[20,'s'],[20,'s']],
+        42:[[60,'s'],[20,'s']], 43:[[40,'p',4]], 44:[[25,'r',300],[25,'r',150],[10,'c']], 45:[[40,'s'],[30,'s']], 46:[[25,'s'],[25,'s']],
+        48:[[40,'p',5]], 50:[[15,'s'],[15,'s']], 54:[[30,'r',312],[20,'c']], 55:[[50,'s'],[30,'s']], 56:[[30,'s'],[20,'s']], 57:[[30,'s'],[30,'s']],
+        58:[[40,'p',5]], 63:[[40,'s'],[30,'f']], 64:[[20,'s'],[20,'r',324],[20,'r',70],[10,'c']], 68:[[50,'s'],[50,'f']], 73:[[50,'f']],
+        74:[[40,'r',200]], 78:[[35,'s'],[35,'f']]
+      };
+      const amounts = (cap, parts) => {
+        let sum = 0;
+        for (const p of parts) if (p[0] >= 0 && 'spr'.includes(p[1])) sum += Math.floor(cap * p[0] / 100);
+        return parts.map((p) => (p[0] >= 0 ? Math.floor(cap * p[0] / 100) : cap - sum));
+      };
+      const ANCH = {
+        0: { n: 'Maya Chen', e: 'maya.chen@brightwave.example', c: 'cus_Qm4TzK81Vb2L', d: 'Annual plan - Brightwave Pro', a: 48000, o: '4401' },
+        1: { n: 'Maya Chen', e: 'maya.chen@brightwave.example', c: 'cus_Qm4TzK81Vb2L', d: 'Monthly plan - Brightwave Pro', a: 4900, o: '4402' },
+        6: { n: 'Maya Chen', e: 'maya.chen@brightwave.example', c: 'cus_Qm4TzK81Vb2L', d: 'Monthly plan - Brightwave Pro', a: 4900, o: '4403' },
+        3: { n: 'Daniel Okoye', e: 'daniel.okoye@harborline.example', c: 'cus_Qn8WcD27Xe9P', d: 'Order #5121 - desk lamp', a: 7500, o: '5121' },
+        4: { n: 'Daniel Okoye', e: 'daniel.okoye@harborline.example', c: 'cus_Qn8WcD27Xe9P', d: 'Order #5120 - standing desk', a: 36000, o: '5120' },
+        8: { n: 'Priya Nair', e: 'priya.nair@lumenhq.example', c: 'cus_Qp5NrA63Hf1S', d: 'Order #6741 - studio monitor pair', a: 12900, o: '6741' },
+        10: { n: 'Priya Nair', e: 'priya.nair@lumenhq.example', c: 'cus_Qp5NrA63Hf1S', d: 'Order #6790 - acoustic panel set', a: 8800, o: '6790' },
+        11: { n: 'Priya Nair', e: 'priya.nair@lumenhq.example', c: 'cus_Qp5NrA63Hf1S', d: 'Order #6802 - cable kit', a: 4500, o: '6802' },
+        14: { n: 'Priya Nair', e: 'priya.nair@lumenhq.example', c: 'cus_Qp5NrA63Hf1S', d: 'Order #6815 - audio interface', a: 15000, o: '6815' },
+        12: { n: 'Priya Nayar', e: 'priya.nayar@lumenhq-labs.example', c: 'cus_Qp5NyB07Jk8T', d: 'Order #6791 - acoustic panel set', a: 8800, o: '6791' }
+      };
+      const firsts = ['Elena','Tomas','Hannah','Rafael','Chloe','Marcus','Aiko','Samuel','Nadia','Oliver','Leila','Ethan'];
+      const lasts = ['Brandt','Castillo','Nguyen','Fitzgerald','Haddad','Larsen','Mbeki','Ortega','Petrov','Sato','Whitfield','Yamamoto'];
+      const domains = ['northpeak.example','cobaltmail.example','greenfield.example','tidalworks.example','amberlane.example','quillhq.example','stonebridge.example','vantagemail.example'];
+      const items = ['wireless keyboard','USB-C dock','ergonomic chair','noise-cancelling headphones','laptop stand','webcam','monitor arm','desk mat','external SSD','mechanical keyboard','portable charger','smart plug'];
+      const idchars = 'KmPq7XbZ3dRtVn9LcWs2HfYa';
+      const pending = [5, 17, 41, 53, 65, 77];
+      const disputed = [13, 22, 57];
+      const rows = [];
+      for (let i = 0; i < 80; i++) {
+        const failed = i % 10 === 9;
+        const pend = pending.includes(i);
+        const pm = failed ? 'card' : ['card', 'card', 'card', 'wallet', 'bank_transfer'][i % 5];
+        const a = ANCH[i];
+        const j = (i * 7) % 24;
+        const first = firsts[j % 12];
+        const last = lasts[(j * 5 + Math.floor(j / 12)) % 12];
+        const email = first.toLowerCase() + '.' + last.toLowerCase() + '@' + domains[j % 8];
+        let cus = 'cus_Q';
+        for (let k = 0; k < 10; k++) cus += idchars[(j * 3 + k * 5 + k * k) % idchars.length];
+        const amount = a ? a.a : ctx.int(100, 10000) * 5;
+        const order = a ? a.o : String(6100 + i * 2);
+        const desc = a ? a.d : 'Order #' + order + ' - ' + items[i % items.length];
+        const ok = !failed && !pend;
+        const cap = ok ? amount : 0;
+        let ar = 0;
+        if (PLAN[i]) {
+          const am = amounts(cap, PLAN[i]);
+          PLAN[i].forEach((p, k) => { if ('spr'.includes(p[1])) ar += am[k]; });
+        }
+        const ageMin = (150 - Math.floor(i * 1.8)) * 1440 - ((i * 173) % 1000);
+        const when = iso(ageMin);
+        rows.push({
+          amount,
+          amount_captured: cap,
+          amount_refunded: ar,
+          refunded: ar > 0 && ar === cap,
+          captured: ok,
+          paid: ok,
+          status: failed ? 'failed' : pend ? 'pending' : 'succeeded',
+          payment_method_type: pm,
+          disputed: disputed.includes(i),
+          customer: a ? a.c : cus,
+          receipt_email: a ? a.e : (i % 17 === 16 ? null : email),
+          description: desc,
+          payment_intent: 'pi_3Rk' + String(810000 + i * 37) + 'Xq',
+          currency: 'usd',
+          livemode: false,
+          failure_code: failed ? ['card_declined', 'insufficient_funds', 'expired_card'][i % 3] : null,
+          failure_message: failed ? ['Your card was declined.', 'Your card has insufficient funds.', 'Your card has expired.'][i % 3] : null,
+          metadata: JSON.stringify({ order_id: order }),
+          created_at: when,
+          updated_at: when
+        });
+      }
+      return rows;
+    }
+  refund: |-
+    (ctx) => {
+      const BASE = '2025-01-01T00:00:00.000Z';
+      const X = ctx.time.minutesBetween(BASE, ctx.now());
+      const iso = (ago) => (ago === X ? BASE : ctx.time.plus(BASE, (X - ago) + 'm'));
+      const PLAN = {
+        3:[[50,'s',3000]], 4:[[25,'s'],[20,'c'],[15,'s']], 8:[[35,'s',2400]], 10:[[60,'s',100,{order_id:'6790',channel:'web'}]], 12:[[50,'s',20]],
+        13:[[40,'p',1]], 14:[[30,'r',288],[30,'r',30]], 18:[[40,'p',2]], 22:[[50,'s'],[25,'s']], 23:[[40,'p',2]], 24:[[30,'r',264],[25,'c']],
+        27:[[25,'s'],[25,'s']], 28:[[40,'p',3]], 30:[[50,'f']], 31:[[25,'s'],[25,'f']], 32:[[40,'s'],[20,'s']], 33:[[40,'p',3]],
+        34:[[20,'s'],[20,'r',252],[20,'r',276],[15,'c']], 35:[[50,'s'],[-1,'s']], 36:[[30,'s'],[30,'s']], 38:[[40,'p',4]], 40:[[20,'s'],[20,'s']],
+        42:[[60,'s'],[20,'s']], 43:[[40,'p',4]], 44:[[25,'r',300],[25,'r',150],[10,'c']], 45:[[40,'s'],[30,'s']], 46:[[25,'s'],[25,'s']],
+        48:[[40,'p',5]], 50:[[15,'s'],[15,'s']], 54:[[30,'r',312],[20,'c']], 55:[[50,'s'],[30,'s']], 56:[[30,'s'],[20,'s']], 57:[[30,'s'],[30,'s']],
+        58:[[40,'p',5]], 63:[[40,'s'],[30,'f']], 64:[[20,'s'],[20,'r',324],[20,'r',70],[10,'c']], 68:[[50,'s'],[50,'f']], 73:[[50,'f']],
+        74:[[40,'r',200]], 78:[[35,'s'],[35,'f']]
+      };
+      const amounts = (cap, parts) => {
+        let sum = 0;
+        for (const p of parts) if (p[0] >= 0 && 'spr'.includes(p[1])) sum += Math.floor(cap * p[0] / 100);
+        return parts.map((p) => (p[0] >= 0 ? Math.floor(cap * p[0] / 100) : cap - sum));
+      };
+      const STATUS = { s: 'succeeded', p: 'pending', r: 'requires_action', f: 'failed', c: 'canceled' };
+      const fails = ['expired_or_canceled_card', 'declined', 'insufficient_funds', 'lost_or_stolen_card'];
+      const reasons = ['requested_by_customer', 'requested_by_customer', 'duplicate', 'fraudulent', null];
+      const charges = ctx.rows('charge');
+      const out = [];
+      for (const key of Object.keys(PLAN)) {
+        const i = Number(key);
+        const ch = charges[i];
+        const parts = PLAN[i];
+        const am = amounts(ch.amount_captured, parts);
+        const chAge = X - ctx.time.minutesBetween(BASE, ch.created_at);
+        parts.forEach((p, k) => {
+          const age = p[2] !== undefined ? p[2] * 60 + (i % 50) + k : ctx.int(60, chAge - 60);
+          let meta = '{}';
+          if (p[3]) meta = JSON.stringify(p[3]);
+          else if ((i + k) % 5 < 2) {
+            let o = null;
+            try { o = JSON.parse(ch.metadata); } catch (e) { o = null; }
+            if (o && o.order_id) meta = JSON.stringify({ order_id: o.order_id });
+          }
+          const status = STATUS[p[1]];
+          out.push({
+            age,
+            row: {
+              charge: ch.id,
+              payment_intent: ch.payment_intent,
+              amount: am[k],
+              currency: 'usd',
+              reason: ctx.pick(reasons),
+              status,
+              failure_reason: status === 'failed' ? fails[(i + k) % 4] : null,
+              receipt_number: status === 'succeeded' ? String(1000 + (i * 13) % 9000) + '-' + String(1000 + (k * 977 + i * 31) % 9000) : null,
+              metadata: meta
+            }
+          });
+        });
+      }
+      out.sort((a, b) => b.age - a.age);
+      return out.map((e) => {
+        const when = iso(e.age);
+        return { ...e.row, created_at: when, updated_at: when };
+      });
+    }
+tests:
+  create_refund_validation:
+    description: create_refund refuses a missing charge and payment_intent, unknown ids, bad metadata, a payment_intent that belongs to another charge, a disputed charge and a charge that is not refundable.
+    script: |-
+      (ctx) => {
+        const none = ctx.api('POST', '/v1/refunds', {});
+        ctx.assert(none.status === 400 && none.body.error.code === 'parameter_missing', 'no charge or payment_intent: ' + JSON.stringify(none));
+        const unk = ctx.api('POST', '/v1/refunds', { charge: 'ch_9999' });
+        ctx.assert(unk.status === 400 && unk.body.error.code === 'resource_missing' && unk.body.error.message.includes('No such charge'), 'unknown charge: ' + JSON.stringify(unk));
+        const unkPi = ctx.api('POST', '/v1/refunds', { payment_intent: 'pi_does_not_exist' });
+        ctx.assert(unkPi.status === 400 && unkPi.body.error.code === 'resource_missing', 'unknown payment_intent: ' + JSON.stringify(unkPi));
+        const bad1 = ctx.api('POST', '/v1/refunds', { charge: 'ch_9999', metadata: 'not json' });
+        ctx.assert(bad1.status === 400 && bad1.body.error.code === 'parameter_invalid', 'metadata not json: ' + JSON.stringify(bad1));
+        const bad2 = ctx.api('POST', '/v1/refunds', { charge: 'ch_9999', metadata: '[1]' });
+        ctx.assert(bad2.status === 400 && bad2.body.error.code === 'parameter_invalid', 'metadata array: ' + JSON.stringify(bad2));
+        const bad3 = ctx.api('POST', '/v1/refunds', { charge: 'ch_9999', metadata: JSON.stringify({ a: 1 }) });
+        ctx.assert(bad3.status === 400 && bad3.body.error.code === 'parameter_invalid', 'metadata number value: ' + JSON.stringify(bad3));
+        const zero = ctx.api('POST', '/v1/refunds', { charge: 'ch_9999', amount: 0 });
+        ctx.assert(zero.status === 400, 'amount 0: ' + JSON.stringify(zero));
+        const charges = ctx.api('GET', '/v1/charges?limit=100').body.data;
+        const withPi = charges.filter((c) => c.payment_intent);
+        if (withPi.length >= 2) {
+          const mism = ctx.api('POST', '/v1/refunds', { charge: withPi[0].id, payment_intent: withPi[1].payment_intent });
+          ctx.assert(mism.status === 400 && mism.body.error.code === 'charge_payment_intent_mismatch', 'mismatch: ' + JSON.stringify(mism));
+        }
+        const disputed = charges.find((c) => c.disputed && c.captured && c.status === 'succeeded');
+        if (disputed) {
+          const d = ctx.api('POST', '/v1/refunds', { charge: disputed.id });
+          ctx.assert(d.status === 400 && d.body.error.code === 'charge_disputed', 'disputed: ' + JSON.stringify(d));
+        }
+        const failed = charges.find((c) => c.status === 'failed');
+        if (failed) {
+          const f = ctx.api('POST', '/v1/refunds', { charge: failed.id });
+          ctx.assert(f.status === 400 && f.body.error.code === 'charge_not_refundable', 'failed charge: ' + JSON.stringify(f));
+        }
+        const uncaptured = charges.find((c) => !c.captured);
+        if (uncaptured) {
+          const u = ctx.api('POST', '/v1/refunds', { charge: uncaptured.id });
+          ctx.assert(u.status === 400 && u.body.error.code === 'charge_not_refundable', 'uncaptured charge: ' + JSON.stringify(u));
+        }
+      }
+  refund_unknown_ids_are_404:
+    description: update_refund and cancel_refund answer 404 resource_missing for an unknown refund id.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/v1/refunds/re_9999', { metadata: JSON.stringify({ a: 'b' }) });
+        ctx.assert(u.status === 404 && u.body.error.code === 'resource_missing' && u.body.error.message.includes('No such refund'), 'update unknown: ' + JSON.stringify(u));
+        const c = ctx.api('POST', '/v1/refunds/re_9999/cancel', {});
+        ctx.assert(c.status === 404 && c.body.error.code === 'resource_missing', 'cancel unknown: ' + JSON.stringify(c));
+      }
+  card_refund_partial_then_full:
+    description: A partial refund on a card charge succeeds at once with a receipt and updates the charge. An amount above the balance is refused. A refund without an amount takes the rest, marks the charge refunded, and a further refund is refused. update_refund works on a succeeded refund.
+    script: |-
+      (ctx) => {
+        const ch = ctx.api('GET', '/v1/charges?limit=100').body.data.find((c) => c.payment_method_type === 'card' && c.captured && c.status === 'succeeded' && !c.disputed && c.amount_captured - c.amount_refunded >= 2);
+        if (!ch) return;
+        const bal = ch.amount_captured - ch.amount_refunded;
+        const part = Math.floor(bal / 2);
+        const r = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: part, reason: 'requested_by_customer' });
+        ctx.assert(r.status === 200, 'create returned ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(r.body.status === 'succeeded' && r.body.receipt_number === 'rcpt_' + r.body.id, 'card refund succeeds at once with a receipt, got ' + JSON.stringify(r.body));
+        ctx.assert(r.body.amount === part && r.body.charge === ch.id && r.body.reason === 'requested_by_customer' && r.body.currency === 'usd', 'refund fields: ' + JSON.stringify(r.body));
+        ctx.assert(r.body.payment_intent === ch.payment_intent, 'payment_intent copied from the charge');
+        const after = ctx.api('GET', '/v1/charges/' + ch.id).body;
+        ctx.assert(after.amount_refunded === ch.amount_refunded + part && after.refunded === false, 'charge after partial refund: ' + JSON.stringify(after));
+        const listed = ctx.api('GET', '/v1/refunds?charge=' + ch.id + '&limit=100').body.data;
+        ctx.assert(listed.some((x) => x.id === r.body.id), 'new refund is listed under its charge');
+        const left = bal - part;
+        const big = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: left + 1 });
+        ctx.assert(big.status === 400 && big.body.error.code === 'amount_too_large' && big.body.error.message.includes('greater than unrefunded amount'), 'too large: ' + JSON.stringify(big));
+        const upd = ctx.api('POST', '/v1/refunds/' + r.body.id, { metadata: JSON.stringify({ order_id: 'T-1' }) });
+        ctx.assert(upd.status === 200 && upd.body.status === 'succeeded' && JSON.parse(upd.body.metadata).order_id === 'T-1', 'metadata on a succeeded refund: ' + JSON.stringify(upd));
+        const rest = ctx.api('POST', '/v1/refunds', ch.payment_intent ? { payment_intent: ch.payment_intent } : { charge: ch.id });
+        ctx.assert(rest.status === 200 && rest.body.amount === left && rest.body.status === 'succeeded', 'default amount is the balance: ' + JSON.stringify(rest));
+        const end = ctx.api('GET', '/v1/charges/' + ch.id).body;
+        ctx.assert(end.amount_refunded === end.amount_captured && end.refunded === true, 'charge fully refunded: ' + JSON.stringify(end));
+        const again = ctx.api('POST', '/v1/refunds', { charge: ch.id });
+        ctx.assert(again.status === 400 && again.body.error.code === 'charge_already_refunded', 'already refunded: ' + JSON.stringify(again));
+        const cancel = ctx.api('POST', '/v1/refunds/' + r.body.id + '/cancel', {});
+        ctx.assert(cancel.status === 400 && cancel.body.error.message.includes('succeeded'), 'cancel of a succeeded refund: ' + JSON.stringify(cancel));
+      }
+  wallet_refund_settles_after_6h:
+    description: A refund on a wallet charge starts pending, counts towards the charge, cannot be canceled, and the settle_pending_refunds job turns it into succeeded once it is 6 hours old.
+    script: |-
+      (ctx) => {
+        const ch = ctx.api('GET', '/v1/charges?limit=100').body.data.find((c) => c.payment_method_type === 'wallet' && c.captured && c.status === 'succeeded' && !c.disputed && c.amount_captured - c.amount_refunded >= 2);
+        if (!ch) return;
+        const bal = ch.amount_captured - ch.amount_refunded;
+        const r = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: bal, reason: 'duplicate' });
+        ctx.assert(r.status === 200 && r.body.status === 'pending' && r.body.receipt_number === null, 'wallet refund is pending: ' + JSON.stringify(r));
+        const c1 = ctx.api('GET', '/v1/charges/' + ch.id).body;
+        ctx.assert(c1.amount_refunded === ch.amount_refunded + bal && c1.refunded === true, 'pending refund counts: ' + JSON.stringify(c1));
+        const cancel = ctx.api('POST', '/v1/refunds/' + r.body.id + '/cancel', {});
+        ctx.assert(cancel.status === 400 && cancel.body.error.message.includes('pending'), 'cancel of a pending refund: ' + JSON.stringify(cancel));
+        ctx.advance('5h');
+        ctx.assert(ctx.api('GET', '/v1/refunds/' + r.body.id).body.status === 'pending', 'still pending after 5h');
+        const adv = ctx.advance('2h');
+        ctx.assert(adv.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(adv.jobsFailed));
+        const done = ctx.api('GET', '/v1/refunds/' + r.body.id).body;
+        ctx.assert(done.status === 'succeeded' && done.receipt_number === 'rcpt_' + r.body.id, 'settled after 7h: ' + JSON.stringify(done));
+        const c2 = ctx.api('GET', '/v1/charges/' + ch.id).body;
+        ctx.assert(c2.amount_refunded === c1.amount_refunded && c2.refunded === true, 'charge unchanged by settlement: ' + JSON.stringify(c2));
+      }
+  bank_refund_metadata_and_cancel:
+    description: A refund on a bank_transfer charge starts in requires_action. update_refund merges metadata keys and removes empty-string keys, refuses non-object metadata, cancel_refund cancels it and gives the amount back to the charge, and a second cancel is refused.
+    script: |-
+      (ctx) => {
+        const ch = ctx.api('GET', '/v1/charges?limit=100').body.data.find((c) => c.payment_method_type === 'bank_transfer' && c.captured && c.status === 'succeeded' && !c.disputed && c.amount_captured - c.amount_refunded >= 2);
+        if (!ch) return;
+        const bal = ch.amount_captured - ch.amount_refunded;
+        const amt = Math.floor(bal / 2);
+        const r = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: amt, metadata: JSON.stringify({ order_id: 'A-1', note: 'first' }) });
+        ctx.assert(r.status === 200 && r.body.status === 'requires_action', 'bank refund needs action: ' + JSON.stringify(r));
+        ctx.assert(JSON.parse(r.body.metadata).order_id === 'A-1', 'metadata stored on create');
+        const upd = ctx.api('POST', '/v1/refunds/' + r.body.id, { metadata: JSON.stringify({ note: '', ticket_id: 'ZD-4821' }) });
+        ctx.assert(upd.status === 200, 'update returned ' + upd.status + ' ' + JSON.stringify(upd.body));
+        const m = JSON.parse(upd.body.metadata);
+        ctx.assert(m.order_id === 'A-1' && m.ticket_id === 'ZD-4821' && !('note' in m), 'merged metadata: ' + upd.body.metadata);
+        ctx.assert(upd.body.status === 'requires_action' && upd.body.amount === amt, 'update changes nothing else');
+        for (const bad of ['not json', '[1]', JSON.stringify({ a: 1 })]) {
+          const x = ctx.api('POST', '/v1/refunds/' + r.body.id, { metadata: bad });
+          ctx.assert(x.status === 400, 'bad metadata ' + bad + ': ' + JSON.stringify(x));
+        }
+        const c1 = ctx.api('GET', '/v1/charges/' + ch.id).body;
+        ctx.assert(c1.amount_refunded === ch.amount_refunded + amt, 'charge counts the requires_action refund: ' + JSON.stringify(c1));
+        const cancel = ctx.api('POST', '/v1/refunds/' + r.body.id + '/cancel', {});
+        ctx.assert(cancel.status === 200 && cancel.body.status === 'canceled', 'cancel: ' + JSON.stringify(cancel));
+        const c2 = ctx.api('GET', '/v1/charges/' + ch.id).body;
+        ctx.assert(c2.amount_refunded === ch.amount_refunded && c2.refunded === false, 'amount given back: ' + JSON.stringify(c2));
+        const again = ctx.api('POST', '/v1/refunds/' + r.body.id + '/cancel', {});
+        ctx.assert(again.status === 400 && again.body.error.message.includes('canceled'), 'second cancel: ' + JSON.stringify(again));
+        const late = ctx.api('POST', '/v1/refunds/' + r.body.id, { metadata: JSON.stringify({ ticket_id: '' }) });
+        ctx.assert(late.status === 200 && late.body.status === 'canceled' && !('ticket_id' in JSON.parse(late.body.metadata)), 'metadata on a canceled refund: ' + JSON.stringify(late));
+      }
+  requires_action_expires_after_14d:
+    description: The expire_requires_action job fails a requires_action refund once it is older than 14 days, with expired_or_canceled_card, and gives the amount back to the charge.
+    script: |-
+      (ctx) => {
+        const rs = ctx.api('GET', '/v1/refunds?limit=100').body;
+        ctx.assert(rs.has_more === false, 'more than 100 refunds');
+        const open = new Set(rs.data.filter((x) => x.status === 'requires_action').map((x) => x.charge));
+        const ch = ctx.api('GET', '/v1/charges?limit=100').body.data.find((c) => c.payment_method_type === 'bank_transfer' && c.captured && c.status === 'succeeded' && !c.disputed && c.amount_captured - c.amount_refunded >= 2 && !open.has(c.id));
+        if (!ch) return;
+        const bal = ch.amount_captured - ch.amount_refunded;
+        const r = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: bal });
+        ctx.assert(r.status === 200 && r.body.status === 'requires_action', 'bank refund needs action: ' + JSON.stringify(r));
+        ctx.advance('13d');
+        ctx.assert(ctx.api('GET', '/v1/refunds/' + r.body.id).body.status === 'requires_action', 'still requires_action after 13 days');
+        const adv = ctx.advance('3d');
+        ctx.assert(adv.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(adv.jobsFailed));
+        const f = ctx.api('GET', '/v1/refunds/' + r.body.id).body;
+        ctx.assert(f.status === 'failed' && f.failure_reason === 'expired_or_canceled_card', 'expired: ' + JSON.stringify(f));
+        const c = ctx.api('GET', '/v1/charges/' + ch.id).body;
+        ctx.assert(c.amount_refunded === ch.amount_refunded && c.refunded === false, 'amount given back: ' + JSON.stringify(c));
+      }
+  pending_refund_on_disputed_charge_fails:
+    description: A seeded pending refund whose charge is disputed fails with charge_for_pending_refund_disputed when settled, and the charge gets the amount back. Pending refunds on undisputed charges succeed.
+    script: |-
+      (ctx) => {
+        const refunds = ctx.api('GET', '/v1/refunds?limit=100').body.data;
+        const pend = refunds.filter((x) => x.status === 'pending');
+        const target = pend.find((x) => ctx.api('GET', '/v1/charges/' + x.charge).body.disputed === true);
+        if (!target) return;
+        const before = ctx.api('GET', '/v1/charges/' + target.charge).body;
+        const sum = pend.filter((x) => x.charge === target.charge).reduce((s, x) => s + x.amount, 0);
+        const normal = pend.find((x) => ctx.api('GET', '/v1/charges/' + x.charge).body.disputed === false);
+        const adv = ctx.advance('7h');
+        ctx.assert(adv.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(adv.jobsFailed));
+        const t = ctx.api('GET', '/v1/refunds/' + target.id).body;
+        ctx.assert(t.status === 'failed' && t.failure_reason === 'charge_for_pending_refund_disputed', 'disputed refund failed: ' + JSON.stringify(t));
+        const after = ctx.api('GET', '/v1/charges/' + target.charge).body;
+        ctx.assert(after.amount_refunded === before.amount_refunded - sum && after.refunded === false, 'amount given back: ' + JSON.stringify(after));
+        if (normal) {
+          const n = ctx.api('GET', '/v1/refunds/' + normal.id).body;
+          ctx.assert(n.status === 'succeeded' && n.receipt_number !== null, 'undisputed pending refund succeeded: ' + JSON.stringify(n));
+        }
+      }
+tasks:
+  refund_annual_plan_in_full:
+    difficulty: easy
+    instruction: Maya Chen (receipt email maya.chen@brightwave.example) wants her annual plan payment refunded in full. Refund the charge for her Annual plan with the reason requested_by_customer. She also has monthly plan charges, leave those alone and change nothing else.
+    grader: |-
+      (ctx) => {
+        const target = ctx.seed.list('charge', { where: { receipt_email: 'maya.chen@brightwave.example' } }).find((c) => c.description === 'Annual plan - Brightwave Pro');
+        if (!target) return 0;
+        const seedIds = new Set(ctx.seed.list('refund').map((r) => r.id));
+        const collateral = ctx.changes().some((c) => {
+          if (c.entity === 'charge' && c.id === target.id) return false;
+          if (c.entity === 'refund' && c.kind === 'created' && !seedIds.has(c.id)) {
+            const row = ctx.db.get('refund', c.id);
+            return row === null || row.charge !== target.id;
+          }
+          return true;
+        });
+        ctx.guard('only the target charge and its new refund changed', !collateral);
+        const fresh = ctx.db.list('refund', { where: { charge: target.id } }).filter((r) => !seedIds.has(r.id));
+        const end = ctx.db.get('charge', target.id);
+        const r = fresh[0];
+        ctx.goal(0.4, 'one new refund for the full amount', fresh.length === 1 && r.amount === target.amount_captured);
+        ctx.goal(0.2, 'reason is requested_by_customer', fresh.length === 1 && r.reason === 'requested_by_customer');
+        ctx.goal(0.4, 'charge is fully refunded', end.refunded === true && end.amount_refunded === target.amount_captured);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const all = (path) => { const rows = []; let cur = null; for (let n = 0; n < 40; n++) { const sep = path.includes('?') ? '&' : '?'; const r = ctx.api('GET', path + sep + 'limit=100' + (cur === null ? '' : '&starting_after=' + cur)); ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body)); rows.push(...r.body.data); if (r.body.has_more === true) cur = r.body.data[r.body.data.length - 1].id; else break; } return rows; };
+        const ch = all('/v1/charges').find((c) => c.receipt_email === 'maya.chen@brightwave.example' && c.description.startsWith('Annual plan'));
+        ctx.assert(ch, 'annual plan charge not found');
+        const r = ctx.api('POST', '/v1/refunds', { charge: ch.id, reason: 'requested_by_customer' });
+        ctx.assert(r.status === 200, 'refund failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: refunds one of the customer's monthly plan charges instead of the annual plan
+        script: |-
+          (ctx) => {
+            const r0 = ctx.api('GET', '/v1/charges?limit=100');
+            const ch = r0.body.data.find((c) => c.receipt_email === 'maya.chen@brightwave.example' && c.description.startsWith('Monthly plan'));
+            ctx.api('POST', '/v1/refunds', { charge: ch.id, reason: 'requested_by_customer' });
+          }
+      - why: refunds only part of the annual plan amount instead of the full charge
+        script: |-
+          (ctx) => {
+            const r0 = ctx.api('GET', '/v1/charges?limit=100');
+            const ch = r0.body.data.find((c) => c.receipt_email === 'maya.chen@brightwave.example' && c.description.startsWith('Annual plan'));
+            ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: Math.floor(ch.amount_captured / 2), reason: 'requested_by_customer' });
+          }
+      - why: refunds the right charge in full but leaves out the reason
+        script: |-
+          (ctx) => {
+            const r0 = ctx.api('GET', '/v1/charges?limit=100');
+            const ch = r0.body.data.find((c) => c.receipt_email === 'maya.chen@brightwave.example' && c.description.startsWith('Annual plan'));
+            ctx.api('POST', '/v1/refunds', { charge: ch.id });
+          }
+    alternatives: []
+    allows:
+      - entity: refund
+        kind: created
+        fields: []
+        where:
+          reason: requested_by_customer
+      - entity: charge
+        kind: updated
+        fields:
+          - amount_refunded
+          - refunded
+        where:
+          receipt_email: maya.chen@brightwave.example
+          description: Annual plan - Brightwave Pro
+  refund_remaining_balance:
+    difficulty: medium
+    instruction: "Daniel Okoye (daniel.okoye@harborline.example) ordered a standing desk, order #5120, and part of it has already been refunded. Create one more refund for exactly the amount that can still be refunded on that charge, with the reason duplicate. Do not touch his other charges and change nothing else."
+    grader: |-
+      (ctx) => {
+        const target = ctx.seed.list('charge').find((c) => c.description === 'Order #5120 - standing desk' && c.receipt_email === 'daniel.okoye@harborline.example');
+        if (!target) return 0;
+        const expected = target.amount_captured - target.amount_refunded;
+        if (expected <= 0) return 0;
+        const seedIds = new Set(ctx.seed.list('refund').map((r) => r.id));
+        const collateral = ctx.changes().some((c) => {
+          if (c.entity === 'charge' && c.id === target.id) return false;
+          if (c.entity === 'refund' && c.kind === 'created' && !seedIds.has(c.id)) {
+            const row = ctx.db.get('refund', c.id);
+            return row === null || row.charge !== target.id;
+          }
+          return true;
+        });
+        ctx.guard('only the target charge and its new refund changed', !collateral);
+        const fresh = ctx.db.list('refund', { where: { charge: target.id } }).filter((r) => !seedIds.has(r.id));
+        const end = ctx.db.get('charge', target.id);
+        const r = fresh[0];
+        ctx.goal(0.5, 'one new refund for exactly the remaining balance', fresh.length === 1 && r.amount === expected);
+        ctx.goal(0.2, 'reason is duplicate', fresh.length === 1 && r.reason === 'duplicate');
+        ctx.goal(0.3, 'charge is fully refunded', end.refunded === true && end.amount_refunded === target.amount_captured);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const all = (path) => { const rows = []; let cur = null; for (let n = 0; n < 40; n++) { const sep = path.includes('?') ? '&' : '?'; const r = ctx.api('GET', path + sep + 'limit=100' + (cur === null ? '' : '&starting_after=' + cur)); ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body)); rows.push(...r.body.data); if (r.body.has_more === true) cur = r.body.data[r.body.data.length - 1].id; else break; } return rows; };
+        const ch = all('/v1/charges').find((c) => c.receipt_email === 'daniel.okoye@harborline.example' && c.description.includes('#5120'));
+        ctx.assert(ch, 'charge for order 5120 not found');
+        const left = ch.amount_captured - ch.amount_refunded;
+        ctx.assert(left > 0, 'nothing left to refund');
+        const r = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: left, reason: 'duplicate' });
+        ctx.assert(r.status === 200, 'refund failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: computes the balance by subtracting every refund on the charge including the canceled one, so it refunds too little
+        script: |-
+          (ctx) => {
+            const r0 = ctx.api('GET', '/v1/charges?limit=100');
+            const ch = r0.body.data.find((c) => c.receipt_email === 'daniel.okoye@harborline.example' && c.description.includes('#5120'));
+            const rs = ctx.api('GET', '/v1/refunds?charge=' + ch.id + '&limit=100').body.data;
+            const sum = rs.reduce((s, x) => s + x.amount, 0);
+            ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: ch.amount_captured - sum, reason: 'duplicate' });
+          }
+      - why: refunds the remaining balance of the sibling charge from the same customer (order 5121) instead of order 5120
+        script: |-
+          (ctx) => {
+            const r0 = ctx.api('GET', '/v1/charges?limit=100');
+            const ch = r0.body.data.find((c) => c.receipt_email === 'daniel.okoye@harborline.example' && c.description.includes('#5121'));
+            ctx.api('POST', '/v1/refunds', { charge: ch.id, reason: 'duplicate' });
+          }
+      - why: refunds the correct remaining amount but with the wrong reason
+        script: |-
+          (ctx) => {
+            const r0 = ctx.api('GET', '/v1/charges?limit=100');
+            const ch = r0.body.data.find((c) => c.receipt_email === 'daniel.okoye@harborline.example' && c.description.includes('#5120'));
+            ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: ch.amount_captured - ch.amount_refunded, reason: 'requested_by_customer' });
+          }
+    alternatives: []
+    allows:
+      - entity: refund
+        kind: created
+        fields: []
+        where:
+          reason: duplicate
+      - entity: charge
+        kind: updated
+        fields:
+          - amount_refunded
+          - refunded
+        where:
+          receipt_email: daniel.okoye@harborline.example
+          description: "Order #5120 - standing desk"
+  merge_ticket_into_refund_metadata:
+    difficulty: medium
+    instruction: Support ticket ZD-4821 is about a refund for the customer with receipt email priya.nair@lumenhq.example (Priya Nair). Add the key ticket_id with the value ZD-4821 to the metadata of the most recently created refund with status succeeded across that customer's charges. Keep the metadata keys already stored on that refund. Do not change anything else.
+    grader: |-
+      (ctx) => {
+        const chIds = new Set(ctx.seed.list('charge', { where: { receipt_email: 'priya.nair@lumenhq.example' } }).map((c) => c.id));
+        let target = null;
+        for (const r of ctx.seed.list('refund', { where: { status: 'succeeded' } })) {
+          if (!chIds.has(r.charge)) continue;
+          if (target === null || ctx.time.minutesBetween(target.created_at, r.created_at) > 0) target = r;
+        }
+        if (target === null) return 0;
+        ctx.guard('only the target refund changed', ctx.changes().every((c) => c.entity === 'refund' && c.id === target.id));
+        const end = ctx.db.get('refund', target.id);
+        let meta = null;
+        let old = {};
+        try { meta = JSON.parse(end.metadata); } catch (e) { meta = null; }
+        try { old = JSON.parse(target.metadata); } catch (e) { old = {}; }
+        const ticketOk = meta !== null && typeof meta === 'object' && meta.ticket_id === 'ZD-4821';
+        const intact = ticketOk && Object.keys(old).every((k) => meta[k] === old[k]);
+        ctx.goal(0.5, 'ticket_id ZD-4821 is in the metadata of the newest succeeded refund', ticketOk);
+        ctx.goal(0.5, 'the existing metadata keys are kept', intact && Object.keys(old).length > 0);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const all = (path) => { const rows = []; let cur = null; for (let n = 0; n < 40; n++) { const sep = path.includes('?') ? '&' : '?'; const r = ctx.api('GET', path + sep + 'limit=100' + (cur === null ? '' : '&starting_after=' + cur)); ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body)); rows.push(...r.body.data); if (r.body.has_more === true) cur = r.body.data[r.body.data.length - 1].id; else break; } return rows; };
+        const charges = all('/v1/charges').filter((c) => c.receipt_email === 'priya.nair@lumenhq.example');
+        ctx.assert(charges.length > 0, 'no charges for the customer');
+        let best = null;
+        for (const c of charges) {
+          for (const r of all('/v1/refunds?charge=' + c.id)) {
+            if (r.status !== 'succeeded') continue;
+            if (best === null || r.created_at > best.created_at) best = r;
+          }
+        }
+        ctx.assert(best, 'no succeeded refund found');
+        const u = ctx.api('POST', '/v1/refunds/' + best.id, { metadata: JSON.stringify({ ticket_id: 'ZD-4821' }) });
+        ctx.assert(u.status === 200, 'update failed: ' + JSON.stringify(u.body));
+      }
+    decoys:
+      - why: tags the newest refund of the customer regardless of its status, which is still requires_action
+        script: |-
+          (ctx) => {
+            const charges = ctx.api('GET', '/v1/charges?limit=100').body.data.filter((c) => c.receipt_email === 'priya.nair@lumenhq.example');
+            let best = null;
+            for (const c of charges) {
+              for (const r of ctx.api('GET', '/v1/refunds?charge=' + c.id + '&limit=100').body.data) {
+                if (best === null || r.created_at > best.created_at) best = r;
+              }
+            }
+            ctx.api('POST', '/v1/refunds/' + best.id, { metadata: JSON.stringify({ ticket_id: 'ZD-4821' }) });
+          }
+      - why: tags the newest succeeded refund of a different customer (the near-identical name Priya Nayar and others) instead of Priya Nair
+        script: |-
+          (ctx) => {
+            const charges = ctx.api('GET', '/v1/charges?limit=100').body.data;
+            const mine = new Set(charges.filter((c) => c.receipt_email === 'priya.nair@lumenhq.example').map((c) => c.id));
+            const refunds = ctx.api('GET', '/v1/refunds?limit=100').body.data;
+            let best = null;
+            for (const r of refunds) {
+              if (r.status !== 'succeeded' || mine.has(r.charge)) continue;
+              if (best === null || r.created_at > best.created_at) best = r;
+            }
+            if (best === null) return;
+            ctx.api('POST', '/v1/refunds/' + best.id, { metadata: JSON.stringify({ ticket_id: 'ZD-4821' }) });
+          }
+      - why: tags the right refund but clears its existing metadata keys, treating the update as an overwrite
+        script: |-
+          (ctx) => {
+            const charges = ctx.api('GET', '/v1/charges?limit=100').body.data.filter((c) => c.receipt_email === 'priya.nair@lumenhq.example');
+            let best = null;
+            for (const c of charges) {
+              for (const r of ctx.api('GET', '/v1/refunds?charge=' + c.id + '&limit=100').body.data) {
+                if (r.status === 'succeeded' && (best === null || r.created_at > best.created_at)) best = r;
+              }
+            }
+            const patch = { ticket_id: 'ZD-4821' };
+            for (const k of Object.keys(JSON.parse(best.metadata))) patch[k] = '';
+            ctx.api('POST', '/v1/refunds/' + best.id, { metadata: JSON.stringify(patch) });
+          }
+    alternatives: []
+    allows:
+      - entity: refund
+        kind: updated
+        fields:
+          - metadata
+        where:
+          status: succeeded
+  cancel_stale_requires_action_refunds:
+    difficulty: hard
+    instruction: Clean up stale refunds that are waiting on customer action. Cancel every refund whose status is requires_action and that was created before 2025-12-26T09:00:00Z (more than 10 days before the current sandbox time of 2026-01-05T09:00:00Z). Leave newer requires_action refunds and every refund in any other status alone. The refund list has no status filter, so check all pages. Change nothing else.
+    grader: |-
+      (ctx) => {
+        const start = '2026-01-05T09:00:00.000Z';
+        const targets = ctx.seed.list('refund', { where: { status: 'requires_action' } }).filter((r) => ctx.time.minutesBetween(r.created_at, start) > 10 * 1440);
+        if (targets.length === 0) return 0;
+        const ids = new Set(targets.map((t) => t.id));
+        const chIds = new Set(targets.map((t) => t.charge));
+        const collateral = ctx.changes().some((c) => !((c.entity === 'refund' && ids.has(c.id)) || (c.entity === 'charge' && chIds.has(c.id))));
+        ctx.guard('only the stale requires_action refunds and their charges changed', !collateral);
+        let canceled = 0;
+        for (const t of targets) {
+          const ok = ctx.db.get('refund', t.id).status === 'canceled';
+          if (ok) canceled += 1;
+          ctx.goal(0.7 / targets.length, 'refund ' + t.id + ' canceled', ok);
+        }
+        let totalsOk = canceled === targets.length;
+        if (totalsOk) {
+          for (const chId of chIds) {
+            const before = ctx.seed.get('charge', chId);
+            const back = targets.filter((t) => t.charge === chId).reduce((s, t) => s + t.amount, 0);
+            const end = ctx.db.get('charge', chId);
+            if (end.amount_refunded !== before.amount_refunded - back) totalsOk = false;
+          }
+        }
+        ctx.goal(0.3, 'every affected charge got the canceled amounts back', totalsOk);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const all = (path) => { const rows = []; let cur = null; for (let n = 0; n < 40; n++) { const sep = path.includes('?') ? '&' : '?'; const r = ctx.api('GET', path + sep + 'limit=100' + (cur === null ? '' : '&starting_after=' + cur)); ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body)); rows.push(...r.body.data); if (r.body.has_more === true) cur = r.body.data[r.body.data.length - 1].id; else break; } return rows; };
+        const cutoff = '2025-12-26T09:00:00.000Z';
+        const targets = all('/v1/refunds').filter((r) => r.status === 'requires_action' && r.created_at < cutoff);
+        ctx.assert(targets.length > 0, 'no stale requires_action refunds found');
+        for (const t of targets) {
+          const r = ctx.api('POST', '/v1/refunds/' + t.id + '/cancel', {});
+          ctx.assert(r.status === 200, 'cancel ' + t.id + ' failed: ' + JSON.stringify(r.body));
+        }
+      }
+    decoys:
+      - why: cancels every requires_action refund and ignores how old it is
+        script: |-
+          (ctx) => {
+            const rows = [];
+            let cur = null;
+            for (let n = 0; n < 40; n++) {
+              const r = ctx.api('GET', '/v1/refunds?limit=100' + (cur === null ? '' : '&starting_after=' + cur));
+              rows.push(...r.body.data);
+              if (r.body.has_more === true) cur = r.body.data[r.body.data.length - 1].id; else break;
+            }
+            for (const t of rows.filter((x) => x.status === 'requires_action')) ctx.api('POST', '/v1/refunds/' + t.id + '/cancel', {});
+          }
+      - why: uses a 7 day cutoff instead of 10 days, so it also cancels a requires_action refund that is only about 8 days old
+        script: |-
+          (ctx) => {
+            const rows = [];
+            let cur = null;
+            for (let n = 0; n < 40; n++) {
+              const r = ctx.api('GET', '/v1/refunds?limit=100' + (cur === null ? '' : '&starting_after=' + cur));
+              rows.push(...r.body.data);
+              if (r.body.has_more === true) cur = r.body.data[r.body.data.length - 1].id; else break;
+            }
+            for (const t of rows.filter((x) => x.status === 'requires_action' && x.created_at < '2025-12-29T09:00:00.000Z')) ctx.api('POST', '/v1/refunds/' + t.id + '/cancel', {});
+          }
+      - why: uses a 13 day cutoff instead of 10 days, so it cancels only the oldest stale refunds and misses the rest
+        script: |-
+          (ctx) => {
+            const rows = [];
+            let cur = null;
+            for (let n = 0; n < 40; n++) {
+              const r = ctx.api('GET', '/v1/refunds?limit=100' + (cur === null ? '' : '&starting_after=' + cur));
+              rows.push(...r.body.data);
+              if (r.body.has_more === true) cur = r.body.data[r.body.data.length - 1].id; else break;
+            }
+            for (const t of rows.filter((x) => x.status === 'requires_action' && x.created_at < '2025-12-23T09:00:00.000Z')) ctx.api('POST', '/v1/refunds/' + t.id + '/cancel', {});
+          }
+    alternatives: []
+    allows:
+      - entity: refund
+        kind: updated
+        fields:
+          - status
+        where:
+          status: requires_action
+      - entity: charge
+        kind: updated
+        fields:
+          - amount_refunded
+          - refunded

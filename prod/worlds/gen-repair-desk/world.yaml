@@ -1,0 +1,623 @@
+format: 1
+meta:
+  name: world
+  description: Two entities, technician and ticket. Tickets have a subject, customer name, priority (normal or urgent), a status of queued, active or closed, and an optional assigned technician. Create, edit, list and filter are standard CRUD routes. Status changes only happen through two explicit actions, start_ticket (queued to active, needs an active assigned technician) and close_ticket (active to closed). Refused calls change nothing. Seed is a frozen set of 5 technicians and 32 tickets, enough for the hard task to need pagination at a page size of 10.
+  resembles: Small equipment repair desk (a minimal Fixably/RepairShopr-style repair ticket queue)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-01-05T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  technician:
+    description: A repair technician who can be assigned tickets. Inactive technicians cannot work tickets.
+    idPrefix: tch
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      active:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  ticket:
+    description: A repair ticket for a customer's equipment. Moves queued, active, closed only through the start and close actions.
+    idPrefix: tkt
+    fields:
+      subject:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      customer_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      priority:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - normal
+          - urgent
+        default: normal
+      status:
+        type: state
+        description: Lifecycle. Changed only by start_ticket (queued to active) and close_ticket (active to closed). closed is final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - queued
+          - active
+          - closed
+        initial: queued
+        transitions:
+          queued:
+            - active
+          active:
+            - closed
+          closed: []
+      technician_id:
+        type: ref
+        description: Assigned technician, if any. Readonly to create and PATCH. Set only by the assign_ticket action (an active technician on a queued ticket) and by seed for historical rows. start_ticket requires an active one.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: technician
+        onDelete: nullify
+routes:
+  list_technicians:
+    op: list
+    entity: technician
+    filters:
+      - active
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 10
+    method: GET
+    path: /technicians
+    description: List technicians, filter by active, search by name.
+  get_technician:
+    op: get
+    entity: technician
+    method: GET
+    path: /technicians/{id}
+    description: Read one technician.
+  list_tickets:
+    op: list
+    entity: ticket
+    filters:
+      - status
+      - priority
+      - technician_id
+    search:
+      - subject
+      - customer_name
+    sort:
+      - created_at
+      - priority
+    pageSize: 10
+    method: GET
+    path: /tickets
+    description: Paginated ticket list.
+  get_ticket:
+    op: get
+    entity: ticket
+    method: GET
+    path: /tickets/{id}
+    description: Read one ticket.
+  create_ticket:
+    op: create
+    entity: ticket
+    method: POST
+    path: /tickets
+    description: Create a queued, unassigned ticket from subject, customer_name and priority. technician_id is readonly here and sending it is refused. Assign afterwards with POST /tickets/{id}/assign.
+  update_ticket:
+    op: update
+    entity: ticket
+    method: PATCH
+    path: /tickets/{id}
+    description: Edit subject, customer_name or priority. technician_id and status are readonly, and a body that includes technician_id is refused with nothing written.
+actions:
+  start_ticket:
+    method: POST
+    path: /tickets/{id}/start
+    description: Move a queued ticket to active. The ticket needs an assigned technician who is active.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('ticket', id);
+        if (t === null) ctx.fail(404, 'not_found', 'ticket ' + id + ' not found');
+        if (t.status !== 'queued') ctx.fail(409, 'invalid_state', 'ticket ' + id + ' is ' + t.status + '. Only queued tickets can be started.');
+        if (t.technician_id === null || t.technician_id === undefined) ctx.fail(409, 'no_technician', 'ticket ' + id + ' has no technician. Assign an active technician first.');
+        const tech = ctx.db.get('technician', t.technician_id);
+        if (tech === null) ctx.fail(409, 'no_technician', 'technician ' + t.technician_id + ' not found.');
+        if (!tech.active) ctx.fail(409, 'technician_inactive', 'technician ' + tech.id + ' (' + tech.name + ') is inactive. Assign an active technician first.');
+        const updated = ctx.db.update('ticket', id, { status: 'active' });
+        return { status: 200, body: updated };
+      }
+  close_ticket:
+    method: POST
+    path: /tickets/{id}/close
+    description: Move an active ticket to closed. Closed is final.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('ticket', id);
+        if (t === null) ctx.fail(404, 'not_found', 'ticket ' + id + ' not found');
+        if (t.status !== 'active') ctx.fail(409, 'invalid_state', 'ticket ' + id + ' is ' + t.status + '. Only active tickets can be closed.');
+        const updated = ctx.db.update('ticket', id, { status: 'closed' });
+        return { status: 200, body: updated };
+      }
+  assign_ticket:
+    method: POST
+    path: /tickets/{id}/assign
+    description: Assign an active technician to a queued ticket. Refuses an unknown ticket (404), a nonexistent technician (4xx), an inactive technician (409 technician_inactive) and a non-queued ticket (409 invalid_state), changing nothing.
+    input:
+      technician_id:
+        type: ref
+        description: The technician who will work the ticket. Must exist and be active.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: technician
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('ticket', id);
+        if (t === null) ctx.fail(404, 'not_found', 'ticket ' + id + ' not found');
+        if (t.status !== 'queued') ctx.fail(409, 'invalid_state', 'ticket ' + id + ' is ' + t.status + '. Only queued tickets can be assigned.');
+        const tech = ctx.db.get('technician', ctx.body.technician_id);
+        if (tech === null) ctx.fail(422, 'unknown_technician', 'technician ' + ctx.body.technician_id + ' not found. List technicians with GET /technicians.');
+        if (!tech.active) ctx.fail(409, 'technician_inactive', 'technician ' + tech.id + ' (' + tech.name + ') is inactive. Pick an active technician.');
+        const updated = ctx.db.update('ticket', id, { technician_id: tech.id });
+        return { status: 200, body: updated };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  technician: "(ctx) => [['Dana Ortiz', false], ['Marco Silva', true], ['Priya Nair', true], ['Sam Okafor', true], ['Lena Brandt', true]].map(([name, active], i) => { const t = ctx.time.plus('2025-06-02T09:00:00.000Z', (i * 20 + 1) + 'd'); return { name, active, created_at: t, updated_at: t }; })"
+  ticket: |-
+    (ctx) => {
+      const T = {};
+      for (const t of ctx.rows('technician')) T[t.name] = t.id;
+      const dana = T['Dana Ortiz'], marco = T['Marco Silva'], priya = T['Priya Nair'], sam = T['Sam Okafor'], lena = T['Lena Brandt'];
+      const L = [];
+      const add = (subject, customer_name, priority, status, technician_id) => L.push({ subject, customer_name, priority, status, technician_id });
+      // Anchors (queued)
+      add('Espresso machine pump leaking', 'Corner Cafe', 'normal', 'queued', marco);
+      add('Espresso machine grinder jammed', 'Corner Cafe', 'urgent', 'queued', null);
+      add('Laptop will not boot', 'Harbor Dental', 'normal', 'queued', null);
+      add('Laptop will not boot', 'Birch Law Office', 'urgent', 'queued', lena);
+      // Dana queued (12)
+      const dq = [
+        ['Printer paper feed broken', 'Northside Bakery', 'normal'], ['Monitor flickers', 'Harbor Dental', 'urgent'],
+        ['Dishwasher not draining', 'Corner Cafe', 'normal'], ['Router keeps rebooting', 'Birch Law Office', 'normal'],
+        ['Tablet screen cracked', 'Maple Pharmacy', 'urgent'], ['Barcode scanner dead', 'Northside Bakery', 'normal'],
+        ['Microwave sparks', 'Greenleaf Grocers', 'normal'], ['Keyboard keys stuck', 'Harbor Dental', 'normal'],
+        ['Label printer offline', 'Maple Pharmacy', 'urgent'], ['Desktop fan noisy', 'Greenleaf Grocers', 'normal'],
+        ['Card reader not pairing', 'Corner Cafe', 'urgent'], ['Projector lamp dim', 'Birch Law Office', 'normal'],
+      ];
+      for (const [s, c, p] of dq) add(s, c, p, 'queued', dana);
+      // Active: 2 Dana, 7 others
+      add('Freezer compressor loud', 'Greenleaf Grocers', 'urgent', 'active', dana);
+      add('Scanner glass scratched', 'Maple Pharmacy', 'normal', 'active', dana);
+      const act = [
+        ['Ice machine not cooling', 'Corner Cafe', 'urgent', marco], ['Laptop battery swollen', 'Birch Law Office', 'urgent', priya],
+        ['POS terminal frozen', 'Northside Bakery', 'normal', sam], ['Dental chair motor stalls', 'Harbor Dental', 'normal', lena],
+        ['Server fan failure', 'Maple Pharmacy', 'normal', priya], ['Oven thermostat off', 'Northside Bakery', 'urgent', marco],
+        ['Wi-Fi access point dead', 'Greenleaf Grocers', 'normal', sam],
+      ];
+      for (const [s, c, p, t] of act) add(s, c, p, 'active', t);
+      // Closed: 1 Dana, 6 others
+      add('Receipt printer jam', 'Corner Cafe', 'normal', 'closed', dana);
+      const cl = [
+        ['Coffee grinder burr replaced', 'Corner Cafe', 'normal', marco], ['Laptop hinge repair', 'Harbor Dental', 'urgent', priya],
+        ['Phone charging port', 'Birch Law Office', 'normal', sam], ['Scale calibration', 'Greenleaf Grocers', 'urgent', lena],
+        ['Monitor replaced', 'Maple Pharmacy', 'normal', priya], ['Mixer gearbox', 'Northside Bakery', 'normal', marco],
+      ];
+      for (const [s, c, p, t] of cl) add(s, c, p, 'closed', t);
+      // Interleave creation order deterministically.
+      const order = L.map((r, i) => ({ r, k: (i * 11) % 32 })).sort((a, b) => a.k - b.k).map((x) => x.r);
+      return order.map((r, i) => {
+        const t = ctx.time.plus('2025-12-01T09:00:00.000Z', (i * 18 + 1) + 'h');
+        return { ...r, created_at: t, updated_at: t };
+      });
+    }
+tests:
+  start_and_close_refusals:
+    description: Unknown tickets give 404, a queued ticket with no technician cannot start or close, and refused calls change nothing.
+    script: |-
+      (ctx) => {
+        const missingStart = ctx.api('POST', '/tickets/tkt_9999/start', {});
+        ctx.assert(missingStart.status === 404 && missingStart.body.error.code === 'not_found', 'start missing: ' + JSON.stringify(missingStart));
+        const missingClose = ctx.api('POST', '/tickets/tkt_9999/close', {});
+        ctx.assert(missingClose.status === 404 && missingClose.body.error.code === 'not_found', 'close missing: ' + JSON.stringify(missingClose));
+        const made = ctx.api('POST', '/tickets', { subject: 'Test: toaster will not heat', customer_name: 'Test Customer', priority: 'normal' });
+        ctx.assert(made.status === 201 || made.status === 200, 'create ticket: ' + JSON.stringify(made));
+        ctx.assert(made.body.status === 'queued', 'new ticket is queued, got ' + made.body.status);
+        const id = made.body.id;
+        const noTech = ctx.api('POST', '/tickets/' + id + '/start', {});
+        ctx.assert(noTech.status === 409 && noTech.body.error.code === 'no_technician', 'start without technician: ' + JSON.stringify(noTech));
+        const early = ctx.api('POST', '/tickets/' + id + '/close', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'close queued: ' + JSON.stringify(early));
+        const after = ctx.api('GET', '/tickets/' + id).body;
+        ctx.assert(after.status === 'queued', 'refused calls left it queued, got ' + after.status);
+      }
+  start_and_close_lifecycle:
+    description: Create an unassigned queued ticket, assign an active technician, start it, then close it. Repeats and out-of-order calls give 409.
+    script: |-
+      (ctx) => {
+        const tech = ctx.api('GET', '/technicians?active=true').body.data[0];
+        ctx.assert(tech, 'an active technician exists');
+        const made = ctx.api('POST', '/tickets', { subject: 'Test: printer jams', customer_name: 'Test Customer', priority: 'urgent' });
+        ctx.assert(made.status === 201 || made.status === 200, 'create ticket: ' + JSON.stringify(made));
+        ctx.assert(made.body.status === 'queued' && made.body.technician_id === null, 'created queued and unassigned: ' + JSON.stringify(made.body));
+        const id = made.body.id;
+        const a = ctx.api('POST', '/tickets/' + id + '/assign', { technician_id: tech.id });
+        ctx.assert(a.status === 200 && a.body.technician_id === tech.id && a.body.status === 'queued', 'assign: ' + JSON.stringify(a));
+        const got = ctx.api('GET', '/tickets/' + id).body;
+        ctx.assert(got.technician_id === tech.id, 'assignment persisted, got ' + got.technician_id);
+        const s = ctx.api('POST', '/tickets/' + id + '/start', {});
+        ctx.assert(s.status === 200 && s.body.status === 'active' && s.body.technician_id === tech.id, 'start: ' + JSON.stringify(s));
+        const again = ctx.api('POST', '/tickets/' + id + '/start', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'start twice: ' + JSON.stringify(again));
+        const c = ctx.api('POST', '/tickets/' + id + '/close', {});
+        ctx.assert(c.status === 200 && c.body.status === 'closed', 'close: ' + JSON.stringify(c));
+        const c2 = ctx.api('POST', '/tickets/' + id + '/close', {});
+        ctx.assert(c2.status === 409 && c2.body.error.code === 'invalid_state', 'close twice: ' + JSON.stringify(c2));
+        const s2 = ctx.api('POST', '/tickets/' + id + '/start', {});
+        ctx.assert(s2.status === 409 && s2.body.error.code === 'invalid_state', 'start closed: ' + JSON.stringify(s2));
+        const a2 = ctx.api('POST', '/tickets/' + id + '/assign', { technician_id: tech.id });
+        ctx.assert(a2.status === 409 && a2.body.error.code === 'invalid_state', 'assign closed: ' + JSON.stringify(a2));
+      }
+  assign_refusals_are_atomic:
+    description: Inactive or nonexistent technicians cannot be assigned by assign, PATCH, mixed PATCH or create, and every refusal changes nothing.
+    script: |-
+      (ctx) => {
+        const active = ctx.api('GET', '/technicians?active=true').body.data[0];
+        const inactive = ctx.api('GET', '/technicians?active=false').body.data[0];
+        ctx.assert(active && inactive, 'seed has active and inactive technicians');
+        const made = ctx.api('POST', '/tickets', { subject: 'Test: kettle leaks', customer_name: 'Test Customer', priority: 'normal' });
+        ctx.assert(made.status === 201 || made.status === 200, 'create: ' + JSON.stringify(made));
+        const id = made.body.id;
+        const unchanged = (label) => {
+          const t = ctx.api('GET', '/tickets/' + id).body;
+          ctx.assert(t.technician_id === null && t.priority === 'normal' && t.status === 'queued' && t.subject === 'Test: kettle leaks', label + ' left the ticket unchanged: ' + JSON.stringify(t));
+        };
+        const inact = ctx.api('POST', '/tickets/' + id + '/assign', { technician_id: inactive.id });
+        ctx.assert(inact.status === 409 && inact.body.error.code === 'technician_inactive', 'assign inactive: ' + JSON.stringify(inact));
+        unchanged('assign inactive');
+        const ghost = ctx.api('POST', '/tickets/' + id + '/assign', { technician_id: 'tch_9999' });
+        ctx.assert(ghost.status >= 400 && ghost.status < 500, 'assign nonexistent: ' + JSON.stringify(ghost));
+        unchanged('assign nonexistent');
+        const missingTech = ctx.api('POST', '/tickets/' + id + '/assign', {});
+        ctx.assert(missingTech.status >= 400 && missingTech.status < 500, 'assign without technician_id: ' + JSON.stringify(missingTech));
+        unchanged('assign without technician');
+        const missingTicket = ctx.api('POST', '/tickets/tkt_9999/assign', { technician_id: active.id });
+        ctx.assert(missingTicket.status === 404 && missingTicket.body.error.code === 'not_found', 'assign missing ticket: ' + JSON.stringify(missingTicket));
+        const plain = ctx.api('PATCH', '/tickets/' + id, { technician_id: inactive.id });
+        ctx.assert(plain.status >= 400 && plain.status < 500, 'plain PATCH inactive: ' + JSON.stringify(plain));
+        unchanged('plain PATCH inactive');
+        const plainActive = ctx.api('PATCH', '/tickets/' + id, { technician_id: active.id });
+        ctx.assert(plainActive.status >= 400 && plainActive.status < 500, 'plain PATCH active is also refused: ' + JSON.stringify(plainActive));
+        unchanged('plain PATCH active');
+        const mixed = ctx.api('PATCH', '/tickets/' + id, { technician_id: inactive.id, priority: 'urgent' });
+        ctx.assert(mixed.status >= 400 && mixed.status < 500, 'mixed PATCH: ' + JSON.stringify(mixed));
+        unchanged('mixed PATCH');
+        const before = ctx.api('GET', '/tickets?q=Test:+toaster+oven').body.data.length;
+        const badCreate = ctx.api('POST', '/tickets', { subject: 'Test: toaster oven', customer_name: 'Test Customer', priority: 'normal', technician_id: inactive.id });
+        ctx.assert(badCreate.status >= 400 && badCreate.status < 500, 'create with inactive technician: ' + JSON.stringify(badCreate));
+        const badCreateActive = ctx.api('POST', '/tickets', { subject: 'Test: toaster oven', customer_name: 'Test Customer', priority: 'normal', technician_id: active.id });
+        ctx.assert(badCreateActive.status >= 400 && badCreateActive.status < 500, 'create with technician_id is refused: ' + JSON.stringify(badCreateActive));
+        const after = ctx.api('GET', '/tickets?q=Test:+toaster+oven').body.data.length;
+        ctx.assert(before === 0 && after === 0, 'refused creates made no rows, found ' + after);
+        const prio = ctx.api('PATCH', '/tickets/' + id, { priority: 'urgent' });
+        ctx.assert(prio.status === 200 && prio.body.priority === 'urgent' && prio.body.technician_id === null, 'priority-only PATCH still works: ' + JSON.stringify(prio));
+      }
+  assign_only_queued_tickets:
+    description: Active and closed tickets cannot be assigned, and the refusal changes nothing.
+    script: |-
+      (ctx) => {
+        const active = ctx.api('GET', '/technicians?active=true').body.data[0];
+        for (const status of ['active', 'closed']) {
+          const t = ctx.api('GET', '/tickets?status=' + status + '&limit=1').body.data[0];
+          ctx.assert(t, 'seed has a ' + status + ' ticket');
+          const r = ctx.api('POST', '/tickets/' + t.id + '/assign', { technician_id: active.id });
+          ctx.assert(r.status === 409 && r.body.error.code === 'invalid_state', 'assign ' + status + ': ' + JSON.stringify(r));
+          const after = ctx.api('GET', '/tickets/' + t.id).body;
+          ctx.assert(JSON.stringify(after) === JSON.stringify(t), 'refused assign changed the ' + status + ' ticket');
+        }
+      }
+  reassign_dana_queued_ticket:
+    description: A seeded queued ticket held by inactive Dana cannot start, can be reassigned to an active technician (also repeatedly), and then starts.
+    script: |-
+      (ctx) => {
+        const dana = ctx.api('GET', '/technicians?q=Dana').body.data.find((t) => t.name === 'Dana Ortiz');
+        const priya = ctx.api('GET', '/technicians?q=Priya').body.data.find((t) => t.name === 'Priya Nair');
+        const marco = ctx.api('GET', '/technicians?q=Marco').body.data.find((t) => t.name === 'Marco Silva');
+        ctx.assert(dana && priya && marco && !dana.active, 'technicians found');
+        const page1 = ctx.api('GET', '/tickets?status=queued&technician_id=' + dana.id);
+        ctx.assert(page1.body.data.length === 10 && page1.body.next_cursor, 'Dana queue needs a second page');
+        const t = page1.body.data[0];
+        const blocked = ctx.api('POST', '/tickets/' + t.id + '/start', {});
+        ctx.assert(blocked.status === 409 && blocked.body.error.code === 'technician_inactive', 'start while Dana holds it: ' + JSON.stringify(blocked));
+        const again = ctx.api('POST', '/tickets/' + t.id + '/assign', { technician_id: dana.id });
+        ctx.assert(again.status === 409 && again.body.error.code === 'technician_inactive', 'reassign to Dana: ' + JSON.stringify(again));
+        ctx.assert(ctx.api('GET', '/tickets/' + t.id).body.technician_id === dana.id, 'still Dana after refusals');
+        const m = ctx.api('POST', '/tickets/' + t.id + '/assign', { technician_id: marco.id });
+        ctx.assert(m.status === 200 && m.body.technician_id === marco.id, 'assign Marco: ' + JSON.stringify(m));
+        const p = ctx.api('POST', '/tickets/' + t.id + '/assign', { technician_id: priya.id });
+        ctx.assert(p.status === 200 && p.body.technician_id === priya.id, 'reassign Priya: ' + JSON.stringify(p));
+        const s = ctx.api('POST', '/tickets/' + t.id + '/start', {});
+        ctx.assert(s.status === 200 && s.body.status === 'active' && s.body.technician_id === priya.id, 'start: ' + JSON.stringify(s));
+        const dq = ctx.api('GET', '/tickets?status=active&technician_id=' + dana.id).body.data;
+        ctx.assert(dq.length === 2, 'Dana keeps her 2 historical active tickets, found ' + dq.length);
+      }
+tasks:
+  raise_espresso_priority:
+    difficulty: easy
+    instruction: Find the repair ticket for the leaking espresso machine pump and set its priority to urgent. Do not change anything else.
+    grader: |-
+      (ctx) => {
+        const target = ctx.seed.list('ticket', { where: { subject: 'Espresso machine pump leaking' } })[0];
+        if (!target) return 0;
+        const collateral = ctx.changes().some((c) => !(c.entity === 'ticket' && c.id === target.id));
+        ctx.guard('only the pump ticket changed', !collateral);
+        const end = ctx.db.get('ticket', target.id);
+        ctx.goal(1, 'pump ticket is urgent and otherwise unchanged', end.priority === 'urgent' && end.status === target.status && end.technician_id === target.technician_id && end.subject === target.subject && end.customer_name === target.customer_name);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const hits = ctx.api('GET', '/tickets?q=Espresso').body.data.filter((t) => t.subject === 'Espresso machine pump leaking');
+        ctx.assert(hits.length === 1, 'expected one pump ticket, found ' + hits.length);
+        const r = ctx.api('PATCH', '/tickets/' + hits[0].id, { priority: 'urgent' });
+        ctx.assert(r.status === 200, 'patch failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: raises every normal-priority Corner Cafe ticket to urgent instead of only the pump ticket
+        script: |-
+          (ctx) => {
+            const rows = ctx.api('GET', '/tickets?q=Corner+Cafe&priority=normal').body.data;
+            for (const t of rows) {
+              if (t.status !== 'closed') ctx.api('PATCH', '/tickets/' + t.id, { priority: 'urgent' });
+            }
+          }
+  assign_and_start_laptop:
+    difficulty: medium
+    instruction: Harbor Dental has a queued ticket titled 'Laptop will not boot'. Assign it to the active technician Marco Silva and start it, so it ends up active with Marco assigned. Do not touch any other ticket.
+    grader: |-
+      (ctx) => {
+        const target = ctx.seed.list('ticket', { where: { subject: 'Laptop will not boot', customer_name: 'Harbor Dental' } })[0];
+        const marco = ctx.seed.list('technician', { where: { name: 'Marco Silva' } })[0];
+        if (!target || !marco) return 0;
+        ctx.guardChanges('only the Harbor Dental laptop ticket technician and status changed', [
+          { entity: 'ticket', id: target.id, kind: 'updated', fields: ['technician_id', 'status'] },
+        ]);
+        const end = ctx.db.get('ticket', target.id);
+        ctx.goal(0.4, 'assigned to Marco Silva', end.technician_id === marco.id);
+        ctx.goal(0.6, 'ticket is active with Marco assigned', end.technician_id === marco.id && end.status === 'active');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const hits = ctx.api('GET', '/tickets?q=Laptop+will+not+boot').body.data.filter((t) => t.customer_name === 'Harbor Dental' && t.status === 'queued');
+        ctx.assert(hits.length === 1, 'expected one Harbor Dental laptop ticket, found ' + hits.length);
+        const marco = ctx.api('GET', '/technicians?q=Marco').body.data.find((t) => t.name === 'Marco Silva');
+        ctx.assert(marco && marco.active, 'Marco Silva not found or inactive');
+        const a = ctx.api('POST', '/tickets/' + hits[0].id + '/assign', { technician_id: marco.id });
+        ctx.assert(a.status === 200, 'assign failed: ' + JSON.stringify(a.body));
+        const s = ctx.api('POST', '/tickets/' + hits[0].id + '/start', {});
+        ctx.assert(s.status === 200, 'start failed: ' + JSON.stringify(s.body));
+      }
+    decoys:
+      - why: assigns Marco with the assign action but never starts the ticket, leaving it queued
+        script: |-
+          (ctx) => {
+            const hit = ctx.api('GET', '/tickets?q=Laptop+will+not+boot').body.data.find((t) => t.customer_name === 'Harbor Dental');
+            const marco = ctx.api('GET', '/technicians?q=Marco').body.data[0];
+            ctx.api('POST', '/tickets/' + hit.id + '/assign', { technician_id: marco.id });
+          }
+      - why: picks the other 'Laptop will not boot' ticket (Birch Law Office) without checking the customer, then assigns and starts it
+        script: |-
+          (ctx) => {
+            const hit = ctx.api('GET', '/tickets?q=Laptop+will+not+boot').body.data.find((t) => t.customer_name === 'Birch Law Office');
+            const marco = ctx.api('GET', '/technicians?q=Marco').body.data[0];
+            ctx.api('POST', '/tickets/' + hit.id + '/assign', { technician_id: marco.id });
+            ctx.api('POST', '/tickets/' + hit.id + '/start', {});
+          }
+      - why: assigns and starts the right ticket but also edits the Birch Law Office laptop ticket's priority, a collateral change
+        script: |-
+          (ctx) => {
+            const rows = ctx.api('GET', '/tickets?q=Laptop+will+not+boot').body.data;
+            const hit = rows.find((t) => t.customer_name === 'Harbor Dental');
+            const other = rows.find((t) => t.customer_name === 'Birch Law Office');
+            const marco = ctx.api('GET', '/technicians?q=Marco').body.data[0];
+            ctx.api('POST', '/tickets/' + hit.id + '/assign', { technician_id: marco.id });
+            ctx.api('POST', '/tickets/' + hit.id + '/start', {});
+            ctx.api('PATCH', '/tickets/' + other.id, { priority: 'normal' });
+          }
+      - why: assigns and starts the right ticket, then also edits its subject
+        script: |-
+          (ctx) => {
+            const hit = ctx.api('GET', '/tickets?q=Laptop+will+not+boot').body.data.find((t) => t.customer_name === 'Harbor Dental' && t.status === 'queued');
+            ((ctx) => {
+            const hits = ctx.api('GET', '/tickets?q=Laptop+will+not+boot').body.data.filter((t) => t.customer_name === 'Harbor Dental' && t.status === 'queued');
+            ctx.assert(hits.length === 1, 'expected one Harbor Dental laptop ticket, found ' + hits.length);
+            const marco = ctx.api('GET', '/technicians?q=Marco').body.data.find((t) => t.name === 'Marco Silva');
+            ctx.assert(marco && marco.active, 'Marco Silva not found or inactive');
+            const a = ctx.api('POST', '/tickets/' + hits[0].id + '/assign', { technician_id: marco.id });
+            ctx.assert(a.status === 200, 'assign failed: ' + JSON.stringify(a.body));
+            const s = ctx.api('POST', '/tickets/' + hits[0].id + '/start', {});
+            ctx.assert(s.status === 200, 'start failed: ' + JSON.stringify(s.body));
+          })(ctx);
+            ctx.api('PATCH', '/tickets/' + hit.id, { subject: hit.subject + ' (edited)' });
+          }
+  reassign_and_start_dana_queue:
+    difficulty: hard
+    instruction: The technician Dana Ortiz is on leave and inactive, but she still has queued tickets assigned to her. Reassign every queued ticket assigned to Dana to the technician Priya Nair and start each of them. Leave Dana's active and closed tickets, and every other ticket, untouched.
+    grader: |-
+      (ctx) => {
+        const dana = ctx.seed.list('technician', { where: { name: 'Dana Ortiz' } })[0];
+        const priya = ctx.seed.list('technician', { where: { name: 'Priya Nair' } })[0];
+        if (!dana || !priya) return 0;
+        const targets = ctx.seed.list('ticket', { where: { status: 'queued', technician_id: dana.id } });
+        if (targets.length === 0) return 0;
+        const ids = new Set(targets.map((t) => t.id));
+        ctx.guardChanges('only Dana queued tickets technician and status changed',
+          targets.map((t) => ({ entity: 'ticket', id: t.id, kind: 'updated', fields: ['technician_id', 'status'] })));
+        const ends = targets.map((t) => ctx.db.get('ticket', t.id));
+        ctx.goal(0.5, 'every queued Dana ticket reassigned to Priya', ends.every((t) => t.technician_id === priya.id));
+        ctx.goal(0.5, 'every queued Dana ticket reassigned and active', ends.every((t) => t.technician_id === priya.id && t.status === 'active'));
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const pages = (path) => {
+          const rows = [];
+          let cursor = null;
+          do {
+            const r = ctx.api('GET', path + (cursor === null ? '' : '&cursor=' + cursor));
+            ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body));
+            rows.push(...r.body.data);
+            cursor = r.body.next_cursor;
+          } while (cursor !== null && cursor !== undefined);
+          return rows;
+        };
+        const dana = ctx.api('GET', '/technicians?q=Dana').body.data.find((t) => t.name === 'Dana Ortiz');
+        const priya = ctx.api('GET', '/technicians?q=Priya').body.data.find((t) => t.name === 'Priya Nair');
+        ctx.assert(dana && priya, 'technicians not found');
+        const targets = pages('/tickets?status=queued&technician_id=' + dana.id);
+        ctx.assert(targets.length > 0, 'no queued tickets for Dana');
+        for (const t of targets) {
+          const a = ctx.api('POST', '/tickets/' + t.id + '/assign', { technician_id: priya.id });
+          ctx.assert(a.status === 200, 'assign ' + t.id + ' failed: ' + JSON.stringify(a.body));
+          const s = ctx.api('POST', '/tickets/' + t.id + '/start', {});
+          ctx.assert(s.status === 200, 'start ' + t.id + ' failed: ' + JSON.stringify(s.body));
+        }
+      }
+    decoys:
+      - why: handles only the first page of Dana's queued tickets and misses the rest
+        script: |-
+          (ctx) => {
+            const dana = ctx.api('GET', '/technicians?q=Dana').body.data[0];
+            const priya = ctx.api('GET', '/technicians?q=Priya').body.data[0];
+            const page = ctx.api('GET', '/tickets?status=queued&technician_id=' + dana.id).body.data;
+            for (const t of page) {
+              ctx.api('POST', '/tickets/' + t.id + '/assign', { technician_id: priya.id });
+              ctx.api('POST', '/tickets/' + t.id + '/start', {});
+            }
+          }
+      - why: reassigns all of Dana's queued tickets to the wrong technician, Marco Silva, instead of Priya Nair, and starts them
+        script: |-
+          (ctx) => {
+            const dana = ctx.api('GET', '/technicians?q=Dana').body.data[0];
+            const marco = ctx.api('GET', '/technicians?q=Marco').body.data[0];
+            const ids = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/tickets?status=queued&technician_id=' + dana.id + (cursor === null ? '' : '&cursor=' + cursor));
+              for (const t of r.body.data) ids.push(t.id);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null && cursor !== undefined);
+            for (const id of ids) {
+              ctx.api('POST', '/tickets/' + id + '/assign', { technician_id: marco.id });
+              ctx.api('POST', '/tickets/' + id + '/start', {});
+            }
+          }
+      - why: reassigns all of Dana's queued tickets to Priya but never starts them
+        script: |-
+          (ctx) => {
+            const dana = ctx.api('GET', '/technicians?q=Dana').body.data[0];
+            const priya = ctx.api('GET', '/technicians?q=Priya').body.data[0];
+            const ids = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/tickets?status=queued&technician_id=' + dana.id + (cursor === null ? '' : '&cursor=' + cursor));
+              for (const t of r.body.data) ids.push(t.id);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null && cursor !== undefined);
+            for (const id of ids) ctx.api('POST', '/tickets/' + id + '/assign', { technician_id: priya.id });
+          }
+      - why: also starts other queued tickets that already have an active technician, which were not Dana's
+        script: |-
+          (ctx) => {
+            const dana = ctx.api('GET', '/technicians?q=Dana').body.data[0];
+            const priya = ctx.api('GET', '/technicians?q=Priya').body.data[0];
+            const ids = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/tickets?status=queued' + (cursor === null ? '' : '&cursor=' + cursor));
+              for (const t of r.body.data) ids.push({ id: t.id, tech: t.technician_id });
+              cursor = r.body.next_cursor;
+            } while (cursor !== null && cursor !== undefined);
+            for (const t of ids) {
+              if (t.tech === dana.id) ctx.api('POST', '/tickets/' + t.id + '/assign', { technician_id: priya.id });
+              ctx.api('POST', '/tickets/' + t.id + '/start', {});
+            }
+          }
+      - why: reassigns and starts every Dana ticket correctly, then also edits the subject of one of them
+        script: |-
+          (ctx) => {
+            const dana = ctx.api('GET', '/technicians?q=Dana').body.data.find((t) => t.name === 'Dana Ortiz');
+            const hit = ctx.api('GET', '/tickets?status=queued&technician_id=' + dana.id).body.data[0];
+            ((ctx) => {
+            const pages = (path) => {
+              const rows = [];
+              let cursor = null;
+              do {
+                const r = ctx.api('GET', path + (cursor === null ? '' : '&cursor=' + cursor));
+                ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body));
+                rows.push(...r.body.data);
+                cursor = r.body.next_cursor;
+              } while (cursor !== null && cursor !== undefined);
+              return rows;
+            };
+            const dana = ctx.api('GET', '/technicians?q=Dana').body.data.find((t) => t.name === 'Dana Ortiz');
+            const priya = ctx.api('GET', '/technicians?q=Priya').body.data.find((t) => t.name === 'Priya Nair');
+            ctx.assert(dana && priya, 'technicians not found');
+            const targets = pages('/tickets?status=queued&technician_id=' + dana.id);
+            ctx.assert(targets.length > 0, 'no queued tickets for Dana');
+            for (const t of targets) {
+              const a = ctx.api('POST', '/tickets/' + t.id + '/assign', { technician_id: priya.id });
+              ctx.assert(a.status === 200, 'assign ' + t.id + ' failed: ' + JSON.stringify(a.body));
+              const s = ctx.api('POST', '/tickets/' + t.id + '/start', {});
+              ctx.assert(s.status === 200, 'start ' + t.id + ' failed: ' + JSON.stringify(s.body));
+            }
+          })(ctx);
+            ctx.api('PATCH', '/tickets/' + hit.id, { subject: hit.subject + ' (edited)' });
+          }

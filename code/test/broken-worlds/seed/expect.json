@@ -1,0 +1,8 @@
+{
+  "code": "constraint.violation",
+  "path": [
+    "seed",
+    "customer"
+  ],
+  "layer": "seed"
+}

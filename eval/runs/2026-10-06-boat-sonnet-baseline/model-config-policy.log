@@ -1,0 +1,1017 @@
+TAP version 13
+# Subtest: loadConfig
+    # Subtest: parses the shipped config with the A-48 budget of $5 and 15 minutes
+    ok 1 - parses the shipped config with the A-48 budget of $5 and 15 minutes
+      ---
+      duration_ms: 7.593333
+      type: 'test'
+      ...
+    # Subtest: rejects an unknown step key and names it
+    ok 2 - rejects an unknown step key and names it
+      ---
+      duration_ms: 1.958625
+      type: 'test'
+      ...
+    # Subtest: rejects an unknown top-level key and names it
+    ok 3 - rejects an unknown top-level key and names it
+      ---
+      duration_ms: 1.992334
+      type: 'test'
+      ...
+    # Subtest: overrides win over the file
+    ok 4 - overrides win over the file
+      ---
+      duration_ms: 1.425458
+      type: 'test'
+      ...
+    # Subtest: ignores undefined overrides
+    ok 5 - ignores undefined overrides
+      ---
+      duration_ms: 1.462125
+      type: 'test'
+      ...
+    # Subtest: validates overrides
+    ok 6 - validates overrides
+      ---
+      duration_ms: 1.011083
+      type: 'test'
+      ...
+    # Subtest: fills defaults for omitted keys
+    ok 7 - fills defaults for omitted keys
+      ---
+      duration_ms: 1.636291
+      type: 'test'
+      ...
+    # Subtest: resolves the default exampleWorld against the config dir when the key is omitted
+    ok 8 - resolves the default exampleWorld against the config dir when the key is omitted
+      ---
+      duration_ms: 4.092375
+      type: 'test'
+      ...
+    # Subtest: errors on a missing file and on bad JSON
+    ok 9 - errors on a missing file and on bad JSON
+      ---
+      duration_ms: 1.868541
+      type: 'test'
+      ...
+    # Subtest: resolves exampleWorld against the config dir, not the cwd
+    ok 10 - resolves exampleWorld against the config dir, not the cwd
+      ---
+      duration_ms: 0.813042
+      type: 'test'
+      ...
+    1..10
+ok 1 - loadConfig
+  ---
+  duration_ms: 24.813667
+  type: 'suite'
+  ...
+# Subtest: prices schema
+    # Subtest: accepts cache prices and keeps them
+    ok 1 - accepts cache prices and keeps them
+      ---
+      duration_ms: 0.395375
+      type: 'test'
+      ...
+    # Subtest: rejects a misspelt key and names it
+    ok 2 - rejects a misspelt key and names it
+      ---
+      duration_ms: 0.394917
+      type: 'test'
+      ...
+    # Subtest: rejects negative prices
+    ok 3 - rejects negative prices
+      ---
+      duration_ms: 0.139125
+      type: 'test'
+      ...
+    # Subtest: rejects a misspelt price key through loadConfig with the key in the message
+    ok 4 - rejects a misspelt price key through loadConfig with the key in the message
+      ---
+      duration_ms: 1.85975
+      type: 'test'
+      ...
+    1..4
+ok 2 - prices schema
+  ---
+  duration_ms: 2.888208
+  type: 'suite'
+  ...
+# Subtest: model selection folded into worldgen.config.json
+    # Subtest: ships transport, binary, key variable, per-step effort, escalation and prices in the one config file
+    ok 1 - ships transport, binary, key variable, per-step effort, escalation and prices in the one config file
+      ---
+      duration_ms: 0.898959
+      type: 'test'
+      ...
+    # Subtest: gives each step of the shipped config claude-opus-5-5 at its effort, and max effort when escalated
+    ok 2 - gives each step of the shipped config claude-opus-5-5 at its effort, and max effort when escalated
+      ---
+      duration_ms: 0.5835
+      type: 'test'
+      ...
+    # Subtest: a --model override reaches every step of the shipped config, since no step pins its model
+    ok 3 - a --model override reaches every step of the shipped config, since no step pins its model
+      ---
+      duration_ms: 0.404125
+      type: 'test'
+      ...
+    # Subtest: picks the pinned model and effort per step from a literal config, falling back to the defaults
+    ok 4 - picks the pinned model and effort per step from a literal config, falling back to the defaults
+      ---
+      duration_ms: 0.19675
+      type: 'test'
+      ...
+    # Subtest: escalation keeps the step model when escalate names only an effort, and is a no-op without escalate
+    ok 5 - escalation keeps the step model when escalate names only an effort, and is a no-op without escalate
+      ---
+      duration_ms: 0.090667
+      type: 'test'
+      ...
+    # Subtest: defaults the transport to the claude CLI
+    ok 6 - defaults the transport to the claude CLI
+      ---
+      duration_ms: 0.090542
+      type: 'test'
+      ...
+    # Subtest: rejects an unknown transport, effort, step or escalate key
+    ok 7 - rejects an unknown transport, effort, step or escalate key
+      ---
+      duration_ms: 0.133875
+      type: 'test'
+      ...
+    # Subtest: refuses an Anthropic environment variable as the sdk key source
+    ok 8 - refuses an Anthropic environment variable as the sdk key source
+      ---
+      duration_ms: 0.09525
+      type: 'test'
+      ...
+    1..8
+ok 3 - model selection folded into worldgen.config.json
+  ---
+  duration_ms: 2.59575
+  type: 'suite'
+  ...
+# Subtest: prices for every model the sdk transport calls
+    # Subtest: fails parse naming the unpriced default model
+    ok 1 - fails parse naming the unpriced default model
+      ---
+      duration_ms: 0.111584
+      type: 'test'
+      ...
+    # Subtest: fails parse naming an unpriced step model and escalation model at their paths
+    ok 2 - fails parse naming an unpriced step model and escalation model at their paths
+      ---
+      duration_ms: 0.120833
+      type: 'test'
+      ...
+    # Subtest: accepts a model priced in config or in the built-in table
+    ok 3 - accepts a model priced in config or in the built-in table
+      ---
+      duration_ms: 0.095083
+      type: 'test'
+      ...
+    # Subtest: fails at load time, not mid-run, when a --transport sdk override meets an unpriced --model override
+    ok 4 - fails at load time, not mid-run, when a --transport sdk override meets an unpriced --model override
+      ---
+      duration_ms: 1.683167
+      type: 'test'
+      ...
+    # Subtest: does not require prices under the claude CLI transport, which reports cost itself
+    ok 5 - does not require prices under the claude CLI transport, which reports cost itself
+      ---
+      duration_ms: 0.070459
+      type: 'test'
+      ...
+    1..5
+ok 4 - prices for every model the sdk transport calls
+  ---
+  duration_ms: 2.145542
+  type: 'suite'
+  ...
+# Subtest: costOf
+    # Subtest: prices input and output tokens per million
+    ok 1 - prices input and output tokens per million
+      ---
+      duration_ms: 0.276209
+      type: 'test'
+      ...
+    # Subtest: defaults cache write to 1.25x input and cache read to 0.1x input
+    ok 2 - defaults cache write to 1.25x input and cache read to 0.1x input
+      ---
+      duration_ms: 0.038458
+      type: 'test'
+      ...
+    # Subtest: uses explicit cache prices when given
+    ok 3 - uses explicit cache prices when given
+      ---
+      duration_ms: 0.033167
+      type: 'test'
+      ...
+    # Subtest: returns 0 for zero usage
+    ok 4 - returns 0 for zero usage
+      ---
+      duration_ms: 0.026041
+      type: 'test'
+      ...
+    # Subtest: throws a model_error for an unpriced model
+    ok 5 - throws a model_error for an unpriced model
+      ---
+      duration_ms: 0.139209
+      type: 'test'
+      ...
+    1..5
+ok 5 - costOf
+  ---
+  duration_ms: 0.859959
+  type: 'suite'
+  ...
+# Subtest: anthropicModel
+    # Subtest: sends auto tool_choice and returns input, usage, cost and ms
+    ok 1 - sends auto tool_choice and returns input, usage, cost and ms
+      ---
+      duration_ms: 0.478541
+      type: 'test'
+      ...
+    # Subtest: returns text blocks as advice and never parses them
+    ok 2 - returns text blocks as advice and never parses them
+      ---
+      duration_ms: 0.151709
+      type: 'test'
+      ...
+    # Subtest: raises model_error when the response has no tool call
+    ok 3 - raises model_error when the response has no tool call
+      ---
+      duration_ms: 0.20775
+      type: 'test'
+      ...
+    # Subtest: raises model_error when output was truncated at max_tokens
+    ok 4 - raises model_error when output was truncated at max_tokens
+      ---
+      duration_ms: 0.123709
+      type: 'test'
+      ...
+    # Subtest: raises model_error carrying the status of an API error
+    ok 5 - raises model_error carrying the status of an API error
+      ---
+      duration_ms: 0.176208
+      type: 'test'
+      ...
+    # Subtest: raises model_error without a status for a network failure
+    ok 6 - raises model_error without a status for a network failure
+      ---
+      duration_ms: 0.069042
+      type: 'test'
+      ...
+    1..6
+ok 6 - anthropicModel
+  ---
+  duration_ms: 1.337875
+  type: 'suite'
+  ...
+# Subtest: pricing
+    # Subtest: prices the shipped default model from the built-in table when config has no prices
+    ok 1 - prices the shipped default model from the built-in table when config has no prices
+      ---
+      duration_ms: 0.095333
+      type: 'test'
+      ...
+    # Subtest: config.prices overrides the built-in price for the same model
+    ok 2 - config.prices overrides the built-in price for the same model
+      ---
+      duration_ms: 0.039292
+      type: 'test'
+      ...
+    # Subtest: config that sets only input and output keeps the default cache read price
+    ok 3 - config that sets only input and output keeps the default cache read price
+      ---
+      duration_ms: 0.1405
+      type: 'test'
+      ...
+    # Subtest: config cache prices override the defaults per field
+    ok 4 - config cache prices override the defaults per field
+      ---
+      duration_ms: 0.140417
+      type: 'test'
+      ...
+    # Subtest: fails before any network call for a model with no price anywhere
+    ok 5 - fails before any network call for a model with no price anywhere
+      ---
+      duration_ms: 0.055125
+      type: 'test'
+      ...
+    1..5
+ok 7 - pricing
+  ---
+  duration_ms: 0.519292
+  type: 'suite'
+  ...
+# Subtest: API key handling
+    # Subtest: with the shipped config, sends the key as x-api-key to api.anthropic.com even when ambient env points elsewhere
+    ok 1 - with the shipped config, sends the key as x-api-key to api.anthropic.com even when ambient env points elsewhere
+      ---
+      duration_ms: 8.655167
+      type: 'test'
+      ...
+    # Subtest: throws a model_error naming LLM_KEY when the key is missing or blank
+    ok 2 - throws a model_error naming LLM_KEY when the key is missing or blank
+      ---
+      duration_ms: 0.180083
+      type: 'test'
+      ...
+    # Subtest: never reads ANTHROPIC_API_KEY from the environment
+    ok 3 - never reads ANTHROPIC_API_KEY from the environment
+      ---
+      duration_ms: 0.0505
+      type: 'test'
+      ...
+    # Subtest: keeps the key out of the proposal and out of error messages, even when the API echoes it
+    ok 4 - keeps the key out of the proposal and out of error messages, even when the API echoes it
+      ---
+      duration_ms: 0.097917
+      type: 'test'
+      ...
+    # Subtest: does not put the key in config
+    ok 5 - does not put the key in config
+      ---
+      duration_ms: 0.311125
+      type: 'test'
+      ...
+    1..5
+ok 8 - API key handling
+  ---
+  duration_ms: 9.364125
+  type: 'suite'
+  ...
+# Subtest: anthropicModel per-request model and effort
+    # Subtest: sends the request model and effort, and prices the call at that model
+    ok 1 - sends the request model and effort, and prices the call at that model
+      ---
+      duration_ms: 0.068916
+      type: 'test'
+      ...
+    # Subtest: sends no output_config when the request has no effort
+    ok 2 - sends no output_config when the request has no effort
+      ---
+      duration_ms: 0.039458
+      type: 'test'
+      ...
+    # Subtest: refuses an unpriced request model before any network call
+    ok 3 - refuses an unpriced request model before any network call
+      ---
+      duration_ms: 0.050666
+      type: 'test'
+      ...
+    1..3
+ok 9 - anthropicModel per-request model and effort
+  ---
+  duration_ms: 0.190708
+  type: 'suite'
+  ...
+# Subtest: claudeArgs
+    # Subtest: builds the claude -p flags with the schema inline and no prompt
+    ok 1 - builds the claude -p flags with the schema inline and no prompt
+      ---
+      duration_ms: 0.101542
+      type: 'test'
+      ...
+    # Subtest: drops $schema, which the claude CLI rejects, and keeps the rest of the schema
+    ok 2 - drops $schema, which the claude CLI rejects, and keeps the rest of the schema
+      ---
+      duration_ms: 0.027792
+      type: 'test'
+      ...
+    # Subtest: omits --effort when the request has none
+    ok 3 - omits --effort when the request has none
+      ---
+      duration_ms: 0.018625
+      type: 'test'
+      ...
+    1..3
+ok 10 - claudeArgs
+  ---
+  duration_ms: 0.174333
+  type: 'suite'
+  ...
+# Subtest: claudeCliModel
+    # Subtest: sends the prompt on stdin and returns structured_output, usage, total_cost_usd and wall ms
+    ok 1 - sends the prompt on stdin and returns structured_output, usage, total_cost_usd and wall ms
+      ---
+      duration_ms: 0.198625
+      type: 'test'
+      ...
+    # Subtest: uses the configured binary and the request model
+    ok 2 - uses the configured binary and the request model
+      ---
+      duration_ms: 0.092834
+      type: 'test'
+      ...
+    # Subtest: returns result text as advice when it is commentary, not the JSON echo
+    ok 3 - returns result text as advice when it is commentary, not the JSON echo
+      ---
+      duration_ms: 0.038541
+      type: 'test'
+      ...
+    # Subtest: reads the result from the last line when a warning precedes it
+    ok 4 - reads the result from the last line when a warning precedes it
+      ---
+      duration_ms: 0.045083
+      type: 'test'
+      ...
+    # Subtest: raises a billed model_error for an is_error result on a non-zero exit
+    ok 5 - raises a billed model_error for an is_error result on a non-zero exit
+      ---
+      duration_ms: 0.062625
+      type: 'test'
+      ...
+    # Subtest: raises a billed model_error for is_error even on exit 0, with the result text and stderr tail
+    ok 6 - raises a billed model_error for is_error even on exit 0, with the result text and stderr tail
+      ---
+      duration_ms: 0.046
+      type: 'test'
+      ...
+    # Subtest: raises a billed model_error when structured_output is missing
+    ok 7 - raises a billed model_error when structured_output is missing
+      ---
+      duration_ms: 0.048833
+      type: 'test'
+      ...
+    # Subtest: names claudeBin, WORLDGEN_CLAUDE_BIN and the real binary when the CLI exits 127
+    ok 8 - names claudeBin, WORLDGEN_CLAUDE_BIN and the real binary when the CLI exits 127
+      ---
+      duration_ms: 0.081375
+      type: 'test'
+      ...
+    # Subtest: sends a --json-schema with no $schema that parses as JSON
+    ok 9 - sends a --json-schema with no $schema that parses as JSON
+      ---
+      duration_ms: 0.119708
+      type: 'test'
+      ...
+    # Subtest: raises model_error naming the exit code and stderr when stdout is not JSON
+    ok 10 - raises model_error naming the exit code and stderr when stdout is not JSON
+      ---
+      duration_ms: 0.05125
+      type: 'test'
+      ...
+    # Subtest: raises model_error for a process killed by the timeout
+    ok 11 - raises model_error for a process killed by the timeout
+      ---
+      duration_ms: 0.042417
+      type: 'test'
+      ...
+    # Subtest: raises model_error when the binary cannot start
+    ok 12 - raises model_error when the binary cannot start
+      ---
+      duration_ms: 0.060916
+      type: 'test'
+      ...
+    # Subtest: falls back to config prices when the result has no total_cost_usd, and to 0 for an unpriced model
+    ok 13 - falls back to config prices when the result has no total_cost_usd, and to 0 for an unpriced model
+      ---
+      duration_ms: 0.076708
+      type: 'test'
+      ...
+    1..13
+ok 11 - claudeCliModel
+  ---
+  duration_ms: 1.051416
+  type: 'suite'
+  ...
+# Subtest: spawnClaude with a stand-in binary (no model, no network)
+    # Subtest: round-trips argv and stdin through the real spawn path
+    ok 1 - round-trips argv and stdin through the real spawn path
+      ---
+      duration_ms: 231.558417
+      type: 'test'
+      ...
+    # Subtest: runs the CLI from the OS temp dir, not the repo
+    ok 2 - runs the CLI from the OS temp dir, not the repo
+      ---
+      duration_ms: 211.960208
+      type: 'test'
+      ...
+    # Subtest: kills a hung CLI after the timeout with SIGTERM
+    ok 3 - kills a hung CLI after the timeout with SIGTERM
+      ---
+      duration_ms: 304.242584
+      type: 'test'
+      ...
+    # Subtest: rejects when the binary does not exist
+    ok 4 - rejects when the binary does not exist
+      ---
+      duration_ms: 3.287417
+      type: 'test'
+      ...
+    # Subtest: keeps stdout and stderr apart
+    ok 5 - keeps stdout and stderr apart
+      ---
+      duration_ms: 231.166042
+      type: 'test'
+      ...
+    1..5
+ok 12 - spawnClaude with a stand-in binary (no model, no network)
+  ---
+  duration_ms: 982.401791
+  type: 'suite'
+  ...
+# Subtest: decide
+    # Subtest: accepted advances
+    ok 1 - accepted advances
+      ---
+      duration_ms: 0.64075
+      type: 'test'
+      ...
+    # Subtest: accepted with warnings advances
+    ok 2 - accepted with warnings advances
+      ---
+      duration_ms: 0.039125
+      type: 'test'
+      ...
+    # Subtest: first rejection retries
+    ok 3 - first rejection retries
+      ---
+      duration_ms: 0.064708
+      type: 'test'
+      ...
+    # Subtest: rejection at attempts 3 of 4 still retries
+    ok 4 - rejection at attempts 3 of 4 still retries
+      ---
+      duration_ms: 0.070833
+      type: 'test'
+      ...
+    # Subtest: attempts at the limit stops attempts_exhausted
+    ok 5 - attempts at the limit stops attempts_exhausted
+      ---
+      duration_ms: 0.0605
+      type: 'test'
+      ...
+    # Subtest: per-step maxAttempts is honoured
+    ok 6 - per-step maxAttempts is honoured
+      ---
+      duration_ms: 0.061583
+      type: 'test'
+      ...
+    # Subtest: same issue set twice stops no_progress
+    ok 7 - same issue set twice stops no_progress
+      ---
+      duration_ms: 0.02825
+      type: 'test'
+      ...
+    # Subtest: a different earlier set does not trigger no_progress
+    ok 8 - a different earlier set does not trigger no_progress
+      ---
+      duration_ms: 0.06175
+      type: 'test'
+      ...
+    # Subtest: the same set seen on another step is not a repeat
+    ok 9 - the same set seen on another step is not a repeat
+      ---
+      duration_ms: 0.129375
+      type: 'test'
+      ...
+    # Subtest: all blockers owned earlier backtracks
+    ok 10 - all blockers owned earlier backtracks
+      ---
+      duration_ms: 0.219917
+      type: 'test'
+      ...
+    # Subtest: backtrack goes to the earliest owner
+    ok 11 - backtrack goes to the earliest owner
+      ---
+      duration_ms: 0.038875
+      type: 'test'
+      ...
+    # Subtest: one blocker owned by the current step prevents backtrack
+    ok 12 - one blocker owned by the current step prevents backtrack
+      ---
+      duration_ms: 0.027125
+      type: 'test'
+      ...
+    # Subtest: a warning owned earlier does not force a backtrack
+    ok 13 - a warning owned earlier does not force a backtrack
+      ---
+      duration_ms: 0.020709
+      type: 'test'
+      ...
+    # Subtest: backtracks past the limit stop backtrack_limit
+    ok 14 - backtracks past the limit stop backtrack_limit
+      ---
+      duration_ms: 0.020334
+      type: 'test'
+      ...
+    # Subtest: maxBacktracks 0 stops at the first backtrack
+    ok 15 - maxBacktracks 0 stops at the first backtrack
+      ---
+      duration_ms: 0.023
+      type: 'test'
+      ...
+    # Subtest: backtrack wins over attempts_exhausted
+    ok 16 - backtrack wins over attempts_exhausted
+      ---
+      duration_ms: 0.017583
+      type: 'test'
+      ...
+    # Subtest: backtrack wins over no_progress
+    ok 17 - backtrack wins over no_progress
+      ---
+      duration_ms: 0.016292
+      type: 'test'
+      ...
+    # Subtest: plan issues at the plan step retry, not backtrack
+    ok 18 - plan issues at the plan step retry, not backtrack
+      ---
+      duration_ms: 0.019917
+      type: 'test'
+      ...
+    # Subtest: a coverage gap raised at the plan step retries plan
+    ok 19 - a coverage gap raised at the plan step retries plan
+      ---
+      duration_ms: 0.049834
+      type: 'test'
+      ...
+    # Subtest: model stage missing a planned entity retries model, not backtrack to plan
+    ok 20 - model stage missing a planned entity retries model, not backtrack to plan
+      ---
+      duration_ms: 0.0185
+      type: 'test'
+      ...
+    # Subtest: model stage missing a planned route retries model
+    ok 21 - model stage missing a planned route retries model
+      ---
+      duration_ms: 0.020584
+      type: 'test'
+      ...
+    # Subtest: workflow stage missing a planned action retries workflow
+    ok 22 - workflow stage missing a planned action retries workflow
+      ---
+      duration_ms: 0.016833
+      type: 'test'
+      ...
+    # Subtest: tasks stage missing a planned task retries tasks
+    ok 23 - tasks stage missing a planned task retries tasks
+      ---
+      duration_ms: 0.015875
+      type: 'test'
+      ...
+    # Subtest: a planned entity still missing at the tasks stage backtracks to model, not plan
+    ok 24 - a planned entity still missing at the tasks stage backtracks to model, not plan
+      ---
+      duration_ms: 0.015333
+      type: 'test'
+      ...
+    # Subtest: a seed-rooted gap on an entity named tasks raised at tasks backtracks to seed
+    ok 25 - a seed-rooted gap on an entity named tasks raised at tasks backtracks to seed
+      ---
+      duration_ms: 0.016875
+      type: 'test'
+      ...
+    # Subtest: a seed-rooted gap on an entity named constructor raised at tasks backtracks to seed
+    ok 26 - a seed-rooted gap on an entity named constructor raised at tasks backtracks to seed
+      ---
+      duration_ms: 0.018584
+      type: 'test'
+      ...
+    # Subtest: invalid_output retries and never backtracks
+    ok 27 - invalid_output retries and never backtracks
+      ---
+      duration_ms: 0.016708
+      type: 'test'
+      ...
+    # Subtest: invalid_output repeated stops no_progress
+    ok 28 - invalid_output repeated stops no_progress
+      ---
+      duration_ms: 0.084709
+      type: 'test'
+      ...
+    # Subtest: model_error stops
+    ok 29 - model_error stops
+      ---
+      duration_ms: 0.022042
+      type: 'test'
+      ...
+    # Subtest: spend at the limit stops budget_exhausted before accepting
+    ok 30 - spend at the limit stops budget_exhausted before accepting
+      ---
+      duration_ms: 0.022834
+      type: 'test'
+      ...
+    # Subtest: spend just under the limit proceeds
+    ok 31 - spend just under the limit proceeds
+      ---
+      duration_ms: 0.017291
+      type: 'test'
+      ...
+    # Subtest: accepted last step whose call crossed the budget advances and reports the overspend
+    ok 32 - accepted last step whose call crossed the budget advances and reports the overspend
+      ---
+      duration_ms: 0.018958
+      type: 'test'
+      ...
+    # Subtest: accepted last step exactly at the budget advances with the overspend
+    ok 33 - accepted last step exactly at the budget advances with the overspend
+      ---
+      duration_ms: 0.017375
+      type: 'test'
+      ...
+    # Subtest: last: true marks an earlier step as the end of an iterate run
+    ok 34 - last: true marks an earlier step as the end of an iterate run
+      ---
+      duration_ms: 0.020583
+      type: 'test'
+      ...
+    # Subtest: last: false at tasks still stops over budget
+    ok 35 - last: false at tasks still stops over budget
+      ---
+      duration_ms: 0.016917
+      type: 'test'
+      ...
+    # Subtest: accepted on a non-last step over budget stops: no further call is allowed
+    ok 36 - accepted on a non-last step over budget stops: no further call is allowed
+      ---
+      duration_ms: 0.0185
+      type: 'test'
+      ...
+    # Subtest: a rejection on the last step over budget stops
+    ok 37 - a rejection on the last step over budget stops
+      ---
+      duration_ms: 0.016958
+      type: 'test'
+      ...
+    # Subtest: time still stops an accepted last step that crossed the budget
+    ok 38 - time still stops an accepted last step that crossed the budget
+      ---
+      duration_ms: 0.020917
+      type: 'test'
+      ...
+    # Subtest: budget is checked before a backtrack
+    ok 39 - budget is checked before a backtrack
+      ---
+      duration_ms: 0.015292
+      type: 'test'
+      ...
+    # Subtest: elapsed at maxMinutes stops time_exhausted before accepting
+    ok 40 - elapsed at maxMinutes stops time_exhausted before accepting
+      ---
+      duration_ms: 0.017084
+      type: 'test'
+      ...
+    # Subtest: elapsed just under maxMinutes proceeds
+    ok 41 - elapsed just under maxMinutes proceeds
+      ---
+      duration_ms: 0.015459
+      type: 'test'
+      ...
+    # Subtest: budget beats time when both are spent
+    ok 42 - budget beats time when both are spent
+      ---
+      duration_ms: 0.015042
+      type: 'test'
+      ...
+    # Subtest: table has at least 12 rows
+    ok 43 - table has at least 12 rows
+      ---
+      duration_ms: 0.033083
+      type: 'test'
+      ...
+    1..43
+ok 13 - decide
+  ---
+  duration_ms: 2.715125
+  type: 'suite'
+  ...
+# Subtest: ownerOf
+    # Subtest: fixed owner entities maps to model
+    ok 1 - fixed owner entities maps to model
+      ---
+      duration_ms: 0.111083
+      type: 'test'
+      ...
+    # Subtest: fixed owner tasks maps to tasks
+    ok 2 - fixed owner tasks maps to tasks
+      ---
+      duration_ms: 0.018125
+      type: 'test'
+      ...
+    # Subtest: at_path with path[0] tests maps to workflow
+    ok 3 - at_path with path[0] tests maps to workflow
+      ---
+      duration_ms: 0.01725
+      type: 'test'
+      ...
+    # Subtest: at_path with path[0] seed maps to seed
+    ok 4 - at_path with path[0] seed maps to seed
+      ---
+      duration_ms: 0.014875
+      type: 'test'
+      ...
+    # Subtest: at_path with path[0] plan maps to plan
+    ok 5 - at_path with path[0] plan maps to plan
+      ---
+      duration_ms: 0.05425
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered for an entity maps to model
+    ok 6 - plan.not_covered for an entity maps to model
+      ---
+      duration_ms: 0.022709
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered for a route maps to model
+    ok 7 - plan.not_covered for a route maps to model
+      ---
+      duration_ms: 0.022792
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered for a workflow action maps to workflow
+    ok 8 - plan.not_covered for a workflow action maps to workflow
+      ---
+      duration_ms: 0.014625
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered for a task maps to tasks
+    ok 9 - plan.not_covered for a task maps to tasks
+      ---
+      duration_ms: 0.013667
+      type: 'test'
+      ...
+    # Subtest: at_path with path[0] routes maps to model
+    ok 10 - at_path with path[0] routes maps to model
+      ---
+      duration_ms: 0.015166
+      type: 'test'
+      ...
+    # Subtest: at_path with path[0] jobs maps to workflow
+    ok 11 - at_path with path[0] jobs maps to workflow
+      ---
+      duration_ms: 0.015833
+      type: 'test'
+      ...
+    # Subtest: at_path with path[0] fixtures maps to model
+    ok 12 - at_path with path[0] fixtures maps to model
+      ---
+      duration_ms: 0.013
+      type: 'test'
+      ...
+    # Subtest: at_path with path[0] meta maps to plan
+    ok 13 - at_path with path[0] meta maps to plan
+      ---
+      duration_ms: 0.017458
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered rooted at seed for an entity named tasks maps to seed
+    ok 14 - plan.not_covered rooted at seed for an entity named tasks maps to seed
+      ---
+      duration_ms: 0.015208
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered rooted at routes maps to model
+    ok 15 - plan.not_covered rooted at routes maps to model
+      ---
+      duration_ms: 0.022292
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered rooted at meta maps to plan
+    ok 16 - plan.not_covered rooted at meta maps to plan
+      ---
+      duration_ms: 0.014208
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered rooted at seed for an entity named constructor maps to seed
+    ok 17 - plan.not_covered rooted at seed for an entity named constructor maps to seed
+      ---
+      duration_ms: 0.013458
+      type: 'test'
+      ...
+    # Subtest: plan.not_covered for a plan kind named constructor maps to plan
+    ok 18 - plan.not_covered for a plan kind named constructor maps to plan
+      ---
+      duration_ms: 0.013542
+      type: 'test'
+      ...
+    # Subtest: at_path with path[0] input maps to plan
+    ok 19 - at_path with path[0] input maps to plan
+      ---
+      duration_ms: 0.013208
+      type: 'test'
+      ...
+    1..19
+ok 14 - ownerOf
+  ---
+  duration_ms: 0.550917
+  type: 'suite'
+  ...
+# Subtest: issueSetKey
+    # Subtest: sorts and de-duplicates by code and path
+    ok 1 - sorts and de-duplicates by code and path
+      ---
+      duration_ms: 0.029666
+      type: 'test'
+      ...
+    1..1
+ok 15 - issueSetKey
+  ---
+  duration_ms: 0.044625
+  type: 'suite'
+  ...
+# Subtest: record
+    # Subtest: returns a new ledger with attempt, cost and issue set added
+    ok 1 - returns a new ledger with attempt, cost and issue set added
+      ---
+      duration_ms: 0.07675
+      type: 'test'
+      ...
+    # Subtest: keeps the seen sets when the attempt was accepted (null set)
+    ok 2 - keeps the seen sets when the attempt was accepted (null set)
+      ---
+      duration_ms: 0.02625
+      type: 'test'
+      ...
+    # Subtest: never mutates its input, even when frozen deeply
+    ok 3 - never mutates its input, even when frozen deeply
+      ---
+      duration_ms: 0.043291
+      type: 'test'
+      ...
+    # Subtest: recordBacktrack adds one and leaves the input alone
+    ok 4 - recordBacktrack adds one and leaves the input alone
+      ---
+      duration_ms: 0.028167
+      type: 'test'
+      ...
+    # Subtest: recordBacktrack resets the target step attempts and keeps the rest
+    ok 5 - recordBacktrack resets the target step attempts and keeps the rest
+      ---
+      duration_ms: 0.035
+      type: 'test'
+      ...
+    # Subtest: a step backtracked to after using all its attempts gets its repair budget again
+    ok 6 - a step backtracked to after using all its attempts gets its repair budget again
+      ---
+      duration_ms: 0.059583
+      type: 'test'
+      ...
+    # Subtest: backtracks stay bounded by maxBacktracks with the reset: an upstream error that never clears stops backtrack_limit
+    ok 7 - backtracks stay bounded by maxBacktracks with the reset: an upstream error that never clears stops backtrack_limit
+      ---
+      duration_ms: 0.047125
+      type: 'test'
+      ...
+    # Subtest: record then decide: the second identical rejection stops no_progress
+    ok 8 - record then decide: the second identical rejection stops no_progress
+      ---
+      duration_ms: 0.038
+      type: 'test'
+      ...
+    # Subtest: record via attemptIssueSet with an error plus a warning: second identical rejection stops no_progress
+    ok 9 - record via attemptIssueSet with an error plus a warning: second identical rejection stops no_progress
+      ---
+      duration_ms: 0.045083
+      type: 'test'
+      ...
+    1..9
+ok 16 - record
+  ---
+  duration_ms: 0.4575
+  type: 'suite'
+  ...
+# Subtest: attemptIssueSet
+    # Subtest: is null for accepted and model_error
+    ok 1 - is null for accepted and model_error
+      ---
+      duration_ms: 0.0395
+      type: 'test'
+      ...
+    # Subtest: keys only blocking errors of a rejection
+    ok 2 - keys only blocking errors of a rejection
+      ---
+      duration_ms: 0.020417
+      type: 'test'
+      ...
+    # Subtest: keys all issues when a rejection has only warnings
+    ok 3 - keys all issues when a rejection has only warnings
+      ---
+      duration_ms: 0.030209
+      type: 'test'
+      ...
+    # Subtest: keys the outcome issues of invalid_output
+    ok 4 - keys the outcome issues of invalid_output
+      ---
+      duration_ms: 0.020084
+      type: 'test'
+      ...
+    1..4
+ok 17 - attemptIssueSet
+  ---
+  duration_ms: 0.187334
+  type: 'suite'
+  ...
+1..17
+# tests 148
+# suites 17
+# pass 148
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2247.402292

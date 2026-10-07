@@ -1,0 +1,24 @@
+# WorldGen Studio, the operator web app, on pinned Bun. Build from the repo root:
+#   docker build -f Dockerfile.studio --build-arg WORLDGEN_BUILD_SHA=$(git rev-parse HEAD) -t worldgen-studio .
+#   docker run -d -p 127.0.0.1:8787:8787 worldgen-studio
+# The studio has no login and starts worldgen runs, so publish it on the host's loopback only.
+# The base is pinned by digest: the same Dockerfile builds the same runtime (YOS-192, A-277).
+FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61
+WORKDIR /app/code
+COPY code/package.json code/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY code/ ./
+# Owned by bun, the user the studio runs as: generation writes gen-* worlds here, and a new volume copies this ownership.
+COPY --chown=bun:bun prod/worlds/ /app/prod/worlds/
+RUN mkdir -p /home/bun/.worldgen && chown bun:bun /home/bun/.worldgen
+# No claude CLI or login lives in the image, so generation uses the Anthropic SDK. Its key comes only at run time
+# (`docker run -e LLM_KEY`, or an env file outside the repo), never from the image or git (A-326).
+ENV WORLDGEN_TRANSPORT=sdk
+ARG WORLDGEN_BUILD_SHA=unknown
+ENV WORLDGEN_BUILD_SHA=${WORLDGEN_BUILD_SHA}
+USER bun
+EXPOSE 8787
+# Ready once /api/health answers 200: the worlds directory reads and the build is named.
+HEALTHCHECK --interval=2s --timeout=3s --start-period=3s --retries=30 \
+  CMD ["bun", "-e", "fetch('http://127.0.0.1:8787/api/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+CMD ["bun", "src/cli/studio.ts", "--host", "0.0.0.0", "--port", "8787", "--repo-root", "/app"]

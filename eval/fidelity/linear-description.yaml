@@ -1,0 +1,100 @@
+# Frozen reference for linear-description ("An issue tracker like Linear"), from research/linear.md
+# section 4 (T2) and research/linear-world.md. Core types: Issue, Team, Project, User, WorkflowState,
+# IssueLabel, Comment, Cycle. Matching rules are the same as in helpdesk-sla.yaml.
+# Linear documents no transition rules, so the state set is any-to-any and a world that invents
+# stricter rules loses the transitions item.
+# Where the states live: in Linear the five states are the values of WorkflowState.type (backlog,
+# unstarted, started, completed, canceled), and an issue only points at a workflow state. So the primary
+# location is workflow_state.type, and issue.status is the alternative for a flat world. The first location
+# that resolves to a state or enum field is used. A name matches the canonical spelling first, then
+# synonyms in listed order, and normalized names never repeat within a scope (the parser rejects a clash).
+case: linear-description
+source: research/linear.md section 4 (T2); research/linear-world.md; Linear GraphQL SDL core types and WorkflowState.type
+entities:
+  - name: issue
+    synonyms: [ticket, task]
+    weight: 4
+    fields:
+      - { name: title, synonyms: [subject, name], types: [string, text], weight: 2 }
+      - { name: description, synonyms: [body], types: [text, string], weight: 1 }
+      - { name: priority, synonyms: [], types: [int, enum, string], weight: 2 }
+      - { name: team_id, synonyms: [team], types: [ref], weight: 2 }
+      - { name: assignee_id, synonyms: [assignee], types: [ref], weight: 2 }
+      - { name: project_id, synonyms: [project], types: [ref], weight: 1 }
+      - { name: due_date, synonyms: [due, due_at], types: [datetime, string], weight: 1 }
+      - { name: estimate, synonyms: [points], types: [int, number], weight: 1 }
+  - name: team
+    synonyms: [workspace_team]
+    weight: 3
+    fields:
+      - { name: name, synonyms: [], types: [string], weight: 2 }
+      - { name: key, synonyms: [identifier, prefix], types: [string], weight: 2 }
+  - name: project
+    synonyms: [initiative]
+    weight: 2
+    fields:
+      - { name: name, synonyms: [title], types: [string], weight: 2 }
+      - { name: state, synonyms: [status], types: [state, enum, string], weight: 1 }
+  - name: user
+    synonyms: [member, person]
+    weight: 3
+    fields:
+      - { name: name, synonyms: [display_name], types: [string], weight: 2 }
+      - { name: email, synonyms: [], types: [string], weight: 2 }
+  - name: workflow_state
+    synonyms: [state, status, issue_status]
+    weight: 3
+    fields:
+      - { name: name, synonyms: [], types: [string], weight: 2 }
+      - { name: type, synonyms: [category, kind], types: [enum, state, string], weight: 2 }
+      - { name: team_id, synonyms: [team], types: [ref], weight: 1 }
+  - name: issue_label
+    synonyms: [label, tag]
+    weight: 2
+    fields:
+      - { name: name, synonyms: [], types: [string], weight: 2 }
+      - { name: color, synonyms: [colour], types: [string], weight: 1 }
+  - name: comment
+    synonyms: [issue_comment, note]
+    weight: 2
+    fields:
+      - { name: issue_id, synonyms: [issue], types: [ref], weight: 1 }
+      - { name: body, synonyms: [text, content], types: [text, string], weight: 2 }
+      - { name: user_id, synonyms: [author_id, author], types: [ref], weight: 1 }
+  - name: cycle
+    synonyms: [sprint, iteration]
+    weight: 1
+    fields:
+      - { name: name, synonyms: [title], types: [string], weight: 1 }
+      - { name: starts_at, synonyms: [start_date, starts_on], types: [datetime, string], weight: 1 }
+      - { name: ends_at, synonyms: [end_date, ends_on], types: [datetime, string], weight: 1 }
+stateSets:
+  - entity: workflow_state
+    field: type
+    synonyms: [category, kind]
+    alternatives:
+      - { entity: issue, field: status, synonyms: [state, workflow_state] }
+    states:
+      - { name: backlog, synonyms: [], weight: 1 }
+      - { name: unstarted, synonyms: [todo, to_do], weight: 1 }
+      - { name: started, synonyms: [in_progress, doing], weight: 1 }
+      - { name: completed, synonyms: [done], weight: 1 }
+      - { name: canceled, synonyms: [cancelled], weight: 1 }
+    transitions:
+      weight: 4
+      anyToAny: true
+      allowed: []
+routes:
+  - { method: GET, path: /issues, synonyms: [], weight: 2 }
+  - { method: GET, path: "/issues/{id}", synonyms: [], weight: 2 }
+  - { method: POST, path: /issues, synonyms: [], weight: 2 }
+  - { method: PATCH, path: "/issues/{id}", synonyms: [], weight: 2 }
+  - { method: GET, path: /teams, synonyms: [], weight: 1 }
+  - { method: GET, path: /projects, synonyms: [], weight: 1 }
+  - { method: GET, path: /users, synonyms: [], weight: 1 }
+  - { method: GET, path: /labels, synonyms: [/issue_labels, /issue-labels], weight: 1 }
+  - { method: POST, path: "/issues/{id}/comments", synonyms: [/comments], weight: 1 }
+# error cases: research/linear.md section 4, T3 (create without teamId is the real validation failure; title is optional in IssueCreateInput)
+errors:
+  - { case: unknown issue id, status: 404, via: { kind: route, method: GET, path: "/issues/{id}" }, weight: 1 }
+  - { case: create issue without a team, status: 422, via: { kind: route, method: POST, path: /issues }, weight: 1 }

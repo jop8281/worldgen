@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules
+.env
+*.log
+worlds/generated/**/transcripts/
+.DS_Store
+.factory/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/

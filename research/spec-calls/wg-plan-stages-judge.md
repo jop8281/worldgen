@@ -1,0 +1,14 @@
+# Spec calls: wg-plan-stages-judge
+
+One bullet per call: the call, why, and whether it is reversible.
+
+- **Coverage paths point into plan.yaml by index.** `plan.not_covered` uses `['plan', 'entities', i]`, `['plan', 'routes', i]`, `['plan', 'workflows', w, 'actions', a]` and `['plan', 'tasks', i]`, and names the item in `expected` (`the planned route "list_tickets" exists in the world`). Why: the path then locates the exact plan.yaml line, and the name stays readable in the message. Reversible: yes.
+- **A planned route is covered only by a `routes` key equal to its id.** Method and path are not matched, and an `actions` entry does not cover a planned route. Why: the plan's `routes` list is owned by the model stage, and custom logic is planned as workflow actions (A-12). Reversible: yes.
+- **Plan jobs are not part of coverage.** Why: Acceptance 1 lists entities, routes, workflow actions and task ids only. Reversible: yes, add a `jobs` loop to `planCoverage`.
+- **Each stage's `done` includes plan coverage for the lists it builds.** model covers entities and routes, workflow covers actions, tasks covers task ids. Why: Acceptance 3 asks model and workflow to require planned items, and tasks follows the same rule. `blockingIssues` (wg-judge) also adds plan coverage, so it must dedupe. Reversible: yes.
+- **"At least one test per action" reads `stats.unexercisedActions`.** Why: the engine computes it and `done` may read only engine output and the plan. It also counts task solutions as callers, so after the tasks stage an action called only by a solution passes. Reversible: yes, if the engine adds a tests-only stat.
+- **workflow `done` reports every unexercised action, planned or not, as `action.unexercised` at `['actions', name]`.** Why: an action with no test is untested logic whether or not the plan named it. The issue keeps its catalog severity (`warning`); the stage treats it as blocking. Reversible: yes.
+- **tasks `done` emits both `world.too_few_tasks` (fewer than 3 tasks) and `tasks.difficulty_not_spread` (a difficulty missing), independently, at path `['tasks']`.** `have` lists present difficulties in easy, medium, hard order. Reversible: yes.
+- **`stagesToRun` uses direct owners and readers only, with no transitive closure.** Why: Acceptance 5 requires a routes change to skip seed even though model reruns and owns entities, which seed reads (A-33). Reversible: yes.
+- **The plan step's brief is `PLAN_BRIEF`, exported from stages.ts.** Why: `plan` is a step but not a row in `STAGES`, and stages.ts already holds every other brief. Reversible: yes.
+- **plan.yaml key order is the schema order, lines are never folded, and strings that need quoting use single quotes.** Why: the same plan always renders the same text and long assumptions stay on one readable line. Reversible: yes.

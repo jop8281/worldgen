@@ -1,0 +1,10 @@
+{
+  "//": "Engine core: pure world logic. No Node types, so process, Buffer, setTimeout, fetch and node:* imports fail to compile. Date and Math.random are banned by the symbol rule in test/architecture.test.ts, because lib ES2023 still declares them.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [],
+    "lib": ["ES2023"]
+  },
+  "include": ["src/engine/**/*.ts"],
+  "exclude": ["src/engine/index.ts", "src/engine/sandbox.ts", "src/engine/http.ts"]
+}

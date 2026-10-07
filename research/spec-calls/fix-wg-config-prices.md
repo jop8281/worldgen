@@ -1,0 +1,3 @@
+- Per-field merge applies to every model with a built-in price, not only claude-opus-5-5. Why: one rule is simpler than a special case. Reversible: yes.
+- The llm.test.ts shared PRICES fixture now lists cache prices explicitly (18.75 / 1.5), keeping the old 0.045 figures, because an input/output-only override now inherits the built-in cache prices. Why: behavior change required by the acceptance. Reversible: yes.
+- Removed the todo markers from WG-C01, WG-C02, WG-C04 in code/test/redteam-wg-config-events.test.ts (outside the allowed file list) as the work order directs. Why: they now pass. Reversible: yes.

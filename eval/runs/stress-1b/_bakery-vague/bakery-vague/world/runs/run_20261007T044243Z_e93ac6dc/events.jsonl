@@ -1,0 +1,6 @@
+{"at":"2026-10-07T04:42:43.679Z","runId":"run_20261007T044243Z_e93ac6dc","t":"run_started","mode":"create","input":"description","model":"claude-sonnet-5-5","budgetUsd":1.75,"transport":"claude-cli"}
+{"at":"2026-10-07T04:42:43.682Z","runId":"run_20261007T044243Z_e93ac6dc","t":"step_started","step":"plan","reason":"planned"}
+{"at":"2026-10-07T04:43:28.942Z","runId":"run_20261007T044243Z_e93ac6dc","t":"attempt","step":"plan","n":1,"ms":45224,"usage":{"inputTokens":2,"outputTokens":6652,"cacheReadTokens":41463,"cacheWriteTokens":625},"costUsd":0.0773166,"outcome":{"kind":"accepted","warnings":0},"dump":"runs/run_20261007T044243Z_e93ac6dc/001-plan-1.json"}
+{"at":"2026-10-07T04:43:28.944Z","runId":"run_20261007T044243Z_e93ac6dc","t":"step_finished","step":"plan","attempts":1,"ms":45262,"costUsd":0.0773166}
+{"at":"2026-10-07T04:43:28.954Z","runId":"run_20261007T044243Z_e93ac6dc","t":"step_started","step":"model","reason":"planned"}
+{"at":"2026-10-07T05:06:24.590Z","runId":"run_20261007T044243Z_e93ac6dc","t":"run_finished","ms":1420911,"costUsd":0.0773166,"worldWritten":false,"result":{"kind":"stopped","reason":{"kind":"time_exhausted","minutes":12}}}

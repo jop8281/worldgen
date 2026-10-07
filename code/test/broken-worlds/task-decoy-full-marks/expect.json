@@ -1,0 +1,10 @@
+{
+  "code": "task.decoy_full_marks",
+  "path": [
+    "tasks",
+    "escalate_breached_enterprise_tickets",
+    "decoys",
+    0
+  ],
+  "layer": "tasks"
+}

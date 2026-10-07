@@ -1,0 +1,13 @@
+id,name,email,country,plan,created_at
+cus_0001,Ada Lovelace,ada.lovelace@example.com,CA,free,2026-01-01T09:00:00Z
+cus_0002,Grace Hopper,grace.hopper@example.com,IE,team,2026-01-02T10:00:00Z
+cus_0003,Alan Turing,alan.turing@example.com,US,free,2026-01-03T11:00:00Z
+cus_0004,Edsger Dijkstra,edsger.dijkstra@example.com,GB,pro,2026-01-04T12:00:00Z
+cus_0005,Barbara Liskov,barbara.liskov@example.com,US,team,2026-01-05T13:00:00Z
+cus_0006,Donald Knuth,donald.knuth@example.com,FR,free,2026-01-06T14:00:00Z
+cus_0007,Frances Allen,frances.allen@example.com,GB,pro,2026-01-07T15:00:00Z
+cus_0008,Ken Thompson,ken.thompson@example.com,IE,free,2026-01-08T16:00:00Z
+cus_0009,Margaret Hamilton,margaret.hamilton@example.com,FR,free,2026-01-09T09:00:00Z
+cus_0010,Dennis Ritchie,dennis.ritchie@example.com,IE,free,2026-01-10T10:00:00Z
+cus_0011,Radia Perlman,radia.perlman@example.com,GB,free,2026-01-11T11:00:00Z
+cus_0012,John McCarthy,john.mccarthy@example.com,US,team,2026-01-12T12:00:00Z

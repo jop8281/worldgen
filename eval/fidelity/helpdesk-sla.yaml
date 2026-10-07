@@ -1,0 +1,110 @@
+# Frozen reference for helpdesk-sla: what a Zendesk-style helpdesk has, written from
+# research/helpdesk-expected-behaviour.md and the Zendesk Support tickets API, never from a generated world.
+# Matching rules (fidelityScore in code/src/worldgen/eval.ts): names compare after lowercasing and
+# dropping every character that is not a letter or digit, and a world name matches when it equals the
+# item's name or one of its synonyms. Nothing else is guessed. A field matches when its engine type is in `types`.
+# A name matches the canonical spelling first, then synonyms in listed order. Normalized names never repeat
+# within a scope (entities, fields of one entity, states of one set), so one world key satisfies at most one item.
+# An error case with `via: route` reuses the synonyms of the route it points at. A state set may list
+# `alternatives`, other places the states may live. Every `types` entry is an engine field type.
+# Provenance: Zendesk's own ticket statuses are new, open, pending, hold, solved and closed. The `escalated`
+# state and the assign, escalate and resolve actions come from research/helpdesk-expected-behaviour.md, the
+# hand world's target. So 0.9577 on prod/worlds/helpdesk measures fidelity to that target, not to Zendesk.
+case: helpdesk-sla
+source: research/helpdesk-expected-behaviour.md (the hand world's target, source of escalated and the assign, escalate and resolve actions); Zendesk Support API tickets (statuses new, open, pending, hold, solved, closed)
+entities:
+  - name: ticket
+    synonyms: [issue, case, request]
+    weight: 3
+    fields:
+      - { name: subject, synonyms: [title], types: [string, text], weight: 2 }
+      - { name: description, synonyms: [body, details], types: [text, string], weight: 1 }
+      - { name: customer_id, synonyms: [requester_id, requester, user_id], types: [ref], weight: 2 }
+      - { name: assignee_id, synonyms: [agent_id, assigned_to], types: [ref], weight: 2 }
+      - { name: priority, synonyms: [], types: [enum, string], weight: 2 }
+      - { name: type, synonyms: [ticket_type, kind], types: [enum, string], weight: 1 }
+  - name: customer
+    synonyms: [end_user, requester, user, organization, company]
+    weight: 2
+    fields:
+      - { name: name, synonyms: [], types: [string], weight: 2 }
+      - { name: tier, synonyms: [plan, sla_tier], types: [enum, string], weight: 1 }
+      - { name: email, synonyms: [], types: [string], weight: 1 }
+  - name: agent
+    synonyms: [staff, support_agent]
+    weight: 2
+    fields:
+      - { name: name, synonyms: [], types: [string], weight: 1 }
+      - { name: email, synonyms: [], types: [string], weight: 1 }
+      - { name: team, synonyms: [group], types: [enum, string], weight: 1 }
+      - { name: active, synonyms: [is_active], types: [bool], weight: 1 }
+  - name: sla_policy
+    synonyms: [sla, sla_target]
+    weight: 2
+    fields:
+      - { name: tier, synonyms: [customer_tier], types: [enum, string], weight: 1 }
+      - { name: priority, synonyms: [], types: [enum, string], weight: 1 }
+      - { name: resolution_minutes, synonyms: [target_minutes, resolution_target], types: [int, number], weight: 2 }
+  - name: oncall_shift
+    synonyms: [oncall, shift, on_call_schedule]
+    weight: 2
+    fields:
+      - { name: agent_id, synonyms: [agent], types: [ref], weight: 1 }
+      - { name: level, synonyms: [escalation_level], types: [int], weight: 1 }
+      - { name: starts_at, synonyms: [start, start_time], types: [datetime], weight: 1 }
+      - { name: ends_at, synonyms: [end, end_time], types: [datetime], weight: 1 }
+  - name: ticket_comment
+    synonyms: [comment, message, reply]
+    weight: 2
+    fields:
+      - { name: ticket_id, synonyms: [ticket], types: [ref], weight: 1 }
+      - { name: body, synonyms: [text, content], types: [text, string], weight: 1 }
+      - { name: public, synonyms: [is_public], types: [bool], weight: 1 }
+      - { name: author_id, synonyms: [author, agent_id], types: [ref], weight: 1 }
+stateSets:
+  - entity: ticket
+    field: status
+    synonyms: [state]
+    states:
+      - { name: new, synonyms: [], weight: 1 }
+      - { name: open, synonyms: [], weight: 1 }
+      - { name: pending, synonyms: [], weight: 1 }
+      - { name: hold, synonyms: [on_hold], weight: 1 }
+      - { name: escalated, synonyms: [], weight: 1 }
+      - { name: resolved, synonyms: [solved], weight: 1 }
+      - { name: closed, synonyms: [], weight: 1 }
+    # new -> escalated: research/helpdesk-expected-behaviour.md machine and T4. Hold moves (open <-> hold, hold -> resolved) and
+    # pending -> resolved: Zendesk ticket status lifecycle (hold is an agent-set pause that returns to open or goes to solved).
+    transitions:
+      weight: 3
+      anyToAny: false
+      allowed:
+        - [new, open]
+        - [open, pending]
+        - [pending, open]
+        - [new, escalated]
+        - [open, escalated]
+        - [open, hold]
+        - [hold, open]
+        - [hold, resolved]
+        - [pending, resolved]
+        - [open, resolved]
+        - [escalated, resolved]
+        - [resolved, open]
+        - [resolved, closed]
+routes:
+  - { method: GET, path: /tickets, synonyms: [], weight: 2 }
+  - { method: GET, path: "/tickets/{id}", synonyms: [], weight: 2 }
+  - { method: POST, path: /tickets, synonyms: [], weight: 2 }
+  - { method: PATCH, path: "/tickets/{id}", synonyms: [], weight: 2 }
+  - { method: GET, path: /customers, synonyms: [/users, /organizations], weight: 1 }
+  - { method: GET, path: /agents, synonyms: [], weight: 1 }
+  - { method: GET, path: /search, synonyms: [/tickets/search], weight: 1 }
+  - { method: GET, path: "/tickets/{id}/comments", synonyms: [], weight: 1 }
+  - { method: POST, path: "/tickets/{id}/assign", synonyms: [], weight: 1 }
+  - { method: POST, path: "/tickets/{id}/escalate", synonyms: [], weight: 1 }
+  - { method: POST, path: "/tickets/{id}/resolve", synonyms: ["/tickets/{id}/solve"], weight: 1 }
+errors:
+  - { case: unknown ticket id, status: 404, via: { kind: route, method: GET, path: "/tickets/{id}" }, weight: 1 }
+  - { case: create ticket without a subject, status: 422, via: { kind: route, method: POST, path: /tickets }, weight: 1 }
+  - { case: move a closed ticket back to open, status: 422, via: { kind: state, entity: ticket, field: status, from: closed, to: open }, weight: 1 }

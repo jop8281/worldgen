@@ -1,0 +1,53 @@
+{
+  "manifest_version": 1,
+  "schema_version": 1,
+  "provider": "anthropic",
+  "model": "claude-sonnet-5-5",
+  "prompt_versions": [
+    "solver-prompt-1"
+  ],
+  "config_versions": [
+    "cfg-183f17ac337b"
+  ],
+  "engine_commits": [
+    "10bfe47bd170a55b1f0ee87a5b750177d2b3f67e"
+  ],
+  "run_ids": [
+    "gen-stripe-charges-w1",
+    "gen-stripe-charges-w2"
+  ],
+  "selection": null,
+  "worlds": [
+    {
+      "world_id": "gen_stripe_charges",
+      "world_version": "2d83544102d3f556e598a1a67a5e244a02e364fd96c1d978f72725aa7d934221",
+      "artifact": {
+        "path": "private/worlds/2d83544102d3f556e598a1a67a5e244a02e364fd96c1d978f72725aa7d934221/world.yaml",
+        "sha256": "2d83544102d3f556e598a1a67a5e244a02e364fd96c1d978f72725aa7d934221"
+      }
+    }
+  ],
+  "counts": {
+    "episodes": 8,
+    "accepted": 8,
+    "failed": 0,
+    "by_stop_reason": {
+      "done": 8
+    }
+  },
+  "files": {
+    "dataset": {
+      "path": "dataset.jsonl",
+      "records": 8,
+      "bytes": 85999,
+      "sha256": "4506ef9546b460f60993e95f6038f7e3fa66ebe156ab815e0147b6f024510713"
+    },
+    "failures": {
+      "path": "failures.jsonl",
+      "records": 0,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "grading_note": "The engine score certifies the final world state only. It does not independently certify that the final reply is factually correct."
+}

@@ -1,0 +1,7 @@
+# Input conformance
+
+- Keep every selected OpenAPI method and path in `InputDigest.operations`, separately from its capped summary and optional response examples. Operations without examples and operations beyond the summary limit must still be checked. Reversible.
+- Compare methods and paths with the engine's `routeKey`, including positional path parameters and trailing-slash normalization. Both standard routes and actions satisfy an input operation. A promised workflow action is checked at workflow and its repair issue belongs to actions; other missing operations block model. Reversible.
+- Compare the inferred error template as structured JSON. Response status behavior and response-body schema conformance remain outside this change. Reversible.
+- Map CSV tables to an entity with the table's name or its existing singularization rule, falling back to seed snippets that reference that table. A table with no mapping is an error. Require dot access or literal bracket access to `ctx.fixtures` plus at least the imported row count, capped at the adapter's 2000-row limit. This is a source-reference and row-count check, not a proof that each original value survives a transformation. Reversible.
+- Reuse the engine report's seed counts when it succeeds. Failed reports expose no counts, so those attempts still check fixture references but defer row-count checks. A successful final engine report with an undersized seed cannot be accepted or saved. No unchecked world is cast to a checked world. Reversible.

@@ -1,0 +1,8 @@
+{
+  "code": "schema.invalid",
+  "path": [
+    "meta",
+    "name"
+  ],
+  "layer": "schema"
+}

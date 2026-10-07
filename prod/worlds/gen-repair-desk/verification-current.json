@@ -1,0 +1,349 @@
+{
+  "kind": "Current offline verification of the hardened repair-desk world",
+  "verifiedSourceCommit": "b00bab5b0c612b42b21e4a89de515eb6e4dbb01d",
+  "stabilizationBase": "50dcf10a3887087d666e1644923f077f799082d1",
+  "codeTree": "940082146fea244a5f3fe0d80de48429471a0c9b",
+  "worldSha256": "8b20fded76ad5bec68ec25c3882f1f06ad325aeedc75dded13ecbada2e9e099d",
+  "historicalWorldSha256": "cbdaf17807d8365daac96ba1712b1267b42106c4e86c9731fa857b8022577f37",
+  "historicalLiveArtifactCommit": "654269e882814b32926544dba979072b8d7d077e",
+  "datasetSha256": "f7c4c14628c68bf6c2e06b75946aa527c9a8a2360436e762657195b667e885cf",
+  "worldChange": "The current world is exactly stabilization 50dcf10: the repair assignment behavior is preserved and two task graders have exact-field guards plus collateral decoys. Public world data, fixtures, task instructions and reference solutions equal the historical live world.",
+  "historicalEvidence": "verification.json and runs/run_20261007T032643Z_024b0b89 describe the original Sonnet repair. Their hashes, costs and receipts remain historical and unchanged.",
+  "runtimeResults": {
+    "bun": {
+      "runtime": {
+        "executable": "/opt/homebrew/Cellar/bun/1.4.2/bin/bun",
+        "bun": "1.4.2",
+        "nodeReported": "26.3.0"
+      },
+      "status": "pass",
+      "engineAccepted": true,
+      "conformance": {
+        "ok": true,
+        "cases": [
+          {
+            "id": "inactive-assignment",
+            "ok": true,
+            "detail": "status=409, stateUnchanged=true"
+          },
+          {
+            "id": "inactive-patch-bypass",
+            "ok": true,
+            "detail": "status=422, stateUnchanged=true"
+          },
+          {
+            "id": "mixed-inactive-edit",
+            "ok": true,
+            "detail": "status=422, stateUnchanged=true"
+          },
+          {
+            "id": "inactive-create",
+            "ok": true,
+            "detail": "status=422, stateUnchanged=true"
+          },
+          {
+            "id": "active-create",
+            "ok": true,
+            "detail": "new queued ticket assigned to an active technician persisted; seed rows unchanged"
+          },
+          {
+            "id": "active-lifecycle",
+            "ok": true,
+            "detail": "changed active assignment, start and close persisted; invalid transitions left state unchanged"
+          }
+        ]
+      },
+      "proofs": {
+        "raise_espresso_priority": {
+          "task": "raise_espresso_priority",
+          "difficulty": "easy",
+          "proof": {
+            "reference": {
+              "score": 1,
+              "calls": 2
+            },
+            "noop": {
+              "score": 0
+            },
+            "near_miss": {
+              "score": 0
+            },
+            "decoys": [
+              0
+            ],
+            "best_prefix": null,
+            "replay_identical": true,
+            "state": "b519f77b11ba7fe3fe5a4c2f16ee5b38"
+          }
+        },
+        "assign_and_start_laptop": {
+          "task": "assign_and_start_laptop",
+          "difficulty": "medium",
+          "proof": {
+            "reference": {
+              "score": 1,
+              "calls": 4
+            },
+            "noop": {
+              "score": 0
+            },
+            "near_miss": {
+              "score": 0.4
+            },
+            "decoys": [
+              0.4,
+              0,
+              0,
+              0
+            ],
+            "best_prefix": 0.4,
+            "replay_identical": true,
+            "state": "4e008d714d43cb21b0828ccc99bded17"
+          }
+        },
+        "reassign_and_start_dana_queue": {
+          "task": "reassign_and_start_dana_queue",
+          "difficulty": "hard",
+          "proof": {
+            "reference": {
+              "score": 1,
+              "calls": 28
+            },
+            "noop": {
+              "score": 0
+            },
+            "near_miss": {
+              "score": 0.5
+            },
+            "decoys": [
+              0,
+              0,
+              0.5,
+              0,
+              0
+            ],
+            "best_prefix": 0.5,
+            "replay_identical": true,
+            "state": "acc9eac95feb5f397860f00b9830b622"
+          }
+        }
+      },
+      "addedCollateralDecoys": [
+        {
+          "taskId": "assign_and_start_laptop",
+          "why": "assigns and starts the right ticket, then also edits its subject",
+          "score": 0
+        },
+        {
+          "taskId": "reassign_and_start_dana_queue",
+          "why": "reassigns and starts every Dana ticket correctly, then also edits the subject of one of them",
+          "score": 0
+        }
+      ],
+      "episodes": [
+        {
+          "taskId": "assign_and_start_laptop",
+          "calls": 4,
+          "grade": 1,
+          "initialStateIdentical": true,
+          "finalStateIdentical": true,
+          "finalStateHash": "4349585d23ab03f85f12a8a2d2695276329656f2958871b42b26e7d91881f72a",
+          "replyUnchanged": true,
+          "reply": "Harbor Dental's queued ticket \"Laptop will not boot\" (tkt_0023) is now active and assigned to Marco Silva (tch_0002), who is active. I assigned it first, then started it, and the start response showed status \"active\" with technician_id tch_0002. A second ticket with the same title belongs to Birch Law Office (tkt_0002). I did not touch it or any other ticket."
+        },
+        {
+          "taskId": "raise_espresso_priority",
+          "calls": 2,
+          "grade": 1,
+          "initialStateIdentical": true,
+          "finalStateIdentical": true,
+          "finalStateHash": "ca6f1726097d33d9f1b4b0fc5b9a4eea955bc50e3643aa1eb826a9fa5b7149f6",
+          "replyUnchanged": true,
+          "reply": "I found the ticket for the leaking espresso machine pump, tkt_0001 (\"Espresso machine pump leaking\", Corner Cafe), and changed its priority from normal to urgent. The update response confirmed priority is now urgent. Its status (queued) and its technician (tch_0002) are unchanged, and I did not touch any other ticket."
+        },
+        {
+          "taskId": "reassign_and_start_dana_queue",
+          "calls": 28,
+          "grade": 1,
+          "initialStateIdentical": true,
+          "finalStateIdentical": true,
+          "finalStateHash": "687bf786ab66f915df3f5528e33c5636b50ed60fb500c352e3996809c4b305ed",
+          "replyUnchanged": true,
+          "reply": "I reassigned all 12 of Dana Ortiz's queued tickets to Priya Nair (tch_0003) and started each one. The tickets are tkt_0003, 0004, 0005, 0006, 0013, 0014, 0015, 0016, 0024, 0025, 0026 and 0027. Every assign and start call returned 200, and each ticket now shows as active under Priya. A final check for queued tickets still assigned to Dana returned none. I didn't touch Dana's active and closed tickets or any other ticket."
+        }
+      ]
+    },
+    "node": {
+      "runtime": {
+        "executable": "/Users/yossieliaz/.local/node/bin/node",
+        "bun": null,
+        "nodeReported": "22.23.3"
+      },
+      "status": "pass",
+      "engineAccepted": true,
+      "conformance": {
+        "ok": true,
+        "cases": [
+          {
+            "id": "inactive-assignment",
+            "ok": true,
+            "detail": "status=409, stateUnchanged=true"
+          },
+          {
+            "id": "inactive-patch-bypass",
+            "ok": true,
+            "detail": "status=422, stateUnchanged=true"
+          },
+          {
+            "id": "mixed-inactive-edit",
+            "ok": true,
+            "detail": "status=422, stateUnchanged=true"
+          },
+          {
+            "id": "inactive-create",
+            "ok": true,
+            "detail": "status=422, stateUnchanged=true"
+          },
+          {
+            "id": "active-create",
+            "ok": true,
+            "detail": "new queued ticket assigned to an active technician persisted; seed rows unchanged"
+          },
+          {
+            "id": "active-lifecycle",
+            "ok": true,
+            "detail": "changed active assignment, start and close persisted; invalid transitions left state unchanged"
+          }
+        ]
+      },
+      "proofs": {
+        "raise_espresso_priority": {
+          "task": "raise_espresso_priority",
+          "difficulty": "easy",
+          "proof": {
+            "reference": {
+              "score": 1,
+              "calls": 2
+            },
+            "noop": {
+              "score": 0
+            },
+            "near_miss": {
+              "score": 0
+            },
+            "decoys": [
+              0
+            ],
+            "best_prefix": null,
+            "replay_identical": true,
+            "state": "b519f77b11ba7fe3fe5a4c2f16ee5b38"
+          }
+        },
+        "assign_and_start_laptop": {
+          "task": "assign_and_start_laptop",
+          "difficulty": "medium",
+          "proof": {
+            "reference": {
+              "score": 1,
+              "calls": 4
+            },
+            "noop": {
+              "score": 0
+            },
+            "near_miss": {
+              "score": 0.4
+            },
+            "decoys": [
+              0.4,
+              0,
+              0,
+              0
+            ],
+            "best_prefix": 0.4,
+            "replay_identical": true,
+            "state": "4e008d714d43cb21b0828ccc99bded17"
+          }
+        },
+        "reassign_and_start_dana_queue": {
+          "task": "reassign_and_start_dana_queue",
+          "difficulty": "hard",
+          "proof": {
+            "reference": {
+              "score": 1,
+              "calls": 28
+            },
+            "noop": {
+              "score": 0
+            },
+            "near_miss": {
+              "score": 0.5
+            },
+            "decoys": [
+              0,
+              0,
+              0.5,
+              0,
+              0
+            ],
+            "best_prefix": 0.5,
+            "replay_identical": true,
+            "state": "acc9eac95feb5f397860f00b9830b622"
+          }
+        }
+      },
+      "addedCollateralDecoys": [
+        {
+          "taskId": "assign_and_start_laptop",
+          "why": "assigns and starts the right ticket, then also edits its subject",
+          "score": 0
+        },
+        {
+          "taskId": "reassign_and_start_dana_queue",
+          "why": "reassigns and starts every Dana ticket correctly, then also edits the subject of one of them",
+          "score": 0
+        }
+      ],
+      "episodes": [
+        {
+          "taskId": "assign_and_start_laptop",
+          "calls": 4,
+          "grade": 1,
+          "initialStateIdentical": true,
+          "finalStateIdentical": true,
+          "finalStateHash": "4349585d23ab03f85f12a8a2d2695276329656f2958871b42b26e7d91881f72a",
+          "replyUnchanged": true,
+          "reply": "Harbor Dental's queued ticket \"Laptop will not boot\" (tkt_0023) is now active and assigned to Marco Silva (tch_0002), who is active. I assigned it first, then started it, and the start response showed status \"active\" with technician_id tch_0002. A second ticket with the same title belongs to Birch Law Office (tkt_0002). I did not touch it or any other ticket."
+        },
+        {
+          "taskId": "raise_espresso_priority",
+          "calls": 2,
+          "grade": 1,
+          "initialStateIdentical": true,
+          "finalStateIdentical": true,
+          "finalStateHash": "ca6f1726097d33d9f1b4b0fc5b9a4eea955bc50e3643aa1eb826a9fa5b7149f6",
+          "replyUnchanged": true,
+          "reply": "I found the ticket for the leaking espresso machine pump, tkt_0001 (\"Espresso machine pump leaking\", Corner Cafe), and changed its priority from normal to urgent. The update response confirmed priority is now urgent. Its status (queued) and its technician (tch_0002) are unchanged, and I did not touch any other ticket."
+        },
+        {
+          "taskId": "reassign_and_start_dana_queue",
+          "calls": 28,
+          "grade": 1,
+          "initialStateIdentical": true,
+          "finalStateIdentical": true,
+          "finalStateHash": "687bf786ab66f915df3f5528e33c5636b50ed60fb500c352e3996809c4b305ed",
+          "replyUnchanged": true,
+          "reply": "I reassigned all 12 of Dana Ortiz's queued tickets to Priya Nair (tch_0003) and started each one. The tickets are tkt_0003, 0004, 0005, 0006, 0013, 0014, 0015, 0016, 0024, 0025, 0026 and 0027. Every assign and start call returned 200, and each ticket now shows as active under Priya. A final check for queued tickets still assigned to Dana returned none. I didn't touch Dana's active and closed tickets or any other ticket."
+        }
+      ]
+    }
+  },
+  "newPaidCalls": 0,
+  "newBoatVMs": 0,
+  "dependencyInstalls": 0,
+  "limits": [
+    "Offline replay, not a new live generation or solver run.",
+    "Original dataset rows retain the historical world version. No rows, hashes or replies were rewritten to claim they originated from the hardened world.",
+    "API identity means status and deep response-body equality, not HTTP wire-byte identity.",
+    "Full repository/main and fresh Boat/Bun qualification remain separate."
+  ]
+}

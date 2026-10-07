@@ -1,0 +1,6 @@
+- Call: loadConfig resolves a file's `exampleWorld` against the config file's directory; an override `exampleWorld` resolves against the process cwd. Why: acceptance 3 for the file value, and a CLI flag is relative to where the user typed it. Reversible: yes.
+- Call: overrides are merged into the raw JSON before strict parsing, and `undefined` override values are ignored. Why: overrides get the same validation as the file and a CLI flag that was not passed cannot erase a setting. Reversible: yes.
+- Call: config errors are one Error listing `path: message "key"` per issue, with unknown keys quoted. Why: acceptance 1 requires the bad key to be named. Reversible: yes.
+- Call: createEmitter's `opts` became optional (default `{ console: false }`). Why: acceptance 2 calls `createEmitter(runDir)`. Reversible: yes.
+- Call: the console view uses `console.log`, one line per event, never printing `attempt.dump`. Why: dump can be large, and the JSONL keeps it. Reversible: yes.
+- Call: events.jsonl is opened per event with appendFileSync, and runDir is created recursively. Why: simple, crash-safe, no handle to close. Reversible: yes.

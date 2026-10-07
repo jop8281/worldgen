@@ -1,0 +1,8 @@
+{
+  "code": "seed.lorem_text",
+  "path": [
+    "seed",
+    "ticket"
+  ],
+  "layer": "lints"
+}

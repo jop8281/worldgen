@@ -1,0 +1,288 @@
+software: 'Square-for-Restaurants / Toast-style bakery management app: pre-orders and pickup, product catalog, recipes and ingredient stock, and daily production batches'
+summary: A single-shop bakery back office. Customers place pickup orders (including pre-orders for a future pickup time). Staff confirm orders, mark them ready and hand them over. The kitchen runs production batches that consume ingredients, per each product's recipe, and add finished stock. Ingredient stock is tracked against reorder levels, and jobs expire uncollected orders and flag low stock.
+clock:
+  start: 2026-01-05T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: customer
+    purpose: A person who orders from the bakery, with contact details and a loyalty tier.
+    keyFields:
+      - name
+      - email
+      - phone
+      - loyalty_tier
+  - name: product
+    purpose: A sellable bakery item such as a sourdough loaf or croissant, with price and finished stock on hand.
+    keyFields:
+      - name
+      - category
+      - price
+      - stock_on_hand
+      - par_level
+      - active
+      - contains_allergens
+  - name: ingredient
+    purpose: A raw material such as flour or butter, with stock and a reorder level.
+    keyFields:
+      - name
+      - unit
+      - stock_qty
+      - reorder_level
+      - low_stock
+  - name: recipe_line
+    purpose: One ingredient quantity needed to produce one unit of a product.
+    keyFields:
+      - product_id
+      - ingredient_id
+      - qty_per_unit
+  - name: bakery_order
+    purpose: A pickup order from a customer with a status lifecycle and a total computed from its lines.
+    keyFields:
+      - customer_id
+      - status
+      - pickup_at
+      - total
+      - placed_at
+      - ready_at
+      - note
+  - name: order_line
+    purpose: A product and quantity on an order, with the unit price captured at order time.
+    keyFields:
+      - order_id
+      - product_id
+      - quantity
+      - unit_price
+  - name: production_batch
+    purpose: A planned or completed bake of a quantity of one product. Completing it consumes ingredients and adds product stock.
+    keyFields:
+      - product_id
+      - quantity
+      - status
+      - scheduled_for
+      - completed_at
+      - baker_name
+workflows:
+  - name: order_lifecycle
+    entity: bakery_order
+    states:
+      - placed
+      - confirmed
+      - ready
+      - picked_up
+      - cancelled
+    rules:
+      - placed -> confirmed or cancelled. confirmed -> ready or cancelled. ready -> picked_up or cancelled. picked_up and cancelled are final.
+      - place_order needs at least one line. Every product must exist and be active, and every quantity must be at least 1. total is the sum of quantity times unit_price.
+      - confirm_order needs product.stock_on_hand to cover every line, otherwise 409 insufficient_stock naming the product. It decrements stock_on_hand per line.
+      - cancel_order from confirmed or ready adds the line quantities back to stock_on_hand. Cancelling a placed order changes no stock.
+      - mark_order_ready sets ready_at to now. complete_pickup is allowed only from ready.
+      - pickup_at must be in the future when an order is placed.
+    actions:
+      - place_order
+      - confirm_order
+      - mark_order_ready
+      - complete_pickup
+      - cancel_order
+  - name: production_batch_lifecycle
+    entity: production_batch
+    states:
+      - planned
+      - completed
+      - cancelled
+    rules:
+      - planned -> completed or cancelled. Both are final.
+      - complete_batch needs each recipe ingredient stock_qty to cover quantity times qty_per_unit, otherwise 409 insufficient_ingredients naming the ingredient.
+      - complete_batch subtracts the ingredients, adds quantity to product.stock_on_hand, sets completed_at, and refreshes low_stock on the ingredients it touched.
+      - A product with no recipe lines cannot be batched (422 no_recipe).
+    actions:
+      - complete_batch
+      - cancel_batch
+  - name: ingredient_stock
+    entity: ingredient
+    states:
+      - ok
+      - low
+    rules:
+      - low_stock is true when stock_qty is at or below reorder_level. It is a derived bool, not a state machine.
+      - restock_ingredient adds a positive quantity and recomputes low_stock.
+    actions:
+      - restock_ingredient
+jobs:
+  - name: expire_uncollected_orders
+    every: 1h
+    rule: A ready order whose ready_at is more than 24 hours old becomes cancelled and its reserved stock goes back to product.stock_on_hand.
+  - name: flag_low_stock
+    every: 1h
+    rule: Recompute ingredient.low_stock as stock_qty <= reorder_level for every ingredient.
+routes:
+  - id: list_products
+    method: GET
+    path: /products
+    purpose: List products, filtered by category and active, searchable by name, sortable by price and stock.
+  - id: get_product
+    method: GET
+    path: /products/{id}
+    purpose: Read one product.
+  - id: create_product
+    method: POST
+    path: /products
+    purpose: Add a product to the catalog.
+  - id: update_product
+    method: PATCH
+    path: /products/{id}
+    purpose: Edit price, par level or active flag. stock_on_hand is readonly and changes only through batches and orders.
+  - id: list_ingredients
+    method: GET
+    path: /ingredients
+    purpose: List ingredients, filtered by low_stock.
+  - id: get_ingredient
+    method: GET
+    path: /ingredients/{id}
+    purpose: Read one ingredient.
+  - id: list_recipe_lines
+    method: GET
+    path: /products/{product_id}/recipe
+    purpose: List the recipe lines of a product.
+  - id: list_customers
+    method: GET
+    path: /customers
+    purpose: List customers, filtered by loyalty_tier, searchable by name and email.
+  - id: get_customer
+    method: GET
+    path: /customers/{id}
+    purpose: Read one customer.
+  - id: create_customer
+    method: POST
+    path: /customers
+    purpose: Register a customer.
+  - id: update_customer
+    method: PATCH
+    path: /customers/{id}
+    purpose: Edit customer contact details.
+  - id: list_orders
+    method: GET
+    path: /orders
+    purpose: List orders, filtered by status and customer_id, sortable by pickup_at and created_at.
+  - id: get_order
+    method: GET
+    path: /orders/{id}
+    purpose: Read one order.
+  - id: list_order_lines
+    method: GET
+    path: /orders/{order_id}/lines
+    purpose: List the lines of an order.
+  - id: place_order
+    method: POST
+    path: /orders
+    purpose: Action. Create an order with its lines in one call, price the lines from the current product price and compute the total. Starts in placed.
+  - id: list_batches
+    method: GET
+    path: /batches
+    purpose: List production batches, filtered by status and product_id, sortable by scheduled_for.
+  - id: get_batch
+    method: GET
+    path: /batches/{id}
+    purpose: Read one batch.
+  - id: create_batch
+    method: POST
+    path: /batches
+    purpose: Plan a production batch. It starts as planned.
+  - id: confirm_order
+    method: POST
+    path: /orders/{id}/confirm
+    purpose: Action. Confirm a placed order and reserve finished stock.
+  - id: mark_order_ready
+    method: POST
+    path: /orders/{id}/ready
+    purpose: Action. Mark a confirmed order ready for pickup.
+  - id: complete_pickup
+    method: POST
+    path: /orders/{id}/pickup
+    purpose: Action. Hand a ready order to the customer.
+  - id: cancel_order
+    method: POST
+    path: /orders/{id}/cancel
+    purpose: Action. Cancel a placed, confirmed or ready order and release reserved stock.
+  - id: complete_batch
+    method: POST
+    path: /batches/{id}/complete
+    purpose: 'Action. Finish a planned batch: consume recipe ingredients and add product stock.'
+  - id: cancel_batch
+    method: POST
+    path: /batches/{id}/cancel
+    purpose: Action. Cancel a planned batch with no stock effect.
+  - id: restock_ingredient
+    method: POST
+    path: /ingredients/{id}/restock
+    purpose: Action. Add a delivered quantity to an ingredient and refresh its low_stock flag.
+seed:
+  rowsPerEntity:
+    customer: 60
+    product: 40
+    ingredient: 30
+    recipe_line: 130
+    bakery_order: 140
+    order_line: 340
+    production_batch: 70
+  mix: "Orders: placed 15%, confirmed 25%, ready 10%, picked_up 40%, cancelled 10%. Batches: planned 30%, completed 62%, cancelled 8%. Products across bread, pastry, cake, cookie and drink categories, about 90% active. About a fifth of ingredients are below their reorder level. Loyalty tiers: none 55%, regular 35%, gold 10%. Reserved stock matches the confirmed and ready orders. Order totals equal the sum of their lines. Seed has a few named anchors: customer Maria Lopez with a confirmed custom cake order, a croissant product with a planned batch that is short of butter, and several confirmed orders for tomorrow's pickup. Realistic names and prices, no placeholder text. Seed rows predate the clock start."
+tasks:
+  - id: mark_marias_order_ready
+    difficulty: easy
+    intent: Mark Maria Lopez's confirmed custom cake order ready for pickup. The agent looks up the customer, finds her confirmed order and calls the ready action. Nothing else changes.
+    decoyIdea: Completes pickup instead of marking ready, or PATCHes status directly, or marks a different Maria's order.
+  - id: bake_croissants_after_restock
+    difficulty: medium
+    intent: The planned croissant batch cannot complete because butter is short. Restock butter by the missing amount and complete that batch. Do not touch other batches or ingredients.
+    decoyIdea: Restocks butter but never completes the batch, completes the wrong product's batch, or restocks far too many unrelated ingredients.
+  - id: cancel_tomorrows_orders_for_discontinued_product
+    difficulty: hard
+    intent: A product was discontinued. Cancel every placed or confirmed order due for pickup tomorrow that contains it, across all result pages. Orders already ready or picked up and orders without the product stay untouched. Reserved stock of the other products must be released correctly.
+    decoyIdea: Reads only page 1 of orders, cancels all orders for tomorrow regardless of product, cancels orders for the wrong day, or cancels ready orders too.
+open_questions:
+  - question: Which real product should this mirror?
+    default_answer: A Square/Toast-style order and inventory API plus a simple production-planning module.
+  - question: Is it one bakery location or several?
+    default_answer: One location.
+  - question: Is it pickup only, or does it also deliver?
+    default_answer: Pickup only.
+  - question: Should payments be modeled?
+    default_answer: No. Orders carry a total, but nothing is charged.
+  - question: Should ingredient stock be tracked against recipes?
+    default_answer: Yes. Completing a batch consumes recipe ingredients and adds product stock.
+  - question: Should confirming an order reserve stock?
+    default_answer: Yes. Confirming decrements stock_on_hand and cancelling gives it back.
+  - question: Which currency applies?
+    default_answer: USD.
+assumptions:
+  - decision: One shop, one currency (USD), no multi-location inventory.
+    why: The input gives no detail about scale. A single shop is the simplest realistic default.
+  - decision: Mirrors a Square/Toast-style order and inventory API, combined with a simple production-planning module.
+    why: No named product was given. Bakeries need orders, stock and baking schedules.
+  - decision: Orders are pickup only, with no delivery, and there is no real payment processing.
+    why: Keeps the lifecycle small and deterministic.
+  - decision: Order entity is named bakery_order, with prefix ord.
+    why: Avoids clashing with the SQL word 'order'.
+  - decision: Confirming an order reserves finished stock by decrementing product.stock_on_hand. Cancelling before pickup puts it back.
+    why: Makes the product, order and batch workflows interact in a checkable way.
+  - decision: Stock fields (stock_on_hand, stock_qty, status, totals) are readonly and change only through actions or jobs.
+    why: Stops agents from bypassing the workflow with a plain PATCH.
+  - decision: Order total is computed on place_order from the lines and the current product price. Prices captured in order_line do not change later.
+    why: Mirrors real point-of-sale behavior and keeps totals consistent.
+  - decision: Time is explicit. Jobs fire only when the clock advances.
+    why: The engine default for deterministic worlds.
+  - decision: Allergen info is a simple text or enum field on product and is not enforced in workflows.
+    why: Informational only, since compliance logic is out of scope.
+outOfScope:
+  - what: Real payments, refunds, tips, tax calculation
+    why: Needs a payment processor model. Not needed for the stock and order workflows.
+  - what: Delivery, couriers and addresses
+    why: Pickup only keeps the scope small.
+  - what: Staff scheduling, payroll, authentication and roles
+    why: Not part of the bakery order and production core.
+  - what: Supplier purchase orders and invoicing
+    why: Restocking is a single direct action instead.
+  - what: Multi-location inventory and shelf-life/waste tracking
+    why: One shop is enough to exercise the workflows.
+changes: []

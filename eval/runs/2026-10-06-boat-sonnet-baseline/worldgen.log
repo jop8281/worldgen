@@ -1,0 +1,227 @@
+TAP version 13
+# Subtest: the scripted target world
+    # Subtest: passes the engine, so the scripts below fail only where they mean to
+    ok 1 - passes the engine, so the scripts below fail only where they mean to
+      ---
+      duration_ms: 189.811375
+      type: 'test'
+      ...
+    1..1
+ok 1 - the scripted target world
+  ---
+  duration_ms: 190.089208
+  type: 'suite'
+  ...
+# Subtest: runWorldGen create: success on the first try
+    # Subtest: runs plan, model, workflow, seed and tasks once each and saves the world
+    ok 1 - runs plan, model, workflow, seed and tasks once each and saves the world
+      ---
+      duration_ms: 88.097041
+      type: 'test'
+      ...
+    # Subtest: writes world.yaml from the checked world, with meta from the plan and the output directory
+    ok 2 - writes world.yaml from the checked world, with meta from the plan and the output directory
+      ---
+      duration_ms: 88.389167
+      type: 'test'
+      ...
+    # Subtest: writes events.jsonl and one dump per attempt under runs/<runId>
+    not ok 3 - writes events.jsonl and one dump per attempt under runs/<runId>
+      ---
+      duration_ms: 56.629
+      type: 'test'
+      location: '<repo>/code/test/worldgen.test.ts:26:6789'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly deep-equal:
+        + actual - expected
+
+          {
+            kind: 'accepted',
+        +   warnings: 2
+        -   warnings: 0
+          }
+
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected:
+        kind: 'accepted'
+        warnings: 0
+      actual:
+        kind: 'accepted'
+        warnings: 2
+      operator: 'deepStrictEqual'
+      stack: |-
+        TestContext.<anonymous> (<repo>/code/test/worldgen.test.ts:222:12)
+        async Test.run (node:internal/test_runner/test:1054:7)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: writes plan.yaml before any stage runs, with the plan assumptions verbatim
+    ok 4 - writes plan.yaml before any stage runs, with the plan assumptions verbatim
+      ---
+      duration_ms: 61.176917
+      type: 'test'
+      ...
+    1..4
+not ok 2 - runWorldGen create: success on the first try
+  ---
+  duration_ms: 294.514125
+  type: 'suite'
+  location: '<repo>/code/test/worldgen.test.ts:26:4799'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: runWorldGen create: one bad edit, then a fixed one
+    # Subtest: retries the model stage with the engine issues and then finishes
+    ok 1 - retries the model stage with the engine issues and then finishes
+      ---
+      duration_ms: 82.226708
+      type: 'test'
+      ...
+    # Subtest: keeps world.yaml unwritten until the last stage is accepted
+    ok 2 - keeps world.yaml unwritten until the last stage is accepted
+      ---
+      duration_ms: 60.010875
+      type: 'test'
+      ...
+    1..2
+ok 3 - runWorldGen create: one bad edit, then a fixed one
+  ---
+  duration_ms: 142.402375
+  type: 'suite'
+  ...
+# Subtest: runWorldGen create: the plan step
+    # Subtest: asks with the plan JSON Schema and a system prompt holding the format reference and example world
+    ok 1 - asks with the plan JSON Schema and a system prompt holding the format reference and example world
+      ---
+      duration_ms: 65.246375
+      type: 'test'
+      ...
+    # Subtest: feeds plan schema errors back and accepts the corrected plan
+    ok 2 - feeds plan schema errors back and accepts the corrected plan
+      ---
+      duration_ms: 10.892291
+      type: 'test'
+      ...
+    # Subtest: stops with input_rejected on a refusal, writing plan.yaml but no world.yaml
+    ok 3 - stops with input_rejected on a refusal, writing plan.yaml but no world.yaml
+      ---
+      duration_ms: 6.548291
+      type: 'test'
+      ...
+    1..3
+ok 4 - runWorldGen create: the plan step
+  ---
+  duration_ms: 82.820209
+  type: 'suite'
+  ...
+# Subtest: runWorldGen create: stage tools and scope
+    # Subtest: gives each stage the edit schema for exactly the sections it owns
+    ok 1 - gives each stage the edit schema for exactly the sections it owns
+      ---
+      duration_ms: 64.977834
+      type: 'test'
+      ...
+    # Subtest: rejects edits to meta, to sections another stage owns, and to fixtures as edit.out_of_scope
+    ok 2 - rejects edits to meta, to sections another stage owns, and to fixtures as edit.out_of_scope
+      ---
+      duration_ms: 13.026042
+      type: 'test'
+      ...
+    # Subtest: flags unknown edit keys and section names instead of dropping them, and ignores empty unowned parts
+    ok 3 - flags unknown edit keys and section names instead of dropping them, and ignores empty unowned parts
+      ---
+      duration_ms: 0.097333
+      type: 'test'
+      ...
+    1..3
+ok 5 - runWorldGen create: stage tools and scope
+  ---
+  duration_ms: 78.193709
+  type: 'suite'
+  ...
+# Subtest: runWorldGen create: code writes fixtures and the API shape
+    # Subtest: puts digest fixtures and apiShape into the world before the model stage and keeps them to the end
+    ok 1 - puts digest fixtures and apiShape into the world before the model stage and keeps them to the end
+      ---
+      duration_ms: 62.57075
+      type: 'test'
+      ...
+    # Subtest: stops with input_rejected when the digest tables do not fit the world format
+    ok 2 - stops with input_rejected when the digest tables do not fit the world format
+      ---
+      duration_ms: 0.96825
+      type: 'test'
+      ...
+    1..2
+ok 6 - runWorldGen create: code writes fixtures and the API shape
+  ---
+  duration_ms: 63.603083
+  type: 'suite'
+  ...
+# Subtest: runWorldGen create: stops
+    # Subtest: stops with attempts_exhausted after the step budget, with no world.yaml
+    ok 1 - stops with attempts_exhausted after the step budget, with no world.yaml
+      ---
+      duration_ms: 12.113167
+      type: 'test'
+      ...
+    # Subtest: stops with no_progress when the same issues come back
+    ok 2 - stops with no_progress when the same issues come back
+      ---
+      duration_ms: 10.478959
+      type: 'test'
+      ...
+    # Subtest: stops with model_error and charges what the failed call billed
+    ok 3 - stops with model_error and charges what the failed call billed
+      ---
+      duration_ms: 12.286292
+      type: 'test'
+      ...
+    # Subtest: stops with budget_exhausted once spend reaches maxCostUsd before the last step
+    ok 4 - stops with budget_exhausted once spend reaches maxCostUsd before the last step
+      ---
+      duration_ms: 8.808958
+      type: 'test'
+      ...
+    # Subtest: leaves iterate mode to wg-iterate
+    ok 5 - leaves iterate mode to wg-iterate
+      ---
+      duration_ms: 0.534416
+      type: 'test'
+      ...
+    1..5
+ok 7 - runWorldGen create: stops
+  ---
+  duration_ms: 44.355833
+  type: 'suite'
+  ...
+# Subtest: runWorldGen create: model and effort per step
+    # Subtest: uses each step model and effort from config, and the escalation model after a stall
+    ok 1 - uses each step model and effort from config, and the escalation model after a stall
+      ---
+      duration_ms: 58.844167
+      type: 'test'
+      ...
+    # Subtest: does not escalate while each retry has fewer issues than the one before
+    ok 2 - does not escalate while each retry has fewer issues than the one before
+      ---
+      duration_ms: 21.929542
+      type: 'test'
+      ...
+    1..2
+ok 8 - runWorldGen create: model and effort per step
+  ---
+  duration_ms: 80.903125
+  type: 'suite'
+  ...
+1..8
+# tests 22
+# suites 8
+# pass 21
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1285.141917

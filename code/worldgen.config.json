@@ -1,0 +1,29 @@
+{
+  "model": "claude-sonnet-5-5",
+  "effort": "high",
+  "transport": "claude-cli",
+  "claudeBin": "claude",
+  "apiKeyEnv": "LLM_KEY",
+  "maxCostUsd": 5,
+  "maxMinutes": 15,
+  "maxBacktracks": 2,
+  "steps": {
+    "plan": { "maxAttempts": 3, "minShareSeconds": 330 },
+    "model": { "maxAttempts": 4 },
+    "workflow": { "maxAttempts": 5 },
+    "seed": { "maxAttempts": 4 },
+    "tasks": { "maxAttempts": 5 }
+  },
+  "stepModels": {
+    "plan": { "effort": "medium" },
+    "model": { "effort": "high" },
+    "workflow": { "effort": "medium" },
+    "seed": { "effort": "medium" },
+    "tasks": { "effort": "high" }
+  },
+  "escalate": { "effort": "high" },
+  "prices": {
+    "claude-sonnet-5-5": { "inputPerMTok": 2, "outputPerMTok": 10, "cacheWritePerMTok": 2.5, "cacheWrite1hPerMTok": 4, "cacheReadPerMTok": 0.2 }
+  },
+  "exampleWorld": "../prod/worlds/helpdesk"
+}

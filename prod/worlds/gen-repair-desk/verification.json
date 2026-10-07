@@ -1,0 +1,165 @@
+{
+  "worldSha256": "cbdaf17807d8365daac96ba1712b1267b42106c4e86c9731fa857b8022577f37",
+  "artifactBaseCommit": "460f04a151810c933e578b42846d9bf5d31383b3",
+  "artifactBaseEngineCheck": "pass",
+  "artifactBaseTaskProofs": {
+    "raise_espresso_priority": {
+      "taskId": "raise_espresso_priority",
+      "difficulty": "easy",
+      "solution": 1,
+      "noop": 0,
+      "decoys": [
+        {
+          "why": "raises every normal-priority Corner Cafe ticket to urgent instead of only the pump ticket",
+          "score": 0
+        }
+      ],
+      "bestPrefixScore": null,
+      "solutionCalls": 2,
+      "solutionWrites": 1,
+      "solutionReadsBeforeWrite": 1,
+      "endStateHash": "b519f77b11ba7fe3fe5a4c2f16ee5b38"
+    },
+    "assign_and_start_laptop": {
+      "taskId": "assign_and_start_laptop",
+      "difficulty": "medium",
+      "solution": 1,
+      "noop": 0,
+      "decoys": [
+        {
+          "why": "assigns Marco with the assign action but never starts the ticket, leaving it queued",
+          "score": 0.4
+        },
+        {
+          "why": "picks the other 'Laptop will not boot' ticket (Birch Law Office) without checking the customer, then assigns and starts it",
+          "score": 0
+        },
+        {
+          "why": "assigns and starts the right ticket but also edits the Birch Law Office laptop ticket's priority, a collateral change",
+          "score": 0
+        }
+      ],
+      "bestPrefixScore": 0.4,
+      "solutionCalls": 4,
+      "solutionWrites": 2,
+      "solutionReadsBeforeWrite": 2,
+      "endStateHash": "4e008d714d43cb21b0828ccc99bded17"
+    },
+    "reassign_and_start_dana_queue": {
+      "taskId": "reassign_and_start_dana_queue",
+      "difficulty": "hard",
+      "solution": 1,
+      "noop": 0,
+      "decoys": [
+        {
+          "why": "handles only the first page of Dana's queued tickets and misses the rest",
+          "score": 0
+        },
+        {
+          "why": "reassigns all of Dana's queued tickets to the wrong technician, Marco Silva, instead of Priya Nair, and starts them",
+          "score": 0
+        },
+        {
+          "why": "reassigns all of Dana's queued tickets to Priya but never starts them",
+          "score": 0.5
+        },
+        {
+          "why": "also starts other queued tickets that already have an active technician, which were not Dana's",
+          "score": 0
+        }
+      ],
+      "bestPrefixScore": 0.5,
+      "solutionCalls": 28,
+      "solutionWrites": 24,
+      "solutionReadsBeforeWrite": 4,
+      "endStateHash": "acc9eac95feb5f397860f00b9830b622"
+    }
+  },
+  "revision": {
+    "sourceCommit": "654269e882814b32926544dba979072b8d7d077e",
+    "sourceWorldSha256": "ba5e78ed7f841dc264ba044b66b2557750cf6630c3a935d43684676712a5890e",
+    "sourceArtifact": "repair-desk-description-world",
+    "sourceGenerationCommit": "c1c25bcfa6ac56cd635bcd895cf0c433af7bcdba",
+    "sourceTransport": "sdk",
+    "revisionTransport": "claude-cli",
+    "originalArtifactPreserved": true
+  },
+  "initialStateUnchanged": true,
+  "briefConformance": {
+    "ok": true,
+    "cases": [
+      {
+        "id": "inactive-assignment",
+        "ok": true,
+        "detail": "status=409, stateUnchanged=true"
+      },
+      {
+        "id": "inactive-patch-bypass",
+        "ok": true,
+        "detail": "status=422, stateUnchanged=true"
+      },
+      {
+        "id": "mixed-inactive-edit",
+        "ok": true,
+        "detail": "status=422, stateUnchanged=true"
+      },
+      {
+        "id": "inactive-create",
+        "ok": true,
+        "detail": "status=422, stateUnchanged=true"
+      },
+      {
+        "id": "active-create",
+        "ok": true,
+        "detail": "new queued ticket assigned to an active technician persisted; seed rows unchanged"
+      },
+      {
+        "id": "active-lifecycle",
+        "ok": true,
+        "detail": "changed active assignment, start and close persisted; invalid transitions left state unchanged"
+      }
+    ]
+  },
+  "liveAcceptance": {
+    "status": "pass",
+    "commit": "654269e882814b32926544dba979072b8d7d077e",
+    "sourceWorldSha256": "cbdaf17807d8365daac96ba1712b1267b42106c4e86c9731fa857b8022577f37",
+    "transport": "claude-cli",
+    "model": "claude-sonnet-5-5",
+    "accepted": 3,
+    "failed": 0,
+    "modelCalls": 37,
+    "scores": {
+      "assign_and_start_laptop": 1,
+      "raise_espresso_priority": 1,
+      "reassign_and_start_dana_queue": 1
+    },
+    "unaccountedCalls": 0,
+    "solverCostUsdReported": 0.6938947999999999,
+    "revisionCostUsdReported": 0.6764998,
+    "boatCostUsdEstimated": 0.000717225,
+    "totalRevisionAndDatasetUsdReportedAndEstimated": 1.3711118249999998,
+    "invoiceVerified": false,
+    "replyAudit": "pass, including literal target IDs, all13 assignment actions and final empty Dana search",
+    "vmCreated": 1,
+    "vmArchived": true,
+    "activeVmsAfter": 0,
+    "stopCalls": 1,
+    "reopenedExport": "pass",
+    "byteIdenticalReExport": true,
+    "publicApiHttp": 200,
+    "publicAdminHttp": 404,
+    "toolchain": "Node/npm; Boat Node24.18.1, observed Bun1.3.14. Not full Bun/main qualification.",
+    "limits": [
+      "Historical initial world generation was SDK at c1c25bc; the repair and all fresh episodes use default CLI at654269e.",
+      "Known shared-cost admission and product generation-cancellation work remains separate.",
+      "No full-release or main-promotion claim."
+    ]
+  },
+  "evidence": {
+    "linearIssue": "https://linear.app/yossi-zozo123/issue/YOS-129",
+    "revisionArchiveSha256": "ddcdb0d4b8a86bc2b46ff544007be04467f4d003bb51a565735d133c6fb60cd7",
+    "liveArchiveSha256": "b441354499811aed69ee13d4c0703acb0f2aed3e36547dd7faf92995df1aac50"
+  },
+  "qualification": "Artifact and exact-source live proof only. Full integrated Bun/main qualification remains open."
+}

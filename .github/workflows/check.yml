@@ -1,0 +1,73 @@
+name: check
+
+on:
+  push:
+    branches: [main, stabilize/main, factory/integration]
+  # No pull_request trigger: with dozens of PR pushes an hour the free runners queued for hours and no
+  # gate head was ever checked. Gate a pinned head with `gh workflow run check.yml --ref promote/<sha>`.
+  workflow_dispatch:
+
+# One run per ref: a newer push or PR update cancels the older run (consolidation produces many pushes).
+concurrency:
+  group: check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # A shared 2-vCPU runner: scale the snippet CPU guard and the per-test timeout alike (A-169).
+    env:
+      WORLDGEN_GUARD_SCALE: "4"
+    defaults:
+      run:
+        working-directory: code
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test --timeout 480000 ./test
+
+  # The same tests under node:test on Node 22. It also gates the snippet heap bound, which Bun ignores (A-87).
+  node:
+    runs-on: ubuntu-latest
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+      WORLDGEN_GUARD_SCALE: "4"
+      # The per-test timeout scales with the guard: redteam-http and redteam-paging outrun 10 min on 2 vCPUs (A-231).
+      WORLDGEN_TEST_TIMEOUT_MS: "2400000"
+    defaults:
+      run:
+        working-directory: code
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: code/package-lock.json
+      - run: npm ci
+      - run: npm run check:node
+
+  # Acceptance on a clean checkout: typecheck, the helpdesk world checked, verified and over HTTP, CLI help,
+  # fresh docs. The test suite runs in the check job, not here (A-231).
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WORLDGEN_GUARD_SCALE: "4"
+    defaults:
+      run:
+        working-directory: code
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run e2e

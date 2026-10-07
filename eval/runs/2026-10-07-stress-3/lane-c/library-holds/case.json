@@ -1,0 +1,14 @@
+{
+  "id": "library-holds",
+  "expect": "done",
+  "phases": [
+    {
+      "phase": "create",
+      "result": "stopped",
+      "error": null
+    }
+  ],
+  "verify": {
+    "kind": "not_run"
+  }
+}

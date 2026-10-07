@@ -1,0 +1,58 @@
+{
+  "capsule": 1,
+  "runId": "run_20261007T150841Z_45dd3829",
+  "mode": "create",
+  "input": {
+    "kind": "csv",
+    "digest": "4afe706f0d69d369c46263323319c6d64f4fd6798114eb235078cf88c0d3ca5d"
+  },
+  "worldId": "wid_f773d2c649bf6ff1acfa9f272edfcf2e07b21ff4bd24d103aeea46736af10368",
+  "model": "claude-sonnet-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 139843,
+      "costUsd": 0.34799060000000004
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 49559,
+      "costUsd": 0.17296
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 20280,
+      "costUsd": 0.1390516
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 15981,
+      "costUsd": 0.1445758
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 20869,
+      "costUsd": 0.1533576
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 109949,
+      "costUsd": 0.3083806
+    }
+  ],
+  "ms": 357089,
+  "costUsd": 1.2663162000000001
+}

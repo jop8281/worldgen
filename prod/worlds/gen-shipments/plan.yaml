@@ -1,0 +1,248 @@
+software: Parcel shipment-tracking and carrier-operations API (EasyPost / AfterShip / Shippo-style tracking and dispatch backend)
+summary: A multi-carrier shipment tracker. The 120 imported shipments become shipment rows that link to carrier and hub rows. Operators dispatch, delay, resume, deliver, return and re-carrier shipments through lifecycle actions. Every step writes an append-only tracking event. Late or damaged parcels get claims that are reviewed and resolved. An hourly job flags in-transit shipments that pass their ETA. Tasks cover filtering, paging, state rules and collateral checks.
+clock:
+  start: 2026-10-15T09:00:00.000Z
+  tick: 1s
+verdict:
+  kind: proceed
+entities:
+  - name: carrier
+    purpose: A shipping carrier (UPS, PostNL, DHL, FedEx, DPD). The fixture only has the carrier name. The code, service-level transit days and active flag are invented by the seed.
+    keyFields:
+      - name
+      - code (unique)
+      - transit_days (int, SLA used to compute expected_delivery_at)
+      - active (bool)
+  - name: hub
+    purpose: A city hub that parcels leave from or arrive at. The 10 origin and destination cities are the same set, so one table serves both.
+    keyFields:
+      - name (unique)
+      - country
+      - active (bool)
+  - name: shipment
+    purpose: One parcel in transit between two hubs with one carrier. It is imported from the shipments CSV. Status moves only through lifecycle actions.
+    keyFields:
+      - reference (unique, e.g. SH-1001)
+      - carrier_id (ref carrier)
+      - origin_id (ref hub)
+      - destination_id (ref hub)
+      - weight_kg (number)
+      - 'status (state: created, in_transit, delayed, delivered, returned)'
+      - shipped_at
+      - expected_delivery_at
+      - delivered_at (nullable)
+      - delay_reason (nullable)
+      - return_reason (nullable)
+  - name: shipment_event
+    purpose: Append-only tracking history per shipment. It is written by the seed, the actions and the job.
+    keyFields:
+      - shipment_id (ref shipment)
+      - 'kind (enum: created, dispatched, delayed, resumed, delivered, returned, carrier_changed, claim_opened)'
+      - hub_id (ref hub, nullable)
+      - note (nullable)
+  - name: claim
+    purpose: A compensation claim on a shipment, for a late, damaged or lost parcel. A claim is open until it is resolved.
+    keyFields:
+      - shipment_id (ref shipment)
+      - 'kind (enum: late, damaged, lost)'
+      - 'status (state: open, approved, rejected)'
+      - amount (money EUR)
+      - resolution_note (nullable)
+      - resolved_at (nullable)
+workflows:
+  - name: shipment_lifecycle
+    entity: shipment
+    states:
+      - created
+      - in_transit
+      - delayed
+      - delivered
+      - returned
+    rules:
+      - 'Initial state is created. Allowed transitions: created→in_transit|returned; in_transit→delayed|delivered|returned; delayed→in_transit|delivered|returned; delivered→returned; returned is final.'
+      - dispatch_shipment needs status created and an active carrier. It sets shipped_at to now, expected_delivery_at to now plus the carrier's transit_days, and writes a dispatched event.
+      - delay_shipment needs status in_transit. The reason is required and non-blank, and the new expected_delivery_at must be after the current one. It stores delay_reason and writes a delayed event.
+      - resume_shipment needs status delayed. It clears delay_reason and writes a resumed event.
+      - deliver_shipment needs status in_transit or delayed. It sets delivered_at to now and writes a delivered event.
+      - return_shipment needs a non-blank reason. A delivered shipment can be returned only within 14 days of delivered_at, otherwise it answers 409. It stores return_reason and writes a returned event.
+      - reassign_carrier needs status created, a new active carrier that differs from the current one, and a carrier_changed event naming both carriers. It never touches a dispatched shipment.
+      - "The job flag_overdue_shipments (every 1h) moves in_transit shipments with expected_delivery_at at or before now to delayed, with delay_reason 'auto: past ETA' and a delayed event."
+      - Every action answers 404 for an unknown id and 409 invalid_state for a disallowed status, with a message naming the current status. A failed action writes nothing.
+    actions:
+      - dispatch_shipment
+      - delay_shipment
+      - resume_shipment
+      - deliver_shipment
+      - return_shipment
+      - reassign_carrier
+  - name: claim_review
+    entity: claim
+    states:
+      - open
+      - approved
+      - rejected
+    rules:
+      - 'Initial state is open. Allowed transitions: open→approved|rejected. Approved and rejected are final.'
+      - open_claim needs shipment status delayed, delivered or returned. The kind is late, damaged or lost, and the amount is greater than 0. A 'late' claim also needs delayed_at or delivered_at later than expected_delivery_at. A second open claim of the same kind on a shipment answers 409 duplicate_claim. It writes a claim_opened event.
+      - resolve_claim takes decision (approved or rejected) and a non-blank note. It sets resolved_at to now and resolution_note. Approving a claim with an amount over 50000 (EUR 500.00) answers 409 needs_manager_review, so large claims can only be rejected in this world.
+      - Resolving an already resolved claim answers 409 invalid_state.
+    actions:
+      - open_claim
+      - resolve_claim
+jobs: []
+routes:
+  - id: list_shipments
+    method: GET
+    path: /shipments
+    purpose: 'List shipments (page size 25). Filters: carrier_id, origin_id, destination_id, status. Search: reference. Sort: shipped_at, expected_delivery_at, weight_kg, created_at.'
+  - id: get_shipment
+    method: GET
+    path: /shipments/{id}
+    purpose: Fetch one shipment.
+  - id: create_shipment
+    method: POST
+    path: /shipments
+    purpose: Register a new shipment. It starts in status created.
+  - id: update_shipment
+    method: PATCH
+    path: /shipments/{id}
+    purpose: Edit plain fields such as weight_kg and carrier_id. Lifecycle fields (status and timestamps) are readonly and move only through actions.
+  - id: list_shipment_events
+    method: GET
+    path: /shipments/{shipment_id}/events
+    purpose: 'Tracking history of one shipment. Sort: created_at.'
+  - id: list_shipment_claims
+    method: GET
+    path: /shipments/{shipment_id}/claims
+    purpose: Claims on one shipment.
+  - id: list_carriers
+    method: GET
+    path: /carriers
+    purpose: 'List carriers. Filter: active. Search: name.'
+  - id: get_carrier
+    method: GET
+    path: /carriers/{id}
+    purpose: Fetch one carrier.
+  - id: update_carrier
+    method: PATCH
+    path: /carriers/{id}
+    purpose: Toggle active or edit transit_days.
+  - id: list_hubs
+    method: GET
+    path: /hubs
+    purpose: 'List hubs. Filter: country, active. Search: name.'
+  - id: get_hub
+    method: GET
+    path: /hubs/{id}
+    purpose: Fetch one hub.
+  - id: list_claims
+    method: GET
+    path: /claims
+    purpose: 'List all claims (page size 25). Filters: shipment_id, kind, status.'
+  - id: get_claim
+    method: GET
+    path: /claims/{id}
+    purpose: Fetch one claim.
+  - id: dispatch_shipment
+    method: POST
+    path: /shipments/{id}/dispatch
+    purpose: Action. Move a created shipment to in_transit. It sets shipped_at and expected_delivery_at from the carrier's transit_days.
+  - id: delay_shipment
+    method: POST
+    path: /shipments/{id}/delay
+    purpose: Action. Move an in_transit shipment to delayed with a required reason and a later expected_delivery_at.
+  - id: resume_shipment
+    method: POST
+    path: /shipments/{id}/resume
+    purpose: Action. Move a delayed shipment back to in_transit.
+  - id: deliver_shipment
+    method: POST
+    path: /shipments/{id}/deliver
+    purpose: Action. Mark an in_transit or delayed shipment as delivered and set delivered_at to now.
+  - id: return_shipment
+    method: POST
+    path: /shipments/{id}/return
+    purpose: Action. Return a created, in_transit, delayed or delivered shipment, with a required reason.
+  - id: reassign_carrier
+    method: POST
+    path: /shipments/{id}/reassign_carrier
+    purpose: Action. Switch the carrier of a shipment that is still in status created. The new carrier must be active.
+  - id: open_claim
+    method: POST
+    path: /shipments/{id}/claim
+    purpose: Action. Open a claim of kind late, damaged or lost on a delayed, delivered or returned shipment. Only one open claim of the same kind per shipment.
+  - id: resolve_claim
+    method: POST
+    path: /claims/{id}/resolve
+    purpose: Action. Approve or reject an open claim with a note.
+seed:
+  rowsPerEntity:
+    carrier: 5
+    hub: 10
+    shipment: 120
+    shipment_event: 420
+    claim: 18
+  mix: "Shipments are read from fixtures.shipments, one row each, keeping the imported carrier, origin, destination, weight, status and timestamps. The CSV status mix is kept (about 20% each of created, in_transit, delayed, delivered and returned). It is normalised only where it is incoherent: a delivered row always has delivered_at, and non-delivered rows have none unless returned. Naive timestamps are read as UTC and clamped to at or before the clock start. Active shipments get ETAs consistent with the clock, so in_transit ETAs are in the future and delayed ETAs are in the past. At least 6 delivered shipments were delivered over 48h after their ETA and have no claim, spread across all pages of the id-ordered list. About 18 claims exist (about 60% open, the rest approved or rejected). Events are derived from each shipment's fields in time order. Carriers: UPS, PostNL, DHL, FedEx and DPD with transit_days 2 to 5, all active except one inactive carrier. Hubs: the 10 cities with real countries. A seeded mix reaches at least 5 shipments in created status with PostNL."
+tasks:
+  - id: dispatch_heaviest_created_shipment
+    difficulty: easy
+    intent: Dispatch the heaviest shipment that is still in status created, using dispatch_shipment. The grader checks that this shipment is in_transit with shipped_at and expected_delivery_at set and a dispatched event written. It also checks that no other shipment changed. The agent must read the filtered list sorted by weight, not use the heaviest overall.
+    decoyIdea: Dispatches the heaviest shipment of any status (it fails with 409 or hits the wrong row), or the lightest created shipment, or the first created shipment in id order.
+  - id: move_postnl_created_to_dpd
+    difficulty: medium
+    intent: PostNL has suspended pickups. Move every shipment that is still in status created and has carrier PostNL to the carrier DPD, using reassign_carrier. Shipments already dispatched, delayed or delivered with PostNL must not change. The grader checks the carrier of every target, one carrier_changed event per target, and no collateral change. Page 2 of the list may hold targets.
+    decoyIdea: PATCHes carrier_id on every PostNL shipment regardless of status, so the in_transit ones change too (a collateral write). Or it reassigns only the first page of results. Or it reassigns to DHL by mistake.
+  - id: claim_for_late_delivered_shipments
+    difficulty: hard
+    intent: Open a 'late' claim for every delivered shipment that was delivered more than 48 hours after its expected delivery time and has no claim of kind late yet. Use an amount of 2500 (EUR 25.00) each. The agent must page through all delivered shipments, compare delivered_at to expected_delivery_at, and check the claims list so it does not duplicate. The grader checks exactly one new open late claim per target, no claim on non-targets, no duplicate on the shipments that already had one, and no other collateral change.
+    decoyIdea: Reads only page 1 of delivered shipments. Or it uses shipped_at instead of expected_delivery_at to measure lateness. Or it ignores existing claims and double-claims some shipments. Or it also claims on delayed (not delivered) shipments. Or it uses a 24h threshold, so it claims on extra near-miss rows.
+open_questions:
+  - question: What reference time should the world start at, given that the CSV has no explicit 'now'?
+    default_answer: 2026-10-15T09:00:00.000Z, safely after the latest imported shipped_at, with a 1s tick.
+  - question: Are the CSV timestamps UTC?
+    default_answer: Yes, naive ISO strings are read as UTC.
+  - question: Should carriers and hubs be separate entities or stay as enum columns on shipment?
+    default_answer: Separate entities, built from the distinct CSV values, so refs, filters and carrier rules are possible.
+  - question: The CSV has no ETA, carrier SLA, claims or tracking events. Should the world invent them?
+    default_answer: Yes. The seed derives them deterministically with the seeded rng, and the imported columns are never overwritten except for status/timestamp normalisation.
+  - question: Can an agent set status directly with PATCH?
+    default_answer: No. Status and lifecycle timestamps are readonly and change only through the lifecycle actions.
+  - question: What happens to rows where the CSV status and delivered_at disagree?
+    default_answer: 'The seed normalises them: delivered always has delivered_at, and non-delivered rows have none, except returned rows that keep theirs.'
+  - question: Which currency and amounts do claims use?
+    default_answer: EUR in integer minor units. Claims over EUR 500 cannot be approved in this world.
+assumptions:
+  - decision: Clock starts at 2026-10-15T09:00:00.000Z with tick 1s.
+    why: The CSV shows shipped_at up to at least 2026-09-28, and the real maximum is unknown. Starting about two weeks later puts every imported event in the past. The 1s tick keeps event ordering deterministic. Active-shipment ETAs and the hourly job are the only future-scheduled events.
+  - decision: Naive timestamps such as 2026-09-28T09:00:00 are read as UTC. Any timestamp after clock start is clamped to clock start minus a small offset.
+    why: The CSV has no timezone, and the seed rule requires created_at <= updated_at <= clock.start.
+  - decision: Carrier and hub are separate entities, built from the distinct enum values in the CSV, and the seed maps the shipment columns to their ids.
+    why: Refs let agents join across entities and filter by id. Hubs serve both origin and destination, since both columns use the same 10 cities.
+  - decision: The invented attributes (carrier code and transit_days, hub country, claims, events, expected_delivery_at) come from the seed using the seeded rng, and nothing in the CSV is overwritten except for the normalisation listed in the seed mix.
+    why: The CSV carries only shipment columns, but the workflows need ETAs, history and claims.
+  - decision: delivered_at is null for every non-delivered shipment. Returned shipments keep delivered_at only if the CSV has one.
+    why: About 51% of delivered_at values are null, which matches the share of undelivered rows. A delivered status with no timestamp would be incoherent.
+  - decision: status, shipped_at, expected_delivery_at, delivered_at, delay_reason, return_reason and the claim lifecycle fields are readonly. Only the lifecycle actions change them.
+    why: This keeps the state machine and its side effects (events, timestamps) consistent. Agents must find and use the action routes, as in a real carrier API.
+  - decision: 'Shipment transitions: created→in_transit|returned; in_transit→delayed|delivered|returned; delayed→in_transit|delivered|returned; delivered→returned; returned is final.'
+    why: This models forward flow plus an undeliverable or customer return, with no way back from returned.
+  - decision: "The job flag_overdue_shipments runs every 1h. It moves in_transit shipments whose expected_delivery_at has passed to delayed, with the delay_reason 'auto: past ETA' and a delayed event."
+    why: It gives time-driven behaviour that agents must reason about. The seed sets no in_transit ETA in the past, so the untouched seed has no pending job work.
+  - decision: A claim is allowed only on delayed, delivered or returned shipments. open_claim returns 409 if an open claim of the same kind exists. Claim amounts are in EUR minor units.
+    why: The rule gives hard tasks a duplicate-claim trap. EUR fits the European cities.
+  - decision: List page size is 25 with cursor paging (data, next_cursor, limit and cursor) and the error envelope {error:{code,message}}.
+    why: With 120 shipments, paging matters, and these are the engine defaults.
+  - decision: Tasks are phrased by business attributes (carrier, status, weight, lateness) and never by ids.
+    why: Agents must discover ids, and every task must use rows the imported data really contains.
+outOfScope:
+  - what: Real carrier integrations, label purchase, rate shopping and tracking-number generation
+    why: They need external services. The world is a deterministic state machine over imported data.
+  - what: Customs, duties, address validation and multi-leg routing
+    why: The CSV has only origin and destination cities, so these add nothing testable.
+  - what: Authentication, users, roles and multi-tenant accounts
+    why: The input has no such data, and the tasks gain nothing from it.
+  - what: Claim payouts, invoicing and carrier billing
+    why: Claims stop at approved or rejected. Payment flows need a finance model that is not in the input.
+  - what: Webhooks and push notifications
+    why: A synchronous, deterministic engine cannot deliver outbound HTTP.
+changes: []

@@ -1,0 +1,8 @@
+{
+  "code": "task.noop_not_zero",
+  "path": [
+    "tasks",
+    "assign_newest_acme_ticket"
+  ],
+  "layer": "tasks"
+}

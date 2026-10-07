@@ -1,0 +1,1477 @@
+format: 1
+meta:
+  name: world
+  description: A single-property hotel booking system. Room types carry a nightly rate and capacity, rooms belong to a type, guests make reservations for a specific room over a half-open stay window [check-in 15:00, check-out 11:00). The engine refuses overlapping non-cancelled reservations on the same room (same-day turnover is allowed). Cancelling within 48 hours of check-in charges a one-night fee, posted as a folio charge, and a job marks unclaimed arrivals as no-shows. Status changes happen only through actions so the overlap and fee rules cannot be bypassed.
+  resembles: Cloudbeds / Opera-style hotel property management system (PMS) reservations API
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-06T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  room_type:
+    description: A category of room with a base nightly rate and capacity, such as Standard Queen or Executive Suite.
+    idPrefix: rty
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 80
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      capacity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+        max: 10
+      nightly_rate:
+        type: money
+        description: Base nightly rate in USD cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      bed_config:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - single
+          - double
+          - queen
+          - king
+          - twin
+  room:
+    description: A physical room that can be booked. Housekeeping state gates check-in and bookability.
+    idPrefix: rom
+    fields:
+      number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: true
+        maxLength: 10
+      floor:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        max: 100
+      room_type_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: room_type
+        onDelete: restrict
+      housekeeping:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - clean
+          - dirty
+          - out_of_service
+        default: clean
+  guest:
+    description: A person who books and stays.
+    idPrefix: gst
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 160
+        format: email
+      phone:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 30
+      loyalty_tier:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - none
+          - silver
+          - gold
+        default: none
+  reservation:
+    description: A booking of one room by one guest for the half-open stay window [check_in 15:00 UTC, check_out 11:00 UTC). Status, room, dates and money fields are readonly and change only through actions.
+    idPrefix: res
+    fields:
+      guest_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: guest
+        onDelete: restrict
+      room_id:
+        type: ref
+        description: Changed only by the change_room action.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: room
+        onDelete: restrict
+      check_in:
+        type: datetime
+        description: Arrival at 15:00 UTC.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      check_out:
+        type: datetime
+        description: Departure at 11:00 UTC.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      nights:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 1
+      adults:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+        max: 10
+      nightly_rate:
+        type: money
+        description: Snapshot of the room type rate at booking.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      total:
+        type: money
+        description: nights x nightly_rate.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      status:
+        type: state
+        description: Moved only by actions and the mark_no_shows job. cancelled, checked_out and no_show are final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - confirmed
+          - checked_in
+          - checked_out
+          - cancelled
+          - no_show
+        initial: confirmed
+        transitions:
+          confirmed:
+            - checked_in
+            - cancelled
+            - no_show
+          checked_in:
+            - checked_out
+          checked_out: []
+          cancelled: []
+          no_show: []
+      cancelled_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      cancellation_fee:
+        type: money
+        description: One night at the snapshot rate when cancelled within 48 hours of check-in, else 0.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+      special_requests:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  folio_charge:
+    description: "A charge posted against a reservation: room revenue at check-out, or a cancellation or no-show fee. Written by actions and jobs only."
+    idPrefix: chg
+    fields:
+      reservation_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: reservation
+        onDelete: restrict
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        values:
+          - room
+          - cancellation_fee
+          - no_show_fee
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      description:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 200
+routes:
+  list_room_types:
+    op: list
+    entity: room_type
+    filters:
+      - bed_config
+    search:
+      - name
+    sort:
+      - nightly_rate
+      - name
+    pageSize: 25
+    method: GET
+    path: /room_types
+    description: List room types, filter by bed_config, sort by nightly_rate.
+  get_room_type:
+    op: get
+    entity: room_type
+    method: GET
+    path: /room_types/{id}
+    description: Fetch one room type.
+  list_rooms:
+    op: list
+    entity: room
+    filters:
+      - room_type_id
+      - floor
+      - housekeeping
+    search:
+      - number
+    sort:
+      - number
+      - floor
+    pageSize: 25
+    method: GET
+    path: /rooms
+    description: List rooms, filter by room type, floor and housekeeping; search by number.
+  get_room:
+    op: get
+    entity: room
+    method: GET
+    path: /rooms/{id}
+    description: Fetch one room.
+  update_room:
+    op: update
+    entity: room
+    method: PATCH
+    path: /rooms/{id}
+    description: Update housekeeping status and floor.
+  list_guests:
+    op: list
+    entity: guest
+    filters:
+      - loyalty_tier
+    search:
+      - name
+      - email
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /guests
+    description: List guests, filter by loyalty tier, search by name and email.
+  get_guest:
+    op: get
+    entity: guest
+    method: GET
+    path: /guests/{id}
+    description: Fetch one guest.
+  create_guest:
+    op: create
+    entity: guest
+    method: POST
+    path: /guests
+    description: Register a new guest.
+  update_guest:
+    op: update
+    entity: guest
+    method: PATCH
+    path: /guests/{id}
+    description: Edit guest contact details or loyalty tier.
+  list_reservations:
+    op: list
+    entity: reservation
+    filters:
+      - status
+      - room_id
+      - guest_id
+    search: []
+    sort:
+      - check_in
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /reservations
+    description: List reservations, filter by status, room and guest; sort by check_in or created_at.
+  get_reservation:
+    op: get
+    entity: reservation
+    method: GET
+    path: /reservations/{id}
+    description: Fetch one reservation.
+  update_reservation:
+    op: update
+    entity: reservation
+    method: PATCH
+    path: /reservations/{id}
+    description: Edit special_requests and adults only. Status, room and dates change only through actions.
+  list_reservation_charges:
+    op: list
+    entity: folio_charge
+    filters:
+      - kind
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /reservations/{reservation_id}/charges
+    description: List folio charges for one reservation.
+  list_charges:
+    op: list
+    entity: folio_charge
+    filters:
+      - kind
+      - reservation_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /charges
+    description: List all folio charges, filter by kind and reservation.
+actions:
+  create_reservation:
+    method: POST
+    path: /reservations
+    description: Book one room for one guest. Stay is [check_in_date 15:00 UTC, check_out_date 11:00 UTC). Refuses overlap (409 room_unavailable), out_of_service rooms, over-capacity, bad or past dates. nights, nightly_rate (room type snapshot) and total are computed.
+    input:
+      guest_id:
+        type: ref
+        description: The guest who is booking.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: guest
+        onDelete: restrict
+      room_id:
+        type: ref
+        description: The room to book.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: room
+        onDelete: restrict
+      check_in_date:
+        type: string
+        description: Arrival date, YYYY-MM-DD. Check-in time is 15:00 UTC.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}$
+      check_out_date:
+        type: string
+        description: Departure date, YYYY-MM-DD. Check-out time is 11:00 UTC. Must be after check_in_date.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}$
+      adults:
+        type: int
+        description: Number of adults. Must not exceed the room type capacity.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+        max: 10
+      special_requests:
+        type: text
+        description: Optional note for the hotel.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const isDate = (s) => { if (typeof s !== 'string') return false; const p = s.split('-'); if (p.length !== 3 || p[0].length !== 4 || p[1].length !== 2 || p[2].length !== 2) return false; const y = Number(p[0]); const mo = Number(p[1]); const d = Number(p[2]); if (!Number.isInteger(y) || !Number.isInteger(mo) || !Number.isInteger(d) || mo < 1 || mo > 12 || d < 1) return false; const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]; return d <= dim[mo - 1]; };
+        const b = ctx.body;
+        if (!isDate(b.check_in_date) || !isDate(b.check_out_date)) ctx.fail(400, 'input.invalid', 'check_in_date and check_out_date must be valid calendar dates (YYYY-MM-DD)');
+        if (b.check_out_date <= b.check_in_date) ctx.fail(400, 'invalid_dates', 'check_out_date ' + b.check_out_date + ' must be after check_in_date ' + b.check_in_date);
+        const today = ctx.now().slice(0, 10);
+        if (b.check_in_date < today) ctx.fail(400, 'check_in_in_past', 'check_in_date ' + b.check_in_date + ' is before today (' + today + ')');
+        const guest = ctx.db.get('guest', b.guest_id);
+        if (guest === null) ctx.fail(404, 'not_found', 'guest ' + b.guest_id + ' not found');
+        const room = ctx.db.get('room', b.room_id);
+        if (room === null) ctx.fail(404, 'not_found', 'room ' + b.room_id + ' not found');
+        if (room.housekeeping === 'out_of_service') ctx.fail(409, 'room_out_of_service', 'room ' + room.number + ' is out of service and cannot be booked');
+        const type = ctx.db.get('room_type', room.room_type_id);
+        if (b.adults > type.capacity) ctx.fail(422, 'over_capacity', 'room ' + room.number + ' (' + type.name + ') sleeps ' + type.capacity + ' but ' + b.adults + ' adults were requested');
+        const checkIn = b.check_in_date + 'T15:00:00.000Z';
+        const checkOut = b.check_out_date + 'T11:00:00.000Z';
+        for (const st of ['confirmed', 'checked_in', 'checked_out']) {
+          for (const r of ctx.db.list('reservation', { where: { room_id: room.id, status: st } })) {
+            if (ctx.time.minutesBetween(r.check_in, checkOut) > 0 && ctx.time.minutesBetween(checkIn, r.check_out) > 0) {
+              ctx.fail(409, 'room_unavailable', 'room ' + room.number + ' is already booked for these dates by reservation ' + r.id + ' (' + r.check_in + ' to ' + r.check_out + ')');
+            }
+          }
+        }
+        const nights = Math.round(ctx.time.minutesBetween(checkIn, checkOut) / 1440);
+        const rate = type.nightly_rate;
+        const created = ctx.db.create('reservation', {
+          guest_id: guest.id, room_id: room.id, check_in: checkIn, check_out: checkOut, nights, adults: b.adults,
+          nightly_rate: rate, total: nights * rate, cancelled_at: null, cancellation_fee: 0,
+          special_requests: b.special_requests === undefined ? null : b.special_requests,
+        });
+        return { status: 201, body: created };
+      }
+  cancel_reservation:
+    method: POST
+    path: /reservations/{id}/cancel
+    description: Cancel a confirmed reservation before check-in. When check-in is 48 hours or less away, one night at the snapshot rate is charged as a cancellation_fee folio charge and recorded on the reservation.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const r = ctx.db.get('reservation', id);
+        if (r === null) ctx.fail(404, 'not_found', 'reservation ' + id + ' not found');
+        if (r.status !== 'confirmed') ctx.fail(409, 'invalid_state', 'reservation ' + id + ' is ' + r.status + '. Only confirmed reservations can be cancelled.');
+        const now = ctx.now();
+        const minutes = ctx.time.minutesBetween(now, r.check_in);
+        if (minutes <= 0) ctx.fail(409, 'check_in_passed', 'reservation ' + id + ' check-in time ' + r.check_in + ' has passed. It can no longer be cancelled.');
+        const fee = minutes <= 2880 ? r.nightly_rate : 0;
+        const updated = ctx.db.update('reservation', id, { status: 'cancelled', cancelled_at: now, cancellation_fee: fee });
+        if (fee > 0) {
+          ctx.db.create('folio_charge', { reservation_id: id, kind: 'cancellation_fee', amount: fee, description: 'Late cancellation fee: one night' });
+        }
+        return { status: 200, body: updated };
+      }
+  check_in_reservation:
+    method: POST
+    path: /reservations/{id}/check_in
+    description: Check in a confirmed reservation. Allowed from 00:00 UTC of the check-in day, and only when the room housekeeping is clean.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const r = ctx.db.get('reservation', id);
+        if (r === null) ctx.fail(404, 'not_found', 'reservation ' + id + ' not found');
+        if (r.status !== 'confirmed') ctx.fail(409, 'invalid_state', 'reservation ' + id + ' is ' + r.status + '. Only confirmed reservations can be checked in.');
+        const now = ctx.now();
+        const dayStart = r.check_in.slice(0, 10) + 'T00:00:00.000Z';
+        if (ctx.time.minutesBetween(dayStart, now) < 0) ctx.fail(409, 'too_early', 'reservation ' + id + ' arrives on ' + r.check_in.slice(0, 10) + '. Check-in opens at ' + dayStart + '.');
+        const room = ctx.db.get('room', r.room_id);
+        if (room.housekeeping !== 'clean') ctx.fail(409, 'room_not_ready', 'room ' + room.number + ' is ' + room.housekeeping + '. It must be clean before check-in.');
+        const updated = ctx.db.update('reservation', id, { status: 'checked_in' });
+        return { status: 200, body: updated };
+      }
+  check_out_reservation:
+    method: POST
+    path: /reservations/{id}/check_out
+    description: Check out a checked-in guest. Posts the room charge for the reservation total and marks the room dirty.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const r = ctx.db.get('reservation', id);
+        if (r === null) ctx.fail(404, 'not_found', 'reservation ' + id + ' not found');
+        if (r.status !== 'checked_in') ctx.fail(409, 'invalid_state', 'reservation ' + id + ' is ' + r.status + '. Only checked_in reservations can be checked out.');
+        const updated = ctx.db.update('reservation', id, { status: 'checked_out' });
+        ctx.db.create('folio_charge', { reservation_id: id, kind: 'room', amount: r.total, description: 'Room charge: ' + r.nights + ' night(s) at ' + r.nightly_rate });
+        ctx.db.update('room', r.room_id, { housekeeping: 'dirty' });
+        return { status: 200, body: updated };
+      }
+  change_room:
+    method: POST
+    path: /reservations/{id}/change_room
+    description: Move a confirmed reservation to another room for the same dates. The new room must differ, be in service, sleep the adults and be free. Nightly rate and total stay as booked.
+    input:
+      room_id:
+        type: ref
+        description: The room to move the reservation to.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: room
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const r = ctx.db.get('reservation', id);
+        if (r === null) ctx.fail(404, 'not_found', 'reservation ' + id + ' not found');
+        if (r.status !== 'confirmed') ctx.fail(409, 'invalid_state', 'reservation ' + id + ' is ' + r.status + '. Only confirmed reservations can change room.');
+        const room = ctx.db.get('room', ctx.body.room_id);
+        if (room === null) ctx.fail(404, 'not_found', 'room ' + ctx.body.room_id + ' not found');
+        if (room.id === r.room_id) ctx.fail(409, 'same_room', 'reservation ' + id + ' is already in room ' + room.number);
+        if (room.housekeeping === 'out_of_service') ctx.fail(409, 'room_out_of_service', 'room ' + room.number + ' is out of service');
+        const type = ctx.db.get('room_type', room.room_type_id);
+        if (type.capacity < r.adults) ctx.fail(409, 'over_capacity', 'room ' + room.number + ' sleeps ' + type.capacity + ' but the reservation has ' + r.adults + ' adults');
+        for (const st of ['confirmed', 'checked_in', 'checked_out']) {
+          for (const o of ctx.db.list('reservation', { where: { room_id: room.id, status: st } })) {
+            if (o.id === id) continue;
+            if (ctx.time.minutesBetween(o.check_in, r.check_out) > 0 && ctx.time.minutesBetween(r.check_in, o.check_out) > 0) {
+              ctx.fail(409, 'room_unavailable', 'room ' + room.number + ' is already booked for these dates by reservation ' + o.id);
+            }
+          }
+        }
+        const updated = ctx.db.update('reservation', id, { room_id: room.id });
+        return { status: 200, body: updated };
+      }
+  find_available_rooms:
+    method: POST
+    path: /rooms/available
+    description: Read only. Lists in-service rooms with no confirmed, checked_in or checked_out reservation overlapping the stay window, optionally of one room type. Writes nothing.
+    input:
+      check_in_date:
+        type: string
+        description: Arrival date, YYYY-MM-DD.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}$
+      check_out_date:
+        type: string
+        description: Departure date, YYYY-MM-DD. Must be after check_in_date.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}$
+      room_type_id:
+        type: ref
+        description: Optional room type filter.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: room_type
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const isDate = (s) => { if (typeof s !== 'string') return false; const p = s.split('-'); if (p.length !== 3 || p[0].length !== 4 || p[1].length !== 2 || p[2].length !== 2) return false; const y = Number(p[0]); const mo = Number(p[1]); const d = Number(p[2]); if (!Number.isInteger(y) || !Number.isInteger(mo) || !Number.isInteger(d) || mo < 1 || mo > 12 || d < 1) return false; const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]; return d <= dim[mo - 1]; };
+        const b = ctx.body;
+        if (!isDate(b.check_in_date) || !isDate(b.check_out_date)) ctx.fail(400, 'input.invalid', 'check_in_date and check_out_date must be valid calendar dates (YYYY-MM-DD)');
+        if (b.check_out_date <= b.check_in_date) ctx.fail(400, 'invalid_dates', 'check_out_date must be after check_in_date');
+        const checkIn = b.check_in_date + 'T15:00:00.000Z';
+        const checkOut = b.check_out_date + 'T11:00:00.000Z';
+        const busy = new Set();
+        for (const st of ['confirmed', 'checked_in', 'checked_out']) {
+          for (const r of ctx.db.list('reservation', { where: { status: st } })) {
+            if (ctx.time.minutesBetween(r.check_in, checkOut) > 0 && ctx.time.minutesBetween(checkIn, r.check_out) > 0) busy.add(r.room_id);
+          }
+        }
+        const rooms = b.room_type_id ? ctx.db.list('room', { where: { room_type_id: b.room_type_id } }) : ctx.db.list('room');
+        const data = rooms.filter((x) => x.housekeeping !== 'out_of_service' && !busy.has(x.id));
+        return { status: 200, body: { data } };
+      }
+jobs:
+  mark_no_shows:
+    description: Every hour. A confirmed reservation whose check-in time is at least 24 hours past becomes no_show and gets a one-night no_show_fee folio charge at its snapshot rate. This frees the room for new bookings.
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const r of ctx.db.list('reservation', { where: { status: 'confirmed' } })) {
+          if (ctx.time.minutesBetween(r.check_in, now) < 1440) continue;
+          ctx.db.update('reservation', r.id, { status: 'no_show' });
+          ctx.db.create('folio_charge', { reservation_id: r.id, kind: 'no_show_fee', amount: r.nightly_rate, description: 'No-show fee: one night' });
+        }
+      }
+fixtures: {}
+seed:
+  room_type: |-
+    (ctx) => {
+      const t = '2024-03-01T09:00:00.000Z';
+      return [
+        { name: 'Economy Twin', description: 'Compact room with two twin beds and a work desk.', capacity: 2, nightly_rate: 11900, bed_config: 'twin' },
+        { name: 'Standard Double', description: 'Double bed, city view, en-suite bathroom.', capacity: 2, nightly_rate: 15900, bed_config: 'double' },
+        { name: 'Deluxe Queen', description: 'Queen bed with a sofa bed and a small seating area.', capacity: 3, nightly_rate: 21900, bed_config: 'queen' },
+        { name: 'Superior King', description: 'King bed, large bathroom with soaking tub, upper floors.', capacity: 4, nightly_rate: 32900, bed_config: 'king' },
+        { name: 'Executive Suite', description: 'Separate living room, king bedroom, lounge access.', capacity: 4, nightly_rate: 48900, bed_config: 'king' },
+      ].map((r) => ({ ...r, created_at: t, updated_at: t }));
+    }
+  room: |-
+    (ctx) => {
+      const types = ctx.rows('room_type').slice().sort((p, q) => p.nightly_rate - q.nightly_rate);
+      const nums = [];
+      for (let i = 1; i <= 8; i++) nums.push(100 + i);
+      for (let i = 1; i <= 14; i++) nums.push(200 + i);
+      for (let i = 1; i <= 10; i++) nums.push(300 + i);
+      for (let i = 1; i <= 10; i++) nums.push(400 + i);
+      const pat = [0, 0, 1, 1, 1, 2, 2, 3, 3, 2, 4, 1];
+      const t = '2024-03-01T09:00:00.000Z';
+      return nums.map((n, i) => ({
+        number: String(n),
+        floor: Math.floor(n / 100),
+        room_type_id: types[pat[i % 12]].id,
+        housekeeping: n === 214 || n === 108 ? 'out_of_service' : i % 7 === 3 ? 'dirty' : 'clean',
+        created_at: t,
+        updated_at: t,
+      }));
+    }
+  guest: |-
+    (ctx) => {
+      const fixed = [
+        ['Eleanor Whitfield', 'eleanor.whitfield@example.com'],
+        ['Daniel Whitfield', 'daniel.whitfield@example.com'],
+        ['Marcus Okafor', 'marcus.okafor@example.com'],
+        ['Priya Nair', 'priya.nair@example.com'],
+        ['Hannah Brooks', 'hannah.brooks@example.com'],
+      ];
+      const firsts = ['James', 'Sofia', 'Liam', 'Aiko', 'Noah', 'Chloe', 'Mateo', 'Fatima', 'Oliver', 'Grace', 'Ethan', 'Lucia', 'Samuel', 'Nora', 'Victor', 'Ingrid', 'Hugo', 'Amara', 'Felix', 'Mei', 'Rafael', 'Tessa', 'Jonas', 'Leila', 'Owen', 'Camila', 'Arjun', 'Beth', 'Tomas', 'Yara'];
+      const lasts = ['Carter', 'Lindqvist', 'Moreau', 'Tanaka', 'Alvarez', 'Reilly', 'Haddad', 'Novak', 'Fischer', 'Mensah', 'Kowalski', 'Dubois', 'Sato', 'Bennett', 'Rossi', 'Khan', 'Olsen', 'Pereira', 'Walsh', 'Ivanov', 'Castillo', 'Murphy', 'Schmidt', 'Hughes', 'Park'];
+      const rows = [];
+      for (let i = 0; i < 70; i++) {
+        let name; let email;
+        if (i < 5) { name = fixed[i][0]; email = fixed[i][1]; }
+        else {
+          const f = firsts[(i * 7) % 30];
+          const l = lasts[(i * 11 + Math.floor(i / 5)) % 25];
+          name = f + ' ' + l;
+          email = (f + '.' + l).toLowerCase() + i + '@example.com';
+        }
+        const m = i % 25;
+        const since = ctx.time.plus('2024-01-08T09:00:00.000Z', ctx.int(1, 600) + 'd');
+        rows.push({
+          name, email,
+          phone: '+1-555-' + String(1000 + ((i * 137) % 9000)),
+          loyalty_tier: m < 15 ? 'none' : m < 22 ? 'silver' : 'gold',
+          created_at: since, updated_at: since,
+        });
+      }
+      return rows;
+    }
+  reservation: |-
+    (ctx) => {
+      const BASE = '2025-01-01T00:00:00.000Z';
+      const X = ctx.time.minutesBetween(BASE, ctx.now());
+      const D0 = Math.floor(X / 1440);
+      const iso = (m) => ctx.time.plus(BASE, m + 'm');
+      const types = ctx.rows('room_type').slice().sort((p, q) => p.nightly_rate - q.nightly_rate);
+      const rooms = ctx.rows('room');
+      const guests = ctx.rows('guest');
+      const typeOf = rooms.map((r) => types.findIndex((t) => t.id === r.room_type_id));
+      const idxOf = (num) => rooms.findIndex((r) => r.number === num);
+      const gid = (name) => guests.find((g) => g.name === name).id;
+      const rg = () => guests[5 + ctx.int(0, guests.length - 6)].id;
+      const occ = rooms.map(() => []);
+      const free = (ri, a, b) => occ[ri].every((o) => !(a < o[1] && o[0] < b));
+      const prot = (ri, a, b) => typeOf[ri] === 1 && rooms[ri].number !== '305' && a < 12 && b > 3;
+      const absIn = (a) => (D0 + a) * 1440 + 900;
+      const absOut = (b) => (D0 + b) * 1440 + 660;
+      const tally = { confirmed: 0, checked_in: 0, checked_out: 0, cancelled: 0, no_show: 0 };
+      const out = [];
+      const requests = ['Late arrival, around 22:00', 'High floor please', 'Extra pillows', 'Quiet room away from the elevator', 'Early check-in if possible', 'Celebrating an anniversary', 'Baby cot needed', 'Airport transfer arranged separately'];
+      const add = (o) => {
+        const t = types[typeOf[o.ri]];
+        const inM = absIn(o.a);
+        const outM = absOut(o.b);
+        const nights = o.b - o.a;
+        let created; let updated; let cancelledAbs = null; let fee = 0;
+        const lead = ctx.int(1, 45) * 1440 + 60;
+        if (o.status === 'confirmed') { created = X - (ctx.int(1, 40) * 1440 + 60); updated = created; }
+        else if (o.status === 'checked_in') { created = inM - lead; updated = inM; }
+        else if (o.status === 'checked_out') { created = inM - lead; updated = outM; }
+        else if (o.status === 'no_show') { created = inM - lead; updated = inM + 1440; }
+        else {
+          if (o.fee) { cancelledAbs = inM - ctx.int(2, 47) * 60; fee = t.nightly_rate; }
+          else if (o.a >= 3) cancelledAbs = X - (ctx.int(1, 20) * 1440 + 60);
+          else cancelledAbs = inM - ctx.int(49, 300) * 60;
+          created = cancelledAbs - (ctx.int(1, 30) * 1440 + 30);
+          updated = cancelledAbs;
+        }
+        out.push({ c: created, row: {
+          guest_id: o.guest, room_id: rooms[o.ri].id, check_in: iso(inM), check_out: iso(outM), nights, adults: o.adults,
+          nightly_rate: t.nightly_rate, total: nights * t.nightly_rate, status: o.status,
+          cancelled_at: cancelledAbs === null ? null : iso(cancelledAbs), cancellation_fee: fee,
+          special_requests: o.req === undefined ? null : o.req,
+          created_at: iso(created), updated_at: iso(updated),
+        } });
+        if (o.status === 'confirmed' || o.status === 'checked_in' || o.status === 'checked_out') occ[o.ri].push([o.a, o.b]);
+        tally[o.status]++;
+      };
+      const cleanIdx = [];
+      rooms.forEach((r, i) => { if (r.housekeeping === 'clean') cleanIdx.push(i); });
+      const place = (name, a, b, status, adults, req) => {
+        const ri = cleanIdx.find((i) => free(i, a, b) && !prot(i, a, b));
+        if (ri === undefined) throw new Error('no room for anchor ' + name);
+        add({ ri, a, b, status, adults, guest: gid(name), req });
+      };
+      place('Eleanor Whitfield', 20, 23, 'confirmed', 2, 'Late arrival, around 22:00');
+      place('Daniel Whitfield', 15, 17, 'confirmed', 2);
+      place('Marcus Okafor', 1, 3, 'confirmed', 1);
+      place('Marcus Okafor', 26, 29, 'confirmed', 1);
+      place('Marcus Okafor', -30, -28, 'checked_out', 1);
+      const r305 = idxOf('305');
+      if (!free(r305, 6, 9)) throw new Error('305 busy');
+      add({ ri: r305, a: 6, b: 9, status: 'confirmed', adults: 2, guest: gid('Priya Nair'), req: 'Quiet room away from the elevator' });
+      for (const [a, b] of [[8, 10], [19, 22], [33, 35], [48, 51]]) place('Hannah Brooks', a, b, 'confirmed', 2);
+      const r214 = idxOf('214');
+      add({ ri: r214, a: -2, b: 1, status: 'checked_in', adults: 2, guest: rg() });
+      add({ ri: r214, a: -21, b: -18, status: 'checked_out', adults: 2, guest: rg() });
+      add({ ri: r214, a: 12, b: 14, status: 'cancelled', adults: 2, guest: rg(), fee: false });
+      const targets = [[3, 5], [8, 11], [15, 17], [22, 25], [33, 36], [45, 47]];
+      for (const [a, b] of targets) add({ ri: r214, a, b, status: 'confirmed', adults: 2, guest: rg() });
+      const others = [];
+      rooms.forEach((r, i) => { if (typeOf[i] === 2 && r.number !== '214' && r.housekeeping !== 'out_of_service') others.push(i); });
+      targets.forEach(([a, b], j) => {
+        for (let k = 0; k < 3; k++) {
+          const ri = others[(j + k) % others.length];
+          if (free(ri, a, b)) add({ ri, a, b, status: 'confirmed', adults: 1, guest: rg() });
+        }
+      });
+      const quota = { confirmed: 45, checked_in: 13, checked_out: 40, cancelled: 23, no_show: 9 };
+      const arrivals = [0, 0, 0, 1, 1, 1, 2, 2, 2];
+      for (const status of ['confirmed', 'checked_in', 'checked_out', 'cancelled', 'no_show']) {
+        const need = quota[status] - tally[status];
+        let n = 0; let tries = 0;
+        while (n < need && tries < 400) {
+          tries++;
+          const nn = ctx.int(1, 5);
+          let a; let b; let fee = false;
+          if (status === 'confirmed') { a = n < 9 ? arrivals[n] : ctx.int(3, 75); b = a + nn; }
+          else if (status === 'checked_in') { a = ctx.int(-4, -1); b = Math.max(a + nn, 1); }
+          else if (status === 'checked_out') { a = ctx.int(-45, -3); b = Math.min(a + nn, -1); }
+          else if (status === 'no_show') { a = ctx.int(-10, -2); b = a + nn; }
+          else { fee = n < 8; a = fee ? ctx.int(-35, -2) : (ctx.rng() < 0.5 ? ctx.int(-30, -2) : ctx.int(3, 70)); b = a + nn; }
+          const ri = ctx.int(0, rooms.length - 1);
+          const hk = rooms[ri].housekeeping;
+          if (rooms[ri].number === '214') continue;
+          if ((status === 'confirmed' || status === 'checked_in') && hk === 'out_of_service') continue;
+          if (status === 'checked_in' && hk !== 'clean') continue;
+          if (status === 'confirmed' && a <= 1 && hk !== 'clean') continue;
+          if (status === 'confirmed' || status === 'checked_in' || status === 'checked_out') {
+            if (!free(ri, a, b) || prot(ri, a, b)) continue;
+          }
+          const cap = types[typeOf[ri]].capacity;
+          const adults = ctx.int(1, Math.min(cap, 3));
+          const req = ctx.rng() < 0.25 ? ctx.pick(requests) : null;
+          add({ ri, a, b, status, adults, guest: rg(), fee, req });
+          n++;
+        }
+      }
+      out.sort((p, q) => p.c - q.c);
+      return out.map((x) => x.row);
+    }
+  folio_charge: |-
+    (ctx) => {
+      const rows = [];
+      for (const r of ctx.rows('reservation')) {
+        if (r.status === 'checked_out') {
+          rows.push({ reservation_id: r.id, kind: 'room', amount: r.total, description: 'Room charge: ' + r.nights + ' night(s) at ' + (r.nightly_rate / 100).toFixed(2), created_at: r.updated_at, updated_at: r.updated_at });
+        } else if (r.status === 'cancelled' && r.cancellation_fee > 0) {
+          rows.push({ reservation_id: r.id, kind: 'cancellation_fee', amount: r.cancellation_fee, description: 'Late cancellation fee: one night', created_at: r.cancelled_at, updated_at: r.cancelled_at });
+        } else if (r.status === 'no_show') {
+          rows.push({ reservation_id: r.id, kind: 'no_show_fee', amount: r.nightly_rate, description: 'No-show fee: one night', created_at: r.updated_at, updated_at: r.updated_at });
+        }
+      }
+      rows.sort((x, y) => (x.created_at < y.created_at ? -1 : x.created_at > y.created_at ? 1 : 0));
+      return rows;
+    }
+tests:
+  action_refusals:
+    description: Every action refuses bad input and unknown reservations with a 4xx and writes nothing.
+    script: |-
+      (ctx) => {
+        const g = ctx.api('POST', '/guests', { name: 'Refusal Tester', email: 'refusal.tester@example.com', loyalty_tier: 'none' });
+        ctx.assert(g.status < 300, 'create guest: ' + JSON.stringify(g.body));
+        const gid = g.body.id;
+        const noRoom = ctx.api('POST', '/reservations', { guest_id: gid, room_id: 'rom_9999', check_in_date: '2031-03-01', check_out_date: '2031-03-02', adults: 1 });
+        ctx.assert(noRoom.status >= 400 && noRoom.status < 500, 'unknown room: ' + JSON.stringify(noRoom));
+        const badFormat = ctx.api('POST', '/reservations', { guest_id: gid, room_id: 'rom_0001', check_in_date: 'tomorrow', check_out_date: '2031-03-02', adults: 1 });
+        ctx.assert(badFormat.status === 400, 'bad date format: ' + JSON.stringify(badFormat));
+        const noAdults = ctx.api('POST', '/reservations', { guest_id: gid, room_id: 'rom_0001', check_in_date: '2031-03-01', check_out_date: '2031-03-02' });
+        ctx.assert(noAdults.status === 400, 'missing adults: ' + JSON.stringify(noAdults));
+        const noGuest = ctx.api('POST', '/reservations', { guest_id: 'gst_9999', room_id: 'rom_0001', check_in_date: '2031-03-01', check_out_date: '2031-03-02', adults: 1 });
+        ctx.assert(noGuest.status >= 400 && noGuest.status < 500, 'unknown guest: ' + JSON.stringify(noGuest));
+        for (const verb of ['cancel', 'check_in', 'check_out']) {
+          const r = ctx.api('POST', '/reservations/res_9999/' + verb, {});
+          ctx.assert(r.status === 404 && r.body.error.code === 'not_found', verb + ' on unknown reservation: ' + JSON.stringify(r));
+        }
+        const mv = ctx.api('POST', '/reservations/res_9999/change_room', { room_id: 'rom_9999' });
+        ctx.assert(mv.status >= 400 && mv.status < 500, 'change_room on unknown reservation: ' + JSON.stringify(mv));
+        const reversed = ctx.api('POST', '/rooms/available', { check_in_date: '2031-03-05', check_out_date: '2031-03-02' });
+        ctx.assert(reversed.status === 400 && reversed.body.error.code === 'invalid_dates', 'reversed range: ' + JSON.stringify(reversed));
+        const same = ctx.api('POST', '/rooms/available', { check_in_date: '2031-03-02', check_out_date: '2031-03-02' });
+        ctx.assert(same.status === 400, 'zero-night range: ' + JSON.stringify(same));
+        const impossible = ctx.api('POST', '/rooms/available', { check_in_date: '2031-02-30', check_out_date: '2031-03-02' });
+        ctx.assert(impossible.status === 400, 'impossible date: ' + JSON.stringify(impossible));
+        const unknownType = ctx.api('POST', '/rooms/available', { check_in_date: '2031-03-01', check_out_date: '2031-03-02', room_type_id: 'rty_9999' });
+        ctx.assert(unknownType.status >= 400 && unknownType.status < 500, 'unknown room type: ' + JSON.stringify(unknownType));
+      }
+  booking_overlap_and_cancel_free:
+    description: create_reservation computes nights, rate snapshot and total, refuses overlap, bad dates, over-capacity and out-of-service rooms, allows same-day turnover, and cancel_reservation far from check-in is free and frees the room.
+    script: |-
+      (ctx) => {
+        const p2 = (x) => ('0' + x).slice(-2);
+        const toDays = (s) => { const q = s.split('-').map(Number); const y = q[1] <= 2 ? q[0] - 1 : q[0]; const era = Math.floor(y / 400); const yoe = y - era * 400; const mp = (q[1] + 9) % 12; const doy = Math.floor((153 * mp + 2) / 5) + q[2] - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
+        const fromDays = (z0) => { const z = z0 + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const m = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (m <= 2 ? 1 : 0); return y + '-' + p2(m) + '-' + p2(d); };
+        const today = ctx.now().slice(0, 10);
+        const day = (n) => fromDays(toDays(today) + n);
+        const avail = (i, o, extra) => ctx.api('POST', '/rooms/available', { check_in_date: i, check_out_date: o, ...(extra || {}) }).body.data;
+        const book = (gid, rid, i, o, adults) => ctx.api('POST', '/reservations', { guest_id: gid, room_id: rid, check_in_date: i, check_out_date: o, adults: adults || 1 });
+        const a = day(400); const b = day(402); const c = day(403);
+        const rooms = avail(a, c);
+        if (rooms.length === 0) return;
+        const room = rooms[0];
+        const type = ctx.api('GET', '/room_types/' + room.room_type_id).body;
+        const g = ctx.api('POST', '/guests', { name: 'Booking Tester', email: 'booking.tester@example.com', loyalty_tier: 'none' });
+        ctx.assert(g.status < 300, 'create guest: ' + JSON.stringify(g.body));
+        const gid = g.body.id;
+        const r1 = book(gid, room.id, a, b);
+        ctx.assert(r1.status === 201, 'book: ' + JSON.stringify(r1.body));
+        ctx.assert(r1.body.status === 'confirmed' && r1.body.nights === 2, 'confirmed, 2 nights, got ' + JSON.stringify(r1.body));
+        ctx.assert(r1.body.nightly_rate === type.nightly_rate && r1.body.total === 2 * type.nightly_rate, 'rate snapshot and total, got ' + r1.body.nightly_rate + ' / ' + r1.body.total);
+        ctx.assert(r1.body.check_in === a + 'T15:00:00.000Z' && r1.body.check_out === b + 'T11:00:00.000Z', 'check-in 15:00 and check-out 11:00, got ' + r1.body.check_in + ' ' + r1.body.check_out);
+        ctx.assert(r1.body.cancellation_fee === 0, 'no fee yet');
+        const clash = book(gid, room.id, day(401), c);
+        ctx.assert(clash.status === 409 && clash.body.error.code === 'room_unavailable', 'overlap: ' + JSON.stringify(clash));
+        ctx.assert(clash.body.error.message.includes(r1.body.id), 'the error names the conflicting reservation ' + r1.body.id);
+        const same = book(gid, room.id, a, b);
+        ctx.assert(same.status === 409 && same.body.error.code === 'room_unavailable', 'identical dates: ' + JSON.stringify(same));
+        const turnover = book(gid, room.id, b, c);
+        ctx.assert(turnover.status === 201, 'same-day turnover is allowed: ' + JSON.stringify(turnover.body));
+        const reversed = book(gid, room.id, b, a);
+        ctx.assert(reversed.status === 400, 'reversed dates: ' + JSON.stringify(reversed));
+        const zero = book(gid, room.id, a, a);
+        ctx.assert(zero.status === 400, 'zero nights: ' + JSON.stringify(zero));
+        const past = book(gid, room.id, '2000-01-01', '2000-01-03');
+        ctx.assert(past.status === 400 && past.body.error.code === 'check_in_in_past', 'past check-in: ' + JSON.stringify(past));
+        if (type.capacity < 10) {
+          const big = book(gid, room.id, day(500), day(501), type.capacity + 1);
+          ctx.assert(big.status === 422 && big.body.error.code === 'over_capacity', 'over capacity: ' + JSON.stringify(big));
+        }
+        const oos = ctx.api('GET', '/rooms?housekeeping=out_of_service').body.data;
+        if (oos.length > 0) {
+          const blocked = book(gid, oos[0].id, day(500), day(501));
+          ctx.assert(blocked.status === 409 && blocked.body.error.code === 'room_out_of_service', 'out of service: ' + JSON.stringify(blocked));
+        }
+        const cancel = ctx.api('POST', '/reservations/' + r1.body.id + '/cancel', {});
+        ctx.assert(cancel.status === 200 && cancel.body.status === 'cancelled', 'cancel: ' + JSON.stringify(cancel.body));
+        ctx.assert(cancel.body.cancellation_fee === 0 && cancel.body.cancelled_at !== null, 'far cancellation is free and stamped, got ' + JSON.stringify(cancel.body));
+        const charges = ctx.api('GET', '/reservations/' + r1.body.id + '/charges').body.data;
+        ctx.assert(charges.length === 0, 'no charge for a free cancellation, got ' + charges.length);
+        const again = ctx.api('POST', '/reservations/' + r1.body.id + '/cancel', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second cancel: ' + JSON.stringify(again));
+        const rebook = book(gid, room.id, a, b);
+        ctx.assert(rebook.status === 201, 'a cancelled reservation frees the room: ' + JSON.stringify(rebook.body));
+      }
+  late_cancellation_fee:
+    description: cancel_reservation within 48 hours of check-in records one night as cancellation_fee and posts exactly one cancellation_fee charge. Outside 48 hours it is free.
+    script: |-
+      (ctx) => {
+        const p2 = (x) => ('0' + x).slice(-2);
+        const toDays = (s) => { const q = s.split('-').map(Number); const y = q[1] <= 2 ? q[0] - 1 : q[0]; const era = Math.floor(y / 400); const yoe = y - era * 400; const mp = (q[1] + 9) % 12; const doy = Math.floor((153 * mp + 2) / 5) + q[2] - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
+        const fromDays = (z0) => { const z = z0 + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const m = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (m <= 2 ? 1 : 0); return y + '-' + p2(m) + '-' + p2(d); };
+        const minsBetween = (a, b) => (toDays(b.slice(0, 10)) - toDays(a.slice(0, 10))) * 1440 + (Number(b.slice(11, 13)) * 60 + Number(b.slice(14, 16))) - (Number(a.slice(11, 13)) * 60 + Number(a.slice(14, 16)));
+        const today = ctx.now().slice(0, 10);
+        const day = (n) => fromDays(toDays(today) + n);
+        const avail = (i, o, extra) => ctx.api('POST', '/rooms/available', { check_in_date: i, check_out_date: o, ...(extra || {}) }).body.data;
+        const book = (gid, rid, i, o, adults) => ctx.api('POST', '/reservations', { guest_id: gid, room_id: rid, check_in_date: i, check_out_date: o, adults: adults || 1 });
+        const rooms = avail(day(1), day(3));
+        if (rooms.length === 0) return;
+        const g = ctx.api('POST', '/guests', { name: 'Fee Tester', email: 'fee.tester@example.com', loyalty_tier: 'none' });
+        ctx.assert(g.status < 300, 'create guest: ' + JSON.stringify(g.body));
+        const gid = g.body.id;
+        const r = book(gid, rooms[0].id, day(1), day(3));
+        ctx.assert(r.status === 201, 'book: ' + JSON.stringify(r.body));
+        const c = ctx.api('POST', '/reservations/' + r.body.id + '/cancel', {});
+        ctx.assert(c.status === 200 && c.body.status === 'cancelled', 'cancel: ' + JSON.stringify(c.body));
+        const exp1 = minsBetween(c.body.cancelled_at, r.body.check_in) <= 2880 ? r.body.nightly_rate : 0;
+        ctx.assert(c.body.cancellation_fee === exp1, 'fee follows the 48h rule, expected ' + exp1 + ' got ' + c.body.cancellation_fee);
+        const charges = ctx.api('GET', '/charges?reservation_id=' + r.body.id).body.data;
+        ctx.assert(charges.length === (exp1 > 0 ? 1 : 0), 'charge count follows the fee, got ' + JSON.stringify(charges));
+        if (exp1 > 0) ctx.assert(charges[0].kind === 'cancellation_fee' && charges[0].amount === r.body.nightly_rate, 'one cancellation_fee charge of one night, got ' + JSON.stringify(charges));
+        const rooms2 = avail(day(2), day(4));
+        if (rooms2.length > 0) {
+          const r2 = book(gid, rooms2[0].id, day(2), day(4));
+          ctx.assert(r2.status === 201, 'book day 2: ' + JSON.stringify(r2.body));
+          const c2 = ctx.api('POST', '/reservations/' + r2.body.id + '/cancel', {});
+          ctx.assert(c2.status === 200, 'cancel day 2: ' + JSON.stringify(c2.body));
+          const expected = minsBetween(c2.body.cancelled_at, r2.body.check_in) <= 2880 ? r2.body.nightly_rate : 0;
+          ctx.assert(c2.body.cancellation_fee === expected, 'fee follows the 48h rule, expected ' + expected + ' got ' + c2.body.cancellation_fee);
+          const ch2 = ctx.api('GET', '/reservations/' + r2.body.id + '/charges').body.data;
+          ctx.assert(ch2.length === (expected > 0 ? 1 : 0), 'charge count follows the fee, got ' + ch2.length);
+        }
+        const rooms3 = avail(day(5), day(7));
+        if (rooms3.length > 0) {
+          const r3 = book(gid, rooms3[0].id, day(5), day(7));
+          ctx.assert(r3.status === 201, 'book day 5: ' + JSON.stringify(r3.body));
+          const c3 = ctx.api('POST', '/reservations/' + r3.body.id + '/cancel', {});
+          ctx.assert(c3.status === 200 && c3.body.cancellation_fee === 0, 'more than 48h out is free, got ' + JSON.stringify(c3.body));
+          const ch3 = ctx.api('GET', '/reservations/' + r3.body.id + '/charges').body.data;
+          ctx.assert(ch3.length === 0, 'no charge outside the window');
+        }
+      }
+  check_in_and_check_out_flow:
+    description: check_in_reservation needs the check-in day and a clean room. check_out_reservation posts the room charge, marks the room dirty, and checked-in or checked-out reservations cannot be cancelled.
+    script: |-
+      (ctx) => {
+        const p2 = (x) => ('0' + x).slice(-2);
+        const toDays = (s) => { const q = s.split('-').map(Number); const y = q[1] <= 2 ? q[0] - 1 : q[0]; const era = Math.floor(y / 400); const yoe = y - era * 400; const mp = (q[1] + 9) % 12; const doy = Math.floor((153 * mp + 2) / 5) + q[2] - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
+        const fromDays = (z0) => { const z = z0 + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const m = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (m <= 2 ? 1 : 0); return y + '-' + p2(m) + '-' + p2(d); };
+        const today = ctx.now().slice(0, 10);
+        const day = (n) => fromDays(toDays(today) + n);
+        const avail = (i, o, extra) => ctx.api('POST', '/rooms/available', { check_in_date: i, check_out_date: o, ...(extra || {}) }).body.data;
+        const book = (gid, rid, i, o, adults) => ctx.api('POST', '/reservations', { guest_id: gid, room_id: rid, check_in_date: i, check_out_date: o, adults: adults || 1 });
+        const act = (id, verb, body) => ctx.api('POST', '/reservations/' + id + '/' + verb, body || {});
+        const rooms = avail(day(0), day(1));
+        if (rooms.length === 0) return;
+        const room = rooms[0];
+        const g = ctx.api('POST', '/guests', { name: 'Stay Tester', email: 'stay.tester@example.com', loyalty_tier: 'none' });
+        ctx.assert(g.status < 300, 'create guest: ' + JSON.stringify(g.body));
+        const gid = g.body.id;
+        const far = book(gid, room.id, day(400), day(401));
+        ctx.assert(far.status === 201, 'book far: ' + JSON.stringify(far.body));
+        const early = act(far.body.id, 'check_in');
+        ctx.assert(early.status === 409 && early.body.error.code === 'too_early', 'early check-in: ' + JSON.stringify(early));
+        const notIn = act(far.body.id, 'check_out');
+        ctx.assert(notIn.status === 409 && notIn.body.error.code === 'invalid_state', 'check-out of a confirmed reservation: ' + JSON.stringify(notIn));
+        const r = book(gid, room.id, day(0), day(1));
+        ctx.assert(r.status === 201, 'book today: ' + JSON.stringify(r.body));
+        const dirty = ctx.api('PATCH', '/rooms/' + room.id, { housekeeping: 'dirty' });
+        ctx.assert(dirty.status === 200, 'mark dirty: ' + JSON.stringify(dirty.body));
+        const notReady = act(r.body.id, 'check_in');
+        ctx.assert(notReady.status === 409 && notReady.body.error.code === 'room_not_ready', 'dirty room: ' + JSON.stringify(notReady));
+        ctx.assert(ctx.api('PATCH', '/rooms/' + room.id, { housekeeping: 'clean' }).status === 200, 'mark clean');
+        const ci = act(r.body.id, 'check_in');
+        ctx.assert(ci.status === 200 && ci.body.status === 'checked_in', 'check in: ' + JSON.stringify(ci.body));
+        const again = act(r.body.id, 'check_in');
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second check-in: ' + JSON.stringify(again));
+        const cancel = act(r.body.id, 'cancel');
+        ctx.assert(cancel.status === 409 && cancel.body.error.code === 'invalid_state', 'cancel while checked in: ' + JSON.stringify(cancel));
+        const co = act(r.body.id, 'check_out');
+        ctx.assert(co.status === 200 && co.body.status === 'checked_out', 'check out: ' + JSON.stringify(co.body));
+        const charges = ctx.api('GET', '/reservations/' + r.body.id + '/charges').body.data;
+        ctx.assert(charges.length === 1 && charges[0].kind === 'room' && charges[0].amount === r.body.total, 'one room charge for the total, got ' + JSON.stringify(charges));
+        const after = ctx.api('GET', '/rooms/' + room.id).body;
+        ctx.assert(after.housekeeping === 'dirty', 'room is dirty after check-out, got ' + after.housekeeping);
+        const twice = act(r.body.id, 'check_out');
+        ctx.assert(twice.status === 409 && twice.body.error.code === 'invalid_state', 'second check-out: ' + JSON.stringify(twice));
+        const late = act(r.body.id, 'cancel');
+        ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'cancel after check-out: ' + JSON.stringify(late));
+      }
+  change_room_rules:
+    description: change_room moves a confirmed reservation to another free in-service room for the same dates, keeps rate and total, and refuses the same room, a booked room, an out-of-service room and non-confirmed reservations.
+    script: |-
+      (ctx) => {
+        const p2 = (x) => ('0' + x).slice(-2);
+        const toDays = (s) => { const q = s.split('-').map(Number); const y = q[1] <= 2 ? q[0] - 1 : q[0]; const era = Math.floor(y / 400); const yoe = y - era * 400; const mp = (q[1] + 9) % 12; const doy = Math.floor((153 * mp + 2) / 5) + q[2] - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
+        const fromDays = (z0) => { const z = z0 + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const m = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (m <= 2 ? 1 : 0); return y + '-' + p2(m) + '-' + p2(d); };
+        const today = ctx.now().slice(0, 10);
+        const day = (n) => fromDays(toDays(today) + n);
+        const avail = (i, o, extra) => ctx.api('POST', '/rooms/available', { check_in_date: i, check_out_date: o, ...(extra || {}) }).body.data;
+        const book = (gid, rid, i, o, adults) => ctx.api('POST', '/reservations', { guest_id: gid, room_id: rid, check_in_date: i, check_out_date: o, adults: adults || 1 });
+        const act = (id, verb, body) => ctx.api('POST', '/reservations/' + id + '/' + verb, body || {});
+        const a = day(400); const b = day(402);
+        const rooms = avail(a, day(403));
+        if (rooms.length < 2) return;
+        const r1 = rooms[0]; const r2 = rooms[1];
+        const g = ctx.api('POST', '/guests', { name: 'Move Tester', email: 'move.tester@example.com', loyalty_tier: 'none' });
+        ctx.assert(g.status < 300, 'create guest: ' + JSON.stringify(g.body));
+        const gid = g.body.id;
+        const res = book(gid, r1.id, a, b);
+        ctx.assert(res.status === 201, 'book: ' + JSON.stringify(res.body));
+        const mv = act(res.body.id, 'change_room', { room_id: r2.id });
+        ctx.assert(mv.status === 200 && mv.body.room_id === r2.id, 'move: ' + JSON.stringify(mv.body));
+        ctx.assert(mv.body.nightly_rate === res.body.nightly_rate && mv.body.total === res.body.total, 'rate and total keep the booked values');
+        ctx.assert(mv.body.check_in === res.body.check_in && mv.body.check_out === res.body.check_out && mv.body.status === 'confirmed', 'dates and status unchanged');
+        const same = act(res.body.id, 'change_room', { room_id: r2.id });
+        ctx.assert(same.status === 409 && same.body.error.code === 'same_room', 'same room: ' + JSON.stringify(same));
+        const x = book(gid, r1.id, a, b);
+        ctx.assert(x.status === 201, 'the old room is free again: ' + JSON.stringify(x.body));
+        const busy = act(x.body.id, 'change_room', { room_id: r2.id });
+        ctx.assert(busy.status === 409 && busy.body.error.code === 'room_unavailable', 'booked room: ' + JSON.stringify(busy));
+        ctx.assert(busy.body.error.message.includes(res.body.id), 'the error names ' + res.body.id);
+        const oos = ctx.api('GET', '/rooms?housekeeping=out_of_service').body.data;
+        if (oos.length > 0) {
+          const blocked = act(x.body.id, 'change_room', { room_id: oos[0].id });
+          ctx.assert(blocked.status === 409 && blocked.body.error.code === 'room_out_of_service', 'out of service: ' + JSON.stringify(blocked));
+        }
+        ctx.assert(act(x.body.id, 'cancel').status === 200, 'cancel x');
+        const dead = act(x.body.id, 'change_room', { room_id: r2.id });
+        ctx.assert(dead.status === 409 && dead.body.error.code === 'invalid_state', 'cancelled reservation: ' + JSON.stringify(dead));
+      }
+  find_available_rooms_rules:
+    description: find_available_rooms excludes rooms with overlapping active reservations and out-of-service rooms, includes same-day turnover, filters by room type and writes nothing.
+    script: |-
+      (ctx) => {
+        const p2 = (x) => ('0' + x).slice(-2);
+        const toDays = (s) => { const q = s.split('-').map(Number); const y = q[1] <= 2 ? q[0] - 1 : q[0]; const era = Math.floor(y / 400); const yoe = y - era * 400; const mp = (q[1] + 9) % 12; const doy = Math.floor((153 * mp + 2) / 5) + q[2] - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
+        const fromDays = (z0) => { const z = z0 + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const m = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (m <= 2 ? 1 : 0); return y + '-' + p2(m) + '-' + p2(d); };
+        const today = ctx.now().slice(0, 10);
+        const day = (n) => fromDays(toDays(today) + n);
+        const avail = (i, o, extra) => ctx.api('POST', '/rooms/available', { check_in_date: i, check_out_date: o, ...(extra || {}) }).body.data;
+        const book = (gid, rid, i, o, adults) => ctx.api('POST', '/reservations', { guest_id: gid, room_id: rid, check_in_date: i, check_out_date: o, adults: adults || 1 });
+        const a = day(400); const b = day(402);
+        const before = avail(a, b);
+        if (before.length === 0) return;
+        const room = before[0];
+        ctx.assert(before.every((x) => x.housekeeping !== 'out_of_service'), 'out-of-service rooms are never listed');
+        const typed = avail(a, b, { room_type_id: room.room_type_id });
+        ctx.assert(typed.length > 0 && typed.every((x) => x.room_type_id === room.room_type_id), 'type filter returns only that type');
+        ctx.assert(typed.some((x) => x.id === room.id), 'the room is in its own type list');
+        const g = ctx.api('POST', '/guests', { name: 'Search Tester', email: 'search.tester@example.com', loyalty_tier: 'none' });
+        ctx.assert(g.status < 300, 'create guest: ' + JSON.stringify(g.body));
+        const r = book(g.body.id, room.id, a, b);
+        ctx.assert(r.status === 201, 'book: ' + JSON.stringify(r.body));
+        const afterBook = avail(a, b);
+        ctx.assert(afterBook.length === before.length - 1 && !afterBook.some((x) => x.id === room.id), 'the booked room is gone, got ' + afterBook.length + ' of ' + before.length);
+        ctx.assert(!avail(day(401), day(403)).some((x) => x.id === room.id), 'a partial overlap is excluded');
+        ctx.assert(avail(b, day(403)).some((x) => x.id === room.id), 'same-day turnover leaves the room available');
+        const reread = avail(a, b);
+        ctx.assert(reread.length === afterBook.length, 'searching twice changes nothing');
+        ctx.assert(ctx.api('POST', '/reservations/' + r.body.id + '/cancel', {}).status === 200, 'cancel');
+        ctx.assert(avail(a, b).some((x) => x.id === room.id), 'a cancelled reservation frees the room');
+      }
+  mark_no_shows_job:
+    description: After 24 hours past check-in the hourly job turns an unclaimed confirmed reservation into no_show with a one-night no_show_fee charge, and leaves future reservations alone.
+    script: |-
+      (ctx) => {
+        const p2 = (x) => ('0' + x).slice(-2);
+        const toDays = (s) => { const q = s.split('-').map(Number); const y = q[1] <= 2 ? q[0] - 1 : q[0]; const era = Math.floor(y / 400); const yoe = y - era * 400; const mp = (q[1] + 9) % 12; const doy = Math.floor((153 * mp + 2) / 5) + q[2] - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
+        const fromDays = (z0) => { const z = z0 + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const m = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (m <= 2 ? 1 : 0); return y + '-' + p2(m) + '-' + p2(d); };
+        const today = ctx.now().slice(0, 10);
+        const day = (n) => fromDays(toDays(today) + n);
+        const avail = (i, o, extra) => ctx.api('POST', '/rooms/available', { check_in_date: i, check_out_date: o, ...(extra || {}) }).body.data;
+        const book = (gid, rid, i, o, adults) => ctx.api('POST', '/reservations', { guest_id: gid, room_id: rid, check_in_date: i, check_out_date: o, adults: adults || 1 });
+        const rooms = avail(day(0), day(1));
+        const far = avail(day(400), day(401));
+        if (rooms.length === 0 || far.length === 0) return;
+        const g = ctx.api('POST', '/guests', { name: 'Noshow Tester', email: 'noshow.tester@example.com', loyalty_tier: 'none' });
+        ctx.assert(g.status < 300, 'create guest: ' + JSON.stringify(g.body));
+        const gid = g.body.id;
+        const r = book(gid, rooms[0].id, day(0), day(1));
+        ctx.assert(r.status === 201, 'book today: ' + JSON.stringify(r.body));
+        const f = book(gid, far[0].id, day(400), day(401));
+        ctx.assert(f.status === 201, 'book far: ' + JSON.stringify(f.body));
+        const run = ctx.advance('3d');
+        ctx.assert(run.jobsFired.includes('mark_no_shows'), 'mark_no_shows fired, got ' + JSON.stringify(run));
+        ctx.assert(run.jobsFailed.length === 0, 'no job failed: ' + JSON.stringify(run.jobsFailed));
+        const after = ctx.api('GET', '/reservations/' + r.body.id).body;
+        ctx.assert(after.status === 'no_show', 'unclaimed arrival is a no-show, got ' + after.status);
+        ctx.assert(after.cancellation_fee === 0, 'cancellation_fee unchanged');
+        const charges = ctx.api('GET', '/reservations/' + r.body.id + '/charges').body.data;
+        ctx.assert(charges.length === 1 && charges[0].kind === 'no_show_fee' && charges[0].amount === r.body.nightly_rate, 'one no_show_fee of one night, got ' + JSON.stringify(charges));
+        ctx.assert(ctx.api('GET', '/reservations/' + f.body.id).body.status === 'confirmed', 'a future reservation stays confirmed');
+        const late = ctx.api('POST', '/reservations/' + r.body.id + '/cancel', {});
+        ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'cancel after no-show: ' + JSON.stringify(late));
+        ctx.advance('2h');
+        ctx.assert(ctx.api('GET', '/reservations/' + r.body.id + '/charges').body.data.length === 1, 'the job does not charge twice');
+      }
+tasks:
+  cancel_distant_reservation:
+    difficulty: easy
+    instruction: Cancel the confirmed reservation of the guest Eleanor Whitfield. Her stay starts well over 48 hours from now, so no fee should apply. Change nothing else.
+    grader: |-
+      (ctx) => {
+        const g = ctx.seed.list('guest', { where: { name: 'Eleanor Whitfield' } })[0];
+        if (!g) return 0;
+        const target = ctx.seed.list('reservation', { where: { guest_id: g.id, status: 'confirmed' } })[0];
+        if (!target) return 0;
+        if (ctx.changes().length === 0) return 0;
+        ctx.guardChanges('only the target reservation is cancelled', [
+          { entity: 'reservation', id: target.id, kind: 'updated', fields: ['status', 'cancelled_at', 'cancellation_fee'] },
+        ]);
+        const end = ctx.db.get('reservation', target.id);
+        if (!end) return 0;
+        ctx.goal(1, 'cancelled with no fee', end.status === 'cancelled' && end.cancellation_fee === 0 && end.cancelled_at !== null);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const guests = ctx.api('GET', '/guests?q=Whitfield').body.data;
+        const g = guests.find((x) => x.name === 'Eleanor Whitfield');
+        ctx.assert(g, 'guest Eleanor Whitfield not found');
+        const res = ctx.api('GET', '/reservations?guest_id=' + g.id + '&status=confirmed').body.data;
+        ctx.assert(res.length === 1, 'expected one confirmed reservation, found ' + res.length);
+        const r = ctx.api('POST', '/reservations/' + res[0].id + '/cancel', {});
+        ctx.assert(r.status === 200, 'cancel failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: searches for the surname Whitfield and cancels the confirmed reservation of Daniel Whitfield instead of Eleanor
+        script: |-
+          (ctx) => {
+            const guests = ctx.api('GET', '/guests?q=Whitfield').body.data;
+            const g = guests.find((x) => x.name === 'Daniel Whitfield');
+            const res = ctx.api('GET', '/reservations?guest_id=' + g.id + '&status=confirmed').body.data;
+            ctx.api('POST', '/reservations/' + res[0].id + '/cancel', {});
+          }
+      - why: cancels the correct reservation, then also changes its adults count
+        script: |-
+          (ctx) => {
+            const g = ctx.api('GET', '/guests?q=Whitfield').body.data.find((x) => x.name === 'Eleanor Whitfield');
+            const res = ctx.api('GET', '/reservations?guest_id=' + g.id + '&status=confirmed').body.data;
+            ctx.api('POST', '/reservations/' + res[0].id + '/cancel', {});
+            ctx.api('PATCH', '/reservations/' + res[0].id, { adults: 3 });
+          }
+    alternatives: []
+    allows:
+      - entity: reservation
+        kind: updated
+        fields:
+          - status
+          - cancelled_at
+          - cancellation_fee
+        where:
+          guest_id: gst_0001
+          status: confirmed
+  cancel_arriving_tomorrow_with_fee:
+    difficulty: medium
+    instruction: The guest Marcus Okafor phoned to cancel the booking that starts tomorrow. Cancel that reservation and leave his other bookings alone.
+    grader: |-
+      (ctx) => {
+        const g = ctx.seed.list('guest', { where: { name: 'Marcus Okafor' } })[0];
+        if (!g) return 0;
+        let target = null;
+        for (const r of ctx.seed.list('reservation', { where: { guest_id: g.id, status: 'confirmed' } })) {
+          if (target === null || ctx.time.minutesBetween(r.check_in, target.check_in) > 0) target = r;
+        }
+        if (target === null) return 0;
+        if (ctx.changes().length === 0) return 0;
+        const fees = ctx.db.list('folio_charge', { where: { reservation_id: target.id } }).filter((f) => ctx.seed.get('folio_charge', f.id) === null);
+        ctx.guardChanges('only the target reservation is cancelled and its fee charge created', [
+          { entity: 'reservation', id: target.id, kind: 'updated', fields: ['status', 'cancelled_at', 'cancellation_fee'] },
+          ...fees.map((f) => ({ entity: 'folio_charge', id: f.id, kind: 'created', fields: ['reservation_id', 'kind', 'amount', 'description'] })),
+        ]);
+        const end = ctx.db.get('reservation', target.id);
+        if (!end || end.status !== 'cancelled' || end.cancelled_at === null) return 0;
+        if (end.cancellation_fee !== target.nightly_rate) return 0;
+        const before = ctx.seed.list('folio_charge', { where: { reservation_id: target.id } }).length;
+        const kinds = ctx.db.list('folio_charge', { where: { reservation_id: target.id, kind: 'cancellation_fee' } });
+        const all = ctx.db.list('folio_charge', { where: { reservation_id: target.id } });
+        if (before !== 0 || all.length !== 1 || kinds.length !== 1) return 0;
+        ctx.goal(1, 'one cancellation_fee of one night', kinds[0].amount === target.nightly_rate);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const guests = ctx.api('GET', '/guests?q=Okafor').body.data;
+        const g = guests.find((x) => x.name === 'Marcus Okafor');
+        ctx.assert(g, 'guest Marcus Okafor not found');
+        const res = ctx.api('GET', '/reservations?guest_id=' + g.id + '&status=confirmed&sort=check_in').body.data;
+        ctx.assert(res.length >= 1, 'no confirmed reservation for Marcus Okafor');
+        const r = ctx.api('POST', '/reservations/' + res[0].id + '/cancel', {});
+        ctx.assert(r.status === 200, 'cancel failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: cancels Marcus Okafor's later confirmed reservation (more than 48 hours out) instead of the one starting tomorrow
+        script: |-
+          (ctx) => {
+            const g = ctx.api('GET', '/guests?q=Okafor').body.data.find((x) => x.name === 'Marcus Okafor');
+            const res = ctx.api('GET', '/reservations?guest_id=' + g.id + '&status=confirmed&sort=-check_in').body.data;
+            ctx.api('POST', '/reservations/' + res[0].id + '/cancel', {});
+          }
+      - why: cancels every confirmed reservation of Marcus Okafor, including the later one that should stay
+        script: |-
+          (ctx) => {
+            const g = ctx.api('GET', '/guests?q=Okafor').body.data.find((x) => x.name === 'Marcus Okafor');
+            const res = ctx.api('GET', '/reservations?guest_id=' + g.id + '&status=confirmed').body.data;
+            for (const r of res) ctx.api('POST', '/reservations/' + r.id + '/cancel', {});
+          }
+      - why: cancels the correct reservation, then also changes its adults count
+        script: |-
+          (ctx) => {
+            const g = ctx.api('GET', '/guests?q=Okafor').body.data.find((x) => x.name === 'Marcus Okafor');
+            const res = ctx.api('GET', '/reservations?guest_id=' + g.id + '&status=confirmed&sort=check_in').body.data;
+            ctx.api('POST', '/reservations/' + res[0].id + '/cancel', {});
+            ctx.api('PATCH', '/reservations/' + res[0].id, { adults: 2 });
+          }
+    alternatives: []
+    allows:
+      - entity: reservation
+        kind: updated
+        fields:
+          - status
+          - cancelled_at
+          - cancellation_fee
+        where:
+          guest_id: gst_0003
+          status: confirmed
+      - entity: folio_charge
+        kind: created
+        fields: []
+        where:
+          kind: cancellation_fee
+  move_booking_to_free_room:
+    difficulty: medium
+    instruction: Priya Nair has an upcoming confirmed reservation in room 305, but the room has a plumbing problem. Move that reservation to a different room of the same room type that is free for the same dates. Do not cancel or rebook it, and change nothing else.
+    grader: |-
+      (ctx) => {
+        const room = ctx.seed.list('room', { where: { number: '305' } })[0];
+        const g = ctx.seed.list('guest', { where: { name: 'Priya Nair' } })[0];
+        if (!room || !g) return 0;
+        const t = ctx.seed.list('reservation', { where: { guest_id: g.id, room_id: room.id, status: 'confirmed' } })[0];
+        if (!t) return 0;
+        const ch = ctx.changes();
+        if (ch.length === 0) return 0;
+        for (const c of ch) {
+          if (!(c.entity === 'reservation' && c.id === t.id)) return 0;
+        }
+        const end = ctx.db.get('reservation', t.id);
+        if (!end || end.room_id === t.room_id) return 0;
+        for (const k of Object.keys(t)) {
+          if (k === 'room_id' || k === 'updated_at') continue;
+          if (end[k] !== t[k]) return 0;
+        }
+        const nr = ctx.db.get('room', end.room_id);
+        if (!nr || nr.room_type_id !== room.room_type_id || nr.housekeeping === 'out_of_service') return 0;
+        for (const st of ['confirmed', 'checked_in', 'checked_out']) {
+          for (const o of ctx.db.list('reservation', { where: { room_id: nr.id, status: st } })) {
+            if (o.id === t.id) continue;
+            if (ctx.time.minutesBetween(o.check_in, end.check_out) > 0 && ctx.time.minutesBetween(end.check_in, o.check_out) > 0) return 0;
+          }
+        }
+        return 1;
+      }
+    solution: |-
+      (ctx) => {
+        const room = ctx.api('GET', '/rooms?q=305').body.data.find((x) => x.number === '305');
+        ctx.assert(room, 'room 305 not found');
+        const g = ctx.api('GET', '/guests?q=Nair').body.data.find((x) => x.name === 'Priya Nair');
+        ctx.assert(g, 'guest Priya Nair not found');
+        const res = ctx.api('GET', '/reservations?room_id=' + room.id + '&guest_id=' + g.id + '&status=confirmed').body.data;
+        ctx.assert(res.length === 1, 'expected one confirmed reservation, found ' + res.length);
+        const r = res[0];
+        const av = ctx.api('POST', '/rooms/available', { check_in_date: r.check_in.slice(0, 10), check_out_date: r.check_out.slice(0, 10), room_type_id: room.room_type_id }).body.data;
+        const pick = av.find((x) => x.id !== room.id);
+        ctx.assert(pick, 'no free room of the same type');
+        const mv = ctx.api('POST', '/reservations/' + r.id + '/change_room', { room_id: pick.id });
+        ctx.assert(mv.status === 200, 'change_room failed: ' + JSON.stringify(mv.body));
+      }
+    decoys:
+      - why: moves the reservation to a free room of a different room type instead of the same type
+        script: |-
+          (ctx) => {
+            const room = ctx.api('GET', '/rooms?q=305').body.data.find((x) => x.number === '305');
+            const g = ctx.api('GET', '/guests?q=Nair').body.data.find((x) => x.name === 'Priya Nair');
+            const r = ctx.api('GET', '/reservations?room_id=' + room.id + '&guest_id=' + g.id + '&status=confirmed').body.data[0];
+            const av = ctx.api('POST', '/rooms/available', { check_in_date: r.check_in.slice(0, 10), check_out_date: r.check_out.slice(0, 10) }).body.data;
+            const pick = av.find((x) => x.room_type_id !== room.room_type_id);
+            ctx.api('POST', '/reservations/' + r.id + '/change_room', { room_id: pick.id });
+          }
+      - why: cancels the reservation and books a new one in another room, which changes the reservation id and leaves a cancelled booking behind
+        script: |-
+          (ctx) => {
+            const room = ctx.api('GET', '/rooms?q=305').body.data.find((x) => x.number === '305');
+            const g = ctx.api('GET', '/guests?q=Nair').body.data.find((x) => x.name === 'Priya Nair');
+            const r = ctx.api('GET', '/reservations?room_id=' + room.id + '&guest_id=' + g.id + '&status=confirmed').body.data[0];
+            const av = ctx.api('POST', '/rooms/available', { check_in_date: r.check_in.slice(0, 10), check_out_date: r.check_out.slice(0, 10), room_type_id: room.room_type_id }).body.data;
+            const pick = av.find((x) => x.id !== room.id);
+            ctx.api('POST', '/reservations/' + r.id + '/cancel', {});
+            ctx.api('POST', '/reservations', { guest_id: g.id, room_id: pick.id, check_in_date: r.check_in.slice(0, 10), check_out_date: r.check_out.slice(0, 10), adults: r.adults });
+          }
+      - why: moves the reservation correctly but also overwrites its special_requests, an unrequested change
+        script: |-
+          (ctx) => {
+            const room = ctx.api('GET', '/rooms?q=305').body.data.find((x) => x.number === '305');
+            const g = ctx.api('GET', '/guests?q=Nair').body.data.find((x) => x.name === 'Priya Nair');
+            const r = ctx.api('GET', '/reservations?room_id=' + room.id + '&guest_id=' + g.id + '&status=confirmed').body.data[0];
+            const av = ctx.api('POST', '/rooms/available', { check_in_date: r.check_in.slice(0, 10), check_out_date: r.check_out.slice(0, 10), room_type_id: room.room_type_id }).body.data;
+            const pick = av.find((x) => x.id !== room.id);
+            ctx.api('POST', '/reservations/' + r.id + '/change_room', { room_id: pick.id });
+            ctx.api('PATCH', '/reservations/' + r.id, { special_requests: 'Moved because of a plumbing issue in 305' });
+          }
+    alternatives: []
+    allows:
+      - entity: reservation
+        kind: updated
+        fields:
+          - room_id
+        where:
+          guest_id: gst_0004
+          room_id: rom_0027
+          status: confirmed
+  relocate_all_from_maintenance_room:
+    difficulty: hard
+    instruction: Room 214 has just been taken out of service for repairs. Move every upcoming confirmed reservation in room 214 to a different room of the same room type that is free for the same dates, keeping the dates unchanged. Different reservations may need different replacement rooms. Do not cancel anything, and leave reservations that are already checked in, checked out or cancelled where they are.
+    grader: |-
+      (ctx) => {
+        const old = ctx.seed.list('room', { where: { number: '214' } })[0];
+        if (!old) return 0;
+        const targets = ctx.seed.list('reservation', { where: { room_id: old.id, status: 'confirmed' } });
+        if (targets.length === 0) return 0;
+        const ids = new Set(targets.map((t) => t.id));
+        const ch = ctx.changes();
+        if (ch.length === 0) return 0;
+        for (const c of ch) {
+          if (!(c.entity === 'reservation' && ids.has(c.id))) return 0;
+        }
+        let done = 0;
+        for (const t of targets) {
+          const end = ctx.db.get('reservation', t.id);
+          if (!end || end.room_id === old.id) continue;
+          let same = true;
+          for (const k of Object.keys(t)) {
+            if (k === 'room_id' || k === 'updated_at') continue;
+            if (end[k] !== t[k]) same = false;
+          }
+          if (!same) continue;
+          const nr = ctx.db.get('room', end.room_id);
+          if (!nr || nr.room_type_id !== old.room_type_id || nr.housekeeping === 'out_of_service') continue;
+          let clash = false;
+          for (const st of ['confirmed', 'checked_in', 'checked_out']) {
+            for (const o of ctx.db.list('reservation', { where: { room_id: nr.id, status: st } })) {
+              if (o.id === t.id) continue;
+              if (ctx.time.minutesBetween(o.check_in, end.check_out) > 0 && ctx.time.minutesBetween(end.check_in, o.check_out) > 0) clash = true;
+            }
+          }
+          if (!clash) done += 1;
+        }
+        return done / targets.length;
+      }
+    solution: |-
+      (ctx) => {
+        const room = ctx.api('GET', '/rooms?q=214').body.data.find((x) => x.number === '214');
+        ctx.assert(room, 'room 214 not found');
+        const targets = [];
+        let cursor = null;
+        do {
+          const r = ctx.api('GET', '/reservations?room_id=' + room.id + '&status=confirmed' + (cursor === null ? '' : '&cursor=' + cursor));
+          ctx.assert(r.status === 200, 'list failed: ' + JSON.stringify(r.body));
+          targets.push(...r.body.data);
+          cursor = r.body.next_cursor;
+        } while (cursor !== null && cursor !== undefined);
+        ctx.assert(targets.length > 0, 'no confirmed reservations on room 214');
+        for (const t of targets) {
+          const av = ctx.api('POST', '/rooms/available', { check_in_date: t.check_in.slice(0, 10), check_out_date: t.check_out.slice(0, 10), room_type_id: room.room_type_id }).body.data;
+          const pick = av.find((x) => x.id !== room.id);
+          ctx.assert(pick, 'no free room of the same type for ' + t.id);
+          const mv = ctx.api('POST', '/reservations/' + t.id + '/change_room', { room_id: pick.id });
+          ctx.assert(mv.status === 200, 'change_room ' + t.id + ' failed: ' + JSON.stringify(mv.body));
+        }
+      }
+    decoys:
+      - why: reads only the first page of confirmed reservations, so it misses the room 214 bookings that start later
+        script: |-
+          (ctx) => {
+            const room = ctx.api('GET', '/rooms?q=214').body.data.find((x) => x.number === '214');
+            const page = ctx.api('GET', '/reservations?status=confirmed&sort=check_in').body.data.filter((r) => r.room_id === room.id);
+            for (const t of page) {
+              const av = ctx.api('POST', '/rooms/available', { check_in_date: t.check_in.slice(0, 10), check_out_date: t.check_out.slice(0, 10), room_type_id: room.room_type_id }).body.data;
+              const pick = av.find((x) => x.id !== room.id);
+              if (pick) ctx.api('POST', '/reservations/' + t.id + '/change_room', { room_id: pick.id });
+            }
+          }
+      - why: cancels the confirmed reservations on room 214 instead of relocating them
+        script: |-
+          (ctx) => {
+            const room = ctx.api('GET', '/rooms?q=214').body.data.find((x) => x.number === '214');
+            const res = ctx.api('GET', '/reservations?room_id=' + room.id + '&status=confirmed').body.data;
+            for (const t of res) ctx.api('POST', '/reservations/' + t.id + '/cancel', {});
+          }
+      - why: moves each reservation to any free room without checking that it has the same room type as 214
+        script: |-
+          (ctx) => {
+            const room = ctx.api('GET', '/rooms?q=214').body.data.find((x) => x.number === '214');
+            const res = ctx.api('GET', '/reservations?room_id=' + room.id + '&status=confirmed').body.data;
+            for (const t of res) {
+              const av = ctx.api('POST', '/rooms/available', { check_in_date: t.check_in.slice(0, 10), check_out_date: t.check_out.slice(0, 10) }).body.data;
+              const pick = av.find((x) => x.room_type_id !== room.room_type_id && x.id !== room.id);
+              if (pick) ctx.api('POST', '/reservations/' + t.id + '/change_room', { room_id: pick.id });
+            }
+          }
+    alternatives: []
+    allows:
+      - entity: reservation
+        kind: updated
+        fields:
+          - room_id
+        where:
+          room_id: rom_0022
+          status: confirmed

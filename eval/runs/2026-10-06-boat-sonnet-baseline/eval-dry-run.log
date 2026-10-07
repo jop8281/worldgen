@@ -1,0 +1,19 @@
+
+> eval
+> tsx src/cli/eval.ts --dry-run
+
+dry run: 13 cases from <repo>/eval/suite.yaml, no model call
+ok    helpdesk-sla (description)
+ok    bakery-vague (description)
+ok    video-codec-impossible (description)
+ok    library-holds (description)
+ok    billing-dunning (description)
+ok    todo-projects (description)
+ok    clinic-appointments (description)
+ok    stripe-refunds (openapi)
+ok    petstore-store (openapi)
+ok    orders-csv (csv)
+ok    helpdesk-add-refunds (description + change)
+ok    stripe-partial-refunds (openapi + change)
+ok    retail-tau2-known (description)
+13 of 13 cases ready

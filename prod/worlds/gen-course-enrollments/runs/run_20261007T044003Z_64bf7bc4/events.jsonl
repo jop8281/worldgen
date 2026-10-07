@@ -1,0 +1,17 @@
+{"at":"2026-10-07T04:40:03.597Z","runId":"run_20261007T044003Z_64bf7bc4","t":"run_started","mode":"create","input":"csv","model":"claude-sonnet-5-5","budgetUsd":5,"transport":"claude-cli"}
+{"at":"2026-10-07T04:40:03.608Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_started","step":"plan","reason":"planned"}
+{"at":"2026-10-07T04:40:47.771Z","runId":"run_20261007T044003Z_64bf7bc4","t":"attempt","step":"plan","n":1,"ms":44133,"usage":{"inputTokens":2,"outputTokens":5789,"cacheReadTokens":40475,"cacheWriteTokens":1177},"costUsd":0.070697,"outcome":{"kind":"accepted","warnings":0},"dump":"runs/run_20261007T044003Z_64bf7bc4/001-plan-1.json"}
+{"at":"2026-10-07T04:40:47.772Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_finished","step":"plan","attempts":1,"ms":44164,"costUsd":0.070697}
+{"at":"2026-10-07T04:40:47.774Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_started","step":"model","reason":"planned"}
+{"at":"2026-10-07T04:41:01.408Z","runId":"run_20261007T044003Z_64bf7bc4","t":"attempt","step":"model","n":1,"ms":13600,"usage":{"inputTokens":2,"outputTokens":2090,"cacheReadTokens":44404,"cacheWriteTokens":20411},"costUsd":0.1114288,"outcome":{"kind":"accepted","warnings":1},"dump":"runs/run_20261007T044003Z_64bf7bc4/002-model-1.json"}
+{"at":"2026-10-07T04:41:01.409Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_finished","step":"model","attempts":1,"ms":13635,"costUsd":0.1114288}
+{"at":"2026-10-07T04:41:01.409Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_started","step":"workflow","reason":"planned"}
+{"at":"2026-10-07T04:41:37.594Z","runId":"run_20261007T044003Z_64bf7bc4","t":"attempt","step":"workflow","n":1,"ms":36092,"usage":{"inputTokens":2,"outputTokens":6548,"cacheReadTokens":44555,"cacheWriteTokens":21899},"costUsd":0.161991,"outcome":{"kind":"accepted","warnings":1},"dump":"runs/run_20261007T044003Z_64bf7bc4/003-workflow-1.json"}
+{"at":"2026-10-07T04:41:37.596Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_finished","step":"workflow","attempts":1,"ms":36187,"costUsd":0.161991}
+{"at":"2026-10-07T04:41:37.596Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_started","step":"seed","reason":"planned"}
+{"at":"2026-10-07T04:41:46.846Z","runId":"run_20261007T044003Z_64bf7bc4","t":"attempt","step":"seed","n":1,"ms":9098,"usage":{"inputTokens":2,"outputTokens":1089,"cacheReadTokens":40236,"cacheWriteTokens":27092},"costUsd":0.1273092,"outcome":{"kind":"accepted","warnings":0},"dump":"runs/run_20261007T044003Z_64bf7bc4/004-seed-1.json"}
+{"at":"2026-10-07T04:41:46.846Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_finished","step":"seed","attempts":1,"ms":9250,"costUsd":0.1273092}
+{"at":"2026-10-07T04:41:46.846Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_started","step":"tasks","reason":"planned"}
+{"at":"2026-10-07T04:43:19.829Z","runId":"run_20261007T044003Z_64bf7bc4","t":"attempt","step":"tasks","n":1,"ms":92168,"usage":{"inputTokens":2,"outputTokens":14275,"cacheReadTokens":41299,"cacheWriteTokens":27647},"costUsd":0.2616018,"outcome":{"kind":"accepted","warnings":0},"dump":"runs/run_20261007T044003Z_64bf7bc4/005-tasks-1.json"}
+{"at":"2026-10-07T04:43:19.830Z","runId":"run_20261007T044003Z_64bf7bc4","t":"step_finished","step":"tasks","attempts":1,"ms":92984,"costUsd":0.2616018}
+{"at":"2026-10-07T04:43:19.830Z","runId":"run_20261007T044003Z_64bf7bc4","t":"run_finished","ms":196234,"costUsd":0.7330278,"worldWritten":true,"result":{"kind":"done","worldDir":"/Users/yossieliaz/wt/stress/prod/worlds/gen-course-enrollments"}}

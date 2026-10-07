@@ -1,0 +1,19 @@
+id,name,email,country,plan,created_at
+cus_0001,Ada Lovelace,ada.lovelace@example.com,GB,pro,2026-01-01T09:00:00Z
+cus_0002,Grace Hopper,grace.hopper@example.com,GB,free,2026-01-02T10:00:00Z
+cus_0003,Alan Turing,alan.turing@example.com,IE,team,2026-01-03T11:00:00Z
+cus_0004,Edsger Dijkstra,edsger.dijkstra@example.com,SE,team,2026-01-04T12:00:00Z
+cus_0005,Barbara Liskov,barbara.liskov@example.com,SE,free,2026-01-05T13:00:00Z
+cus_0006,Donald Knuth,donald.knuth@example.com,US,team,2026-01-06T14:00:00Z
+cus_0007,Frances Allen,frances.allen@example.com,GB,free,2026-01-07T15:00:00Z
+cus_0008,Ken Thompson,ken.thompson@example.com,NL,free,2026-01-08T16:00:00Z
+cus_0009,Margaret Hamilton,margaret.hamilton@example.com,SE,free,2026-01-09T09:00:00Z
+cus_0010,Dennis Ritchie,dennis.ritchie@example.com,SE,team,2026-01-10T10:00:00Z
+cus_0011,Radia Perlman,radia.perlman@example.com,CA,free,2026-01-11T11:00:00Z
+cus_0012,John McCarthy,john.mccarthy@example.com,IE,pro,2026-01-12T12:00:00Z
+cus_0013,Katherine Johnson,katherine.johnson@example.com,CA,pro,2026-01-13T13:00:00Z
+cus_0014,Niklaus Wirth,niklaus.wirth@example.com,IE,team,2026-01-14T14:00:00Z
+cus_0015,Shafi Goldwasser,shafi.goldwasser@example.com,GB,team,2026-01-15T15:00:00Z
+cus_0016,Leslie Lamport,leslie.lamport@example.com,CA,free,2026-01-16T16:00:00Z
+cus_0017,Hedy Lamarr,hedy.lamarr@example.com,NL,pro,2026-01-17T09:00:00Z
+cus_0018,Tim Berners-Lee,tim.bernerslee@example.com,SE,free,2026-01-18T10:00:00Z

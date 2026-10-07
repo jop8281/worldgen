@@ -1,0 +1,738 @@
+# The customers operations and schemas are trimmed from Stripe's public spec, openapi/spec3.json in
+# github.com/stripe/openapi at commit 0082e0c942013f66947dbaf3d9944cf66e00f391 (API version
+# 2026-09-30.endive), MIT License, Copyright (c) 2011- Stripe, Inc.
+openapi: 3.0.3
+info:
+  title: Stripe API subset (charges, refunds and customers)
+  version: '2024-06-20'
+  description: >-
+    A hand-written subset of the Stripe REST API for rehearsal runs: charges, refunds and
+    customers, with Stripe's list envelope, form-encoded request bodies, expandable fields and
+    its shared error body.
+servers:
+  - url: https://api.stripe.com
+security:
+  - basic: []
+components:
+  securitySchemes:
+    basic:
+      type: http
+      scheme: basic
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: A limit on the number of objects to be returned, between 1 and 100.
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    StartingAfter:
+      name: starting_after
+      in: query
+      description: A cursor for pagination. The id of the last object on the previous page.
+      required: false
+      schema:
+        type: string
+        maxLength: 5000
+    EndingBefore:
+      name: ending_before
+      in: query
+      description: A cursor for pagination. The id of the first object on the next page.
+      required: false
+      schema:
+        type: string
+        maxLength: 5000
+  schemas:
+    Metadata:
+      type: object
+      description: Set of key-value pairs attached to an object. Values are strings up to 500 characters.
+      additionalProperties:
+        type: string
+        maxLength: 500
+    Charge:
+      type: object
+      description: A charge against a card or other payment source.
+      required: [id, object, amount, amount_captured, amount_refunded, captured, created, currency, livemode, metadata, paid, refunded, status]
+      properties:
+        id:
+          type: string
+          maxLength: 5000
+        object:
+          type: string
+          enum: [charge]
+        amount:
+          type: integer
+          description: Amount in the smallest currency unit, such as 100 cents for 1.00 USD.
+        amount_captured:
+          type: integer
+        amount_refunded:
+          type: integer
+        captured:
+          type: boolean
+        created:
+          type: integer
+          format: unix-time
+        currency:
+          type: string
+          description: Three-letter ISO currency code, in lowercase.
+        customer:
+          type: string
+          nullable: true
+          maxLength: 5000
+        description:
+          type: string
+          nullable: true
+          maxLength: 40000
+        failure_code:
+          type: string
+          nullable: true
+          maxLength: 5000
+        failure_message:
+          type: string
+          nullable: true
+          maxLength: 5000
+        livemode:
+          type: boolean
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        paid:
+          type: boolean
+        payment_intent:
+          type: string
+          nullable: true
+          maxLength: 5000
+        receipt_email:
+          type: string
+          nullable: true
+          maxLength: 5000
+        refunded:
+          type: boolean
+        refunds:
+          $ref: '#/components/schemas/RefundList'
+        status:
+          type: string
+          enum: [succeeded, pending, failed]
+    Refund:
+      type: object
+      description: A refund of a previously created charge, in full or in part.
+      required: [id, object, amount, created, currency, metadata, status]
+      properties:
+        id:
+          type: string
+          maxLength: 5000
+        object:
+          type: string
+          enum: [refund]
+        amount:
+          type: integer
+        charge:
+          description: The charge that was refunded. Expandable.
+          nullable: true
+          anyOf:
+            - type: string
+              maxLength: 5000
+            - $ref: '#/components/schemas/Charge'
+        created:
+          type: integer
+          format: unix-time
+        currency:
+          type: string
+        failure_reason:
+          type: string
+          nullable: true
+          enum: [lost_or_stolen_card, expired_or_canceled_card, charge_for_pending_refund_disputed, insufficient_funds, declined, merchant_request, unknown]
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        payment_intent:
+          type: string
+          nullable: true
+          maxLength: 5000
+        reason:
+          type: string
+          nullable: true
+          enum: [duplicate, expired_uncaptured_charge, fraudulent, requested_by_customer]
+        receipt_number:
+          type: string
+          nullable: true
+          maxLength: 5000
+        status:
+          type: string
+          enum: [pending, requires_action, succeeded, failed, canceled]
+    RefundList:
+      type: object
+      description: The list envelope for refunds.
+      required: [object, data, has_more, url]
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Refund'
+        has_more:
+          type: boolean
+          description: True if this list has another page after this one.
+        url:
+          type: string
+          maxLength: 5000
+    ChargeList:
+      type: object
+      description: The list envelope for charges.
+      required: [object, data, has_more, url]
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Charge'
+        has_more:
+          type: boolean
+          description: True if this list has another page after this one.
+        url:
+          type: string
+          maxLength: 5000
+    Customer:
+      type: object
+      description: A customer of your business, whom you can charge and track payments for.
+      required: [id, object, created, livemode]
+      properties:
+        id:
+          type: string
+          maxLength: 5000
+        object:
+          type: string
+          enum: [customer]
+        balance:
+          type: integer
+          description: Balance in the smallest currency unit, applied to the next invoice. Negative is a credit, positive is owed.
+        created:
+          type: integer
+          format: unix-time
+        currency:
+          type: string
+          nullable: true
+          maxLength: 5000
+        delinquent:
+          type: boolean
+          nullable: true
+          description: True when the customer's latest invoice is past due or its automatic payment failed.
+        description:
+          type: string
+          nullable: true
+          maxLength: 5000
+        email:
+          type: string
+          nullable: true
+          maxLength: 5000
+        invoice_prefix:
+          type: string
+          nullable: true
+          maxLength: 5000
+        livemode:
+          type: boolean
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        name:
+          type: string
+          nullable: true
+          maxLength: 5000
+        phone:
+          type: string
+          nullable: true
+          maxLength: 5000
+        tax_exempt:
+          type: string
+          nullable: true
+          enum: [exempt, none, reverse]
+    DeletedCustomer:
+      type: object
+      description: What deleting a customer returns.
+      required: [deleted, id, object]
+      properties:
+        deleted:
+          type: boolean
+          enum: [true]
+        id:
+          type: string
+          maxLength: 5000
+        object:
+          type: string
+          enum: [customer]
+    CustomerList:
+      type: object
+      description: The list envelope for customers.
+      required: [object, data, has_more, url]
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Customer'
+        has_more:
+          type: boolean
+          description: True if this list has another page after this one.
+        url:
+          type: string
+          maxLength: 5000
+    ApiErrors:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [api_error, card_error, idempotency_error, invalid_request_error]
+          example: invalid_request_error
+        code:
+          type: string
+          description: A short string identifying the error, such as resource_missing.
+          maxLength: 5000
+        message:
+          type: string
+          description: A human-readable message with more details about the error.
+          maxLength: 40000
+        param:
+          type: string
+          description: The parameter the error relates to, if any.
+          maxLength: 5000
+        doc_url:
+          type: string
+          maxLength: 5000
+    Error:
+      type: object
+      description: An error response from the Stripe API.
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ApiErrors'
+  responses:
+    Error:
+      description: Error response.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              type: invalid_request_error
+              code: resource_missing
+              message: No such refund
+              param: id
+paths:
+  /v1/charges:
+    get:
+      summary: List all charges
+      description: Returns a list of charges you have previously created, newest first.
+      operationId: GetCharges
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/StartingAfter'
+        - $ref: '#/components/parameters/EndingBefore'
+        - name: customer
+          in: query
+          description: Only return charges for the customer with this id.
+          required: false
+          schema:
+            type: string
+            maxLength: 5000
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChargeList'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      summary: Create a charge
+      description: Charges a payment source. The charge succeeds or fails at once.
+      operationId: PostCharges
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [amount, currency]
+              properties:
+                amount:
+                  type: integer
+                  description: Amount in the smallest currency unit.
+                currency:
+                  type: string
+                  description: Three-letter ISO currency code, in lowercase.
+                customer:
+                  type: string
+                  maxLength: 500
+                description:
+                  type: string
+                  maxLength: 40000
+                receipt_email:
+                  type: string
+                capture:
+                  type: boolean
+                  description: Whether to capture the charge immediately. Defaults to true.
+                metadata:
+                  $ref: '#/components/schemas/Metadata'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Charge'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/charges/{charge}:
+    get:
+      summary: Retrieve a charge
+      operationId: GetChargesCharge
+      parameters:
+        - name: charge
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 5000
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Charge'
+              example:
+                id: ch_3PqXk2LmNo4
+                object: charge
+                amount: 2000
+                amount_captured: 2000
+                amount_refunded: 0
+                captured: true
+                created: 1718900000
+                currency: usd
+                customer: cus_Q7rStUvW
+                description: Order ord_0042
+                failure_code: null
+                failure_message: null
+                livemode: false
+                metadata: {}
+                paid: true
+                payment_intent: null
+                receipt_email: jenny.rosen@example.com
+                refunded: false
+                refunds:
+                  object: list
+                  data: []
+                  has_more: false
+                  url: /v1/refunds
+                status: succeeded
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/refunds:
+    get:
+      summary: List all refunds
+      description: Returns a list of refunds, newest first.
+      operationId: GetRefunds
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/StartingAfter'
+        - $ref: '#/components/parameters/EndingBefore'
+        - name: charge
+          in: query
+          description: Only return refunds for the charge with this id.
+          required: false
+          schema:
+            type: string
+            maxLength: 5000
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundList'
+              example:
+                object: list
+                data:
+                  - id: re_3PqXk2LmNo4
+                    object: refund
+                    amount: 500
+                    charge: ch_3PqXk2LmNo4
+                    created: 1718900600
+                    currency: usd
+                    failure_reason: null
+                    metadata: {}
+                    payment_intent: null
+                    reason: requested_by_customer
+                    receipt_number: null
+                    status: succeeded
+                has_more: false
+                url: /v1/refunds
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      summary: Create a refund
+      description: Refunds a charge in full, or in part when amount is given. A charge cannot be refunded beyond its amount.
+      operationId: PostRefunds
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                charge:
+                  type: string
+                  maxLength: 5000
+                payment_intent:
+                  type: string
+                  maxLength: 5000
+                amount:
+                  type: integer
+                  description: Defaults to the remaining unrefunded amount of the charge.
+                reason:
+                  type: string
+                  enum: [duplicate, fraudulent, requested_by_customer]
+                metadata:
+                  $ref: '#/components/schemas/Metadata'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/refunds/{refund}:
+    parameters:
+      - name: refund
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 5000
+    get:
+      summary: Retrieve a refund
+      operationId: GetRefundsRefund
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      summary: Update a refund
+      description: Updates the metadata of a refund. Other fields cannot be changed.
+      operationId: PostRefundsRefund
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                metadata:
+                  $ref: '#/components/schemas/Metadata'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/refunds/{refund}/cancel:
+    post:
+      summary: Cancel a refund
+      description: Cancels a refund whose status is requires_action. Other refunds cannot be canceled.
+      operationId: PostRefundsRefundCancel
+      parameters:
+        - name: refund
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 5000
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/customers:
+    get:
+      summary: List all customers
+      description: Returns a list of your customers, newest first.
+      operationId: GetCustomers
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/StartingAfter'
+        - $ref: '#/components/parameters/EndingBefore'
+        - name: email
+          in: query
+          description: A case-sensitive filter on the customer's email.
+          required: false
+          schema:
+            type: string
+            maxLength: 512
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerList'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      summary: Create a customer
+      description: Creates a new customer object.
+      operationId: PostCustomers
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                balance:
+                  type: integer
+                  description: Balance in the smallest currency unit. Negative is a credit.
+                description:
+                  type: string
+                  maxLength: 5000
+                email:
+                  type: string
+                  maxLength: 512
+                invoice_prefix:
+                  type: string
+                  maxLength: 5000
+                  description: 1 to 12 uppercase letters or numbers.
+                metadata:
+                  $ref: '#/components/schemas/Metadata'
+                name:
+                  type: string
+                  maxLength: 256
+                phone:
+                  type: string
+                  maxLength: 20
+                tax_exempt:
+                  type: string
+                  enum: [exempt, none, reverse]
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+              example:
+                id: cus_Q7rStUvW
+                object: customer
+                balance: 0
+                created: 1718800000
+                currency: usd
+                delinquent: false
+                description: null
+                email: jenny.rosen@example.com
+                invoice_prefix: 7C4F21A
+                livemode: false
+                metadata: {}
+                name: Jenny Rosen
+                phone: null
+                tax_exempt: none
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/customers/{customer}:
+    parameters:
+      - name: customer
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 5000
+    get:
+      summary: Retrieve a customer
+      operationId: GetCustomersCustomer
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      summary: Update a customer
+      description: Updates the customer by setting the values of the parameters passed. Parameters not passed are left unchanged.
+      operationId: PostCustomersCustomer
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                balance:
+                  type: integer
+                  description: Balance in the smallest currency unit. Negative is a credit.
+                description:
+                  type: string
+                  maxLength: 5000
+                email:
+                  type: string
+                  maxLength: 512
+                invoice_prefix:
+                  type: string
+                  maxLength: 5000
+                  description: 1 to 12 uppercase letters or numbers.
+                metadata:
+                  $ref: '#/components/schemas/Metadata'
+                name:
+                  type: string
+                  maxLength: 256
+                phone:
+                  type: string
+                  maxLength: 20
+                tax_exempt:
+                  type: string
+                  enum: [exempt, none, reverse]
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      summary: Delete a customer
+      description: Permanently deletes a customer. It cannot be undone.
+      operationId: DeleteCustomersCustomer
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedCustomer'
+        default:
+          $ref: '#/components/responses/Error'

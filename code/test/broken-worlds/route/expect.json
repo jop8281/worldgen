@@ -1,0 +1,9 @@
+{
+  "code": "route.duplicate_path",
+  "path": [
+    "actions",
+    "reopen_ticket",
+    "path"
+  ],
+  "layer": "references"
+}

@@ -1,0 +1,376 @@
+# Hand-written for the live segment in research/demo-runbook.md. Not copied from a vendor spec.
+# Run it with --only /v1/gift_cards: the merchant and payout operations are there to be dropped.
+openapi: 3.0.3
+info:
+  title: Gift card API
+  version: '2026-10-01'
+  description: >-
+    Issue, look up, load, redeem and freeze store gift cards. Amounts are integers in the minor unit
+    of the card's currency. Every balance change is a gift card activity, and a card's balance is the
+    sum of its activities.
+servers:
+  - url: https://api.giftcards.example
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Most objects to return, between 1 and 100.
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      description: The next_cursor value of the previous page.
+      required: false
+      schema:
+        type: string
+    GiftCardId:
+      name: gift_card
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: A short machine code, such as insufficient_balance or card_frozen.
+            message:
+              type: string
+    GiftCard:
+      type: object
+      required: [id, gan, state, currency, balance, created_at]
+      properties:
+        id:
+          type: string
+          example: gftc_7PqT2
+        gan:
+          type: string
+          description: The 16-digit number printed on the card. Unique.
+          pattern: '^[0-9]{16}$'
+        state:
+          type: string
+          enum: [pending, active, frozen, deactivated]
+          description: >-
+            pending until the first load. active cards can be loaded and redeemed. A frozen card refuses
+            redemptions until it is unfrozen. deactivated is final.
+        currency:
+          type: string
+          enum: [USD, EUR, GBP]
+        balance:
+          type: integer
+          minimum: 0
+          description: Current balance in the minor unit. Never negative.
+        customer_email:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    GiftCardActivity:
+      type: object
+      required: [id, gift_card_id, type, amount, balance_after, created_at]
+      properties:
+        id:
+          type: string
+        gift_card_id:
+          type: string
+        type:
+          type: string
+          enum: [load, redeem, refund, adjust]
+        amount:
+          type: integer
+          description: Signed. A redeem is negative, a load or refund is positive.
+        balance_after:
+          type: integer
+          minimum: 0
+        reference:
+          type: string
+          nullable: true
+          description: The merchant's order id for a redeem or refund.
+        created_at:
+          type: string
+          format: date-time
+    GiftCardList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/GiftCard'
+        next_cursor:
+          type: string
+          nullable: true
+    GiftCardActivityList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/GiftCardActivity'
+        next_cursor:
+          type: string
+          nullable: true
+    Merchant:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    Payout:
+      type: object
+      required: [id, merchant_id, amount, status]
+      properties:
+        id:
+          type: string
+        merchant_id:
+          type: string
+        amount:
+          type: integer
+        status:
+          type: string
+          enum: [pending, paid, failed]
+  responses:
+    BadRequest:
+      description: The request is malformed or a field is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: No object has that id.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: The card's state or balance does not allow this operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+paths:
+  /v1/gift_cards:
+    get:
+      operationId: listGiftCards
+      summary: List gift cards
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, active, frozen, deactivated]
+        - name: customer_email
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of gift cards, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCardList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    post:
+      operationId: createGiftCard
+      summary: Create a gift card
+      description: Creates a pending card with a zero balance. Load it to activate it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currency]
+              properties:
+                currency:
+                  type: string
+                  enum: [USD, EUR, GBP]
+                customer_email:
+                  type: string
+      responses:
+        '201':
+          description: The new card.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCard'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/gift_cards/{gift_card}:
+    get:
+      operationId: getGiftCard
+      summary: Retrieve a gift card
+      parameters:
+        - $ref: '#/components/parameters/GiftCardId'
+      responses:
+        '200':
+          description: The card.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/gift_cards/{gift_card}/activities:
+    get:
+      operationId: listGiftCardActivities
+      summary: List a gift card's activities
+      parameters:
+        - $ref: '#/components/parameters/GiftCardId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of activities, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCardActivityList'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: createGiftCardActivity
+      summary: Load, redeem, refund or adjust a gift card
+      description: >-
+        load activates a pending card and adds to the balance, up to a 50000 maximum balance. redeem
+        subtracts and is refused with insufficient_balance when the balance is too low, or with
+        card_frozen on a frozen card. refund adds back at most what was redeemed under the same
+        reference. A deactivated card refuses every activity.
+      parameters:
+        - $ref: '#/components/parameters/GiftCardId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, amount]
+              properties:
+                type:
+                  type: string
+                  enum: [load, redeem, refund, adjust]
+                amount:
+                  type: integer
+                  minimum: 1
+                  description: Always positive. The type sets the sign.
+                reference:
+                  type: string
+      responses:
+        '201':
+          description: The new activity. The card's balance changed by its amount.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCardActivity'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/gift_cards/{gift_card}/freeze:
+    post:
+      operationId: freezeGiftCard
+      summary: Freeze an active gift card
+      parameters:
+        - $ref: '#/components/parameters/GiftCardId'
+      responses:
+        '200':
+          description: The frozen card.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/gift_cards/{gift_card}/unfreeze:
+    post:
+      operationId: unfreezeGiftCard
+      summary: Unfreeze a frozen gift card
+      parameters:
+        - $ref: '#/components/parameters/GiftCardId'
+      responses:
+        '200':
+          description: The active card.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/gift_cards/{gift_card}/deactivate:
+    post:
+      operationId: deactivateGiftCard
+      summary: Deactivate a gift card for good
+      parameters:
+        - $ref: '#/components/parameters/GiftCardId'
+      responses:
+        '200':
+          description: The deactivated card.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCard'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/merchants:
+    get:
+      operationId: listMerchants
+      summary: List merchants
+      responses:
+        '200':
+          description: Every merchant.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Merchant'
+  /v1/payouts:
+    get:
+      operationId: listPayouts
+      summary: List payouts
+      responses:
+        '200':
+          description: Every payout.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Payout'

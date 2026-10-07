@@ -1,0 +1,249 @@
+# The stress suite: the rehearsal cases `npm run eval` runs (from code/).
+# Each case is { id, input, change?, expect?, note? }. `input` parses with inputSchema in
+# code/src/worldgen/input.ts, the same union the worldgen CLI parses. File paths resolve
+# against this file's directory. `change` runs as an iterate job on the saved world.
+# `expect: stopped` marks a prompt WorldGen should refuse; it passes on an honest stop.
+# `tags` group cases for `--tag`: the input kind (description, openapi, csv), `iterate`, `vague`, `impossible`, `known`,
+# and `cheap` (a small input or an expected early stop).
+# The unseen bank in research/rehearsal-prompts.md stays out of this file so it stays unseen.
+name: stress
+cases:
+  - id: helpdesk-sla
+    tags: [description]
+    input: { kind: description, text: "A helpdesk with SLA tiers and on-call escalation" }
+    note: Tickets carry an SLA tier; a breached first-response deadline on the engine clock escalates to the on-call agent.
+
+  - id: bakery-vague
+    tags: [description, vague]
+    input: { kind: description, text: "An app for a bakery" }
+    note: Vague. Picks one concrete analog (for example custom cake orders), records it as the first assumption, and still builds a graded world.
+
+  - id: video-codec-impossible
+    tags: [description, impossible, cheap]
+    input: { kind: description, text: "A real-time video codec" }
+    expect: stopped
+    note: Impossible. Encoding frames is computation, not stateful software an agent operates through an API; an honest stop with REPORT.md saying why.
+
+  - id: library-holds
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        A public library system with branches, book copies, members, checkouts with due dates,
+        a holds queue per title that serves members in order, and overdue fines.
+    note: Returning a copy fills the oldest hold first; fines accrue on the engine clock.
+
+  - id: billing-dunning
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        Subscription billing with plans, invoices and card payments, where a failed payment starts
+        dunning: retries after 1, 3 and 7 days, then the subscription is cancelled.
+    note: Money in minor units; the retry schedule runs as jobs on the engine clock.
+
+  - id: todo-projects
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        A to-do app with projects, tasks with assignees and due dates, and a project that can be
+        archived only when all of its tasks are done.
+    note: Archiving a project with an open task is refused with no change.
+
+  - id: clinic-appointments
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        A clinic appointment system with doctors, patients and time slots, no double booking,
+        cancellation up to 24 hours before the visit, and no-show tracking.
+    note: Overlaps refused on write; the 24-hour cutoff is measured on the engine clock.
+
+  - id: stripe-refunds
+    tags: [openapi, cheap]
+    input: { kind: openapi, path: inputs/stripe.openapi.yaml, only: [/v1/refunds] }
+    note: Keeps only refund operations and the spec's list and error envelopes.
+
+  - id: petstore-store
+    tags: [openapi, cheap]
+    input: { kind: openapi, path: inputs/petstore.openapi.yaml, only: [/store] }
+    note: Store orders with their status flow, from the Petstore 3.0 spec.
+
+  - id: orders-csv
+    tags: [csv, cheap]
+    input: { kind: csv, paths: [inputs/orders.csv, inputs/customers.csv] }
+    note: orders.customer_id is a ref to customers; the order status column becomes a workflow.
+
+  - id: linear-backlog-csv
+    tags: [csv]
+    input: { kind: csv, paths: [inputs/linear-backlog.csv] }
+    expect: done
+    note: Our own Linear backlog (123 YOS issues, no assignee, no descriptions). Status becomes a workflow, Project, Milestone and Parent become refs, and inputs/linear-backlog.labels.csv is the hand-labeled answer key for state categories (testbed T1).
+
+  - id: helpdesk-add-refunds
+    tags: [description, iterate]
+    input:
+      kind: description
+      text: >-
+        A helpdesk where customers open tickets about their orders, agents reply, and tickets move
+        from open to pending to resolved.
+    change: >-
+      Add refunds: an agent can refund an order linked to a ticket, a refund above $500 needs a
+      supervisor's approval, and a ticket cannot be resolved while one of its refunds is pending.
+    note: Iterate. The change adds refunds without dropping tickets or their tasks.
+
+  - id: stripe-partial-refunds
+    tags: [openapi, iterate]
+    input: { kind: openapi, path: inputs/stripe.openapi.yaml, only: [/v1/charges, /v1/refunds] }
+    change: >-
+      Allow partial refunds: a charge can be refunded several times until the refunded total
+      reaches the charge amount, and a refund that would exceed it is refused with no change.
+    note: Iterate on an OpenAPI world. Charges and earlier refunds survive the change.
+
+  - id: retail-tau2-known
+    tags: [description, known]
+    input:
+      kind: description
+      text: >-
+        An online retail store's customer service backend: users, orders with items, pending orders
+        that can be cancelled or have items modified, delivered orders that can be returned or
+        exchanged for another variant of the same product, and refunds to the original payment
+        method or a gift card.
+    note: Known, not held out. Modelled on the tau2-bench retail domain (MIT), so contamination is possible; a fidelity yardstick only.
+
+  - id: linear-description
+    tags: [description]
+    input: { kind: description, text: "An issue tracker like Linear" }
+    note: Teams, projects, issues with workflow states that move any-to-any, labels and comments. Scored against eval/fidelity/linear-description.yaml (testbed T2).
+
+  - id: insurance-claims
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        An insurance claims world. Policyholders hold policies with per-coverage limits and per-
+        claim deductibles. Claims are filed against a coverage, reviewed by an adjuster, approved
+        with the deductible and the remaining limit applied (reserving money on the coverage), then
+        paid out, or denied. Adjusters raise fraud flags that block approval and payout until they
+        are cleared or confirmed. Confirming fraud denies the claim and releases the reserve. Jobs
+        expire policies and auto-close old paid claims.
+    note: Money reserved and released on the coverage; fraud flags block approval and payout. Reconstructed from the generated world's plan.yaml summary; the live prompt text was not kept.
+
+  - id: bookmarks
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        A multi-user bookmark manager. Users save bookmarks into a nested folder tree and label them
+        with per-user tags. Each bookmark moves through unread, read, archived and trashed, and
+        trash is purged after 30 days. Users group bookmarks into collections that are private,
+        shared with members as viewer or editor, or public with an optional expiry. Actions enforce
+        ownership, permission and cycle rules and write an activity log. Two jobs purge old trash
+        and expire public links.
+    note: Folder cycles refused; trash purge and link expiry run as jobs on the engine clock. Reconstructed from the generated world's plan.yaml summary; the live prompt text was not kept.
+
+  - id: rental-fleet
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        A stateful car rental fleet. Branches hold vehicles. Customers reserve a vehicle for a
+        pickup and due window. Agents pick up, return, cancel and close rentals. Damage claims move
+        through review to approved, denied or settled. A daily job assesses a late fee on rentals
+        returned after their due time, and a second daily job cancels no-show reservations. Most
+        changes go through actions that keep the rental, vehicle and claim state machines
+        consistent.
+    note: Three state machines kept consistent by actions; two daily jobs. Reconstructed from the generated world's plan.yaml summary; the live prompt text was not kept.
+
+  - id: warehouse-inventory
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        A single-warehouse inventory system. SKUs are stocked in bins (stock_level rows, one per SKU
+        and bin). Every change to stock is written to an append-only stock_movement ledger by an
+        action, and stock can never go below zero. Purchase orders to suppliers move draft,
+        submitted, partially received, received or cancelled. Goods are received one PO line and one
+        bin at a time, so a PO is received into bins in several partial shipments. Receiving is
+        refused when it would exceed the ordered quantity, overfill a bin, or target an inactive or
+        quarantine bin. Agents also issue stock, run cycle-count adjustments and transfer stock
+        between bins. A job flags overdue purchase orders.
+    note: Append-only ledger; stock never below zero; partial receiving. Reconstructed from the generated world's plan.yaml summary; the live prompt text was not kept.
+
+  - id: hotel-booking
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        A single-property hotel booking system. Room types carry a nightly rate and capacity, rooms
+        belong to a type, guests make reservations for a specific room over a half-open stay window,
+        check-in 15:00 and check-out 11:00. The engine refuses overlapping non-cancelled
+        reservations on the same room, and same-day turnover is allowed. Cancelling within 48 hours
+        of check-in charges a one-night fee, posted as a folio charge, and a job marks unclaimed
+        arrivals as no-shows. Status changes happen only through actions so the overlap and fee
+        rules cannot be bypassed.
+    note: Overlap refused on write; the 48-hour fee is measured on the engine clock. Reconstructed from the generated world's plan.yaml summary; the live prompt text was not kept.
+
+  - id: repair-desk
+    tags: [description, cheap]
+    input:
+      kind: description
+      text: >-
+        A small equipment repair desk. Technicians have a name and active flag. Repair tickets have
+        a subject, customer name, priority (normal or urgent), status (queued, active or closed),
+        and optional assigned technician. Provide paginated listing and filtering, ticket creation
+        and editing, and explicit start and close actions. Starting requires an active assigned
+        technician and queued status; closing requires active status. Invalid transitions and
+        inactive assignments must fail atomically. Seed a small deterministic set with both
+        priorities, several technicians and at least six tickets across statuses. Keep this world
+        small and self-contained. Include exactly three verifiable tasks: an easy priority update, a
+        medium assignment plus start, and a hard multi-ticket repair workflow using pagination and
+        preserving unrelated tickets. Each task must require a real state change, have a public-API
+        reference solution, a deterministic final-state grader, and meaningful wrong or incomplete
+        decoys. Use the frozen seed and document assumptions; no external integrations or
+        credentials.
+    note: The prompt as WorldGen received it (prod/worlds/gen-repair-desk/description.txt). Small, self-contained world; inactive technicians cannot start a ticket.
+
+  - id: course-enrollments-csv
+    tags: [csv, cheap]
+    input: { kind: csv, paths: [inputs/courses.csv, inputs/enrollments.csv] }
+    note: Courses and enrollments tables. Enrollment status becomes a workflow with a waitlist that promotes in order. Tables only; no description. Matches the generated gen-course-enrollments world.
+
+  - id: shipments-csv
+    tags: [csv, cheap]
+    input: { kind: csv, paths: [inputs/shipments.csv] }
+    note: One table of shipments. Status becomes a lifecycle and carriers become their own rows. Matches the generated gen-shipments world.
+
+  - id: stripe-customers
+    tags: [openapi, cheap]
+    input: { kind: openapi, path: inputs/stripe.openapi.yaml, only: [/v1/customers] }
+    note: Customer operations with the spec's list and error envelopes.
+
+  - id: stripe-charges
+    tags: [openapi]
+    input: { kind: openapi, path: inputs/stripe.openapi.yaml, only: [/v1/charges, "/v1/charges/{charge}"] }
+    note: Charge list, create and retrieve. The generated gen-stripe-charges world added capture, refunds and customer lookup so that tasks could write.
+
+  - id: petstore-full
+    tags: [openapi]
+    input: { kind: openapi, path: inputs/petstore.openapi.yaml }
+    note: Every operation in the Petstore 3.0 spec (pets, store and orders). Matches the generated gen-petstore world.
+
+  - id: petstore-add-refunds
+    tags: [openapi, iterate]
+    input: { kind: openapi, path: inputs/petstore.openapi.yaml }
+    change: add refunds for orders
+    note: Iterate on an OpenAPI world with a one-line vague change. Pets and orders survive the change. Matches the generated gen-petstore-refunds world.
+
+  - id: forecast-impossible
+    tags: [description, impossible, cheap]
+    input: { kind: description, text: "A system that tells each customer which lottery numbers will win next week" }
+    expect: stopped
+    note: Impossible. Forecast accuracy is not world state a deterministic engine can serve or grade; an honest stop with REPORT.md saying why.
+
+  - id: live-market-feed-impossible
+    tags: [description, impossible, cheap]
+    input: { kind: description, text: "A trading terminal that streams live exchange quotes and routes real orders to the exchange" }
+    expect: stopped
+    note: Impossible. It needs a live external feed and wall-clock behaviour, which conflict with the engine's virtual clock and fixed seed; an honest stop.

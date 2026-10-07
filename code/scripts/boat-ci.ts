@@ -1,0 +1,102 @@
+/**
+ * The test gate on a large Boat VM: `bun run check` and `npm run check:node` in parallel on one
+ * archived ref, with a summary per runtime. Driven by scripts/boat-ci.sh; reads BOAT_API_KEY from
+ * the environment only. The VM always goes down.
+ *
+ *   bun scripts/boat-ci.ts <archive.tgz> [label] [junit-out]
+ *
+ * When the ref has scripts/factory-check.sh it runs too, and its .factory/junit.xml is copied to junit-out.
+ */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { boatClientFromEnv } from '../src/boat/client.ts';
+import { SANDBOX_BUN_VERSION } from '../src/sandboxes/backend.ts';
+import { boatBackend } from '../src/sandboxes/boat.ts';
+import { sizeOf } from '../src/sandboxes/registry.ts';
+
+const [archive, label = 'ref', junitOut] = process.argv.slice(2);
+if (archive === undefined) {
+  process.stderr.write('usage: bun scripts/boat-ci.ts <archive.tgz> [label]\n');
+  process.exit(2);
+}
+
+const BUN_DIR = '/tmp/worldgen-bun';
+/** CI's Node major (A-87 gates the heap bound on it) and a guard scale for six suites sharing 8 CPUs, so failures map onto CI's. */
+const NODE_MAJOR = '22';
+const GUARD_SCALE = '2';
+const NODE_DIR = '/tmp/worldgen-node22';
+const PATHS = `export PATH=${BUN_DIR}/node_modules/.bin:${NODE_DIR}/bin:$PATH WORLDGEN_GUARD_SCALE=${GUARD_SCALE}; cd /tmp/worldgen/repo/code`;
+const RUNS: Record<string, string> = {
+  bun: 'bun run check',
+  node: 'npm run check:node',
+};
+const POLL_MS = 20_000;
+const MAX_MS = 100 * 60_000;
+
+const t0 = Date.now();
+const elapsed = (): string => `${Math.round((Date.now() - t0) / 1000)}s`;
+const log = (line: string): void => void process.stderr.write(`[boat-ci ${label} ${elapsed()}] ${line}\n`);
+
+/**
+ * A long-lived VM sometimes answers 502, or 409 `sandbox_not_ready` while boat.dev updates it, and refuses stop meanwhile.
+ * Both pass within minutes, so a lost poll or stop must not end the run or leak the VM.
+ */
+async function retry<T>(f: () => Promise<T>, tries = 15): Promise<T> {
+  for (let n = 1; ; n++) {
+    try {
+      return await f();
+    } catch (err) {
+      if (n >= tries) throw err;
+      log(`retry ${n} after: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+      await new Promise((r) => setTimeout(r, Math.min(5_000 * n, 30_000)));
+    }
+  }
+}
+
+const b = boatBackend({ client: boatClientFromEnv(), ttlSeconds: 7200 });
+const sb = await b.up([{ path: 'repo.tgz', data: readFileSync(archive) }], { name: 'boat-ci', size: sizeOf('large') });
+log(`up ${sb.id} (large)`);
+let failed = false;
+try {
+  const sh = async (cmd: string, timeoutSec = 600): Promise<string> => {
+    const r = await retry(() => b.exec(sb.id, ['bash', '-c', cmd], { workdir: sb.workdir, timeoutSec }));
+    if (r.exitCode !== 0) throw new Error(`exit ${r.exitCode}: ${cmd}\n${(r.stderr || r.stdout).trim().split('\n').slice(-15).join('\n')}`);
+    return r.stdout;
+  };
+  await sh('mkdir -p repo && tar -xzf repo.tgz -C repo');
+  await sh(`npm install --silent --no-audit --no-fund --prefix ${BUN_DIR} bun@${SANDBOX_BUN_VERSION}`);
+  await sh(`. ~/.nvm/nvm.sh && nvm install ${NODE_MAJOR} >/tmp/nvm.log 2>&1 && ln -sfn "$(dirname "$(dirname "$(nvm which ${NODE_MAJOR})")")" ${NODE_DIR}`);
+  await sh(`${PATHS} && bun --version && bun install --frozen-lockfile >/tmp/install.log 2>&1`);
+  log(`installed bun ${SANDBOX_BUN_VERSION}, node ${(await sh(`${PATHS} && node -v`)).trim()}, ${(await sh('nproc')).trim()} cpus, WORLDGEN_GUARD_SCALE=${GUARD_SCALE}`);
+  if ((await sh('test -f repo/scripts/factory-check.sh && echo yes || true')).trim() === 'yes') RUNS['factory'] = 'cd .. && bash scripts/factory-check.sh';
+  for (const [name, cmd] of Object.entries(RUNS)) {
+    await b.start(sb.id, ['bash', '-c', `${PATHS} && { ${cmd}; echo $? > /tmp/${name}.exit; }`], { workdir: sb.workdir, log: `/tmp/${name}.log` });
+  }
+  const done = async (): Promise<boolean> => (await sh(`ls /tmp/*.exit 2>/dev/null | wc -l`)).trim() === String(Object.keys(RUNS).length);
+  while (!(await done())) {
+    if (Date.now() - t0 > MAX_MS) throw new Error(`checks still running after ${MAX_MS / 60_000} min`);
+    await new Promise((r) => setTimeout(r, POLL_MS));
+  }
+  for (const name of Object.keys(RUNS)) {
+    const exit = (await sh(`cat /tmp/${name}.exit`)).trim();
+    const summary = name === 'factory'
+      ? await sh(`grep -E '^(# |ℹ )(tests|pass|fail|skipped|todo|cancelled) |^not ok |^✖ ' /tmp/factory.log | head -60 || true`)
+      : name === 'bun'
+      ? await sh(`grep -E '^ *[0-9]+ (pass|fail|skip|todo)$|^Ran [0-9]+ tests|^\\(fail\\)' /tmp/bun.log | sort -u | head -60 || true`)
+      : await sh(`grep -E '^(# |ℹ )(tests|pass|fail|skipped|todo|cancelled) |^not ok |^✖ |\\[active-handles\\]' /tmp/node.log | head -60 || true`);
+    const tc = await sh(`grep -E 'error TS' /tmp/${name}.log | head -10 || true`);
+    process.stdout.write(`\n== ${name} (${RUNS[name]}) exit ${exit}\n${tc}${summary}`);
+    if (name === 'factory' && junitOut !== undefined) {
+      writeFileSync(junitOut, await sh('cat /tmp/worldgen/repo/.factory/junit.xml || true'));
+      process.stdout.write(`junit: ${junitOut}\n`);
+    }
+    if (exit !== '0') failed = true;
+  }
+} catch (err) {
+  failed = true;
+  log(err instanceof Error ? err.message : String(err));
+} finally {
+  await retry(() => b.down(sb.id));
+  log(`down ${sb.id}`);
+}
+process.stdout.write(`\nboat-ci ${label}: ${failed ? 'FAIL' : 'PASS'} on ${sb.id} in ${elapsed()}\n`);
+process.exit(failed ? 1 : 0);

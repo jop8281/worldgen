@@ -1,0 +1,90 @@
+# Frozen reference for retail-tau2-known, from research/tau2-retail-expected-behaviour.md
+# (sierra-research/tau2-bench retail domain at commit 5bfa7e3, MIT). Matching rules are the same as
+# in helpdesk-sla.yaml.
+# A name matches the canonical spelling first, then synonyms in listed order. Normalized names never repeat
+# within a scope (entities, fields of one entity, states of one set), so one world key satisfies at most one item.
+# An error case with `via: route` reuses the synonyms of the route it points at. A state set may list
+# `alternatives`, other places the states may live. Every `types` entry is an engine field type.
+# The domain is public, so this is a yardstick, not a held-out test.
+case: retail-tau2-known
+source: research/tau2-retail-expected-behaviour.md; tau2-bench retail data_model.py and tools.py
+entities:
+  - name: user
+    synonyms: [customer, account]
+    weight: 3
+    fields:
+      - { name: name, synonyms: [first_name, full_name], types: [string], weight: 1 }
+      - { name: email, synonyms: [], types: [string], weight: 2 }
+      - { name: zip, synonyms: [zip_code, postal_code], types: [string], weight: 1 }
+  - name: order
+    synonyms: [purchase]
+    weight: 4
+    fields:
+      - { name: user_id, synonyms: [customer_id], types: [ref], weight: 2 }
+      - { name: cancel_reason, synonyms: [reason], types: [enum, string, text], weight: 1 }
+  - name: order_item
+    synonyms: [item, line_item, order_line]
+    weight: 3
+    fields:
+      - { name: order_id, synonyms: [order], types: [ref], weight: 2 }
+      - { name: price, synonyms: [unit_price], types: [money, number, int], weight: 1 }
+  - name: product
+    synonyms: [catalog_product]
+    weight: 2
+    fields:
+      - { name: name, synonyms: [title], types: [string], weight: 1 }
+  - name: variant
+    synonyms: [product_variant, sku, product_item]
+    weight: 3
+    fields:
+      - { name: product_id, synonyms: [product], types: [ref], weight: 2 }
+      - { name: price, synonyms: [], types: [money, number, int], weight: 1 }
+      - { name: available, synonyms: [in_stock, is_available], types: [bool], weight: 1 }
+  - name: payment_method
+    synonyms: [payment_source]
+    weight: 3
+    fields:
+      - { name: user_id, synonyms: [customer_id], types: [ref], weight: 1 }
+      - { name: source, synonyms: [kind, type, method], types: [enum, string], weight: 2 }
+      - { name: balance, synonyms: [gift_card_balance], types: [money, number, int], weight: 1 }
+  - name: refund
+    synonyms: [payment, payment_history, transaction, payment_transaction]
+    weight: 2
+    fields:
+      - { name: amount, synonyms: [], types: [money, number, int], weight: 1 }
+stateSets:
+  - entity: order
+    field: status
+    synonyms: [state]
+    states:
+      - { name: pending, synonyms: [], weight: 2 }
+      - { name: processed, synonyms: [], weight: 1 }
+      - { name: delivered, synonyms: [], weight: 2 }
+      - { name: cancelled, synonyms: [canceled], weight: 2 }
+      - { name: pending_item_modified, synonyms: [item_modified, modified], weight: 1 }
+      - { name: return_requested, synonyms: [], weight: 2 }
+      - { name: exchange_requested, synonyms: [], weight: 2 }
+    transitions:
+      weight: 4
+      anyToAny: false
+      allowed:
+        - [pending, cancelled]
+        - [pending, processed]
+        - [pending, pending_item_modified]
+        - [pending_item_modified, processed]
+        - [processed, delivered]
+        - [delivered, return_requested]
+        - [delivered, exchange_requested]
+routes:
+  - { method: GET, path: "/orders/{id}", synonyms: [], weight: 2 }
+  - { method: GET, path: /orders, synonyms: [], weight: 1 }
+  - { method: GET, path: "/users/{id}", synonyms: ["/customers/{id}"], weight: 1 }
+  - { method: POST, path: "/orders/{id}/cancel", synonyms: ["/orders/{id}/cancellation"], weight: 2 }
+  - { method: POST, path: "/orders/{id}/modify-items", synonyms: ["/orders/{id}/modify_items", "/orders/{id}/items"], weight: 2 }
+  - { method: POST, path: "/orders/{id}/return", synonyms: ["/orders/{id}/returns"], weight: 2 }
+  - { method: POST, path: "/orders/{id}/exchange", synonyms: ["/orders/{id}/exchanges"], weight: 2 }
+  - { method: GET, path: "/products/{id}", synonyms: [], weight: 1 }
+errors:
+  - { case: unknown order id, status: 404, via: { kind: route, method: GET, path: "/orders/{id}" }, weight: 1 }
+  - { case: cancel an order that is not pending, status: 409, via: { kind: route, method: POST, path: "/orders/{id}/cancel" }, weight: 2 }
+  - { case: return an order that is not delivered, status: 409, via: { kind: route, method: POST, path: "/orders/{id}/return" }, weight: 2 }

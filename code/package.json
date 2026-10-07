@@ -1,0 +1,47 @@
+{
+  "name": "worldgen",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "bun": "1.4.2",
+    "node": ">=22"
+  },
+  "imports": {
+    "#engine": "./src/engine/index.ts",
+    "#lib/*": "./src/lib/*.ts"
+  },
+  "scripts": {
+    "worldplay": "bun src/cli/worldplay.ts",
+    "worldgen": "bun src/cli/worldgen.ts",
+    "eval": "bun src/cli/eval.ts",
+    "live": "bun src/cli/live.ts",
+    "sandbox": "bun src/cli/sandbox.ts",
+    "costs": "bun src/cli/costs.ts",
+    "dataset": "bun src/cli/dataset.ts",
+    "episode": "bun src/cli/episode.ts",
+    "studio": "bun src/cli/studio.ts",
+    "docs": "bun src/cli/worldplay.ts docs",
+    "demo:prepare": "bash ../scripts/demo-rehearsal.sh prepare",
+    "demo": "bash ../scripts/demo-rehearsal.sh rehearse",
+    "qualify": "bash ../scripts/qualify-main.sh",
+    "qualify:receipt": "bash ../scripts/qualify-main.sh --validate",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.engine-core.json",
+    "test": "bun test --timeout 120000 ./test",
+    "test:node": "node --import tsx --import ./test/helpers/active-handles.ts --test --test-concurrency=3 --test-timeout=${WORLDGEN_TEST_TIMEOUT_MS:-600000} test/*.test.ts",
+    "check": "bun run typecheck && bun run test",
+    "check:node": "npm run typecheck && npm run test:node",
+    "e2e": "bun scripts/e2e.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@boatdev/sdk": "^1.5.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3"
+  }
+}

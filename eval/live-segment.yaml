@@ -1,0 +1,25 @@
+# The live segment of the demo (research/demo-runbook.md, "Live segment"): three unseen inputs, one per input kind.
+# Kept out of suite.yaml so a full `bun run eval` never spends on them or tunes to them. Domains appear nowhere
+# in prod/worlds, suite.yaml or the bank in research/rehearsal-prompts.md.
+# Validate with no model call: bun run eval --suite ../eval/live-segment.yaml --dry-run
+name: live-segment
+cases:
+  - id: box-office
+    tags: [description]
+    input:
+      kind: description
+      text: >-
+        A concert box office: events with seated sections, seat holds that expire after 15 minutes
+        unless paid, orders capped at 6 tickets per customer per event, and refunds allowed until
+        48 hours before the show.
+    note: Hold expiry runs as a job on the engine clock and frees the seat. A seventh ticket is refused with no change. A refund inside 48 hours is refused.
+
+  - id: giftcards-openapi
+    tags: [openapi]
+    input: { kind: openapi, path: inputs/live/giftcards.openapi.yaml, only: [/v1/gift_cards] }
+    note: Keeps the 8 gift card operations and drops merchants and payouts. A redeem above the balance or on a frozen card is a 409 with the error envelope, and the balance never goes negative.
+
+  - id: gym-bookings-csv
+    tags: [csv]
+    input: { kind: csv, paths: [inputs/live/gym-bookings.csv] }
+    note: Splits the one table into classes and bookings. A booking past capacity is waitlisted, and a cancellation promotes the oldest waitlisted booking.

@@ -1,0 +1,15 @@
+{
+  "id": "warehouse-inventory",
+  "expect": "done",
+  "phases": [
+    {
+      "phase": "create",
+      "result": "done",
+      "error": null
+    }
+  ],
+  "verify": {
+    "kind": "pass",
+    "tasks": 4
+  }
+}

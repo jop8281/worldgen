@@ -1,0 +1,8 @@
+
+> worldplay
+> tsx src/cli/worldplay.ts check ../prod/worlds/helpdesk
+
+warning seed.too_few_rows_for_paging seed.customer: expected at least 75 customer rows, found 60 rows. 60 rows fit on one page. Paging never matters.
+warning seed.too_few_rows_for_paging seed.agent: expected at least 75 agent rows, found 12 rows. 12 rows fit on one page. Paging never matters.
+warning seed.too_few_rows_for_paging seed.sla_policy: expected at least 75 sla_policy rows, found 12 rows. 12 rows fit on one page. Paging never matters.
+warning seed.too_few_rows_for_paging seed.oncall_shift: expected at least 75 oncall_shift rows, found 39 rows. 39 rows fit on one page. Paging never matters.

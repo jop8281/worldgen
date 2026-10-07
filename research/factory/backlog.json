@@ -1,0 +1,1242 @@
+{
+ "issues": [
+  {
+   "key": "decision-retire-python",
+   "title": "Decide: retire the Python engine (engine-v1) and the Python acceptance harness",
+   "area": "infra",
+   "priority": "must",
+   "kind": "decision",
+   "milestone": "D1",
+   "depends_on": [],
+   "files": [
+    "research/decisions.md",
+    "eval/README.md"
+   ],
+   "body": "## Goal\nRecord one decision that retires every Python artifact that contradicts A-01, and leave exact cleanup commands for the human.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-01 (TypeScript on Node 22), A-14 (no SQLite), A-43 (research/ holds Markdown and JSON only), A-42 (prod/worlds are the engine fixtures). These artifacts exist only in the main checkout ~/worldgen and are untracked, so they are NOT in your worktree: (a) worktree ~/worldgen/.claude/worktrees/agent-aa1c640fcf4413eee on branch engine-v1 with an uncommitted Python engine (engine/, tests/, pyproject.toml, uv.lock, .python-version); (b) ~/worldgen/eval/engine_acceptance/ (pytest harness driving `uv run wengine`, CONTRACT.md restating research/plan.md as rules C-1..C-1xx with SQLite, an expression language and split YAML files); (c) ~/worldgen/research/tools/proto-universes/*.py (Python spikes, violate A-43); (d) ~/worldgen/research/graphs-and-universes.md (Markdown, but its SQLite-fork mechanisms contradict A-14). You may read them in the main checkout for reference; do not edit them.\n\n## Acceptance\n1. research/decisions.md gains exactly one appended row with the next free A- number (A-45 if none newer). Decision text: retire the Python engine on engine-v1, eval/engine_acceptance and research/tools/proto-universes; Choice names what is deleted and what is kept (graphs-and-universes.md kept as background only, superseded by A-14 for the store); Why cites A-01, A-14 and A-43; Reversible: Yes. No existing row is edited.\n2. The row's Why or a sentence in the row says which CONTRACT.md themes are re-homed in the TypeScript backlog: atomicity and determinism (test/engine.test.ts), admin port separation (test/http.test.ts), verify discrimination (test/tasks-verify.test.ts). Expression-language, SQLite and split-file rules are dropped. These test files are planned by other backlog items and need not exist yet.\n3. eval/README.md states that eval/ holds no code and that engine acceptance lives in code/test (spec deliverable: repository with engine and WorldGen each runnable with one command, through npm only).\n4. The PR description ends with a 'Cleanup for the human' block containing exactly these commands, to run from ~/worldgen: `git worktree remove --force .claude/worktrees/agent-aa1c640fcf4413eee`, `git branch -D engine-v1`, `rm -rf eval/engine_acceptance research/tools/proto-universes`.\n5. No file under code/ changes: `git diff --stat origin/scaffold/agents-md-and-type-sketch -- code` prints nothing.\n6. The PR description says the cleanup is a human step the agent could not verify, because the artifacts are untracked and live only in the main checkout.\n\n## Verify\n```sh\ncd ~/worldgen/code\ngit diff --stat origin/scaffold/agents-md-and-type-sketch -- .\ngrep -E '^\\| A-4[5-9] \\|' ../research/decisions.md\ngrep -n 'no code' ../eval/README.md\n```\n\n## Out of scope\nPorting any Python test to TypeScript. Deleting untracked files (the agent cannot see them). Editing research/plan.md.\n"
+  },
+  {
+   "key": "infra-architecture-test",
+   "title": "Architecture test part A: test dir, import boundaries, node:vm and SDK confinement",
+   "area": "infra",
+   "priority": "must",
+   "kind": "test",
+   "milestone": "D1",
+   "depends_on": [],
+   "files": [
+    "code/test/architecture.test.ts",
+    "code/test/helpers/ts-program.ts",
+    "research/spec-calls/infra-architecture-test.md"
+   ],
+   "body": "## Goal\nCreate code/test/ with architecture.test.ts so that breaking an import boundary fails `npm test`.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-04, A-06, A-35, A-03 (TypeScript ~6.0.3 compiler API). AGENTS.md invariants table rows 1 and 11 and the module map. code/test/ does not exist yet and `npm test` (glob test/*.test.ts) fails on an empty match; this item should merge first in D1 so `npm test` is green from then on. The symbol, brand and switch rules are in infra-architecture-symbols. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/infra-architecture-test.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. code/test/helpers/ts-program.ts exports programFromTree(dir) (ts.createProgram over code/tsconfig.json) and programFromFiles(record) (an in-memory ts.CompilerHost over virtual files), plus importsOf(program, file) returning resolved module specifiers. No regexes over source text.\n2. Fails when any file under src/worldgen/ or src/cli/ imports a src/engine/ module other than through `#engine` (spec: WorldGen uses the engine as its judge and never edits it).\n3. Fails when any file other than src/worldgen/run.ts and src/cli/*.ts imports src/worldgen/llm.ts, and when any file other than llm.ts imports `@anthropic-ai/sdk` (spec: never grades its own work by asking the model).\n4. Fails when any file other than src/engine/sandbox.ts imports `node:vm`, and when engine core (src/engine/** except index.ts, sandbox.ts, http.ts) imports any `node:` module.\n5. Rules scan code/src only. Each rule has a describe() block with one passing case over the real source tree and one virtual fixture program proving the rule fires, with a literal expected violation list.\n6. `npm run check` passes on the current type sketch.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/architecture.test.ts\n```\n\n## Out of scope\nBanned global symbols, brand casts and exhaustive switches (infra-architecture-symbols). AGENTS.md path check (docs-readme-onboarding). Any change under src/.\n"
+  },
+  {
+   "key": "infra-architecture-symbols",
+   "title": "Architecture test part B: banned globals, brand minters, exhaustive switches",
+   "area": "infra",
+   "priority": "must",
+   "kind": "test",
+   "milestone": "D2",
+   "depends_on": [
+    "infra-architecture-test"
+   ],
+   "files": [
+    "code/test/architecture-symbols.test.ts",
+    "research/spec-calls/infra-architecture-symbols.md"
+   ],
+   "body": "## Goal\nAdd type-checker-level architecture rules so nondeterministic globals, forged brands and non-exhaustive switches fail `npm test`.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-25, A-29, A-04. AGENTS.md invariants table rows 1 and 4; header comments of engine/issues.ts, check.ts, tasks.ts and lib/never.ts. Reuse code/test/helpers/ts-program.ts from infra-architecture-test (do not edit it; copy small helpers into your file if needed). Use the TypeChecker to resolve symbols (a local variable named Date must not trip the rule). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/infra-architecture-symbols.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Fails when engine core (src/engine/** except index.ts, sandbox.ts, http.ts) references the global symbols Math.random, globalThis, performance or Date; Date is allowed only in clock.ts (spec: Deterministic; time controlled by the engine, not the wall clock).\n2. Fails on a type assertion to CheckIssue outside issues.ts, to CheckedWorld outside check.ts, and to TaskVerdict outside tasks.ts (spec: Grade; reports render only engine verdicts).\n3. Fails on a `default:` clause in a switch whose body does not call assertNever.\n4. Each rule has a describe() block with a passing case over the real tree and a virtual fixture program (in-memory CompilerHost) with a literal expected violation list, including a shadowed local `Date` that must not fire.\n5. Rules scan code/src only; `npm run check` passes.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/architecture-symbols.test.ts\n```\n\n## Out of scope\nImport-boundary rules (part A). Any change under src/.\n"
+  },
+  {
+   "key": "engine-clock",
+   "title": "Engine clock: durations, ISO conversion, due-job ordering",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [],
+   "files": [
+    "code/src/engine/clock.ts",
+    "code/test/clock.test.ts",
+    "research/spec-calls/engine-clock.md"
+   ],
+   "body": "## Goal\nImplement parseDuration, toIso, fromIso and dueJobs in engine/clock.ts.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-16 (start at meta.clock.start, one tick per committed call, failed calls do not move time), A-17 (jobs fire in (time, name) order), A-18. clock.ts is the only core file allowed to construct a Date, and only from an Instant. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-clock.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. parseDuration('30s')=30000, ('15m')=900000, ('4h')=14400000, ('2d')=172800000.\n2. toIso(fromIso('2026-03-02T09:00:00.000Z')) round-trips exactly; toIso always returns millisecond UTC form ending in Z.\n3. dueJobs({b:{every:'15m'},a:{every:'15m'}}, start, start, start+30m) returns [a@+15m, b@+15m, a@+30m, b@+30m]: sorted by time, then name, in (from, to] (spec: Deterministic; time controlled by the engine).\n4. dueJobs with from == to returns [] and never reads the wall clock.\n5. No use of Date.now, new Date() without argument, or performance.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/clock.test.ts\n```\n\n## Out of scope\nRuntime.advance and firing jobs (engine-actions-jobs). Admin clock route (engine-http-cli).\n"
+  },
+  {
+   "key": "engine-fields",
+   "title": "FIELD_TYPES: validate, compare, parseQuery, inferFromCsv for every type",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [],
+   "files": [
+    "code/src/engine/fields.ts",
+    "code/test/fields.test.ts",
+    "research/spec-calls/engine-fields.md"
+   ],
+   "body": "## Goal\nReplace every `stub` member in engine/fields.ts with a real implementation and add the conformance test that loops over FIELD_TYPES.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-23 (one FIELD_TYPES record, conformance test), A-24 (money in integer minor units). AGENTS.md 'How to add common things: A field type'. Never write `switch (def.type)` outside fields.ts. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-fields.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. test/fields.test.ts loops over every entry of FIELD_TYPES: each examples.valid value passes validate(value, schema.parse(examples.def)) and each examples.invalid value fails with a non-empty `expected` string (spec: Enforce).\n2. money rejects 12.5, -1 when min 0, and '1250'; accepts 0 and 1250. parseQuery('1250') returns 1250.\n3. datetime accepts only ISO 8601 UTC strings; compare orders them chronologically; null sorts first for every type.\n4. state.validate accepts only declared states (transition legality is the store's job). ref.validate accepts any non-empty string id and rejects numbers.\n5. parseQuery for bool accepts 'true'/'false' only; for int rejects '1.5'; for enum rejects values outside `values`.\n6. inferFromCsv: ['true','false'] -> bool; ['1','2'] -> int; ['2026-01-01T00:00:00Z'] -> datetime; a column with <=20 distinct values covering every row and length >= 30 -> enum; otherwise string or text by length. Called in FIELD_TYPE_ORDER (spec: inputs: sample data e.g. CSV, infer the data model).\n7. examples.valid for `ref` gains one value so the loop asserts something for every type.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/fields.test.ts\n```\n\n## Out of scope\nNew field types. Store-level enforcement of unique, required, ref resolution and transitions (engine-store).\n"
+  },
+  {
+   "key": "engine-sandbox",
+   "title": "Deterministic node:vm SnippetHost with call quota and SnippetFault",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [],
+   "files": [
+    "code/src/engine/sandbox.ts",
+    "code/src/engine/ctx.ts",
+    "code/test/sandbox.test.ts",
+    "research/spec-calls/engine-sandbox.md"
+   ],
+   "body": "## Goal\nImplement createVmHost().compile so snippets run deterministically, and pin the sandbox globals with a snapshot test.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-09 (JS snippets in node:vm), A-18 (now() is a function), A-19 (one interface plus one Registry per kind), A-20 (call quota decides verdicts, wall-clock guard only stops runaway code), A-21 (global allowlist with snapshot test). Read the header comments of engine/ctx.ts and engine/sandbox.ts. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-sandbox.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. compile(kind, '(ctx) => ctx.now()', path) returns ok and run(ctx) returns ctx.now()'s value.\n2. A syntax error returns { ok:false, issue } with code snippet.compile_error and the vm message in hint; a source that is not a function expression also returns snippet.compile_error.\n3. Inside the context, Object.getOwnPropertyNames(globalThis) minus engine-internal names equals SANDBOX_GLOBALS exactly (snapshot test in test/sandbox.test.ts); Date, Intl, process, setTimeout, fetch, WeakRef, SharedArrayBuffer are undefined (spec: Deterministic).\n4. Math.random() throws an Error whose message contains 'use ctx.rng'; eval('1') and new Function('') throw.\n5. A snippet returning a Promise makes run throw a SnippetFault carrying a snippet.promise_returned issue. SnippetFault is a class exported from ctx.ts (core), so engine core can catch it without importing sandbox.ts.\n6. Every ctx member call is counted; exceeding SNIPPET_LIMITS.ctxCallsPerRun throws SnippetFault(snippet.call_quota). `while(true){}` throws SnippetFault(snippet.timeout_guard) within guardMs + 500 ms.\n7. A plain throw inside the snippet surfaces as SnippetFault(snippet.runtime_error) with the thrown message in hint; a ctx.fail() control-flow error is rethrown unchanged.\n8. ctx.ts gains only SnippetFault; context builders (HandlerCtx, SeedCtx, GraderCtx, ClientCtx objects) are NOT added here. They live in the module that uses them (api.ts, store.ts, tasks.ts, check.ts), and ctx.ts stays read-only for every later item.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/sandbox.test.ts\n```\n\n## Out of scope\nSecurity isolation (vm is for determinism only). Building handler/grader ctx objects (api.ts, tasks.ts). The ctx registry signature test (engine-ctx-contract).\n"
+  },
+  {
+   "key": "engine-ctx-contract",
+   "title": "ctx registry contract test: every sig matches its interface member",
+   "area": "engine",
+   "priority": "must",
+   "kind": "test",
+   "milestone": "D1",
+   "depends_on": [],
+   "files": [
+    "code/test/ctx.test.ts",
+    "research/spec-calls/engine-ctx-contract.md"
+   ],
+   "body": "## Goal\nFail `npm test` when a ctx registry entry's documented `sig` drifts from the TypeScript interface the snippet actually receives.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-19 (one interface plus one Registry per kind; docs render from the registries), A-21. Header comment of engine/ctx.ts. Read-only on ctx.ts: engine-sandbox adds SnippetFault there in parallel; do not edit it. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-ctx-contract.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. For each snippet kind's registry, compiles with the TypeScript compiler API (in-memory CompilerHost over the real src/engine/ctx.ts) one declaration per member that assigns a value typed by its `sig` to the interface member; any assignment error fails the test with the member name.\n2. A virtual copy of ctx.ts with one sig changed makes the test fail with a literal expected member name (spec: Check errors precise enough for a model to fix them; the docs the model reads match the sandbox).\n3. Every interface member has a registry entry and vice versa (literal list comparison per kind).\n4. `npm run check` passes.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/ctx.test.ts\n```\n\n## Out of scope\nChanging ctx.ts. Sandbox behaviour.\n"
+  },
+  {
+   "key": "engine-format",
+   "title": "World format helpers: emptyWorld, editJsonSchema, formatReference, fromZod",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [],
+   "files": [
+    "code/src/engine/format.ts",
+    "code/src/engine/issues.ts",
+    "code/test/format.test.ts",
+    "research/spec-calls/engine-format.md"
+   ],
+   "body": "## Goal\nImplement the format.ts helpers and issues.ts fromZod so the one zod schema drives tool schemas, docs and precise errors.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-07 (zod v4: z.toJSONSchema, .describe()), A-08 (one world.yaml), A-11 (WorldEdit remove/upsert/patch), A-13, A-25 (issue() is the only minter). AGENTS.md invariant 'One world format drives validation, tool schemas, errors and docs'. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-format.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. emptyWorld('x','worldgen') parses with worldSchema and has every section in SECTIONS as {}; meta.clock.start is the fixed literal '2026-01-05T09:00:00.000Z' (never wall time) (spec: Deterministic).\n2. editJsonSchema(['entities','routes']) returns a JSON Schema whose upsert, patch and remove properties list only entities and routes; it is produced by z.toJSONSchema, not hand-written.\n3. formatReference() returns Markdown containing one heading per section, every FIELD_TYPES doc string, and snippetDoc(kind) for all five snippet kinds; calling it twice returns identical text.\n4. fromZod maps each zod issue to a CheckIssue via issue('schema.invalid', ...) with path prefixed by `base`, `found` set to the offending value (JSON, truncated to 200 chars) and hint containing the field's .describe() text when present (spec: Check, errors precise enough for a model to fix them).\n5. A test feeds worldSchema a world with `idPrefix: 'TK'` and asserts one issue with path ['entities','ticket','idPrefix'] and hint containing 'Row ids look like'.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/format.test.ts\n```\n\n## Out of scope\nWriting prod/world-format.md (docs-world-format). Semantic checks such as unknown refs (engine-check-core). New sections.\n"
+  },
+  {
+   "key": "engine-world-io",
+   "title": "World IO: loadWorld, saveWorld with block scalars, applyEdit",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [
+    "engine-format"
+   ],
+   "files": [
+    "code/src/engine/index.ts",
+    "code/test/world-io.test.ts",
+    "research/spec-calls/engine-world-io.md"
+   ],
+   "body": "## Goal\nImplement loadWorld, saveWorld and applyEdit in engine/index.ts.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-08 (one world.yaml, snippets as YAML block scalars), A-11 (apply order remove, upsert, patch; JSON merge patch RFC 7386 where null deletes), A-29 (saveWorld accepts only CheckedWorld), A-39. index.ts is a shell file and may use node:fs. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-world-io.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. loadWorld(dir) returns { ok:true, value } with parsed YAML of <dir>/world.yaml; a missing file returns one issue with path ['format'] and found naming the path; a YAML syntax error returns one issue whose found contains the line and column (spec: Check).\n2. saveWorld writes multi-line snippet strings as `|` block scalars and keeps section key order from SECTIONS; load(save(w)) deep-equals w.\n3. applyEdit applies remove, then upsert, then patch. Patching tasks.t1 with { decoys: null } removes the key; patching a key that does not exist returns an issue with path ['<section>','<key>'] (spec: WorldGen iterates; existing world plus change request updates rather than restarts).\n4. applyEdit returns schema issues from fromZod for an edit that does not parse; it never runs semantic checks.\n5. saveWorld is a thin wrapper over an exported pure `renderWorldYaml(world: World): string`; tests exercise renderWorldYaml and loadWorld, so no CheckedWorld cast is needed before engine-check-core exists.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/world-io.test.ts\n```\n\n## Out of scope\ncheckWorld itself. HTTP serve export (engine-http-cli).\n"
+  },
+  {
+   "key": "test-helpers",
+   "title": "Shared test world fixtures: minimalWorld, bareWorld, checkedForTest",
+   "area": "infra",
+   "priority": "must",
+   "kind": "test",
+   "milestone": "D1",
+   "depends_on": [
+    "engine-format"
+   ],
+   "files": [
+    "code/test/helpers/world.ts",
+    "code/test/helpers.test.ts",
+    "research/spec-calls/test-helpers.md"
+   ],
+   "body": "## Goal\nGive every engine and WorldGen test one shared, valid minimal world so ~15 items do not each invent one.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-08, A-10, A-13, A-27, A-29. Types World, TaskSchema in engine/format.ts; emptyWorld from engine-format. The architecture test scans src only, so test helpers may cast to CheckedWorld. Later owners of this file, in order: engine-grade-verify-basic, engine-verify-full, engine-lints. Nobody else edits it. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/test-helpers.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. bareWorld() returns a World (via emptyWorld) with entities customer (name string unique, tier enum) and ticket (customer ref onDelete restrict, subject string, priority enum, status state open->pending->resolved, resolved->open; sla_due_at readonly datetime), standard routes for both, one action resolve_ticket, one job every 15m, one seed snippet per entity giving 5 customers and 12 tickets, no tests and no tasks.\n2. minimalWorld(overrides?) returns bareWorld plus three tasks (easy, medium with one decoy, hard with one decoy), each with a reference solution through ctx.api, a grader using ctx.db and ctx.changes, and a decoy that writes something but not the goal; overrides are a deep merge with null deleting a key.\n3. checkedForTest(world) casts to CheckedWorld with a comment saying tests only; tests that need a real verdict must call checkWorld.\n4. test/helpers.test.ts asserts worldSchema.parse succeeds on bareWorld() and minimalWorld(), and that minimalWorld({ tasks: null }) has no tasks key.\n5. Snippets are plain JS strings following SNIPPET_LIMITS and the ctx registries; the file header says engine-grade-verify-basic will prove the tasks verify green.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/helpers.test.ts\n```\n\n## Out of scope\nProving the tasks verify (engine-grade-verify-basic). Helpdesk-sized fixtures.\n"
+  },
+  {
+   "key": "engine-store",
+   "title": "Immutable store: transact with overlay, write enforcement, ids, state hash",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [
+    "engine-fields",
+    "engine-clock",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/store.ts",
+    "code/test/store.test.ts",
+    "research/spec-calls/engine-store.md"
+   ],
+   "body": "## Goal\nImplement transact, emptyState, stateHash and per-write enforcement in engine/store.ts.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-10 (state field transitions enforced on every write), A-14 (immutable maps plus overlay, no SQLite), A-15 (ids like tkt_0001, lists ordered by id), A-24. Header comment of engine/store.ts. Call FIELD_TYPES[def.type].validate; never switch on type.  Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-store.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. create assigns id `<idPrefix>_0001`, then _0002, per entity; sets created_at and updated_at to toIso(tx.now); list returns rows ordered by id.\n2. Every write validates type, required, nullable, unique (409), ref resolution (422), and state transitions measured from the value before the transaction; a violation throws EnforceError with a FieldProblem naming field, expected and found (spec: Enforce, refuse any write that breaks the data model).\n3. A state field accepts an update to a value reachable by a declared transition from its pre-transaction value and rejects any other with EnforceError 422 naming the from and to states, in both 'api' and 'privileged' modes (spec: Enforce; A-10 refuse an illegal transition even from a plain PATCH).\n4. In mode 'api', setting a readonly field throws EnforceError 422; in mode 'privileged' it is allowed.\n5. delete honors onDelete restrict (409), cascade and nullify for every ref pointing at the row.\n6. transact whose fn throws after two successful writes returns { ok:false } and the input State object is unchanged and stateHash is identical (spec: Enforce, a failed call leaves no partial changes).\n7. stateHash is identical for two States built by the same sequence of writes and differs when any value or counter differs (spec: Deterministic).\n8. Exports `initialState(world, host)` which returns emptyState(world) for now; runtime() in api.ts starts from it and engine-seed replaces its body.\n9. Tests use bareWorld() from code/test/helpers/world.ts with local overrides (one ref, one unique, one readonly and one state field).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/store.test.ts\n```\n\n## Out of scope\nSeeding from snippets (engine-seed). HTTP mapping (engine-api-crud). Change-origin journal (engine-actions-jobs).\n"
+  },
+  {
+   "key": "engine-check-core",
+   "title": "checkWorld layers schema, references and compile",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [
+    "engine-world-io",
+    "engine-sandbox",
+    "engine-fields",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/check.ts",
+    "code/src/engine/issues.ts",
+    "code/test/check.test.ts",
+    "research/spec-calls/engine-check-core.md"
+   ],
+   "body": "## Goal\nImplement check() for the schema, references and compile layers and mint CheckedWorld.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-25, A-29 (checkWorld is the only minter of CheckedWorld), A-06. Header comment of engine/check.ts. Layers run in CHECK_LAYERS order; a failed layer stops later ones and each skipped section gets one layer.blocked issue. Layers seed, tests, tasks and lints are pass-through no-ops in this item and are filled by engine-seed, engine-tests-layer, engine-grade-verify-basic and engine-lints. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-check-core.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Schema layer returns fromZod issues; check never throws on any input, including null and a string.\n2. References layer emits ref.unknown (unknown entity in a route, ref field, filter, sort or search field) with `known` listed in hint, route.duplicate_path across routes and actions, state.bad_machine (initial not in states, transition to an undeclared state, unreachable state), and seed.cycle for a ref cycle with no nullable ref (spec: Check, errors precise enough for a model to fix them).\n3. Compile layer compiles every snippet (actions.*.handler, jobs.*.run, seed.*, tests.*.script, tasks.*.grader/solution/decoys[*].script) through the SnippetHost and reports snippet.compile_error at the exact path.\n4. A world with a typo in a ref (entity 'custmer') yields exactly one issue: code ref.unknown, path ending in the field, hint listing 'customer'.\n5. An ok report on bareWorld() carries world (CheckedWorld), verdicts {}, stats with empty rows/states and tests 0.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/check.test.ts\n```\n\n## Out of scope\nSeed, tests, tasks and lints layers. Any CLI (cli-world-check).\n"
+  },
+  {
+   "key": "cli-world-check",
+   "title": "`npm run world -- check <dir>` CLI with readable and JSON output",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [
+    "engine-check-core",
+    "engine-world-io"
+   ],
+   "files": [
+    "code/src/cli/world.ts",
+    "code/test/cli-world.test.ts",
+    "research/spec-calls/cli-world-check.md"
+   ],
+   "body": "## Goal\nAdd the engine's check command so a person or WorldGen can check a world directory with one command.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-06, A-25. AGENTS.md 'Commands'. cli/ holds argument parsing and printing only; logic stays in #engine. Import only from `#engine`. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/cli-world-check.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. `npm run world -- check <dir>` loads <dir>/world.yaml with loadWorld, runs checkWorld and prints one line per issue as `<severity> <code> <path joined by .>: expected <expected>, found <found>. <hint>`; exits 1 on errors and 0 on ok (spec: Check; deliverable: engine runnable with one command).\n2. `--json` prints the issues array as JSON and nothing else on stdout.\n3. An unknown subcommand prints usage listing check, serve, verify, grade, docs (the latter four may print 'not implemented yet' until engine-http-cli and docs-world-format) and exits 2.\n4. test/cli-world.test.ts writes a temp dir with a valid world (renderWorldYaml(bareWorld())) and one with a ref typo, spawns the CLI via `node --import tsx src/cli/world.ts`, and asserts exit codes and one literal output line.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/cli-world.test.ts\n```\n\n## Out of scope\nserve/verify/grade/docs subcommands.\n"
+  },
+  {
+   "key": "engine-api-crud",
+   "title": "Request handling: path matching, standard ops, filters, search, sort, cursor paging, envelopes",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [
+    "engine-store",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/api.ts",
+    "code/test/api.test.ts",
+    "research/spec-calls/engine-api-crud.md"
+   ],
+   "body": "## Goal\nImplement handle() for standard routes against a State, with the world's list and error envelopes.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-15, A-30 (meta.api list keys, paging params, error body template), A-10. Header comment of engine/api.ts. Filters and sort parse through FIELD_TYPES[t].parseQuery/compare. Runtime (call, dump, reset, log, clock ticks) is engine-runtime, the next item in api.ts. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-api-crud.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. GET on a list route returns { [dataKey]: rows, [cursorKey]: string|null } using meta.api.list keys; ?limit caps at pageSize; following the cursor returns the next page with no duplicates and no gaps over 60 rows (spec: outputs: enough rows that searching and paging matter).\n2. Filters declared on the route accept ?field=value parsed by parseQuery; undeclared query params return 400 in the meta.api.error envelope with $status/$code/$message substituted.\n3. ?q= searches the route's search fields case-insensitively; ?sort=field and ?sort=-field order with id as tiebreak.\n4. get missing id -> 404; create -> 201 with the row; delete -> 204; PATCH of a readonly field -> 422 with state unchanged; PATCH of a state field with an undeclared transition (e.g. open -> resolved when bareWorld declares only open -> pending) -> 422 with state unchanged; a declared transition (open -> pending) -> 200 (spec: Serve; Enforce).\n5. Every response body that is an error uses meta.api.error with $status/$code/$message substituted; tests assert one literal error body.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/api.test.ts\n```\n\n## Out of scope\nruntime() and ticks (engine-runtime). Actions and jobs (engine-actions-jobs). HTTP adapter (engine-http-cli).\n"
+  },
+  {
+   "key": "engine-runtime",
+   "title": "Runtime: call, dump, reset, log, one tick per successful call",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "engine-api-crud"
+   ],
+   "files": [
+    "code/src/engine/api.ts",
+    "code/test/runtime.test.ts",
+    "research/spec-calls/engine-runtime.md"
+   ],
+   "body": "## Goal\nImplement runtime() so a checked world can be called, inspected and reset with engine-controlled time.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-16 as written (start at meta.clock.start; one tick per committed call, reads included; failed calls do not move time; explicit advances only via the admin clock), A-22, A-31. runtime() starts from initialState(world, host) exported by store.ts; engine-seed fills that function in, so this file does not change for seeding. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-runtime.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. One successful call (read or write) advances state.now by meta.clock.tick; a failed call (4xx/5xx) leaves dump() and the clock unchanged (spec: Enforce; Deterministic).\n2. runtime().log() returns CallRecords with increasing seq, engine-time `at`, method, path, status and routeId (spec: Inspect and reset, a log of calls).\n3. dump() returns a JSON-serializable StateDump (tables as id-ordered arrays, counters, now); two runtimes on the same world given the same calls produce deep-equal dumps (spec: Deterministic).\n4. reset() restores the start state, clock at meta.clock.start, empty log (spec: Inspect and reset).\n5. runtime.advance exists but may throw 'not implemented' until engine-actions-jobs.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/runtime.test.ts\n```\n\n## Out of scope\nJobs and actions (engine-actions-jobs). Grading (engine-grade-verify-basic).\n"
+  },
+  {
+   "key": "world-helpdesk-model",
+   "title": "Hand-built helpdesk world: meta, entities, routes",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D1",
+   "depends_on": [
+    "engine-check-core",
+    "engine-world-io"
+   ],
+   "files": [
+    "prod/worlds/helpdesk/world.yaml",
+    "prod/worlds/helpdesk/NOTES.md",
+    "code/test/worlds.test.ts",
+    "research/spec-calls/world-helpdesk-model.md"
+   ],
+   "body": "## Goal\nHand-write the data model and API of the golden helpdesk world and the test that checks every world in prod/worlds.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-08, A-10, A-12, A-17, A-42 (prod/worlds are the engine's end-to-end fixtures; the helpdesk is the few-shot example). research/architecture.md 'Usage' shows the intended YAML excerpt. Spec example: 'A helpdesk with SLA tiers and on-call escalation'. This world is written by hand (the one exception to saveWorld). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/world-helpdesk-model.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. world.yaml has format: 1, meta (source: hand, resembles names a real helpdesk such as Zendesk tickets API, fixed clock.start), entities customer, agent, sla_policy, oncall_shift, ticket, ticket_comment with refs between them (spec: World contains a data model with entities, fields, types, keys, relationships).\n2. ticket.status is a `state` field with at least open, pending, escalated, resolved, closed and explicit transitions (open -> escalated is declared, so a plain PATCH can make that move; open -> closed is not); priority is an enum; sla_due_at is a readonly datetime.\n3. routes cover list/get/create/update for tickets and customers and list for agents and on-call shifts, with filters, search and sort on tickets (spec: World contains an API mapped to standard operations).\n4. actions, jobs, seed, tests and tasks sections are present and empty; world-helpdesk-workflow and later items fill them.\n5. NOTES.md (<= 40 lines) explains each entity, the state machine and which real API it resembles.\n6. code/test/worlds.test.ts, inside describe('prod worlds'), loads every directory under ../prod/worlds with loadWorld and asserts checkWorld(...).ok is true, printing issues on failure.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/worlds.test.ts\n```\n\n## Also\nIf a research note with a hand-checked helpdesk behaviour table exists (look for research/*helpdesk*.md on factory/integration, or ask nothing and skip), make the world match it: every state reachable, every transition it lists as legal works, every illegal one is refused.\n\n## Out of scope\nActions and jobs (world-helpdesk-workflow). Seed rows, tests and tasks (world-helpdesk-seed-tests, world-helpdesk-tasks). The check CLI (cli-world-check).\n"
+  },
+  {
+   "key": "world-helpdesk-workflow",
+   "title": "Helpdesk world: escalate, resolve, reopen actions and the SLA breach job",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "world-helpdesk-model",
+    "engine-actions-jobs"
+   ],
+   "files": [
+    "prod/worlds/helpdesk/world.yaml",
+    "prod/worlds/helpdesk/NOTES.md",
+    "research/spec-calls/world-helpdesk-workflow.md"
+   ],
+   "body": "## Goal\nAdd the helpdesk's custom workflow logic so the golden world has real actions and a time-driven job.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-12, A-16, A-17, A-18, A-42. HandlerCtx and JobCtx in engine/ctx.ts. Spec example: 'A helpdesk with SLA tiers and on-call escalation'. Edit world.yaml by hand. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/world-helpdesk-workflow.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. actions escalate_ticket (assigns the agent on the on-call shift covering ctx.now(), sets status escalated, 409 already_escalated when already escalated), resolve_ticket (sets resolved_at) and reopen_ticket implement the workflow (spec: custom logic for workflows beyond plain reads and writes; WorldGen output: custom logic for at least one real workflow).\n2. A job sla_breach every 15m escalates open urgent tickets whose sla_due_at <= ctx.now() using the same on-call rule.\n3. Every handler validates its input fields and every write follows the declared state transitions.\n4. NOTES.md gains a 'Workflow' section on each action and why the job exists.\n5. test/worlds.test.ts still passes (the world checks ok through the compile layer).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/worlds.test.ts\n```\n\n## Also\nIf a research note with a hand-checked helpdesk behaviour table exists (look for research/*helpdesk*.md on factory/integration, or ask nothing and skip), make the world match it: every state reachable, every transition it lists as legal works, every illegal one is refused.\n\n## Out of scope\nSeed rows and world tests (world-helpdesk-seed-tests).\n"
+  },
+  {
+   "key": "engine-seed",
+   "title": "Seed layer: run seed snippets in ref order into a deterministic starting state",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "engine-check-core",
+    "engine-store",
+    "engine-runtime",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/store.ts",
+    "code/src/engine/check.ts",
+    "code/test/seed.test.ts",
+    "research/spec-calls/engine-seed.md"
+   ],
+   "body": "## Goal\nImplement seeding (SeedCtx with seeded rng, ref-ordered entities, fixtures) and the check.ts seed layer, and make runtime() start from the seeded state.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-13 (fixtures are written by code), A-15, A-16, A-22, A-26. SeedCtx and SEED_CTX in engine/ctx.ts. Replace the body of `initialState(world, host)` in store.ts (engine-store left it returning emptyState); runtime() in api.ts (engine-runtime) already calls it, so do not edit api.ts. The SeedCtx object is built in store.ts; ctx.ts is read-only. No Math.random: implement a small seeded PRNG (e.g. mulberry32) keyed by meta.seed and entity name. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-seed.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Entities seed in topological ref order; each seed snippet's returned rows are created in mode 'privileged' with ids from counters (spec: Serve from a fresh copy of the seed data).\n2. ctx.rng/pick/int are seeded per entity from meta.seed, so seeding minimalWorld twice yields identical stateHash, and changing meta.seed changes it (spec: Deterministic, same world and task always start from the same state).\n3. A seed row that violates the data model yields constraint.violation at path ['seed', entity] with found naming the row index and field; seeding stops at the first failed entity (spec: Check).\n4. ctx.rows(entity) returns rows already seeded so refs resolve; ctx.fixtures exposes world.fixtures read-only.\n5. The ok CheckReport fills stats.rows per entity and stats.states per `entity.field` of every state field.\n6. Seed rows may set explicit state values; each must be a declared state (no transition check for initial seed).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/seed.test.ts\n```\n\n## Out of scope\nQuality lints on rows and state mix (engine-lints). Seed content for the helpdesk (world-helpdesk-seed-tests).\n"
+  },
+  {
+   "key": "engine-actions-jobs",
+   "title": "Actions and jobs: handler ctx, input validation, job firing on clock advance, change origins",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "engine-runtime",
+    "engine-sandbox",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/api.ts",
+    "code/test/actions.test.ts",
+    "research/spec-calls/engine-actions-jobs.md"
+   ],
+   "body": "## Goal\nRun `actions` through HandlerCtx inside one transaction and fire `jobs` when engine time moves, tagging every change with its origin.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-12, A-16, A-17 (due jobs fire in (time, name) order, each in its own transaction), A-18, A-28 (changes tagged call or job). HandlerCtx/JobCtx in engine/ctx.ts; SnippetFault from engine-sandbox. HandlerCtx and JobCtx objects are built in api.ts; ctx.ts is read-only. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-actions-jobs.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. An action's body is validated against its `input` fields before the handler runs; a bad body returns 400 with per-field expected/found in the error envelope.\n2. Handler writes go through the store in 'privileged' mode; ctx.fail(409,'already_escalated','...') returns that status in the world's error envelope and leaves dump() unchanged; a thrown error returns 500 and leaves dump() unchanged (spec: Enforce, a failed call leaves no partial changes).\n3. An action that writes an illegal state transition returns 422 and nothing is written, even from a handler.\n4. runtime.advance('1h') with a 15m job fires it 4 times in time order; two jobs due at the same instant fire in name order; each firing is its own transaction and a failing job does not undo earlier firings (spec: Deterministic, time controlled by the engine).\n5. Jobs also fire for time passed by a committed call's tick.\n6. The runtime keeps an origin journal so a later grader ctx can tell call changes from job changes; an exported function `changesSince(seed, end, journal)` returns Change[] with origin 'call' or 'job'.\n7. Job coverage lives here: actions.test.ts runs bareWorld's 15m job through runtime.advance and asserts the rows it changed (world tests cannot advance time; ClientCtx has no clock).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/actions.test.ts\n```\n\n## Out of scope\nGrading (engine-grade-verify-basic). The tests layer in check.ts (engine-tests-layer).\n"
+  },
+  {
+   "key": "engine-tests-layer",
+   "title": "Check layer `tests`: run world test scripts through the public API",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "engine-seed",
+    "engine-actions-jobs",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/check.ts",
+    "code/test/check-tests-layer.test.ts",
+    "research/spec-calls/engine-tests-layer.md"
+   ],
+   "body": "## Goal\nRun every world `tests` client script from seed through handle() and report failures and unexercised actions.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-13 (tests are owned by the workflow stage), A-27. ClientCtx in engine/ctx.ts: only api, assert, now. AGENTS.md invariant 'Reference solutions use the public API'. The ClientCtx object is built in check.ts; ctx.ts is read-only. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-tests-layer.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Each test runs from a fresh seeded state; ctx.api(method, path, body) goes through handle() and returns { status, body }.\n2. A failing ctx.assert yields test.failed at path ['tests', name, 'script'] with the assert message in hint; a SnippetFault yields its own issue at that path (spec: WorldGen stage 3 implement workflow logic, check and test).\n3. stats.unexercisedActions lists actions no test calls, and an action.unexercised warning is emitted per action (warning, does not block ok).\n4. The ok report's `tests` equals the number of tests run.\n5. A test that PATCHes a state field to an undeclared transition gets 422 and one that uses a declared transition gets 200, proving world tests go through the same enforcement as agents (spec: Enforce).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/check-tests-layer.test.ts\n```\n\n## Out of scope\nTask verification (engine-grade-verify-basic).\n"
+  },
+  {
+   "key": "engine-grade-verify-basic",
+   "title": "Grade and verify: grader ctx, solution scores 1, noop scores 0, TaskVerdict",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "engine-tests-layer",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/tasks.ts",
+    "code/src/engine/check.ts",
+    "code/src/engine/api.ts",
+    "code/test/tasks.test.ts",
+    "code/test/helpers/world.ts",
+    "research/spec-calls/engine-grade-verify-basic.md"
+   ],
+   "body": "## Goal\nImplement grade(), gradeDump() and the first half of verifyTask(), wire the check.ts tasks layer, and implement Runtime.grade.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-22, A-27, A-28 (ctx.changes skips job changes by default), A-29 (TaskVerdict minted only by verifyTask), A-41 (every task starts from seed). Header comment of engine/tasks.ts. GraderCtx/GRADER_CTX in engine/ctx.ts. The GraderCtx and ClientCtx objects are built in tasks.ts; ctx.ts is read-only. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). You own code/test/helpers/world.ts for this item: fix minimalWorld's tasks if they do not verify. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-grade-verify-basic.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. grade() builds a GraderCtx with db (end), seed (start), changes(), now, time; a score outside [0,1], NaN or a boolean yields task.grader_out_of_range (spec: Grade, score a task from the end state 0 to 1).\n2. ctx.changes() lists created/updated/deleted rows across every entity with origin, excludes updated_at, and excludes job-origin changes unless includeJobs is true.\n3. verifyTask runs the solution from seed and requires score exactly 1 (else task.solution_not_full_marks) and runs nothing and requires exactly 0 (else task.noop_not_zero) (spec: Grade, confirm the grader gives full marks to a reference solution and zero to doing nothing).\n4. verifyTask runs the solution twice from seed and compares stateHash; a mismatch yields task.nondeterministic (spec: Deterministic).\n5. The check.ts tasks layer calls verifyTask per task and puts verdicts in the ok report keyed by task id; world.too_few_tasks is NOT enforced yet.\n6. Runtime.grade(taskId) scores the runtime's current state against the seed.\n7. Solutions and decoys run with a ClientCtx whose api() goes through handle() (AGENTS.md invariant 'Reference solutions use the public API'); an inline task whose solution calls ctx.db or any member outside api/assert/now fails with snippet.runtime_error at path ['tasks', id, 'solution'].\n8. An exported gradeDump(world, taskId, dump) rebuilds State from a StateDump (in tasks.ts or api.ts, not store.ts) and scores it against the seed; grading the seed dump gives 0 and grading the solution's end dump gives 1 (spec: Grade, score from the end state).\n9. checkWorld(minimalWorld()) is ok with three verdicts, each solution 1 and noop 0.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/tasks.test.ts\n```\n\n## Out of scope\nDecoys and solution prefixes (engine-verify-full). Lints (engine-lints).\n"
+  },
+  {
+   "key": "engine-http-cli",
+   "title": "HTTP serve with separate admin port, and `world serve|verify|grade` CLI",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "engine-grade-verify-basic",
+    "cli-world-check",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/http.ts",
+    "code/src/engine/index.ts",
+    "code/src/cli/world.ts",
+    "code/test/http.test.ts",
+    "code/test/cli-world.test.ts",
+    "research/spec-calls/engine-http-cli.md"
+   ],
+   "body": "## Goal\nServe a checked world over node:http with admin routes on a separate port, and add the remaining engine CLI commands.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-30, A-31 (admin port = world port + 1; the agent under test only gets the world port). AGENTS.md 'Commands' lists the exact CLI and admin routes. http.ts is a shell file; it calls Runtime only. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-http-cli.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. `serve(world, { port, adminPort })` exported from #engine accepts only CheckedWorld; the world port answers the world's routes and actions with JSON (spec: Serve, answer the world's API over HTTP from a fresh copy of the seed data).\n2. Admin port: GET /_world/state returns dump(); POST /_world/reset restores seed; GET /_world/log returns call records; POST /_world/clock {\"advance\":\"4h\"} moves time and returns jobsFired; POST /_world/grade/<task> returns {score} (spec: Inspect and reset, dump current state, reset to seed, log of calls).\n3. /_world/* on the world port returns 404 (agent cannot reset or inspect).\n4. Malformed JSON body -> 400 in the world's error envelope; unknown route -> 404 in the envelope.\n5. `npm run world -- serve <dir> --port 4000` checks, then serves, and exits 1 with issues printed when check fails; `verify <dir>` prints per task '<id> solution 1.000 noop 0.000 decoys ...', prints 'no tasks' and exits 0 for a world without tasks, and exits non-zero on any failure; `grade <dir> <task> --state end.json` prints the score using gradeDump (spec deliverable: engine runnable with one command; Grade).\n6. test/http.test.ts starts serve on ephemeral ports against checkWorld(minimalWorld()), makes a write, checks /_world/log, grades a task, resets and checks state equals the seed dump. test/cli-world.test.ts gains one case for verify on a temp dir.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/http.test.ts test/cli-world.test.ts\nnpm run world -- verify ../prod/worlds/helpdesk\n```\n\n## Out of scope\n/openapi.json export. Auth. Concurrency (calls are serialized by construction).\n"
+  },
+  {
+   "key": "world-helpdesk-seed-tests",
+   "title": "Helpdesk world: realistic seed generators and workflow tests",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "world-helpdesk-workflow",
+    "engine-tests-layer"
+   ],
+   "files": [
+    "prod/worlds/helpdesk/world.yaml",
+    "prod/worlds/helpdesk/NOTES.md",
+    "code/test/helpdesk.test.ts",
+    "research/spec-calls/world-helpdesk-seed-tests.md"
+   ],
+   "body": "## Goal\nFill the helpdesk seed and tests sections so the golden world has paging-sized, internally consistent data and tested workflow logic.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-15, A-26 (quality lints: >= 3 pages of rows, every state present, none above 70%), A-42. SeedCtx in engine/ctx.ts. Edit world.yaml by hand. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/world-helpdesk-seed-tests.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Seed yields >= 40 customers, >= 12 agents, sla_policy rows for every tier x priority, on-call shifts covering clock.start, and >= 300 tickets (>= 3 x pageSize) (spec: outputs: enough rows that searching and paging matter).\n2. Ticket statuses cover every state, none above 70%; resolved tickets have resolved_at after created_at; sla_due_at follows the customer's tier policy; subjects are plausible helpdesk text drawn from lists, not lorem (spec: realistic internally consistent seed data, believable mix of states).\n3. tests include one passing test per action (escalate, resolve, reopen) and one for the 409 on double escalation, so action.unexercised is empty (spec: implement workflow logic, check and test). The sla_breach job is not exercised by world tests (ClientCtx cannot move time); engine-freeze covers it on this world.\n4. `npm run world -- check ../prod/worlds/helpdesk` exits 0 and worlds.test.ts passes.\n5. code/test/helpdesk.test.ts, inside describe('helpdesk seed'), seeds the world and asserts the AC1 counts and that no ticket status exceeds 70% and every state appears, using report.stats.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnpm run world -- check ../prod/worlds/helpdesk\nnode --import tsx --test test/worlds.test.ts test/helpdesk.test.ts\n```\n\n## Also\nIf a research note with a hand-checked helpdesk behaviour table exists (look for research/*helpdesk*.md on factory/integration, or ask nothing and skip), make the world match it: every state reachable, every transition it lists as legal works, every illegal one is refused.\n\n## Out of scope\nTasks (world-helpdesk-tasks).\n"
+  },
+  {
+   "key": "wg-config-events-llm",
+   "title": "WorldGen config and JSONL event emitter",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/src/worldgen/config.ts",
+    "code/src/worldgen/events.ts",
+    "code/test/config.test.ts",
+    "code/test/events.test.ts",
+    "research/spec-calls/wg-config-events-llm.md"
+   ],
+   "body": "## Goal\nImplement loadConfig and createEmitter so model and budget are settings and every step is logged with time and cost.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-35 (only run.ts and cli/ import llm.ts), A-36 (strict config with per-step budgets), A-37 (default claude-opus-5-5, $5, 30 minutes). Header comments of worldgen/config.ts and events.ts. npm test never calls the real API. code/worldgen.config.json is read-only here (only eval-stress-run-2 changes it). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-config-events-llm.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. loadConfig('worldgen.config.json', {}) returns the parsed config; an unknown key (e.g. steps.modle) is an error naming the key; overrides { model, maxCostUsd, maxMinutes } win over the file (spec: WorldGen configurable, model and budget are settings).\n2. createEmitter(runDir) appends one JSON line per RunEvent to <runDir>/events.jsonl and, with console:true, prints a one-line summary per event (step, attempt n, ms, $); events() returns them in order (spec: WorldGen observable, logs each stage, every repair attempt, time, model cost).\n3. exampleWorld resolves relative to the config file's directory (code/), not the process cwd; a test loads the config from another cwd and asserts the absolute path ends in prod/worlds/helpdesk.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/config.test.ts test/events.test.ts\n```\n\n## Out of scope\nThe model client (wg-llm). The run loop (wg-run-slice).\n"
+  },
+  {
+   "key": "wg-llm",
+   "title": "Anthropic model client with forced tool use and cost accounting",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "infra-architecture-test"
+   ],
+   "files": [
+    "code/src/worldgen/llm.ts",
+    "code/test/llm.test.ts",
+    "research/spec-calls/wg-llm.md"
+   ],
+   "body": "## Goal\nImplement anthropicModel and costOf so WorldGen gets structured proposals with exact cost per call.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-35 (only run.ts and cli/ import llm.ts), A-37 (default claude-opus-5-5). Header comment of worldgen/llm.ts. npm test never calls the real API. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-llm.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. An exported pure `costOf(usage, model, prices)` computes USD from input, output, cache-write and cache-read tokens; tested with literal numbers (spec: observable, model cost).\n2. anthropicModel(config).propose forces tool_choice to req.tool.name, returns the tool_use input as untrusted `input`, usage, costUsd and ms; non-tool responses and API errors raise a model_error carrying the status. Tested with an injected fake client object, not the network.\n3. Text blocks outside the tool call are returned as `advice` strings, never parsed.\n4. test/architecture.test.ts passes unchanged (only llm.ts imports @anthropic-ai/sdk).\n\n5. anthropicModel takes the API key as an explicit argument (`anthropicModel(config, { apiKey })`); callers (run.ts, cli/) pass process.env.LLM_KEY. Never read ANTHROPIC_API_KEY, never put the key in config or worldgen.config.json. anthropicModel throws a model_error naming LLM_KEY when it is missing. The key never appears in events, errors, logs or REPORT.md; a test asserts a fake key string is absent from every emitted event and error message.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/llm.test.ts test/architecture.test.ts\n```\n\n## Out of scope\nThe run loop. Prompt caching tuning.\n"
+  },
+  {
+   "key": "wg-plan-stages-judge",
+   "title": "Plan coverage, plan.yaml, stage table `done` rules and stagesToRun",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/src/worldgen/plan.ts",
+    "code/src/worldgen/stages.ts",
+    "code/test/plan.test.ts",
+    "code/test/stages.test.ts",
+    "research/spec-calls/wg-plan-stages-judge.md"
+   ],
+   "body": "## Goal\nImplement the pure plan and stage code WorldGen uses to state what a stage must deliver.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-13 (SECTION_OWNER), A-33 (a stage reruns only if a section it owns or reads changed), A-35 (judge.ts, stages.ts take no Model). Header comments of worldgen/plan.ts and stages.ts. Use only existing issue codes from engine/issues.ts (plan.not_covered, world.too_few_tasks, tasks.difficulty_not_spread, etc.); do not edit engine files. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-plan-stages-judge.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. planCoverage(plan, world) returns plan.not_covered for each planned entity, route, workflow action and task id missing from the world, with path ['plan', ...] (spec: WorldGen plan first, later stages follow it).\n2. renderPlanYaml(plan) returns stable YAML with assumptions (decision and why) and outOfScope as readable lists (spec: plan saved and human-readable; description: fills gaps with sensible choices and writes them down).\n3. STAGES[*].done: model requires every planned entity and route; workflow requires every planned action and >= 1 test per action; seed requires no seed.* warnings; tasks requires >= 3 tasks covering easy, medium, hard (spec: WorldGen outputs: at least three graded tasks at different difficulty levels).\n4. Each stage has a first-draft brief (2-6 sentences) naming the sections it writes and the engine check that judges it; the plan brief tells the model to list each question it would ask a human about the input and answer it as an assumption with why (spec: asks the right questions of the input; no silent guessing). wg-stage-briefs tunes these later.\n5. stagesToRun(new Set(['routes'])) returns ['model','workflow','tasks'] and not 'seed'; stagesToRun(new Set(['seed'])) returns ['seed','tasks'] (literal assertions).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/plan.test.ts test/stages.test.ts\n```\n\n## Out of scope\nblockingIssues (wg-judge). preservationIssues (wg-preservation-gate). Prompt tuning against a real model (wg-stage-briefs).\n"
+  },
+  {
+   "key": "wg-judge",
+   "title": "judge.blockingIssues: engine report plus plan coverage decides each stage",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "wg-plan-stages-judge"
+   ],
+   "files": [
+    "code/src/worldgen/judge.ts",
+    "code/test/judge.test.ts",
+    "research/spec-calls/wg-judge.md"
+   ],
+   "body": "## Goal\nImplement blockingIssues so a stage's acceptance is computed from engine output and the plan, never by a model.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-13 (SECTION_OWNER), A-35 (judge.ts takes no Model). Header comment of worldgen/judge.ts. Map issues to owners via ISSUES[code].owner (or path[0] for 'at_path') and SECTION_OWNER directly; do not import policy.ts, which wg-policy builds in parallel. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-judge.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. blockingIssues(stage, report, plan) returns engine errors in sections owned by that stage or an earlier one, plus planCoverage gaps and STAGES[stage].done issues; issues in later sections are excluded (spec: uses the engine as its judge).\n2. Warnings named by STAGES[stage].done (e.g. seed.* for seed) are returned as blocking; other warnings are not.\n3. test/judge.test.ts is a table of at least 8 rows (stage, report issues, plan) -> literal issue code lists.\n4. judge.ts imports nothing from llm.ts or policy.ts.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/judge.test.ts\n```\n\n## Out of scope\npreservationIssues (wg-preservation-gate). Input conformance (wg-input-conformance).\n"
+  },
+  {
+   "key": "wg-policy",
+   "title": "Repair policy: pure decide() over one ledger",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/src/worldgen/policy.ts",
+    "code/test/policy.test.ts",
+    "research/spec-calls/wg-policy.md"
+   ],
+   "body": "## Goal\nImplement ownerOf, decide and record so retry, advance, backtrack and stop are a pure, table-tested function.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decision A-34 (pure decide() over one Ledger; stops include no_progress and backtrack_limit; backtrack target from the issue owner). Header comment of worldgen/policy.ts. AGENTS.md Testing rules: test policy with tables, never through the fake model. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-policy.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. ownerOf maps ISSUES[code].owner (or path[0] for 'at_path') through SECTION_OWNER to a StepId; 'plan' owner maps to 'plan'.\n2. decide returns advance on accepted; retry on rejected while attempts < steps[step].maxAttempts; stop attempts_exhausted at the limit (spec: self-repair loop, retry within budget).\n3. The same issue-set hash seen twice on one step returns stop no_progress with the repeated set (spec: knows when to stop, says why).\n4. When every blocking issue is owned by an earlier step, decide returns backtrack to the earliest owner; past config.maxBacktracks it returns stop backtrack_limit.\n5. ledger.spentUsd >= config.maxCostUsd returns stop budget_exhausted; nowMs - startedAtMs >= maxMinutes returns stop time_exhausted, both checked before any other rule.\n6. record() returns a new Ledger and never mutates its input.\n7. test/policy.test.ts is one table of at least 12 rows (state, outcome, issues) -> literal Decision.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/policy.test.ts\n```\n\n## Out of scope\nThe loop that calls decide (wg-run-slice, wg-repair-full).\n"
+  },
+  {
+   "key": "wg-input-description",
+   "title": "Input: description kind, redaction, digestInput, CLI flag table",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/src/worldgen/input.ts",
+    "code/test/input.test.ts",
+    "research/spec-calls/wg-input-description.md"
+   ],
+   "body": "## Goal\nImplement the description input kind, redact() and digestInput() so every input reaches the planner only as a redacted digest.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decision A-38 (one zod union parsed by CLI and eval; INPUT_KINDS; digests take only Redacted input). Header comment of worldgen/input.ts. AGENTS.md 'How to add common things: An input adapter'. openapi and csv stay not implemented (wg-input-openapi, wg-input-csv). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-input-description.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. INPUT_KINDS.description.load returns { text }; digest returns kind 'description', summary = the text trimmed to 8000 chars, no fixtures, no observations, apiShape null (spec: inputs: a description).\n2. redact('description', ...) masks strings that look like secrets (Bearer tokens, sk-..., api_key=..., password=...) with '[redacted]'; a test asserts a token in the input never appears in the digest.\n3. digestInput returns { ok:false, why } for an empty description and for an unimplemented kind, never throws.\n4. An exported `parseInputArgs(argv)` maps CLI argv to an Input via inputSchema: a positional string -> description; --openapi <file> [--only a,b] -> openapi; --csv <file...> -> csv. So later adapters never touch the CLI.\n\nQ. Branch rescue/yos-33 (3a77b90) holds an earlier reviewed design: line-by-line mask-before-truncate, wholesale masking of over-long lines, and a PEM state machine. If a review finds redaction leaks or ReDoS, reuse that design rather than reinventing it.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/input.test.ts\n```\n\n## Out of scope\nOpenAPI and CSV adapters.\n"
+  },
+  {
+   "key": "wg-run-slice",
+   "title": "Thin WorldGen run loop: plan, stages, edit tool, engine judge, one repair (fake model)",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "wg-config-events-llm",
+    "wg-llm",
+    "wg-judge",
+    "wg-policy",
+    "wg-input-description",
+    "engine-check-core",
+    "engine-world-io",
+    "test-helpers",
+    "fix-wg-policy",
+    "fix-wg-judge",
+    "fix-wg-plan",
+    "fix-wg-config-prices"
+   ],
+   "files": [
+    "code/src/worldgen/run.ts",
+    "code/test/worldgen.test.ts",
+    "research/spec-calls/wg-run-slice.md",
+    "code/src/worldgen/config.ts",
+    "code/worldgen.config.json",
+    "code/test/config.test.ts",
+    "code/src/worldgen/llm.ts",
+    "code/test/llm.test.ts",
+    "code/models.json"
+   ],
+   "body": "## Goal\nImplement runWorldGen for create mode as a pure-ish loop over an injected Model, tested with a scripted fake.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-11 (generation is edit(emptyWorld)), A-13, A-29, A-34, A-35, A-36, A-39 (on stop world.yaml is not written), A-40. research/architecture.md 'Usage' shows one repair attempt in run.ts. AGENTS.md Testing rules: WorldGen tests use the scripted fake Model in test/worldgen.test.ts. The slice gates on whatever check layers exist when it runs (schema, references, compile at minimum); seed/tests/tasks layers switch on automatically as they merge. The example world is passed in as data (tests use minimalWorld()); reading config.exampleWorld from disk is wg-cli-run's job. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-run-slice.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Steps run plan -> model -> workflow -> seed -> tasks. The plan step calls the model with planSchema's JSON Schema, parses with planSchema, writes <out>/plan.yaml before any stage runs, and a 'refuse' verdict stops with input_rejected (spec: WorldGen plan first; stages 1-5).\n2. Each stage proposes a WorldEdit via a forced tool whose schema is editJsonSchema(writesOf(stage)); edits to other sections yield edit.out_of_scope; applyEdit + checkWorld + blockingIssues decide acceptance; rejected issues (code, path, expected, found, hint) go back into the next prompt (spec: self-repair loop, engine failure fed back to model, retry within budget; uses the engine as its judge).\n3. digest.fixtures and digest.apiShape are written into world.fixtures and meta.api by code before the model stage, never by the model.\n4. The system prompt includes formatReference() and the injected example world rendered with renderWorldYaml.\n5. On success, saveWorld writes <out>/world.yaml from the CheckedWorld; events go to <out>/runs/<runId>/events.jsonl with one attempt dump file per attempt (spec: one command input to finished world; observable).\n6. On a stop, no world.yaml is written and runWorldGen returns the StopReason (spec: knows when to stop).\n7. test/worldgen.test.ts drives a fake Model script that (a) succeeds first try and (b) returns one bad edit then a fixed edit, asserting the event sequence by literal `t` values and that attempt 2's prompt contains the first attempt's issue code.\n8. The fake plan's assumptions (>= 2, decision and why) appear verbatim in <out>/plan.yaml (spec: description: fills gaps with sensible choices and writes them down).\n\nM. Per-step model selection: branch config/models-v1 (from the engine-migration-typescript session) holds code/models.json with model and effort per step (plan/model/workflow/seed/tasks), escalate, default, apiKeyEnv and prices. Per A-36 there is one strict config file: fold those fields into worldgen.config.json and configSchema (code/models.json is now in the repo from the models-v1 merge: fold its contents into worldgen.config.json and configSchema, then delete code/models.json in this unit so one config file remains), and make run.ts pick model and effort per step from config, escalating on stall. A test with a literal config asserts which model and effort each step uses.\n\nT. Model transport (user decision U-11): WorldGen calls the model through the Claude Code CLI by default, NOT the LLM_KEY API key. Add `claudeCliModel(config, spawn?)` to src/worldgen/llm.ts beside anthropicModel (llm.ts is in scope for this unit by U-11): it runs `claude -p --output-format json --model <model> --system-prompt <req.system> --json-schema <JSON of req.tool.inputSchema> --tools \"\"` with req.prompt on stdin, returns `structured_output` as the untrusted input, maps `usage` to Usage, `total_cost_usd` to costUsd and wall time to ms, and raises model_error (with the stderr tail) on a non-zero exit, `is_error`, or missing structured_output. Binary: config `claudeBin`, default \"claude\" resolved on PATH (on this machine the real binary is $HOME/.local/bin/claude; the cmux shim fails non-interactively). Config `transport: \"claude-cli\" | \"sdk\"` defaults to \"claude-cli\"; \"sdk\" is opt-in only and then takes the key from LLM_KEY. Nothing reads ../.env. Unit tests inject a fake spawn with literal CLI JSON fixtures (success, is_error, missing structured_output, non-zero exit); npm test never runs the real CLI. Verified 2026-10-06: `echo hi | claude -p --output-format json --model claude-sonnet-5-5` returns result, total_cost_usd, usage, duration_api_ms.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/worldgen.test.ts\n```\n\n## Also\nPrices: every model named in config (including models.json escalations) must have a price entry. An unknown model is a strict-config error at load time naming the model, never a mid-run throw. Test: a literal config with a missing price fails parse with that message.\n\n## Out of scope\nThe CLI (wg-cli-run). Backtracking and REPORT.md (wg-repair-full). Iterate mode (wg-iterate). Real-model runs (eval-slice-smoke).\n"
+  },
+  {
+   "key": "wg-cli-run",
+   "title": "`npm run worldgen` CLI: one command from description to a world directory",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [
+    "wg-run-slice",
+    "world-helpdesk-model"
+   ],
+   "files": [
+    "code/src/cli/worldgen.ts",
+    "code/test/cli-worldgen.test.ts",
+    "research/spec-calls/wg-cli-run.md"
+   ],
+   "body": "## Goal\nWire `npm run worldgen -- \"<description>\" --out <dir>` to runWorldGen with config, real model and the helpdesk example world.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-35, A-36, A-37, A-38, A-39. AGENTS.md 'Commands'. cli/ holds wiring only; it may import llm.ts. config.exampleWorld resolves relative to code/ (see wg-config-events-llm). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-cli-run.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. cli/worldgen.ts parses argv with parseInputArgs plus --out, --model, --budget-usd, --max-minutes, builds the config with overrides, loads the example world from config.exampleWorld with loadWorld, and calls runWorldGen with anthropicModel(config) (spec: one command; configurable, model and budget are settings).\n2. Exit code 0 only on done; on a stop it prints the StopReason on one line and exits 1 (spec: knows when to stop).\n3. Missing ANTHROPIC_API_KEY prints a one-line error naming the variable and exits 2 before any work.\n4. test/cli-worldgen.test.ts spawns the CLI with no API key and asserts exit 2 and the literal message, and with `--help` asserts every flag is listed.\n\nN. Model transport per U-11: the worldgen CLI uses claudeCliModel by default (flag `--transport claude-cli|sdk`, config `transport`). It never loads ../.env. Only `--transport sdk` reads LLM_KEY from the environment, and the run fails with a clear message naming LLM_KEY when it is missing. The first run event records the transport.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/cli-worldgen.test.ts\n```\n\n## Out of scope\nLoop logic. REPORT.md.\n"
+  },
+  {
+   "key": "eval-slice-smoke",
+   "title": "Live smoke: thin WorldGen slice on one description with the real model",
+   "area": "eval",
+   "priority": "must",
+   "kind": "test",
+   "milestone": "D2",
+   "depends_on": [
+    "wg-cli-run",
+    "engine-http-cli",
+    "world-helpdesk-seed-tests"
+   ],
+   "files": [
+    "eval/runs/*-slice-smoke/**",
+    "research/spec-calls/eval-slice-smoke.md"
+   ],
+   "body": "## Goal\nProve the thin end-to-end slice by generating one world from a description with the real model and recording the outcome.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decision A-44 (rehearsal output goes to eval/runs/). eval/README.md describes run layout. Requires ANTHROPIC_API_KEY in the environment; if it is absent, stop and report the blocked step instead of faking output. Spend cap for this item: $5. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/eval-slice-smoke.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. `npm run worldgen -- \"A todo app with projects, tasks and due dates\" --out ../eval/runs/<YYYY-MM-DD>-slice-smoke/todo` runs once (spec: one command input to finished world).\n2. Either world.yaml exists and `npm run world -- verify` on it exits 0, or the run stopped with a printed reason; both outcomes are recorded.\n3. eval/runs/<date>-slice-smoke/summary.md records: done or stopped, attempts per step, total cost and minutes read from events.jsonl, top 3 issue codes seen, and one concrete follow-up per failure (spec: observable).\n4. No source file under code/ is changed by this item; generic problems are filed as follow-ups in summary.md, each tagged engine or worldgen so engine-freeze can act on engine ones.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run worldgen -- \"A todo app with projects, tasks and due dates\" --out ../eval/runs/$(date +%F)-slice-smoke/todo\nnpm run world -- verify ../eval/runs/$(date +%F)-slice-smoke/todo\n```\n\n## Out of scope\nFixing prompts or code (later items consume the follow-ups).\n"
+  },
+  {
+   "key": "engine-verify-full",
+   "title": "Discriminating graders: decoys, anti-trivial decoys, solution prefixes",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "engine-grade-verify-basic",
+    "test-helpers"
+   ],
+   "files": [
+    "code/src/engine/tasks.ts",
+    "code/test/tasks-verify.test.ts",
+    "code/test/helpers/world.ts",
+    "research/spec-calls/engine-verify-full.md"
+   ],
+   "body": "## Goal\nComplete verifyTask so every grader proves it discriminates: decoys below 1 and not trivial, every strict solution prefix below 1.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decision A-27 (solution 1, noop 0, model-written decoys below 1 and not trivial, required on medium and hard; every strict prefix of the solution's writes below 1). research/architecture.md decision 9. AGENTS.md invariant 'Graders discriminate'.  Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). You own code/test/helpers/world.ts for this item: keep minimalWorld's decoys passing the new rules. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-verify-full.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Medium and hard tasks without decoys yield task.decoy_required.\n2. Each decoy runs from seed; score 1 yields task.decoy_full_marks naming its `why`; a decoy with no successful write yields task.decoy_trivial reason no_successful_write; one ending in the noop or solution state hash yields same_as_noop / same_as_solution (spec spirit: graders that discriminate).\n3. The engine records the solution's successful writes and replays every strict prefix from seed; any prefix scoring 1 yields task.prefix_full_marks with writes/of; TaskVerdict.bestPrefixScore is the max prefix score or null for one write.\n4. TaskVerdict carries decoys [{why, score}], solutionCalls and endStateHash (spec: Grade, confirm full marks to a reference and zero to doing nothing).\n5. Tests use inline worlds: a grader that only checks the first row fails prefix; a grader that passes on 'touch everything' fails a decoy; a correct grader passes.\n6. checkWorld(minimalWorld()) is still ok.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/tasks-verify.test.ts\n```\n\n## Out of scope\nEngine-generated mutants beyond prefixes (plan.md V4-V10 are not built).\n"
+  },
+  {
+   "key": "engine-diff",
+   "title": "Semantic world diff: diffWorlds and DESTRUCTIVE changes",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "engine-format"
+   ],
+   "files": [
+    "code/src/engine/diff.ts",
+    "code/test/diff.test.ts",
+    "research/spec-calls/engine-diff.md"
+   ],
+   "body": "## Goal\nImplement diffWorlds so the iterate gate and REPORT.md read a semantic delta instead of raw edits.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-11, A-32 (diffWorlds finds destructive changes; judge.ts blocks unplanned ones). Header comment of engine/diff.ts. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-diff.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Adding an entity yields item_added; removing a route yields item_removed (destructive).\n2. Removing a field yields field_removed; changing a field's type or enum values yields field_changed with before/after; adding a field yields field_added.\n3. Removing a state from a state field yields state_removed; changing its transitions yields transition_changed; changing idPrefix yields id_prefix_changed; editing any snippet yields snippet_changed; meta changes yield meta_changed.\n4. diffWorlds(w, w) returns { changes: [] }; output order is stable (section order, then key, then path) (spec: WorldGen iterates, updates rather than restarts).\n5. Every WorldChange.path starts with its section and is usable as an IssuePath.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/diff.test.ts\n```\n\n## Out of scope\nThe iterate gate (wg-iterate).\n"
+  },
+  {
+   "key": "world-helpdesk-tasks",
+   "title": "Helpdesk world: three graded tasks with decoys that verify green",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "world-helpdesk-seed-tests",
+    "engine-verify-full"
+   ],
+   "files": [
+    "prod/worlds/helpdesk/world.yaml",
+    "prod/worlds/helpdesk/NOTES.md",
+    "research/spec-calls/world-helpdesk-tasks.md"
+   ],
+   "body": "## Goal\nAdd easy, medium and hard tasks to the hand-built helpdesk, each with a reference solution, a grader and decoys that pass verify.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-27, A-28, A-41, A-42. TaskSchema in engine/format.ts; GraderCtx and ClientCtx in engine/ctx.ts. Instructions must not leak ids the agent should discover. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/world-helpdesk-tasks.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Easy: update one ticket found by search (e.g. set priority on a named customer's ticket). Medium: escalate a specific breached urgent ticket via the escalate action. Hard: escalate every open urgent ticket whose SLA has breached across >= 2 pages (spec: at least three graded tasks at different difficulty levels each with a reference solution).\n2. Medium and hard solutions read before they write (search, filter or cursor paging) (spec: Good world, tasks need reads and writes).\n3. Every grader uses ctx.changes() for a collateral check so touching unrelated tickets scores below 1.\n4. Medium and hard tasks each have >= 1 decoy (e.g. 'escalates only the first page', 'PATCHes status to escalated without assigning the on-call agent'); every decoy scores below 1 because the grader checks the assignment, and is not trivial.\n5. `npm run world -- verify ../prod/worlds/helpdesk` prints solution 1.000 and noop 0.000 for all three and exits 0 (spec deliverable: one hand-built world; Grade).\n6. NOTES.md gains a 'Tasks' section with one line per task and per decoy.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnpm run world -- verify ../prod/worlds/helpdesk\n```\n\n## Also\nIf a research note with a hand-checked helpdesk behaviour table exists (look for research/*helpdesk*.md on factory/integration, or ask nothing and skip), make the world match it: every state reachable, every transition it lists as legal works, every illegal one is refused.\n\n## Out of scope\nMore than five tasks.\n"
+  },
+  {
+   "key": "engine-lints",
+   "title": "Lints layer: paging rows, state mix, task count and spread, WorldStats",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "world-helpdesk-tasks",
+    "engine-verify-full"
+   ],
+   "files": [
+    "code/src/engine/check.ts",
+    "code/test/lints.test.ts",
+    "code/test/helpers/world.ts",
+    "research/spec-calls/engine-lints.md"
+   ],
+   "body": "## Goal\nImplement the lints layer and the world.too_few_tasks rule so realism problems become fixable engine signals.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decision A-26 (quality lints computed by code). ISSUES entries seed.too_few_rows_for_paging, seed.state_mix_skewed, tasks.difficulty_not_spread, world.too_few_tasks in engine/issues.ts. Lints are warnings except world.too_few_tasks (error).  Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). You own code/test/helpers/world.ts for this item: minimalWorld already has three tasks; adjust only if a lint error appears. Thresholds (3 x pageSize, 70%) are design calls: record them in research/spec-calls/engine-lints.md. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/engine-lints.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. For each entity with a list route, rows < 3 x pageSize yields seed.too_few_rows_for_paging (warning) (spec: enough rows that searching and paging matter).\n2. For each state field, a declared state with zero rows or any state above 70% yields seed.state_mix_skewed with counts in the hint (spec: believable mix of states).\n3. Fewer than 3 tasks yields world.too_few_tasks (error, blocks ok); tasks missing a difficulty yield tasks.difficulty_not_spread (warning) (spec: at least three graded tasks at different difficulty levels).\n4. Warnings never block ok and appear in report.warnings.\n5. The helpdesk world still checks ok with zero warnings; worlds.test.ts and every existing test file pass (run the full `npm run check`).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/lints.test.ts\nnpm run world -- check ../prod/worlds/helpdesk\n```\n\n## Out of scope\nModel-judged realism (never).\n"
+  },
+  {
+   "key": "docs-world-format",
+   "title": "Generated prod/world-format.md, `npm run docs`, and staleness test",
+   "area": "docs",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "engine-http-cli"
+   ],
+   "files": [
+    "code/src/cli/world.ts",
+    "code/src/engine/format.ts",
+    "code/test/docs.test.ts",
+    "prod/world-format.md",
+    "research/spec-calls/docs-world-format.md"
+   ],
+   "body": "## Goal\nGenerate prod/world-format.md from the schema and fail `npm test` when it is stale.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-07, A-19 (docs render from the registries), A-42. AGENTS.md: never edit prod/world-format.md by hand; `npm run docs` regenerates it. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/docs-world-format.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. `npm run docs` (world.ts docs) writes ../prod/world-format.md = formatReference() plus a short header saying it is generated (spec deliverable: short design doc covering world format).\n2. formatReference includes every section, every FIELD_TYPES doc with its example def, every ctx member's sig and doc per snippet kind, the issue catalog codes with expected/hint text, and the apply order of WorldEdit.\n3. test/docs.test.ts, inside describe('world-format.md'), asserts the file on disk equals the `npm run docs` output, with a failure message telling the reader to run `npm run docs`. Any later item that edits issue hints, field docs or ctx docs must rerun `npm run docs`.\n4. Running `npm run docs` twice produces no diff.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run docs\ngit diff --exit-code ../prod/world-format.md\nnpm run check\nnode --import tsx --test test/docs.test.ts\n```\n\n## Out of scope\nprod/design.md (docs-design).\n"
+  },
+  {
+   "key": "engine-freeze",
+   "title": "Engine acceptance suite and engine freeze",
+   "area": "engine",
+   "priority": "must",
+   "kind": "test",
+   "milestone": "D3",
+   "depends_on": [
+    "docs-world-format",
+    "engine-diff",
+    "decision-retire-python",
+    "engine-lints",
+    "eval-slice-smoke",
+    "infra-architecture-symbols",
+    "engine-ctx-contract",
+    "engine-sandbox-heap",
+    "fix-arch-tests",
+    "fix-engine-sandbox",
+    "fix-engine-clock",
+    "fix-engine-diff",
+    "fix-engine-store",
+    "fix-engine-api-scope",
+    "fix-engine-fields",
+    "fix-engine-world-io"
+   ],
+   "files": [
+    "code/test/engine.test.ts",
+    "research/decisions.md",
+    "code/test/redteam-*.test.ts",
+    "research/spec-calls/*.md",
+    "research/*.md",
+    "code/src/engine/index.ts",
+    "code/test/world-io.test.ts"
+   ],
+   "body": "## Goal\nProve every spec engine guarantee end to end on the golden helpdesk world, then record the engine freeze.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-14, A-16, A-22, A-29, A-31. research/plan.md section 8 (engine freeze at end of D3; afterwards engine changes only for bugs found by eval). research/architecture.md 'Usage' shows the atomicity test. Read eval/runs/*-slice-smoke/summary.md: every follow-up tagged engine is either fixed before this item (file a separate bug item) or listed in the freeze row as known.\n\n## Acceptance\n1. Check: an inline copy of the helpdesk with one typo yields exactly one issue with code, path, expected, found and hint; the real helpdesk checks ok (spec: Check).\n2. Serve: createRuntime on the helpdesk lists tickets with paging and filters from the seed (spec: Serve).\n3. Enforce: a failing escalate (409) and a PATCH of status along an undeclared transition (e.g. open -> closed, 422) each leave dump() deep-equal to before and the clock unchanged; a PATCH along a declared transition succeeds (spec: Enforce).\n4. Deterministic: two runtimes from the same world produce identical dump() and stateHash; reset() restores the seed hash; time only moves by tick and advance (spec: Deterministic).\n5. Inspect and reset: log() records every call with seq and engine time; reset clears it (spec: Inspect and reset).\n6. Grade: runtime.grade on each helpdesk task scores 0 at seed and 1 after running its solution through call() (spec: Grade).\n7. Jobs: runtime.advance('1h') on the seeded helpdesk fires sla_breach 4 times in time order and every open urgent ticket past sla_due_at is escalated with the on-call agent assigned (spec: Deterministic, time controlled by the engine; custom logic).\n8. research/decisions.md gains one appended row (next free A- number): 'Engine freeze', choice 'after this, engine changes only for bugs found by eval runs, each with a test', listing any known engine follow-ups from the smoke run, reversible Yes. It then appends one 'Spec:' row per bullet in every research/spec-calls/*.md present in the worktree, with Why citing the file; spec-calls files are not deleted.\n\nR. Red-team suite: if branch redteam/suite exists (owned by the engine-migration-typescript session), merge it into this unit branch first, fold its research/spec-calls/*.md proposals into decisions.md alongside the factory spec calls, and make `npm run check` green with its code/test/redteam-*.test.ts included. Then run `REDTEAM_STRICT=1 npm test` and list every still-skipped red-team capability in the freeze notes as either fixed, deferred with a reason, or rejected with a reason.\n\nU. Fold the user decisions U-1..U-10 from /private/tmp/claude-501/-Users-yossieliaz-task-description/b0f52146-000a-4c7f-a7ed-d94eee9e170b/scratchpad/orchestrate/worldgen/user-decisions.md into research/decisions.md as rows (next free A- numbers, Date 2026-10-06, the Why from the user decision). Skip any row already present. Also bring in the research notes from origin/scaffold/agents-md-and-type-sketch (c7ebd76) with `git checkout c7ebd76 -- research/<file>` for the six notes listed there.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/engine.test.ts\nnpm run world -- verify ../prod/worlds/helpdesk\n```\n\n## Also\nSettle the design-review.md vs decisions.md conflicts as explicit A- rows: (a) clock ticks and job firing (A-16/A-17), (b) whether the engine or the grader computes the collateral gate and score (A-28), (c) start.advance vs A-41, (d) id width and ordering, and whether stateHash includes now, (e) U-11 (Claude Code transport). One row each, with the choice, the reason, and the code that enforces it.\n\n## Out of scope\nNew engine features.\n"
+  },
+  {
+   "key": "wg-report",
+   "title": "REPORT.md rendered by code from plan, verdicts, delta and events",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D4",
+   "depends_on": [
+    "wg-config-events-llm",
+    "wg-plan-stages-judge",
+    "engine-diff",
+    "engine-grade-verify-basic"
+   ],
+   "files": [
+    "code/src/worldgen/report.ts",
+    "code/test/report.test.ts",
+    "research/spec-calls/wg-report.md"
+   ],
+   "body": "## Goal\nCreate worldgen/report.ts that renders REPORT.md for done and stopped runs without asking a model.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-29 (REPORT.md renders only engine TaskVerdicts), A-35 (report.ts takes no Model), A-39, A-40. AGENTS.md module map row for worldgen/report.ts. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-report.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. renderReport({ plan, report?, delta?, events, stop? }) returns Markdown with sections: What was built (entities, routes, actions, jobs, row counts from stats), Assumed and why (every plan.assumptions entry with its decision and why), Left out (plan.outOfScope), Proof (per task: difficulty, solution 1.000, noop 0.000, decoy scores, best prefix score, from TaskVerdict only), Run (per step attempts, minutes, $ from events) (spec: outputs: a short report, what was built, assumed and why, left out, proof checks and graders pass).\n2. With delta, a 'Changes' section lists each WorldChange as one line.\n3. With stop, the report opens with 'Stopped: <reason kind>' plus the last issues (code, path, hint) and says no world.yaml was written (spec: knows when to stop, says why instead of handing over a broken world).\n4. report.ts imports nothing from llm.ts (architecture test passes).\n5. test/report.test.ts asserts literal headings and one literal verdict line.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/report.test.ts\n```\n\n## Out of scope\nModel-written prose.\n"
+  },
+  {
+   "key": "wg-repair-full",
+   "title": "Full repair loop: backtracking, stops with reasons, budgets, REPORT.md on every exit",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D4",
+   "depends_on": [
+    "wg-run-slice",
+    "wg-cli-run",
+    "wg-report",
+    "engine-freeze"
+   ],
+   "files": [
+    "code/src/worldgen/run.ts",
+    "code/src/cli/worldgen.ts",
+    "code/test/worldgen.test.ts",
+    "research/spec-calls/wg-repair-full.md",
+    "code/test/redteam-wg-*.test.ts"
+   ],
+   "body": "## Goal\nComplete the create loop so every decide() outcome is handled, every exit writes REPORT.md, and budgets are enforced from the ledger.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-34, A-35 (commentary goes to an advice event), A-36, A-37, A-39, A-40. worldgen/events.ts StopReason and RunEvent. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-repair-full.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. backtrack decisions rerun the target step with the blocking issues in its prompt, emit `backtracked`, then rerun every later step (spec: self-repair loop).\n2. Every StopReason kind is reachable: test cases in test/worldgen.test.ts with the fake Model hit attempts_exhausted, no_progress, backtrack_limit, budget_exhausted (fake costs), time_exhausted (injected clock), model_error and input_rejected (spec: knows when to stop).\n3. On every exit, <out>/REPORT.md and <out>/plan.yaml (if planned) are written; world.yaml only on done; exit code 0 only on done; run_finished.worldWritten matches (spec: outputs: a short report).\n4. Model text outside the tool call is emitted as an `advice` event and never read by acceptance (spec: never grades its own work by asking the model).\n5. Warnings from engine lints are fed into the seed and tasks stage prompts and treated as blocking per STAGES[*].done.\n6. Console output shows step, attempt, cumulative $ and elapsed time per attempt (spec: observable).\n7. A fake-model run's REPORT.md 'Assumed and why' lists the plan's assumptions verbatim (spec: no silent guessing).\n\nR. WorldGen red-team suite: if branch redteam/worldgen exists (owned by session worldgen-b3), merge it into this unit branch first and make `npm run check` green with its code/test/redteam-wg-*.test.ts included. Fix code, not those tests, unless one pins an implementation detail (standing order 15). List any skipped red-team case as fixed, deferred or rejected, each with a reason.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/worldgen.test.ts\n```\n\n## Out of scope\nIterate mode (wg-iterate).\n"
+  },
+  {
+   "key": "wg-stage-briefs",
+   "title": "Stage briefs and prompts tuned on real description runs, including an impossible prompt",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D4",
+   "depends_on": [
+    "wg-repair-full",
+    "engine-freeze"
+   ],
+   "files": [
+    "code/src/worldgen/stages.ts",
+    "code/test/stages.test.ts",
+    "eval/runs/*-d4-briefs/**",
+    "research/spec-calls/wg-stage-briefs.md"
+   ],
+   "body": "## Goal\nTune the stage briefs until three description prompts finish with verified worlds and an impossible prompt stops honestly.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-13, A-37, A-44. Engine is frozen (engine-freeze): do not edit code/src/engine. Requires ANTHROPIC_API_KEY in the environment; if it is absent, stop and report the blocked step instead of faking output. Spend cap for this item: $20. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-stage-briefs.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Briefs tell each stage what 'faithful to the real software, not convenient for the agent' means for its sections: real resource names and status codes (model), real states and rules (workflow), plausible values and a believable mix (seed), instructions without leaked ids and outcome-based graders with collateral checks (tasks) (spec: Good world). The tasks brief requires at least one task whose solution must read (search, filter or page) before it writes (spec: Good world, tasks need reads and writes).\n2. Runs saved under eval/runs/<date>-d4-briefs/: 'A helpdesk with SLA tiers and on-call escalation', 'A library with holds, waitlists and fines', 'A subscription billing system with plans, invoices and dunning' each end done with `npm run world -- verify` exit 0.\n3. 'An app for a bakery' (vague) ends done with >= 3 plan.assumptions in plan.yaml and the same list in REPORT.md 'Assumed and why' (spec: description fills gaps with sensible choices and writes them down; asks the right questions).\n4. 'A real-time video codec' ends stopped (input_rejected or another reason) with REPORT.md explaining why and no world.yaml (spec: knows when to stop).\n5. eval/runs/<date>-d4-briefs/summary.md records per case: done/stopped, attempts per step, minutes, $.\n6. test/stages.test.ts asserts each brief names every section in writesOf(stage).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnpm run worldgen -- \"A library with holds, waitlists and fines\" --out ../eval/runs/$(date +%F)-d4-briefs/library\nnpm run world -- verify ../eval/runs/$(date +%F)-d4-briefs/library\n```\n\n## Out of scope\nOpenAPI and CSV inputs. Engine changes.\n"
+  },
+  {
+   "key": "wg-preservation-gate",
+   "title": "Preservation gate: preservationIssues for iterate mode",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D4",
+   "depends_on": [
+    "engine-diff",
+    "engine-verify-full",
+    "wg-judge",
+    "fix-engine-diff",
+    "fix-wg-judge"
+   ],
+   "files": [
+    "code/src/worldgen/judge.ts",
+    "code/test/judge-preservation.test.ts",
+    "research/spec-calls/wg-preservation-gate.md"
+   ],
+   "body": "## Goal\nImplement preservationIssues so an iteration cannot silently destroy or regress what the existing world had.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-11, A-32 (unplanned destructive changes blocked; old tests and decoys rerun). Header comment of worldgen/judge.ts. Use only existing issue codes (iterate.unplanned_change, iterate.regression). Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-preservation-gate.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. preservationIssues(oldWorld, newReport, edit, plan) returns iterate.unplanned_change for each DESTRUCTIVE WorldChange from diffWorlds not named in edit.remove or plan.changes (spec: WorldGen iterates, updates rather than restarts).\n2. It returns iterate.regression when an old world test fails against the new world, or an old decoy now scores 1.\n3. test/judge-preservation.test.ts is a table over minimalWorld variants: removing a state without plan.changes -> unplanned_change; removing it with plan.changes naming it -> []; adding a field -> []; a grader change that lets an old decoy pass -> regression.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/judge-preservation.test.ts test/judge.test.ts\n```\n\n## Also\nAdditive transitions are classified non-destructive by the engine diff (fix-engine-diff). Test that 'add refunds' (a new state plus a transition into it) passes the gate with no plan.changes entry, and that removing a transition is blocked.\n\n## Out of scope\nThe iterate run loop (wg-iterate).\n"
+  },
+  {
+   "key": "wg-input-openapi",
+   "title": "Input: OpenAPI adapter with $ref resolution, --only narrowing, envelopes and observations",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D4",
+   "depends_on": [
+    "wg-input-description"
+   ],
+   "files": [
+    "code/src/worldgen/input.ts",
+    "code/test/input-openapi.test.ts",
+    "code/test/fixtures/petstore.openapi.yaml",
+    "research/spec-calls/wg-input-openapi.md"
+   ],
+   "body": "## Goal\nImplement INPUT_KINDS.openapi so WorldGen follows an OpenAPI spec's paths, shapes and errors, optionally narrowed.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-30 (meta.api envelopes), A-38. research/architecture.md open question on $ref handling: implement local '#/...' $ref resolution and allOf merging by hand with a depth cut of 3; do not add dependencies. AGENTS.md 'How to add common things: An input adapter'. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-input-openapi.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. load reads YAML or JSON; digest resolves local $ref and allOf, and keeps only operations whose path starts with one of `only` when given (spec: inputs: API spec e.g. OpenAPI, optionally narrowed to part of it).\n2. summary lists each kept operation as `METHOD path: summary`, its request body fields with types, response status codes, and the error schema; it lists dropped operations by count.\n3. apiShape proposes meta.api.list keys when list responses share a data array key and cursor field, and meta.api.error from the shared error schema (spec: follow its paths, shapes and errors).\n4. observations come from response examples (method, path, status, body shape).\n5. redact strips securitySchemes values, example Authorization headers and any `x-api-key`/bearer example; test asserts a token in the fixture never reaches the digest.\n6. test/fixtures/petstore.openapi.yaml (a small Petstore 3.0 with /pets and /store/orders, a $ref'd error schema) narrowed with only ['/store'] yields only /store operations.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/input-openapi.test.ts\n```\n\n## Out of scope\nConformance diff of the generated world against the spec. Remote $refs.\n"
+  },
+  {
+   "key": "wg-input-csv",
+   "title": "Input: CSV adapter with type inference, keys and fixtures",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D4",
+   "depends_on": [
+    "wg-input-openapi",
+    "engine-fields"
+   ],
+   "files": [
+    "code/src/worldgen/input.ts",
+    "code/test/input-csv.test.ts",
+    "code/test/fixtures/orders.csv",
+    "code/test/fixtures/customers.csv",
+    "research/spec-calls/wg-input-csv.md"
+   ],
+   "body": "## Goal\nImplement INPUT_KINDS.csv so WorldGen infers a data model from sample data and shapes seed data from it.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-13 (fixtures are written by code, never the model), A-23 (CSV column types come from FIELD_TYPES[t].inferFromCsv in FIELD_TYPE_ORDER, never a local switch), A-38. InputDigest.fixtures is injected into world.fixtures by run.ts (already wired in wg-run-slice); wg-input-conformance checks the seed uses it. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-input-csv.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. load parses RFC 4180 CSV (quoted fields, embedded commas and newlines) for one or more files; table name = file stem in snake_case.\n2. digest summary gives per column: inferred type via FIELD_TYPES, null ratio, distinct count, candidate key (unique and non-null), enum values when inferred, and likely ref to another table when >= 95% of values match that table's key (spec: inputs: sample data e.g. CSV, infer the data model).\n3. fixtures holds every row converted to Value with the inferred types, capped at 2000 rows per table (spec: shape the seed data).\n4. redact masks columns named like password, token, secret, api_key and values matching secret patterns; test asserts a token never reaches the digest or fixtures.\n5. fixtures orders.csv (>= 30 rows, status column) and customers.csv (>= 10 rows) yield orders.customer_id inferred as a ref to customers.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/input-csv.test.ts\n```\n\n## Out of scope\nExcel or JSON-lines inputs.\n"
+  },
+  {
+   "key": "wg-input-conformance",
+   "title": "Input conformance: generated world follows the OpenAPI operations and uses CSV fixtures",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D5",
+   "depends_on": [
+    "wg-iterate",
+    "wg-input-csv",
+    "wg-input-openapi"
+   ],
+   "files": [
+    "code/src/worldgen/judge.ts",
+    "code/src/worldgen/run.ts",
+    "code/test/judge-input.test.ts",
+    "research/spec-calls/wg-input-conformance.md"
+   ],
+   "body": "## Goal\nMake code, not the model, check that a world generated from an OpenAPI spec follows its paths, statuses and errors, and that a CSV-backed world seeds from its fixtures.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-13 (fixtures written by code), A-30, A-38. Use the existing code plan.not_covered with section-rooted paths so ownerOf routes repairs to the right stage. run.ts change is limited to passing the InputDigest into blockingIssues. Test worlds come from code/test/helpers/world.ts (minimalWorld, bareWorld, checkedForTest); build variants with overrides in your own test file, never edit the helper unless it is in your files list. Tests that expect ok must not assert the full warnings array (lints add warnings in D3). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-input-conformance.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. An exported inputCoverage(digest, world) returns plan.not_covered at path ['routes', '<METHOD> <path>'] for each kept OpenAPI operation with no route or action of the same method and path (path params compared by position), and at path ['meta','api','error'] when meta.api.error differs from digest.apiShape.error (spec: OpenAPI: follow its paths, shapes and errors).\n2. For each fixtures table mapped to an entity, it returns plan.not_covered at ['seed', entity] when the seed snippet source does not reference ctx.fixtures.<table> or the seeded row count is below min(fixture rows, 2000) (spec: CSV: shape the seed data).\n3. blockingIssues includes inputCoverage results for the model stage (routes, meta) and the seed stage (seed); description inputs yield [].\n4. test/judge-input.test.ts covers: a digest with /store/orders GET and POST against a world missing POST -> one literal issue; a matching world -> []; a CSV fixture table whose seed ignores ctx.fixtures -> one issue.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/judge-input.test.ts test/judge.test.ts test/worldgen.test.ts\n```\n\n## Out of scope\nA full OpenAPI conformance diff of response bodies. /openapi.json export.\n"
+  },
+  {
+   "key": "eval-inputs",
+   "title": "Eval input files: Stripe-like OpenAPI subset and orders/customers CSVs",
+   "area": "eval",
+   "priority": "must",
+   "kind": "chore",
+   "milestone": "D5",
+   "depends_on": [
+    "wg-input-csv"
+   ],
+   "files": [
+    "eval/inputs/stripe.openapi.yaml",
+    "eval/inputs/orders.csv",
+    "eval/inputs/customers.csv",
+    "eval/inputs/petstore.openapi.yaml",
+    "code/test/eval-inputs.test.ts",
+    "research/spec-calls/eval-inputs.md"
+   ],
+   "body": "## Goal\nAuthor the input files the eval suite, README and generated worlds use, matching the AGENTS.md commands.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-38, A-44. AGENTS.md 'Commands' names eval/inputs/stripe.openapi.yaml with --only /v1/refunds and eval/inputs/orders.csv. eval/README.md. Write data by hand or with a throwaway script you do not commit. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/eval-inputs.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. eval/inputs/stripe.openapi.yaml is an OpenAPI 3.0 subset with /v1/charges and /v1/refunds (list, get, create, plus refund update), a shared $ref'd error schema and list envelopes {data, has_more} (spec: inputs: API spec e.g. OpenAPI).\n2. eval/inputs/petstore.openapi.yaml is Petstore 3.0 including /store/orders.\n3. eval/inputs/orders.csv (>= 60 rows, status column with >= 4 values, customer_id) and customers.csv (>= 15 rows) are internally consistent: every orders.customer_id exists in customers (spec: inputs: sample data e.g. CSV).\n4. test/eval-inputs.test.ts digests each file through digestInput and asserts: stripe narrowed with only ['/v1/refunds'] keeps only refund operations; orders.customer_id is inferred as a ref to customers; no input contains a string matching the redaction patterns.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/eval-inputs.test.ts\n```\n\n## Out of scope\nThe suite file and runner (eval-suite).\n"
+  },
+  {
+   "key": "eval-suite",
+   "title": "Eval runner: suite.yaml, inputs, `npm run eval`, summary.md",
+   "area": "eval",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D6",
+   "depends_on": [
+    "eval-inputs",
+    "wg-stage-briefs",
+    "wg-input-conformance"
+   ],
+   "files": [
+    "code/src/cli/eval.ts",
+    "code/test/eval.test.ts",
+    "eval/suite.yaml",
+    "research/spec-calls/eval-suite.md"
+   ],
+   "body": "## Goal\nBuild the rehearsal suite and its runner so WorldGen is scored on many prompts with one command.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-38 (suite cases parse with inputSchema), A-44. eval/README.md defines the suite and run layout. cli/ holds wiring only; put any pure summarizing helper inside cli/eval.ts and test it. Requires ANTHROPIC_API_KEY in the environment; if it is absent, stop and report the blocked step instead of faking output. Spend cap for this item: $5. Only the Verify smoke case uses the model; tests and --dry-run do not. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/eval-suite.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. eval/suite.yaml lists >= 12 cases `{ id, input, change? }` with these ids at least: helpdesk-sla ('A helpdesk with SLA tiers and on-call escalation'), bakery-vague ('An app for a bakery'), video-codec-impossible ('A real-time video codec'), library-holds, billing-dunning, todo-projects, clinic-appointments, stripe-refunds (eval/inputs/stripe.openapi.yaml --only /v1/refunds), petstore-store (eval/inputs/petstore.openapi.yaml --only /store), orders-csv (eval/inputs/orders.csv and customers.csv), helpdesk-add-refunds and stripe-partial-refunds (cases with `change`) (spec: inputs: description, OpenAPI, CSV; iterates).\n2. `npm run eval [-- --only <id,...>] [--dry-run]` runs each case into eval/runs/<YYYY-MM-DD>-<suite>/<id>/ via runWorldGen, then the change request when present, sequentially; --dry-run validates the suite and input files and makes no model call.\n3. summary.md has one row per case: done/stopped, stop reason, attempts per step, minutes, $, verify result, plus totals and pass rate (spec: observable). A case whose events.jsonl lacks an attempt event with ms and costUsd for every step that ran is flagged 'unlogged' (AGENTS.md invariant 'Every stage, attempt, time and cost is logged').\n4. test/eval.test.ts parses suite.yaml with inputSchema (every case valid, ids unique kebab-case, input files exist) and tests the summary renderer on literal events.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/eval.test.ts\nnpm run eval -- --dry-run\nnpm run eval -- --only helpdesk-sla\n```\n\n## Also\nKnown-case fidelity yardstick (should): tau2-bench retail (MIT) as a description case. Replay tau gold action lists against the generated world and compare end states; report pass^k. Mark it \"known, not held out\" in the report, because of contamination. AutomationBench support-desk tasks (MIT) can supply extra description prompts.\nIf research/rehearsal-prompts.md exists on factory/integration, draw prompts from it, including its vague and impossible ones; an impossible prompt must end in an honest stop with REPORT.md saying why (spec: knows when to stop).\n\n## Out of scope\nRunning the full suite (eval-stress-run-1).\n"
+  },
+  {
+   "key": "wg-iterate",
+   "title": "Iterate mode: change request on an existing world through edits",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D5",
+   "depends_on": [
+    "wg-repair-full",
+    "wg-preservation-gate"
+   ],
+   "files": [
+    "code/src/worldgen/run.ts",
+    "code/src/cli/worldgen.ts",
+    "code/test/worldgen-iterate.test.ts",
+    "research/spec-calls/wg-iterate.md"
+   ],
+   "body": "## Goal\nImplement `npm run worldgen -- \"add refunds\" --world <dir>` so an existing world is updated through edits, not regenerated.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-11 (iterate is edit(existing)), A-32 (preservation gate: unplanned destructive changes blocked; old tests and decoys rerun), A-33 (stagesToRun), A-39 (on stop the old world stays untouched). Header comment of worldgen/judge.ts (preservationIssues). Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/wg-iterate.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. Iterate loads and checks the existing world, plans with the change request and the current plan.yaml, fills plan.changes, and runs only stagesToRun(changed sections); skipped stages emit step_skipped (spec: WorldGen iterates, existing world plus change request updates rather than restarts).\n2. Each stage's acceptance adds preservationIssues (from wg-preservation-gate) to blockingIssues.\n3. On success world.yaml, plan.yaml and REPORT.md (with a Changes section from diffWorlds) are rewritten; on stop the previous world.yaml is byte-identical and REPORT.md explains the stop.\n4. test/worldgen-iterate.test.ts with the fake Model: 'add refunds' on a copy of the helpdesk adds an entity and action without rerunning seed for unrelated entities; an edit that silently removes a state is blocked and retried.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/worldgen-iterate.test.ts test/worldgen.test.ts\n```\n\n## Out of scope\nSeed row migration beyond keeping existing seed snippets.\n"
+  },
+  {
+   "key": "eval-stress-run-1",
+   "title": "Stress run 1: full suite, triage, fix generic causes",
+   "area": "eval",
+   "priority": "must",
+   "kind": "test",
+   "milestone": "D6",
+   "depends_on": [
+    "wg-iterate",
+    "eval-suite"
+   ],
+   "files": [
+    "eval/runs/*-stress-1/**",
+    "code/src/worldgen/stages.ts",
+    "code/src/engine/issues.ts",
+    "code/test/stages.test.ts",
+    "prod/world-format.md",
+    "research/spec-calls/eval-stress-run-1.md"
+   ],
+   "body": "## Goal\nRun the whole suite, find the top failure causes, and fix them generically in briefs and issue hints.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-25 (hints live in ISSUES), A-44. eval/README.md: fix the generic cause, never the one prompt. Engine is frozen: only `hint`/`expected` text in engine/issues.ts may change, no new codes or logic. Requires ANTHROPIC_API_KEY in the environment; if it is absent, stop and report the blocked step instead of faking output. Spend cap for this item: $60. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/eval-stress-run-1.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. `npm run eval` runs every case into eval/runs/<date>-stress-1/ and summary.md exists (spec deliverable: live-run rehearsal).\n2. summary.md adds a 'Triage' section ranking the top 5 issue codes by frequency with one generic fix each.\n3. Each fix is a brief change in stages.ts or a hint text change in issues.ts, and a rerun of the affected cases (`--only`) is recorded in the same summary.\n4. Pass rate (done and verify exit 0, impossible prompt stopping counts as pass) is recorded; target >= 70%.\n5. `npm run check` passes after the fixes.\n6. If issues.ts hint/expected text changed, `npm run docs` was run and prod/world-format.md committed so test/docs.test.ts passes.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run docs\ngit diff --exit-code ../prod/world-format.md\nnpm run check\nnpm run eval\n```\n\n## Out of scope\nEngine logic changes (file a bug instead).\n"
+  },
+  {
+   "key": "eval-stress-run-2",
+   "title": "Stress run 2: tune cost and latency for the live run",
+   "area": "eval",
+   "priority": "should",
+   "kind": "test",
+   "milestone": "D7",
+   "depends_on": [
+    "eval-stress-run-1"
+   ],
+   "files": [
+    "eval/runs/*-stress-2/**",
+    "code/src/worldgen/stages.ts",
+    "code/src/engine/issues.ts",
+    "code/worldgen.config.json",
+    "code/test/stages.test.ts",
+    "prod/world-format.md",
+    "research/decisions.md"
+   ],
+   "body": "## Goal\nRerun the suite after stress-1 fixes and tune budgets and attempts so unseen prompts finish within budget.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-36, A-37 (tune default model and budget after eval runs). Nothing else writes research/decisions.md while this item runs. Requires ANTHROPIC_API_KEY in the environment; if it is absent, stop and report the blocked step instead of faking output. Spend cap for this item: $60.\n\n## Acceptance\n1. `npm run eval` into eval/runs/<date>-stress-2/ with summary.md (spec: live-run rehearsal).\n2. Pass rate >= 85% or a written reason per failing case; median minutes and median $ per case recorded.\n3. worldgen.config.json step maxAttempts and budgets are set from observed p95 attempts and cost, staying strict-schema valid (spec: configurable).\n4. `npm run check` passes.\n5. If issues.ts hint/expected text changed, `npm run docs` was run and prod/world-format.md committed so test/docs.test.ts passes.\n6. If the default model or budget changes, research/decisions.md gains one appended row (next free A- number) that names A-37 as replaced; no existing row is edited. Also append one 'Spec:' row per bullet in research/spec-calls/*.md not already cited by an earlier row.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run docs\ngit diff --exit-code ../prod/world-format.md\nnpm run check\nnpm run eval\n```\n\n## Out of scope\nEngine changes.\n"
+  },
+  {
+   "key": "prod-generated-worlds",
+   "title": "Deliverable generated worlds in prod/worlds/gen-*",
+   "area": "eval",
+   "priority": "must",
+   "kind": "chore",
+   "milestone": "D7",
+   "depends_on": [
+    "eval-stress-run-2"
+   ],
+   "files": [
+    "prod/worlds/gen-helpdesk-sla/**",
+    "prod/worlds/gen-stripe-refunds/**",
+    "prod/worlds/gen-orders-csv/**",
+    "research/spec-calls/prod-generated-worlds.md"
+   ],
+   "body": "## Goal\nGenerate the deliverable worlds with WorldGen from one description, one OpenAPI and one CSV input, plus one iteration.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Decisions A-29 (only saveWorld writes world.yaml), A-42 (every world in prod/worlds is checked and verified by npm test), A-44. prod/README.md. If the hiring team has sent prompts, use them instead and name the slugs after the software; record the prompts in each REPORT.md. Requires ANTHROPIC_API_KEY in the environment; if it is absent, stop and report the blocked step instead of faking output. Spend cap for this item: $15. The slugs gen-helpdesk-sla, gen-stripe-refunds and gen-orders-csv are fixed unless the hiring team sends prompts before this item starts. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/prod-generated-worlds.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. prod/worlds/gen-helpdesk-sla from 'A helpdesk with SLA tiers and on-call escalation' (spec: deliverables: worlds WorldGen generated from prompts).\n2. prod/worlds/gen-stripe-refunds from eval/inputs/stripe.openapi.yaml with --only /v1/refunds, then iterated with 'add partial refunds' (spec: OpenAPI input; iterates).\n3. prod/worlds/gen-orders-csv from eval/inputs/orders.csv and customers.csv; its seed for fixture-backed entities reads ctx.fixtures (spec: CSV input, shape the seed data).\n4. Each directory holds world.yaml, plan.yaml, REPORT.md and runs/<runId>/events.jsonl, written only by WorldGen; no hand edits.\n5. Each events.jsonl holds an attempt event with ms and costUsd for every step that ran, and each world has >= 1 task whose solution reads before it writes (spec: observable; Good world).\n6. `npm test` (worlds.test.ts) passes with these worlds present, and `npm run world -- verify` exits 0 on each.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnpm test\nnpm run world -- verify ../prod/worlds/gen-helpdesk-sla\nnpm run world -- verify ../prod/worlds/gen-stripe-refunds\nnpm run world -- verify ../prod/worlds/gen-orders-csv\n```\n\n## Out of scope\nHand edits to generated worlds.\n"
+  },
+  {
+   "key": "docs-design",
+   "title": "prod/design.md: world format, engine guarantees, WorldGen loop",
+   "area": "docs",
+   "priority": "must",
+   "kind": "chore",
+   "milestone": "D7",
+   "depends_on": [
+    "engine-freeze",
+    "wg-iterate",
+    "prod-generated-worlds"
+   ],
+   "files": [
+    "prod/design.md",
+    "prod/README.md",
+    "research/decisions.md",
+    "research/*.md"
+   ],
+   "body": "## Goal\nWrite the short design doc the spec asks for.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Sources: research/architecture.md (do not copy it wholesale), research/decisions.md, prod/world-format.md (link to it rather than repeat). Spec deliverable: 'short design doc (world format, engine guarantees, WorldGen loop)'.\n\n## Acceptance\n1. prod/design.md is <= 3 pages with three sections: World format (sections, field types, snippets, one YAML excerpt from the helpdesk, link to world-format.md), Engine guarantees (one paragraph each for Check, Serve, Enforce, Deterministic, Inspect and reset, Grade, naming the mechanism and the test that proves it), WorldGen loop (stages, plan first, self-repair, knows when to stop, engine as judge, iterates, observable, configurable, each naming its mechanism) (spec deliverable: short design doc).\n2. A 'Calls we made' list links the 8-12 most important decisions.md rows, including Spec: rows.\n3. A 'Known limits' list: no auth, no persistence, vm is not a security boundary, every task starts from seed.\n4. prod/README.md links design.md and lists every world under prod/worlds.\n5. research/decisions.md gains one 'Spec:' row per bullet in research/spec-calls/*.md not already cited by an earlier row, so every call made during the build is logged.\n\nU. Fold the user decisions U-1..U-10 from /private/tmp/claude-501/-Users-yossieliaz-task-description/b0f52146-000a-4c7f-a7ed-d94eee9e170b/scratchpad/orchestrate/worldgen/user-decisions.md into research/decisions.md as rows (next free A- numbers, Date 2026-10-06, the Why from the user decision). Skip any row already present. Also bring in the research notes from origin/scaffold/agents-md-and-type-sketch (c7ebd76) with `git checkout c7ebd76 -- research/<file>` for the six notes listed there.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\ntest -s ../prod/design.md\n```\n\n## Out of scope\nREADME and onboarding (docs-readme-onboarding).\n"
+  },
+  {
+   "key": "docs-readme-onboarding",
+   "title": "README with one command each, demo script, and AGENTS.md path check",
+   "area": "docs",
+   "priority": "must",
+   "kind": "chore",
+   "milestone": "D7",
+   "depends_on": [
+    "wg-iterate",
+    "infra-architecture-test",
+    "eval-suite",
+    "docs-world-format",
+    "wg-report",
+    "docs-design"
+   ],
+   "files": [
+    "README.md",
+    "AGENTS.md",
+    "code/test/architecture.test.ts",
+    "research/spec-calls/docs-readme-onboarding.md"
+   ],
+   "body": "## Goal\nMake the repo runnable by a reviewer from README alone, and enforce that every path AGENTS.md names exists.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. AGENTS.md 'Commands' and 'Testing rules' (the architecture test checks every path AGENTS.md names). Spec deliverable: repository with engine and WorldGen each runnable with one command. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/docs-readme-onboarding.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. README.md: prerequisites (Node 22, ANTHROPIC_API_KEY for WorldGen), `cd code && npm install`, one command for the engine (`npm run world -- serve ../prod/worlds/helpdesk --port 4000`) and one for WorldGen (`npm run worldgen -- \"<description>\" --out ../prod/worlds/gen-<slug>`), then OpenAPI (`--openapi ../eval/inputs/stripe.openapi.yaml --only /v1/refunds`), CSV (`--csv ../eval/inputs/orders.csv ../eval/inputs/customers.csv`) and iterate (`--world <dir>`) variants (spec deliverable: repository with engine and WorldGen each runnable with one command).\n2. README has a 5-step demo script: generate, serve, curl a workflow action, inspect /_world/log and grade via the admin port, iterate with a change request.\n3. AGENTS.md status line is updated to say what is implemented; no planned-only paths remain unmarked.\n4. test/architecture.test.ts gains a describe('AGENTS.md paths') case: it extracts backticked tokens from AGENTS.md that contain '/' and look like repo paths, resolves each against the repo root, then code/, then code/src/, and asserts one exists; globs and placeholders (containing *, <, or ...) and a short documented ignore list are skipped. Fix AGENTS.md (not the resolver) when a named path does not exist.\n5. `npm run check` passes.\n\nV. AGENTS.md reflects U-11: the llm.ts module-map row and the invariants table say llm.ts owns the model transports (the claude CLI by default, the SDK opt-in via --transport sdk) and is still the only importer of @anthropic-ai/sdk and the only spawner of the claude CLI under src/worldgen. Commands use `npm run worldplay` per U-7.\n\nW. README.md already exists, written early by session worldgen-27 on branch readme/yos-57 and landed by the coordinator. Update it to match what was actually built, turning commands marked \"planned\" into real ones and checking each command runs. Don't rewrite it from scratch.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/architecture.test.ts\n```\n\n## Out of scope\nprod/design.md.\n"
+  },
+  {
+   "key": "eval-live-rehearsal",
+   "title": "Timed live-run rehearsal on sealed unseen prompts",
+   "area": "eval",
+   "priority": "must",
+   "kind": "test",
+   "milestone": "D8",
+   "depends_on": [
+    "prod-generated-worlds",
+    "docs-readme-onboarding",
+    "docs-design"
+   ],
+   "files": [
+    "eval/runs/*-rehearsal/**",
+    "eval/rehearsal-prompts.yaml",
+    "research/spec-calls/eval-live-rehearsal.md"
+   ],
+   "body": "## Goal\nRehearse the live run: unseen prompts, default config, a timer, no touching anything.\n\n## Context\nRepo ~/worldgen, base branch origin/scaffold/agents-md-and-type-sketch (3342c51). Read AGENTS.md (Module map, Invariants and what enforces them, Testing rules) before writing code. Tests use node:test with every case inside a describe() block, assert literal values, and live in code/test/*.test.ts. Spec: 'They run WorldGen live on unseen prompts at the end.' Decision A-44 (rehearsals go to eval/runs/). Requires ANTHROPIC_API_KEY in the environment; if it is absent, stop and report the blocked step instead of faking output. Spend cap for this item: $40. Prompts must be written by someone other than the agent that tuned briefs: generate them in a fresh model session (or ask the human) and save them before running. Spec calls: if you resolve a spec ambiguity or make a design call no decision records, do NOT edit research/decisions.md; write one bullet per call (call, why, reversible) to research/spec-calls/eval-live-rehearsal.md. engine-freeze, eval-stress-run-2 and docs-design fold these files into decisions.md rows.\n\n## Acceptance\n1. eval/rehearsal-prompts.yaml holds 5 sealed prompts in the spec's style, at least one OpenAPI and one CSV input, and one change request on a generated world (spec: inputs: description, OpenAPI, CSV; iterates).\n2. Each prompt runs once with the default config via the README commands, timed, into eval/runs/<date>-rehearsal/<id>/ (spec deliverable: live-run rehearsal).\n3. summary.md records per prompt: done/stopped, minutes to finish, $, verify result, and a one-paragraph read of its REPORT.md (honest stop reasons count as passes when the prompt is impossible).\n4. summary.md ends with a ranked list of generic fixes, and none of them targets one prompt.\n5. No code changes in this item.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run worldgen -- \"<prompt 1>\" --out ../eval/runs/$(date +%F)-rehearsal/p1\nnpm run world -- verify ../eval/runs/$(date +%F)-rehearsal/p1\n```\n\n## Also\nIf research/rehearsal-prompts.md exists on factory/integration, draw prompts from it, including its vague and impossible ones; an impossible prompt must end in an honest stop with REPORT.md saying why (spec: knows when to stop).\n\n## Out of scope\nFixing the found issues (file follow-ups).\n"
+  },
+  {
+   "key": "engine-sandbox-heap",
+   "title": "Bound snippet memory: run the SnippetHost in a worker with resourceLimits",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "engine-sandbox"
+   ],
+   "files": [
+    "code/src/engine/sandbox.ts",
+    "code/test/sandbox.test.ts",
+    "research/spec-calls/engine-sandbox-heap.md"
+   ],
+   "body": "## Goal\nA model-written snippet that allocates without bound fails as a SnippetFault instead of crashing the engine process.\n\n## Context\nFollow-up from the engine-sandbox review (risk lane, round 3): node:vm cannot bound heap in-process, so a snippet like `const a=[]; for(;;) a.push(new Array(1e6))` can kill the host. Read AGENTS.md (invariants: deterministic world logic, sandbox.ts is the only importer of node:vm), design-review.md section 2.8 (`git show c7ebd76:research/design-review.md`), and the current sandbox.ts. The determinism rules stay: same inputs give the same verdict, decided by the ctx call quota, never by machine speed.\n\n## Acceptance\n1. Snippets execute inside a node:worker_threads Worker created with resourceLimits (maxOldGenerationSizeMb and maxYoungGenerationSizeMb from SNIPPET_LIMITS). Heap exhaustion surfaces as a SnippetFault with code snippet.memory, and the host process keeps running. A test allocates without bound and asserts the literal fault code, then runs a normal snippet in the same host to show it still works.\n2. The ctx call protocol crosses the worker boundary synchronously from the snippet's point of view (Atomics.wait on a SharedArrayBuffer, or a design with the same guarantee), so snippet semantics and quota counting are unchanged. Every existing sandbox test passes unchanged.\n3. Worker startup cost is bounded: one worker is reused per host across snippet calls, and a fresh realm is created per call. A test asserts 200 trivial snippet calls finish under a generous bound (e.g. 5s) and that state does not leak between calls.\n4. The globals snapshot test still passes. The worker gets the same allowlist.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/sandbox.test.ts test/architecture.test.ts test/architecture-symbols.test.ts\n```\n\n## Out of scope\nCPU time bounds beyond the existing guard. Changing ctx registries.\n"
+  },
+  {
+   "key": "fix-wg-policy",
+   "title": "Fix repair-policy defects: backtrack ownership, attempt reset, accepted-over-budget",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/src/worldgen/policy.ts",
+    "code/test/policy.test.ts",
+    "research/spec-calls/fix-wg-policy.md"
+   ],
+   "body": "## Goal\nFix repair-policy defects: backtrack ownership, attempt reset, accepted-over-budget.\n\n## Context\nVerified review findings from session knowledge-base-71 (each has a probe in /tmp/claude-501/-Users-yossieliaz-task-description-knowledge-base/daae5337-2123-431e-a83b-e26ba82edc16/scratchpad/probes/<file>.probe.ts that PASSES while the defect exists; run it from code/ with `node --import tsx --test <probe>`). After your fix the corresponding probe case must FAIL. Do not copy the probes into the repo. Write your own behavioral tests with literal expected values. Read AGENTS.md and the module's existing tests first.\n\n## Acceptance\n1. A plan.not_covered issue (path[0]='plan') raised while the current step is not plan is owned by the step that should have produced the item, not by plan: decide() retries the current step instead of backtracking to plan (policy.ts ownerOf/decide ~:49,:109).\n2. recordBacktrack resets attempts[target] so a backtracked-to step gets its full repair budget again; backtracks stay bounded by maxBacktracks (~:123,:142).\n3. An accepted outcome is honoured even when the call that produced it crossed maxCostUsd: the run saves the world, and the budget stop applies only to further calls (~:87). Report the overspend as a warning event.\n4. Table-driven tests (state, outcome, expected decision) for each, with literal decisions.\n\nR. Independent confirmation: red-team tests WG-P11a/b/c in redteam-wg-policy.test.ts on local branch redteam/worldgen (worldgen-b3) fail today for this defect. Run them without merging the branch: `git show redteam/worldgen:code/test/redteam-wg-policy.test.ts > /tmp/<key>-redteam-wg-policy.test.ts`, then run it from code/ with node --import tsx --test (fix import paths if needed). The named cases must pass after your fix. Do not commit that file; wg-repair-full lands the suite.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/policy.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-wg-judge",
+   "title": "Judge must never accept a world the engine rejects",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/src/worldgen/judge.ts",
+    "code/test/judge.test.ts",
+    "research/spec-calls/fix-wg-judge.md"
+   ],
+   "body": "## Goal\nJudge must never accept a world the engine rejects.\n\n## Context\nVerified review findings from session knowledge-base-71 (each has a probe in /tmp/claude-501/-Users-yossieliaz-task-description-knowledge-base/daae5337-2123-431e-a83b-e26ba82edc16/scratchpad/probes/<file>.probe.ts that PASSES while the defect exists; run it from code/ with `node --import tsx --test <probe>`). After your fix the corresponding probe case must FAIL. Do not copy the probes into the repo. Write your own behavioral tests with literal expected values. Read AGENTS.md and the module's existing tests first.\n\n## Acceptance\n1. blockingIssues(stage, report, plan): when report.ok is false, any error the current stage cannot fix (owned by a later stage) must still prevent final acceptance. Either return it as blocking for the final stage, or return a distinct `deferred` list that run.ts must clear before saving; choose one, document it in the spec-calls file, and make 'save' impossible while the engine report is not ok.\n2. Plan coverage and the stage done() rules run even when report.ok is false, so missing items are reported together with engine errors (judge.ts:39-44).\n3. Tests: a report with only a tasks-owned error (task.solution_not_full_marks) blocks acceptance of the final world; coverage gaps are reported alongside engine errors. Literal expected issue codes.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/judge.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-wg-plan",
+   "title": "Plan coverage checks jobs; refusals parse",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/src/worldgen/plan.ts",
+    "code/test/plan.test.ts",
+    "research/spec-calls/fix-wg-plan.md"
+   ],
+   "body": "## Goal\nPlan coverage checks jobs; refusals parse.\n\n## Context\nVerified review findings from session knowledge-base-71 (each has a probe in /tmp/claude-501/-Users-yossieliaz-task-description-knowledge-base/daae5337-2123-431e-a83b-e26ba82edc16/scratchpad/probes/<file>.probe.ts that PASSES while the defect exists; run it from code/ with `node --import tsx --test <probe>`). After your fix the corresponding probe case must FAIL. Do not copy the probes into the repo. Write your own behavioral tests with literal expected values. Read AGENTS.md and the module's existing tests first.\n\n## Acceptance\n1. planCoverage reports every planned job missing from world.jobs (plan.ts:45-50), with a literal test.\n2. planSchema accepts verdict {kind:'refuse', why} with empty workflows and tasks (min(1)/min(3) apply only to verdict 'build'), so an honest refusal ends as input_rejected rather than invalid_output (plan.ts:19-27). Use a discriminated union, and make illegal states unrepresentable.\n3. Tests with literal plans for both.\n\nR. Independent confirmation: red-team tests WG-S05 in redteam-wg-plan-stages.test.ts on local branch redteam/worldgen (worldgen-b3) fail today for this defect. Run them without merging the branch: `git show redteam/worldgen:code/test/redteam-wg-plan-stages.test.ts > /tmp/<key>-redteam-wg-plan-stages.test.ts`, then run it from code/ with node --import tsx --test (fix import paths if needed). The named cases must pass after your fix. Do not commit that file; wg-repair-full lands the suite.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/plan.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-wg-config-prices",
+   "title": "Strict, non-negative price config with cache prices, merged per field",
+   "area": "worldgen",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/src/worldgen/config.ts",
+    "code/src/worldgen/llm.ts",
+    "code/test/config.test.ts",
+    "code/test/llm.test.ts",
+    "research/spec-calls/fix-wg-config-prices.md"
+   ],
+   "body": "## Goal\nStrict, non-negative price config with cache prices, merged per field.\n\n## Context\nVerified review findings from session knowledge-base-71 (each has a probe in /tmp/claude-501/-Users-yossieliaz-task-description-knowledge-base/daae5337-2123-431e-a83b-e26ba82edc16/scratchpad/probes/<file>.probe.ts that PASSES while the defect exists; run it from code/ with `node --import tsx --test <probe>`). After your fix the corresponding probe case must FAIL. Do not copy the probes into the repo. Write your own behavioral tests with literal expected values. Read AGENTS.md and the module's existing tests first.\n\n## Acceptance\n1. configSchema.prices entries are strictObject with inputPerMTok, outputPerMTok, and optional cacheReadPerMTok and cacheWritePerMTok, all nonnegative. A typo like outputPerMtok fails parsing with a message naming the key, and a negative price fails parsing (config.ts:25).\n2. Model prices merge per field: a config entry for claude-opus-5-5 that sets only input and output keeps the default cache ratios (llm.ts:126). Test: 1M cache-read tokens cost exactly the default figure ($0.20) when the config overrides only input and output.\n3. Literal-value tests for each.\n\nR. Independent confirmation: red-team tests WG-C01, WG-C02, WG-C04 in redteam-wg-config-events.test.ts on local branch redteam/worldgen (worldgen-b3) fail today for this defect. Run them without merging the branch: `git show redteam/worldgen:code/test/redteam-wg-config-events.test.ts > /tmp/<key>-redteam-wg-config-events.test.ts`, then run it from code/ with node --import tsx --test (fix import paths if needed). The named cases must pass after your fix. Do not commit that file; wg-repair-full lands the suite.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/config.test.ts test/llm.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-arch-tests",
+   "title": "Harden architecture tests against re-exports, lib bridges, model calls by other routes, brand forging, dead assertNever and wall-clock escapes",
+   "area": "infra",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D2",
+   "depends_on": [],
+   "files": [
+    "code/test/architecture.test.ts",
+    "code/test/architecture-symbols.test.ts",
+    "code/test/helpers/ts-program.ts",
+    "research/spec-calls/fix-arch-tests.md"
+   ],
+   "body": "## Goal\nHarden architecture tests against re-exports, lib bridges, model calls by other routes, brand forging, dead assertNever and wall-clock escapes.\n\n## Context\nVerified review findings from session knowledge-base-71 (each has a probe in /tmp/claude-501/-Users-yossieliaz-task-description-knowledge-base/daae5337-2123-431e-a83b-e26ba82edc16/scratchpad/probes/<file>.probe.ts that PASSES while the defect exists; run it from code/ with `node --import tsx --test <probe>`). After your fix the corresponding probe case must FAIL. Do not copy the probes into the repo. Write your own behavioral tests with literal expected values. Read AGENTS.md and the module's existing tests first.\n\n## Acceptance\n1. Engine boundary scans every non-engine file under src/, including src/lib, and follows re-exports: a src/lib module re-exporting engine internals reached from worldgen is reported (architecture.test.ts:53-60).\n2. llm confinement follows re-exports (run.ts re-exporting anthropicModel to judge.ts is reported) (:63-70).\n3. 'No grading with a model' also bans, outside llm.ts: node:child_process, any spawn or exec of the claude binary, and fetch or http calls to api.anthropic.com (:63-78).\n4. Brand rule: any expression typed as CheckedWorld, CheckIssue or TaskVerdict produced from `as any` / `as unknown` / a generic identity cast outside its minter is reported (architecture-symbols.test.ts:181-196).\n5. A default: clause passes only if its last statement is `return assertNever(x)` or `assertNever(x)` reached unconditionally (:206-225).\n6. Banned globals in engine core add Function, eval, Intl, and the Function-constructor route (:21, :92-119).\n7. Each rule keeps a real-tree case expecting [] and a virtual fixture proving it fires, with literal lists. npm run check stays green on the real tree; fix the real tree only if a rule finds a genuine violation, and list it.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/architecture.test.ts test/architecture-symbols.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-engine-sandbox",
+   "title": "Sandbox determinism and data-boundary fixes",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "engine-sandbox-heap"
+   ],
+   "files": [
+    "code/src/engine/sandbox.ts",
+    "code/test/sandbox.test.ts",
+    "research/spec-calls/fix-engine-sandbox.md"
+   ],
+   "body": "## Goal\nSandbox determinism and data-boundary fixes.\n\n## Context\nVerified engine review findings from session code-f4 (black-box, reproduced; probes in /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-a and /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-b, run from code/ with `node --import tsx --test <probe>`). First reproduce each finding. If one does not reproduce at your base, record it as not reproduced in your spec-calls file and leave it unchanged. After your fix each reproduced case must behave as the acceptance says. Write your own behavioral tests with literal expected values (do not copy probes). Read AGENTS.md and the module's existing tests first. Keep determinism invariants.\n\n## Acceptance\n1. Error objects in the realm expose no host stack: .stack is a fixed or snippet-relative string, and captureStackTrace and prepareStackTrace are unavailable, so `new Error('x').stack` is identical across checkout paths and callers (sandbox.ts:49-53,102).\n2. Recursion depth is bounded by the engine, not the host stack: a fixed depth limit raises snippet.recursion_limit (or reuse the quota) at the same depth regardless of the caller's stack (:282,:335).\n3. Locale-sensitive methods (toLocaleString, localeCompare, toLocale*Case, Intl-backed formatting) are removed or pinned to a fixed locale, so output does not change under LC_ALL (:49-53).\n4. intoRealm wraps or refuses every host function, including inside arrays and nested objects, so `.constructor` cannot reach host code (:180,:186). Test with a stub ctx that returns functions.\n5. outOfRealm refuses cyclic objects, bigint and symbol (and anything else not plain JSON data) with snippet.runtime_error / RESULT_NOT_DATA, for both args and results (:207-224,:305,:353).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/sandbox.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-engine-clock",
+   "title": "Clock rejects impossible dates, zero intervals and out-of-range durations",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [],
+   "files": [
+    "code/src/engine/clock.ts",
+    "code/test/clock.test.ts",
+    "research/spec-calls/fix-engine-clock.md"
+   ],
+   "body": "## Goal\nClock rejects impossible dates, zero intervals and out-of-range durations.\n\n## Context\nVerified engine review findings from session code-f4 (black-box, reproduced; probes in /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-a and /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-b, run from code/ with `node --import tsx --test <probe>`). First reproduce each finding. If one does not reproduce at your base, record it as not reproduced in your spec-calls file and leave it unchanged. After your fix each reproduced case must behave as the acceptance says. Write your own behavioral tests with literal expected values (do not copy probes). Read AGENTS.md and the module's existing tests first. Keep determinism invariants.\n\n## Acceptance\n1. fromIso rejects impossible calendar values (Feb 30, Feb 31, hour 24) as consistently as month 13 / minute 60, with a precise error (clock.ts:35-42).\n2. The Duration schema rejects '0s' (positive only), so jobSchema refuses every:'0s' at check time rather than dueJobs throwing at run time (:16-30).\n3. parseDuration bounds to the Date range (8.64e15 ms) so start + duration never yields an invalid time (:31-33).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/clock.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-engine-diff",
+   "title": "Destructive classification: narrowing is destructive, pure widening is not",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [],
+   "files": [
+    "code/src/engine/diff.ts",
+    "code/test/diff.test.ts",
+    "research/spec-calls/fix-engine-diff.md"
+   ],
+   "body": "## Goal\nDestructive classification: narrowing is destructive, pure widening is not.\n\n## Context\nVerified engine review findings from session code-f4 (black-box, reproduced; probes in /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-a and /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-b, run from code/ with `node --import tsx --test <probe>`). First reproduce each finding. If one does not reproduce at your base, record it as not reproduced in your spec-calls file and leave it unchanged. After your fix each reproduced case must behave as the acceptance says. Write your own behavioral tests with literal expected values (do not copy probes). Read AGENTS.md and the module's existing tests first. Keep determinism invariants.\n\n## Acceptance\n1. Narrowing changes are destructive: removed enum values; a state field changed to another type (emit state_removed or equivalent so lost states and transitions are visible); optional to required; a new required action input; a route path or action method change (diff.ts:42-49,:134-142).\n2. A pure widening is not destructive: transitions only added (before targets a subset of after) become a new non-destructive kind (e.g. transition_added); transition_changed stays destructive only when a target is removed. This is the 'add refunds' iterate case from worldgen-b3's verified finding.\n3. Update the R4/R5 expectations in diff.test.ts to the new literal kinds and DESTRUCTIVE membership, and add a test per change kind above.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/diff.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-engine-store",
+   "title": "Store: omitted optional fields and unique on datetimes",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "engine-seed",
+    "fix-engine-fields"
+   ],
+   "files": [
+    "code/src/engine/store.ts",
+    "code/src/engine/fields.ts",
+    "code/test/store.test.ts",
+    "code/test/fields.test.ts",
+    "research/spec-calls/fix-engine-store.md"
+   ],
+   "body": "## Goal\nStore: omitted optional fields and unique on datetimes.\n\n## Context\nVerified engine review findings from session code-f4 (black-box, reproduced; probes in /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-a and /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-b, run from code/ with `node --import tsx --test <probe>`). First reproduce each finding. If one does not reproduce at your base, record it as not reproduced in your spec-calls file and leave it unchanged. After your fix each reproduced case must behave as the acceptance says. Write your own behavioral tests with literal expected values (do not copy probes). Read AGENTS.md and the module's existing tests first. Keep determinism invariants.\n\n## Acceptance\n1. Creating a row with a non-required, non-nullable field omitted (no default) is either refused with a precise field error or stores no key. It never stores null that a later update would refuse. Choose and record in spec-calls (store.ts:160-164).\n2. Datetime values are normalized to one canonical form on write (fields.ts:131), so unique constraints compare instants: '2026-01-01T00:00:00Z' and '2026-01-01T00:00:00.000Z' collide (store.ts:213).\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/store.test.ts test/fields.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-engine-api-scope",
+   "title": "Path params scope list/get/update/delete or the route is rejected",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "engine-actions-jobs",
+    "engine-grade-verify-basic"
+   ],
+   "files": [
+    "code/src/engine/api.ts",
+    "code/test/api.test.ts",
+    "research/spec-calls/fix-engine-api-scope.md"
+   ],
+   "body": "## Goal\nPath params scope list/get/update/delete or the route is rejected.\n\n## Context\nVerified engine review findings from session code-f4 (black-box, reproduced; probes in /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-a and /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-b, run from code/ with `node --import tsx --test <probe>`). First reproduce each finding. If one does not reproduce at your base, record it as not reproduced in your spec-calls file and leave it unchanged. After your fix each reproduced case must behave as the acceptance says. Write your own behavioral tests with literal expected values (do not copy probes). Read AGENTS.md and the module's existing tests first. Keep determinism invariants.\n\n## Acceptance\n1. For nested routes such as GET /customers/{cid}/tickets and /customers/{cid}/tickets/{id}, every path param maps to a column (a reference to the parent) and filters the operation: wrong-parent access returns 404, and an unknown parent returns 404 (api.ts:280, rowIdOf :257).\n2. A route whose path param names no column is a check-time error, so the world cannot silently ignore a param. If check.ts owns that layer, emit the issue code from api.ts's route compilation and register it in ISSUES.\n3. Literal tests for list scoping, cross-parent get/update/delete, and an unknown parent.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/api.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-engine-fields",
+   "title": "Field definitions must be self-consistent",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [],
+   "files": [
+    "code/src/engine/fields.ts",
+    "code/src/engine/issues.ts",
+    "code/test/fields.test.ts",
+    "research/spec-calls/fix-engine-fields.md"
+   ],
+   "body": "## Goal\nField definitions must be self-consistent.\n\n## Context\nVerified engine review findings from session code-f4 (black-box, reproduced; probes in /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-a and /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-b, run from code/ with `node --import tsx --test <probe>`). First reproduce each finding. If one does not reproduce at your base, record it as not reproduced in your spec-calls file and leave it unchanged. After your fix each reproduced case must behave as the acceptance says. Write your own behavioral tests with literal expected values (do not copy probes). Read AGENTS.md and the module's existing tests first. Keep determinism invariants.\n\n## Acceptance\n1. fieldSchema refuses self-contradictory definitions with precise issues (issue codes registered in ISSUES): state initial not in states; transitions naming unknown states; enum default not in values; int min > max; string default longer than maxLength or not matching pattern; an invalid regex pattern (fields.ts:166-264).\n2. Tests per case with literal issue codes and paths.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/fields.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  },
+  {
+   "key": "fix-engine-world-io",
+   "title": "World edits: nested merge-patch for meta, stripped keys raise issues, YAML round-trip identity",
+   "area": "engine",
+   "priority": "must",
+   "kind": "feature",
+   "milestone": "D3",
+   "depends_on": [
+    "engine-http-cli",
+    "docs-world-format"
+   ],
+   "files": [
+    "code/src/engine/index.ts",
+    "code/src/engine/format.ts",
+    "code/test/world-io.test.ts",
+    "research/spec-calls/fix-engine-world-io.md"
+   ],
+   "body": "## Goal\nWorld edits: nested merge-patch for meta, stripped keys raise issues, YAML round-trip identity.\n\n## Context\nVerified engine review findings from session code-f4 (black-box, reproduced; probes in /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-a and /private/tmp/claude-501/-Users-yossieliaz-worldgen-code/f1373f36-495e-4adc-89ec-9cea778d478b/scratchpad/probes-b, run from code/ with `node --import tsx --test <probe>`). First reproduce each finding. If one does not reproduce at your base, record it as not reproduced in your spec-calls file and leave it unchanged. After your fix each reproduced case must behave as the acceptance says. Write your own behavioral tests with literal expected values (do not copy probes). Read AGENTS.md and the module's existing tests first. Keep determinism invariants.\n\n## Acceptance\n1. meta edits are a real JSON merge patch at every depth: applyEdit(W,{meta:{clock:{tick:'2s'}}}) keeps clock.start (index.ts:174, format.ts:133).\n2. applyEdit never silently drops keys. Unknown keys in patch items and unknown top-level edit keys produce a schema.invalid issue at [section, key, ...path] (verified finding from worldgen-b3: the non-strict parse after the merge strips them).\n3. save then load is the identity for whitespace-only and single-line-whitespace strings (renderWorldYaml index.ts:78-84); add a property-style test over tricky strings.\n\n## Verify\n```sh\ncd ~/worldgen/code\nnpm run check\nnode --import tsx --test test/world-io.test.ts\n```\n\n## Out of scope\nAnything not listed above.\n"
+  }
+ ]
+}

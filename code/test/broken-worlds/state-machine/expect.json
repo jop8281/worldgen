@@ -1,0 +1,11 @@
+{
+  "code": "state.bad_machine",
+  "path": [
+    "entities",
+    "ticket",
+    "fields",
+    "status",
+    "initial"
+  ],
+  "layer": "schema"
+}

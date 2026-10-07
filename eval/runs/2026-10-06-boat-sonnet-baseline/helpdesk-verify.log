@@ -1,0 +1,11 @@
+
+> worldplay
+> tsx src/cli/worldplay.ts verify ../prod/worlds/helpdesk
+
+warning seed.too_few_rows_for_paging seed.customer: expected at least 75 customer rows, found 60 rows. 60 rows fit on one page. Paging never matters.
+warning seed.too_few_rows_for_paging seed.agent: expected at least 75 agent rows, found 12 rows. 12 rows fit on one page. Paging never matters.
+warning seed.too_few_rows_for_paging seed.sla_policy: expected at least 75 sla_policy rows, found 12 rows. 12 rows fit on one page. Paging never matters.
+warning seed.too_few_rows_for_paging seed.oncall_shift: expected at least 75 oncall_shift rows, found 39 rows. 39 rows fit on one page. Paging never matters.
+assign_newest_acme_ticket easy solution 1.000 noop 0.000 decoys [0.000, 0.000] prefix -
+escalate_breached_printer_ticket medium solution 1.000 noop 0.000 decoys [0.000, 0.700, 0.000] prefix -
+escalate_breached_enterprise_tickets hard solution 1.000 noop 0.000 decoys [0.571, 0.000, 0.000, 0.000, 0.000] prefix 0.857

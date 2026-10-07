@@ -1,0 +1,114 @@
+{
+  "scores": [
+    {
+      "plan": "engine-first (A)",
+      "score": 8,
+      "strengths": [
+        "Best engine on the panel. Guards, effects and graders are typed expressions that are statically type-checked against the data model (field existence through refs, enum membership), so most logic errors surface at check time with did-you-mean hints instead of at runtime.",
+        "Error messages are snapshot-tested as the engine's interface to the model. Each error carries a code, a path, file:line and a hint, which is exactly what 'precise enough for a model to fix' asks for.",
+        "Seeding by simulation evolves workflow entities through the real actions on the virtual clock. Seed rows are legal and internally consistent by construction: events exist, timestamps are monotonic, and breaches really happened.",
+        "Strongest grader discrimination. Each check must be false at seed, every prefix of the reference must score below 1, an overreach mutant must score 0, a wrong-target mutant must score below 1, and a gate-coverage lint forces collateral checks.",
+        "The checker requires scenario coverage per action: a happy path, one failure path per guard with an unchanged state hash, and a timer test. 'Implement logic, then check and test' is therefore verified by the engine, not taken on trust.",
+        "The admin surface runs on a separate port the agent cannot reach. Reset uses the SQLite backup API, and a state-hash test confirms reset equals seed.",
+        "Per-entity RNG streams keep unchanged entities byte-identical through `update`, so existing tasks keep passing."
+      ],
+      "weaknesses": [
+        "The WorldGen agent side is thin. There is no oscillation or stall detection beyond 'same error at same path 3 times', no structured backtracking protocol, no checkpoint/resume, and only about 15 hardening prompts on D9. That is the main risk in the live run.",
+        "Graders hardcode IDs (TCK-2207, AGT-0031). This is brittle when the seed is regenerated or changed by `update`, and nothing checks that the instruction gives the agent enough information to find that row.",
+        "The task stage has no tool for checking facts against the actual seed. The model can invent facts, and the plan relies on anchors alone.",
+        "Simulation-based seeding is complex and slow to build. An LLM-written simulation 'policy' may fail on unusual domains, and there is no fallback to a direct generator.",
+        "A custom expression DSL with type-checking is a lot of engine work. Expressiveness gaps on unseen domains push the model to the less-checkable py: escape hatch.",
+        "There is little on OpenAPI scale handling (large specs, circular $refs, an operation index) and no conformance diff that checks the world against the source spec."
+      ]
+    },
+    {
+      "plan": "agent-first (B)",
+      "score": 8.5,
+      "strengths": [
+        "Most robust plan for the live run. Repair errors are fingerprinted by (code, path) to detect oscillation, a stall escalates to a stronger model, a patch that adds new errors is reverted automatically, and unrepairable tasks are dropped only while at least 3 remain.",
+        "Errors carry an `owner_stage` field. Together with a typed amend(stage, patch, reason) tool and a backtrack budget, this handles failures caused by an upstream stage, and each amendment is logged as an assumption so nothing changes silently.",
+        "Deterministic OpenAPI ingest: full $ref resolution with circular-ref cutting, an operation index for large specs, narrowing, a computed schema closure, a log of dropped operations, and a conformance diff of paths, shapes and error codes. CSV ingest profiles in code, finds FKs by value overlap and flags PII.",
+        "The plan records the real-world analog (e.g. Zendesk), assumptions, out-of-scope items and open questions with default answers. A code linter checks the plan, and an engine check confirms that every planned item exists in the result.",
+        "Logic tests run against an auto-generated fixture seed, so stage 3 is decoupled from stage 4.",
+        "A query_seed tool and anchor rows keep tasks tied to real seed facts. Model-written decoys sit on top of code-generated mutants (truncation, collateral damage).",
+        "The 30-prompt eval harness includes odd domains, large OpenAPI specs and messy CSVs. The plan also has checkpoint/--resume, saved transcripts, per-role model config, temperature 0, and a seed migration that preserves existing rows byte for byte."
+      ],
+      "weaknesses": [
+        "The simpleeval/CEL-like expressions are not statically type-checked against the model, so more errors appear at runtime than in plan A.",
+        "Workflow-state seed rows come from state-conditional generators rather than simulation, so their history (event rows, timestamps that line up with state) can be inconsistent. A plausibility linter catches only part of this.",
+        "Reference solutions may include clock moves through the admin API, which the agent under test cannot make. The plan does not separate a task's pre-run setup from the agent's own actions.",
+        "It does not say whether /_engine admin routes are reachable by the agent being tested.",
+        "The collateral cap at 0.5 is weaker discrimination than a hard gate.",
+        "It is the most ambitious plan with only about 10 days and no cut lines, so there is a risk of breadth over a solid engine."
+      ]
+    },
+    {
+      "plan": "delivery-first (C)",
+      "score": 7,
+      "strengths": [
+        "A thin end-to-end slice by Day 2, explicit cut lines, and an engine feature-freeze give the most realistic chance of shipping something that works.",
+        "Graders use predicates relative to the seed (seed.*, seed_now) instead of hardcoded IDs, so they survive seed regeneration and `update`.",
+        "It has the richest set of code-generated mutants, including running the reference twice to test idempotence (e.g. a double refund) and an over-broad write. A GRADER_TRIVIAL flag catches checks that the seed already satisfies.",
+        "The stress suite includes a vague prompt and an impossible prompt that must fail honestly. This tests the 'knows when to stop' requirement directly.",
+        "A deliverables checklist maps each spec item to where it lives. The plan also includes concrete Slack questions, a DECISIONS.md, a Hypothesis property test that failed calls leave state unchanged, a determinism double-run, recorded-LLM CI fixtures, and an X-Actor header for workflows that depend on roles.",
+        "Seeded 'needle' rows are recorded in needles.json so task writers can target them."
+      ],
+      "weaknesses": [
+        "The spec requires all three input types, but OpenAPI/CSV ingest, mutant verification, collateral checks and stage-3 scenario tests are only SHOULD items. Under time pressure they may not ship.",
+        "The primary custom-logic mechanism is Python handlers. The checker cannot type-check them and they fail at runtime with vague errors, which hurts self-repair on unseen domains.",
+        "The seed comes from a model-written generator.py. That is more code where the model can go wrong, and an AST lint is a weak sandbox.",
+        "A collateral failure only caps the score at 0.5, and Python graders are allowed, which weakens the 'graders are declarative and checkable' guarantee.",
+        "Only 150 rows minimum per core entity and no seeding by simulation, so realism depends on the generator's quality.",
+        "Repair is simpler (one regeneration on no progress), with no ownership routing to upstream stages beyond a model-justified choice."
+      ]
+    }
+  ],
+  "best_ideas_to_keep": [
+    "Declarative-first logic: per-entity state machines, actions made of guards and effects, and timers, with a narrow py: ctx escape hatch that runs inside the same transaction and is flagged in the report (A/B).",
+    "Statically type-check every expression (guards, effects, grader checks) against the data model, with did-you-mean hints, and snapshot-test the error messages as an API (A).",
+    "A stable error catalog. Each error has code, path, file:line, expected/actual, hint, and owner_stage to route repairs (A+B).",
+    "State-machine fields marked managed_by/via: action, so a generic PATCH cannot bypass the workflow, for fidelity to the real software (A/C).",
+    "One SQLite transaction per request, plus a property test that every failed call leaves the state hash unchanged and does not advance the clock (A/C).",
+    "Virtual clock: fixed start, +1s per committed write, reads do not advance it, and jumps only through admin; IDs from per-entity counters; total ordering with an id tiebreak; and a state-hash test that reset equals seed (A).",
+    "Admin/inspect API on a separate port or prefix the agent cannot reach. It provides state, diff vs seed, a call log with per-call diffs, reset, clock, grade and hash (A+C).",
+    "Required per-action scenario tests (a happy path plus one failure path per guard with an unchanged state hash, plus a timer test), run against a small auto-generated fixture seed so stage 3 does not depend on stage 4 (A+B).",
+    "The LLM writes a seed generator spec, not rows. Workflow entities are evolved through real actions on the virtual clock where possible. The result is frozen to seed.lock with a hash and checked by a plausibility linter (every state present, none above 70%, causal timestamps, scenario rows present) (A+B+C).",
+    "Grader shape is sum(weight * check) * product(gates). Each check must be false at seed (GRADER_TRIVIAL), and an unchanged_except collateral gate is mandatory unless the task declares an exemption with a reason (A/B/C).",
+    "Verify suite in code: reference=1, noop=0, every prefix below 1, an overreach mutant scoring 0, a wrong-target/sibling mutant below 1, the reference run twice below 1 where idempotence matters, a first-page-only mutant, and LLM-written decoys below 1 (A+B+C).",
+    "Seed-relative selectors (seed.*, seed_now) and anchor/needle rows instead of hardcoded IDs (C+A).",
+    "A query_seed tool in the task stage so instructions rely only on facts that exist in the seed (B).",
+    "Deterministic OpenAPI ingest (ref resolution, operation index, narrowing, schema closure, dropped-operations log) plus a conformance diff. Deterministic CSV profiling with FK detection by value overlap (B).",
+    "The plan names a real_world_analog and records assumptions with rationale, out_of_scope items, and open_questions with default answers. A code linter checks the plan, and an engine check confirms every planned item exists in the result (B).",
+    "Repair loop: patches by default and full rewrite on escalation, (code, path) fingerprints for oscillation, stall leads to a stronger model, automatic revert of regressions, typed amend() backtracking within a budget, and dropping a task only while 3 or more remain (B).",
+    "On failure, write to <out>.FAILED/ with FAILURE.md (remaining errors, what was tried, suspected cause, suggested narrower request) and a non-zero exit (A/B/C).",
+    "update builds a plan delta, analyzes impact over a dependency graph, re-runs only the affected stages, keeps existing rows byte-identical, and blocks on regressions in existing tasks (A/B).",
+    "Checkpoint each stage and support --resume, save transcripts, log events in run.jsonl with tokens, cost and latency per call, and use worldgen.toml for per-role models and budgets (B/C).",
+    "A thin end-to-end slice early, cut lines, and a stress/eval suite that includes vague and impossible prompts that must fail honestly (C+B)."
+  ],
+  "gaps_in_all_plans": [
+    "None of the plans has a solvability check: no plan confirms that a task's instruction plus the API the agent can reach is enough to complete the task. The checker should replay the reference using only agent-facing routes, never admin or clock endpoints, and reject captured IDs that the instruction does not identify and no search path reaches.",
+    "None of the plans cleanly separates task setup (pre-run clock advance or state preconditions owned by the harness) from the agent's actions. B lets references move the clock, which a real agent cannot do.",
+    "Agent-facing API documentation: none of the plans requires an OpenAPI/tool description for each world so the agent being tested can discover its routes. C lists the export as a bonus and B only gets it implicitly from FastAPI.",
+    "Robustness to alternative valid solutions: only A mentions it briefly. Verify should include at least one alternative correct path (e.g. a different but valid search, or a different order of steps) that must also score 1, so graders check outcomes and do not overfit to the reference.",
+    "Fidelity linting for description inputs: there is no check against real-software conventions (REST naming, pagination style, status codes, error envelope, required timestamps). B's real_world_analog is only a prompt hint.",
+    "Live-run time limits: no plan budgets or parallelizes per-task verify and repair to fit a hard wall-clock limit, or measures p95 build time.",
+    "Sandboxing of the Python escape hatch: AST scanning alone is weak. A subprocess with CPU/memory/time limits and no network, run behind the ctx API, is safer.",
+    "Concurrent agent calls: the plans use a global lock but do not spell out deterministic ordering under concurrency or how call-log order is defined.",
+    "Tasks graded on an answer (e.g. 'how many tickets breached?') are not supported except as an open question in A, so read-heavy tasks cannot be graded.",
+    "Realism of seed text beyond distributions: no plan checks diversity or duplication of free-text fields or name collisions, except B's check for duplicate display names among people."
+  ],
+  "recommended_decisions": [
+    "Use declarative state machines and actions with a typed expression language, plus a py: escape hatch through ctx that is flagged in the report. Static checkability is what makes self-repair converge on unseen prompts.",
+    "Type-check expressions against the model at check time (A), not with simpleeval at runtime (B). Errors found at check time are cheaper to repair than runtime tracebacks.",
+    "Seed: the LLM writes a generator spec; workflow entities are evolved through real actions (simulation) and fall back to state-conditional generators plus an invariant sweep if simulation fails. Simulation is legal by construction, and the fallback keeps unusual domains working.",
+    "Graders: weighted checks times hard gates (a collateral failure gives 0, not 0.5), each check false at seed, seed-relative selectors plus named anchors. This gives sharp discrimination that survives updates.",
+    "Verify = ref=1, noop=0, prefixes<1, overreach=0, wrong-target<1, reference twice<1 where relevant, decoys<1, plus one alternative valid solution=1, with references limited to agent-facing routes. This catches both weak graders and graders that overfit.",
+    "The admin API runs on a separate port; task setup (clock advance, preconditions) is declared in the task and run by the harness, never in the reference. The agent must not be able to inspect, reset or time-travel.",
+    "Clock: +1s per committed write, reads and failed calls do not advance it, jumps only through admin, and timers fire in chronological order. This makes runs deterministic with strictly ordered timestamps.",
+    "Make OpenAPI and CSV ingest MUST items, deterministic and in code, with a conformance diff for OpenAPI. The spec lists all three input types as minimum features.",
+    "Repair: JSON patch by default, full rewrite on oscillation, a stronger model on stall, owner_stage routing to an amend() backtrack, and a global USD/time cap. This is the most convergent design without runaway cost.",
+    "Run non-interactively by default: open_questions get recorded default answers in plan.md, with an optional --interactive or --pause-after-plan. The live run is likely unattended, and this still meets 'no silent guessing'.",
+    "Build a thin end-to-end slice by Day 2, then deepen it, and keep an eval suite of 20-30 prompts including vague and impossible ones. Pass rate on unseen prompts is what decides the trial.",
+    "Write failed builds to <out>.FAILED/ with FAILURE.md and a non-zero exit, and never write to the success path. This makes 'knows when to stop' easy to check mechanically."
+  ]
+}

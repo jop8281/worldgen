@@ -1,0 +1,21 @@
+[commands]
+test = "bash scripts/factory-check.sh"
+lint = "cd code && bun run typecheck"
+
+[paths]
+junit = ".factory/junit.xml"
+source = "code/src"
+tests = "code/test"
+protected = [
+  "factory.toml",
+  "scripts/factory-check.sh",
+  "REVIEW.md",
+  "AGENTS.md",
+  ".github/",
+  "code/package.json",
+  "code/bun.lock",
+  "code/tsconfig.json",
+  "code/tsconfig.engine-core.json",
+  "code/src/engine/",
+  "research/decisions.md",
+]

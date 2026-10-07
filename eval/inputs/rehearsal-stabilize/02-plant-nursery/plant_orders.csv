@@ -1,0 +1,13 @@
+order_id,customer_email,plant,pot_size,qty,unit_price_cents,status,placed_at,shipped_at
+PO-1001,ava@example.com,Monstera deliciosa,medium,1,3400,shipped,2026-09-02T10:15:00Z,2026-09-04T09:00:00Z
+PO-1002,ben@example.com,Snake plant,small,3,1200,shipped,2026-09-03T14:40:00Z,2026-09-05T09:00:00Z
+PO-1003,cara@example.com,Fiddle leaf fig,large,1,6800,cancelled,2026-09-05T08:05:00Z,
+PO-1004,ava@example.com,Pothos,small,2,900,shipped,2026-09-08T17:20:00Z,2026-09-10T09:00:00Z
+PO-1005,dev@example.com,Olive tree,large,1,8900,potted,2026-09-14T11:00:00Z,
+PO-1006,ben@example.com,Peace lily,medium,2,2100,placed,2026-09-20T19:45:00Z,
+PO-1007,eli@example.com,ZZ plant,medium,1,2600,shipped,2026-09-21T09:30:00Z,2026-09-23T09:00:00Z
+PO-1008,cara@example.com,Calathea,small,4,1500,potted,2026-09-24T13:10:00Z,
+PO-1009,dev@example.com,Rubber plant,medium,1,2900,placed,2026-09-28T16:00:00Z,
+PO-1010,fay@example.com,Bird of paradise,large,1,7400,placed,2026-09-30T10:05:00Z,
+PO-1011,eli@example.com,String of pearls,small,2,1100,cancelled,2026-10-01T12:00:00Z,
+PO-1012,ava@example.com,Monstera deliciosa,large,1,5200,placed,2026-10-03T15:35:00Z,

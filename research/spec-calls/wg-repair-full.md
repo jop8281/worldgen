@@ -1,0 +1,5 @@
+# Repair-loop exception artifacts
+
+- Call: exceptions remain exceptions to library/CLI/eval callers, while `run_finished` records `crashed` and REPORT.md/capsule.json retain completed attempts and known or unknown billing. Why: a persistence failure must not erase a settled charge or be described as a normal returned stop. Reversible: yes, the event reader accepts the additional result kind without changing normal done/stopped results.
+- Call: record an attempt before writing its diagnostic dump, and attempt report/capsule recovery independently before rethrowing the original error. Why: a single dump or report failure must not destroy all other evidence; a permanently unwritable path still cannot be promised an artifact. Reversible: yes.
+- Call: crash events use `worldWritten: null` when rollback failed and persistence cannot be proven; reports state this uncertainty explicitly. Why: claiming either success or an unchanged world would exceed the available evidence. Normal done/stopped events retain their existing boolean values. Reversible: yes.

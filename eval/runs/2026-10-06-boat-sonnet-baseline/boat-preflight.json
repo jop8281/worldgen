@@ -1,0 +1,6 @@
+{
+  "provider": "boat",
+  "operation": "list sandboxes",
+  "sandboxes_created": 0,
+  "http_status": 200
+}

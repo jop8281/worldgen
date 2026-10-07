@@ -1,0 +1,37 @@
+[
+  {
+    "time": "2026-10-06",
+    "decision": "Run swfactory method in-session, not its runtime",
+    "why": "No Linear intake, Python-only setup, API-key billing, no tests in target (verified by 8-agent assessment)"
+  },
+  {
+    "time": "2026-10-06",
+    "decision": "Target TypeScript per A-01",
+    "why": "Committed decision; Python engine-v1 retired via decision unit"
+  },
+  {
+    "time": "2026-10-06",
+    "decision": "Base factory branches on origin/scaffold/agents-md-and-type-sketch",
+    "why": "main lacks the type sketch; no PRs exist yet"
+  },
+  {
+    "time": "2026-10-06",
+    "decision": "Restart driver as v2",
+    "why": "wg-judge stranded by a brittle out-of-scope test; wg-input-description oscillating; driver cannot take new orders mid-run"
+  },
+  {
+    "time": "2026-10-06",
+    "decision": "Land engine-sandbox at e3de8a4, split heap bound into engine-sandbox-heap",
+    "why": "node:vm cannot bound heap in-process; rebuilding would hit the same wall; engine-freeze now depends on the follow-up"
+  },
+  {
+    "time": "2026-10-06",
+    "decision": "Standing order 15 (scope escape for brittle tests)",
+    "why": "file fences turned a test pinning an import list into a hard block"
+  },
+  {
+    "time": "2026-10-06",
+    "decision": "U-11 Claude Code transport for WorldGen",
+    "why": "user instruction, supersedes LLM_KEY"
+  }
+]

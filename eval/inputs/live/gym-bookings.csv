@@ -1,0 +1,156 @@
+booking_id,class_id,class_name,instructor,studio,starts_at,duration_min,capacity,member_id,booked_at,status
+B0001,C008,Morning Flow Yoga,Ben Okafor,studio-a,2026-10-01T07:00:00Z,60,8,M059,2026-09-26T05:06:00Z,attended
+B0002,C008,Morning Flow Yoga,Ben Okafor,studio-a,2026-10-01T07:00:00Z,60,8,M024,2026-09-26T19:47:00Z,attended
+B0003,C008,Morning Flow Yoga,Ben Okafor,studio-a,2026-10-01T07:00:00Z,60,8,M035,2026-09-26T21:26:00Z,no_show
+B0004,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M026,2026-09-27T11:00:00Z,attended
+B0005,C008,Morning Flow Yoga,Ben Okafor,studio-a,2026-10-01T07:00:00Z,60,8,M022,2026-09-27T15:16:00Z,no_show
+B0006,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M005,2026-09-27T15:45:00Z,attended
+B0007,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M048,2026-09-27T16:21:00Z,no_show
+B0008,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M018,2026-09-27T20:28:00Z,cancelled
+B0009,C008,Morning Flow Yoga,Ben Okafor,studio-a,2026-10-01T07:00:00Z,60,8,M051,2026-09-28T07:14:00Z,attended
+B0010,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M058,2026-09-28T12:40:00Z,attended
+B0011,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M012,2026-09-28T15:21:00Z,attended
+B0012,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M049,2026-09-28T19:12:00Z,cancelled
+B0013,C007,Kettlebell Strength,Chloe Varga,studio-b,2026-10-02T17:00:00Z,50,8,M033,2026-09-29T02:28:00Z,attended
+B0014,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M051,2026-09-29T02:33:00Z,attended
+B0015,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M034,2026-09-29T05:03:00Z,attended
+B0016,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M029,2026-09-29T13:15:00Z,attended
+B0017,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M018,2026-09-29T17:23:00Z,no_show
+B0018,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M049,2026-09-29T21:29:00Z,attended
+B0019,C008,Morning Flow Yoga,Ben Okafor,studio-a,2026-10-01T07:00:00Z,60,8,M004,2026-09-30T02:33:00Z,attended
+B0020,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M035,2026-09-30T05:53:00Z,attended
+B0021,C008,Morning Flow Yoga,Ben Okafor,studio-a,2026-10-01T07:00:00Z,60,8,M018,2026-09-30T08:49:00Z,attended
+B0022,C007,Kettlebell Strength,Chloe Varga,studio-b,2026-10-02T17:00:00Z,50,8,M058,2026-09-30T11:32:00Z,attended
+B0023,C007,Kettlebell Strength,Chloe Varga,studio-b,2026-10-02T17:00:00Z,50,8,M042,2026-09-30T12:14:00Z,attended
+B0024,C007,Kettlebell Strength,Chloe Varga,studio-b,2026-10-02T17:00:00Z,50,8,M057,2026-09-30T12:52:00Z,attended
+B0025,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M019,2026-09-30T14:50:00Z,attended
+B0026,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M052,2026-09-30T15:13:00Z,attended
+B0027,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M011,2026-09-30T16:13:00Z,attended
+B0028,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M058,2026-09-30T18:45:00Z,attended
+B0029,C009,Boxing Basics,Dev Malhotra,studio-b,2026-10-05T17:00:00Z,60,8,M035,2026-09-30T21:40:00Z,attended
+B0030,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M045,2026-09-30T21:56:00Z,attended
+B0031,C009,Boxing Basics,Dev Malhotra,studio-b,2026-10-05T17:00:00Z,60,8,M001,2026-10-01T00:23:00Z,attended
+B0032,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M031,2026-10-01T00:34:00Z,attended
+B0033,C001,Boxing Basics,Chloe Varga,studio-b,2026-10-01T17:00:00Z,60,10,M016,2026-10-01T01:55:00Z,cancelled
+B0034,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M040,2026-10-01T02:44:00Z,cancelled
+B0035,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M037,2026-10-01T03:23:00Z,cancelled
+B0036,C007,Kettlebell Strength,Chloe Varga,studio-b,2026-10-02T17:00:00Z,50,8,M041,2026-10-01T03:24:00Z,attended
+B0037,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M003,2026-10-01T04:26:00Z,no_show
+B0038,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M004,2026-10-01T07:50:00Z,cancelled
+B0039,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M027,2026-10-01T08:05:00Z,attended
+B0040,C007,Kettlebell Strength,Chloe Varga,studio-b,2026-10-02T17:00:00Z,50,8,M015,2026-10-01T08:10:00Z,attended
+B0041,C012,Kettlebell Strength,Ana Duarte,studio-b,2026-10-05T06:00:00Z,50,8,M038,2026-10-01T09:55:00Z,attended
+B0042,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M033,2026-10-01T11:34:00Z,attended
+B0043,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M015,2026-10-01T13:39:00Z,attended
+B0044,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M001,2026-10-01T16:39:00Z,attended
+B0045,C012,Kettlebell Strength,Ana Duarte,studio-b,2026-10-05T06:00:00Z,50,8,M059,2026-10-01T18:38:00Z,attended
+B0046,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M060,2026-10-01T19:55:00Z,attended
+B0047,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M047,2026-10-01T20:24:00Z,no_show
+B0048,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M043,2026-10-02T01:35:00Z,attended
+B0049,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M054,2026-10-02T02:21:00Z,attended
+B0050,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M021,2026-10-02T03:18:00Z,attended
+B0051,C003,Morning Flow Yoga,Erin Walsh,studio-a,2026-10-02T17:00:00Z,60,14,M007,2026-10-02T05:36:00Z,attended
+B0052,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M020,2026-10-02T05:41:00Z,booked
+B0053,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M058,2026-10-02T06:13:00Z,attended
+B0054,C002,Pilates Core,Chloe Varga,studio-a,2026-10-10T19:00:00Z,55,10,M055,2026-10-02T07:00:00Z,booked
+B0055,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M027,2026-10-02T07:33:00Z,attended
+B0056,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M006,2026-10-02T09:39:00Z,booked
+B0057,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M020,2026-10-02T12:01:00Z,attended
+B0058,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M029,2026-10-02T12:32:00Z,attended
+B0059,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M036,2026-10-02T12:39:00Z,attended
+B0060,C009,Boxing Basics,Dev Malhotra,studio-b,2026-10-05T17:00:00Z,60,8,M030,2026-10-02T12:43:00Z,attended
+B0061,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M004,2026-10-02T13:21:00Z,attended
+B0062,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M035,2026-10-02T14:12:00Z,attended
+B0063,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M058,2026-10-02T14:16:00Z,booked
+B0064,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M009,2026-10-02T14:41:00Z,booked
+B0065,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M037,2026-10-02T18:21:00Z,attended
+B0066,C002,Pilates Core,Chloe Varga,studio-a,2026-10-10T19:00:00Z,55,10,M020,2026-10-02T19:43:00Z,booked
+B0067,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M046,2026-10-02T21:12:00Z,attended
+B0068,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M031,2026-10-03T02:50:00Z,attended
+B0069,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M002,2026-10-03T03:00:00Z,booked
+B0070,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M009,2026-10-03T03:24:00Z,attended
+B0071,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M012,2026-10-03T03:28:00Z,attended
+B0072,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M004,2026-10-03T04:04:00Z,attended
+B0073,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M027,2026-10-03T04:40:00Z,attended
+B0074,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M031,2026-10-03T05:17:00Z,booked
+B0075,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M034,2026-10-03T09:03:00Z,booked
+B0076,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M036,2026-10-03T09:09:00Z,attended
+B0077,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M003,2026-10-03T09:25:00Z,no_show
+B0078,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M054,2026-10-03T09:27:00Z,booked
+B0079,C012,Kettlebell Strength,Ana Duarte,studio-b,2026-10-05T06:00:00Z,50,8,M050,2026-10-03T10:01:00Z,attended
+B0080,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M011,2026-10-03T10:05:00Z,booked
+B0081,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M016,2026-10-03T11:33:00Z,attended
+B0082,C002,Pilates Core,Chloe Varga,studio-a,2026-10-10T19:00:00Z,55,10,M058,2026-10-03T11:55:00Z,booked
+B0083,C012,Kettlebell Strength,Ana Duarte,studio-b,2026-10-05T06:00:00Z,50,8,M031,2026-10-03T12:53:00Z,attended
+B0084,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M018,2026-10-03T13:01:00Z,cancelled
+B0085,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M017,2026-10-03T14:13:00Z,attended
+B0086,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M030,2026-10-03T15:09:00Z,booked
+B0087,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M004,2026-10-03T18:50:00Z,attended
+B0088,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M019,2026-10-03T19:03:00Z,booked
+B0089,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M050,2026-10-03T19:20:00Z,booked
+B0090,C016,HIIT Circuit,Ben Okafor,studio-a,2026-10-04T06:00:00Z,40,8,M050,2026-10-03T19:55:00Z,cancelled
+B0091,C012,Kettlebell Strength,Ana Duarte,studio-b,2026-10-05T06:00:00Z,50,8,M007,2026-10-03T20:20:00Z,no_show
+B0092,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M046,2026-10-03T21:18:00Z,cancelled
+B0093,C009,Boxing Basics,Dev Malhotra,studio-b,2026-10-05T17:00:00Z,60,8,M012,2026-10-03T22:09:00Z,cancelled
+B0094,C009,Boxing Basics,Dev Malhotra,studio-b,2026-10-05T17:00:00Z,60,8,M003,2026-10-03T22:38:00Z,no_show
+B0095,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M004,2026-10-04T00:31:00Z,booked
+B0096,C011,Spin 45,Erin Walsh,cycle-room,2026-10-13T19:00:00Z,45,12,M015,2026-10-04T02:46:00Z,booked
+B0097,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M041,2026-10-04T04:04:00Z,booked
+B0098,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M039,2026-10-04T05:12:00Z,booked
+B0099,C015,HIIT Circuit,Ben Okafor,studio-b,2026-10-08T18:00:00Z,40,8,M009,2026-10-04T06:11:00Z,booked
+B0100,C012,Kettlebell Strength,Ana Duarte,studio-b,2026-10-05T06:00:00Z,50,8,M013,2026-10-04T07:46:00Z,attended
+B0101,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M046,2026-10-04T08:33:00Z,attended
+B0102,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M055,2026-10-04T08:53:00Z,cancelled
+B0103,C009,Boxing Basics,Dev Malhotra,studio-b,2026-10-05T17:00:00Z,60,8,M016,2026-10-04T09:42:00Z,attended
+B0104,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M010,2026-10-04T10:35:00Z,attended
+B0105,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M028,2026-10-04T11:47:00Z,attended
+B0106,C011,Spin 45,Erin Walsh,cycle-room,2026-10-13T19:00:00Z,45,12,M038,2026-10-04T12:23:00Z,booked
+B0107,C002,Pilates Core,Chloe Varga,studio-a,2026-10-10T19:00:00Z,55,10,M035,2026-10-04T12:27:00Z,booked
+B0108,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M022,2026-10-04T13:54:00Z,booked
+B0109,C009,Boxing Basics,Dev Malhotra,studio-b,2026-10-05T17:00:00Z,60,8,M005,2026-10-04T14:38:00Z,attended
+B0110,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M023,2026-10-04T14:43:00Z,booked
+B0111,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M045,2026-10-04T16:29:00Z,booked
+B0112,C011,Spin 45,Erin Walsh,cycle-room,2026-10-13T19:00:00Z,45,12,M041,2026-10-04T17:31:00Z,booked
+B0113,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M052,2026-10-04T19:17:00Z,booked
+B0114,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M040,2026-10-04T20:16:00Z,booked
+B0115,C012,Kettlebell Strength,Ana Duarte,studio-b,2026-10-05T06:00:00Z,50,8,M058,2026-10-04T20:27:00Z,attended
+B0116,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M017,2026-10-04T21:59:00Z,attended
+B0117,C010,Kettlebell Strength,Chloe Varga,studio-b,2026-10-06T12:00:00Z,50,14,M054,2026-10-04T23:00:00Z,attended
+B0118,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M008,2026-10-05T00:08:00Z,booked
+B0119,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M050,2026-10-05T00:28:00Z,booked
+B0120,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M027,2026-10-05T02:38:00Z,booked
+B0121,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M015,2026-10-05T03:49:00Z,booked
+B0122,C011,Spin 45,Erin Walsh,cycle-room,2026-10-13T19:00:00Z,45,12,M002,2026-10-05T04:29:00Z,booked
+B0123,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M035,2026-10-05T05:35:00Z,booked
+B0124,C002,Pilates Core,Chloe Varga,studio-a,2026-10-10T19:00:00Z,55,10,M044,2026-10-05T06:04:00Z,booked
+B0125,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M037,2026-10-05T07:28:00Z,booked
+B0126,C004,HIIT Circuit,Ben Okafor,studio-a,2026-10-05T17:00:00Z,40,10,M018,2026-10-05T08:23:00Z,attended
+B0127,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M012,2026-10-05T08:33:00Z,cancelled
+B0128,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M005,2026-10-05T09:27:00Z,cancelled
+B0129,C009,Boxing Basics,Dev Malhotra,studio-b,2026-10-05T17:00:00Z,60,8,M053,2026-10-05T09:46:00Z,attended
+B0130,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M016,2026-10-05T11:13:00Z,attended
+B0131,C011,Spin 45,Erin Walsh,cycle-room,2026-10-13T19:00:00Z,45,12,M018,2026-10-05T11:18:00Z,booked
+B0132,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M036,2026-10-05T13:18:00Z,booked
+B0133,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M020,2026-10-05T13:19:00Z,booked
+B0134,C015,HIIT Circuit,Ben Okafor,studio-b,2026-10-08T18:00:00Z,40,8,M024,2026-10-05T14:45:00Z,booked
+B0135,C011,Spin 45,Erin Walsh,cycle-room,2026-10-13T19:00:00Z,45,12,M034,2026-10-06T00:02:00Z,booked
+B0136,C013,Spin 45,Erin Walsh,cycle-room,2026-10-06T12:00:00Z,45,12,M014,2026-10-06T01:40:00Z,cancelled
+B0137,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M025,2026-10-06T02:18:00Z,booked
+B0138,C002,Pilates Core,Chloe Varga,studio-a,2026-10-10T19:00:00Z,55,10,M054,2026-10-06T04:52:00Z,booked
+B0139,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M001,2026-10-06T06:06:00Z,booked
+B0140,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M007,2026-10-06T06:36:00Z,booked
+B0141,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M052,2026-10-06T07:19:00Z,waitlisted
+B0142,C011,Spin 45,Erin Walsh,cycle-room,2026-10-13T19:00:00Z,45,12,M055,2026-10-06T08:59:00Z,booked
+B0143,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M018,2026-10-06T09:02:00Z,booked
+B0144,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M048,2026-10-06T16:52:00Z,cancelled
+B0145,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M038,2026-10-06T18:21:00Z,waitlisted
+B0146,C014,Morning Flow Yoga,Dev Malhotra,studio-a,2026-10-11T17:00:00Z,60,14,M010,2026-10-06T18:50:00Z,waitlisted
+B0147,C002,Pilates Core,Chloe Varga,studio-a,2026-10-10T19:00:00Z,55,10,M048,2026-10-06T20:02:00Z,booked
+B0148,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M015,2026-10-06T21:05:00Z,waitlisted
+B0149,C005,Morning Flow Yoga,Chloe Varga,studio-b,2026-10-09T18:00:00Z,60,10,M033,2026-10-06T22:21:00Z,booked
+B0150,C015,HIIT Circuit,Ben Okafor,studio-b,2026-10-08T18:00:00Z,40,8,M034,2026-10-06T23:12:00Z,booked
+B0151,C006,Boxing Basics,Erin Walsh,studio-b,2026-10-12T19:00:00Z,60,10,M051,2026-10-07T00:07:00Z,waitlisted
+B0152,C011,Spin 45,Erin Walsh,cycle-room,2026-10-13T19:00:00Z,45,12,M047,2026-10-07T00:25:00Z,cancelled
+B0153,C002,Pilates Core,Chloe Varga,studio-a,2026-10-10T19:00:00Z,55,10,M008,2026-10-07T02:35:00Z,booked
+B0154,C015,HIIT Circuit,Ben Okafor,studio-b,2026-10-08T18:00:00Z,40,8,M037,2026-10-07T02:42:00Z,booked
+B0155,C015,HIIT Circuit,Ben Okafor,studio-b,2026-10-08T18:00:00Z,40,8,M013,2026-10-07T04:37:00Z,cancelled

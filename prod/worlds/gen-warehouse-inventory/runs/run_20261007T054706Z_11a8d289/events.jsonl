@@ -1,0 +1,17 @@
+{"at":"2026-10-07T05:47:06.031Z","runId":"run_20261007T054706Z_11a8d289","t":"run_started","mode":"create","input":"description","model":"claude-sonnet-5-5","budgetUsd":5,"transport":"claude-cli"}
+{"at":"2026-10-07T05:47:06.033Z","runId":"run_20261007T054706Z_11a8d289","t":"step_started","step":"plan","reason":"planned"}
+{"at":"2026-10-07T05:49:47.018Z","runId":"run_20261007T054706Z_11a8d289","t":"attempt","step":"plan","n":1,"ms":160964,"usage":{"inputTokens":2,"outputTokens":26817,"cacheReadTokens":0,"cacheWriteTokens":43708},"costUsd":0.443006,"outcome":{"kind":"accepted","warnings":0},"dump":"runs/run_20261007T054706Z_11a8d289/001-plan-1.json"}
+{"at":"2026-10-07T05:49:47.019Z","runId":"run_20261007T054706Z_11a8d289","t":"step_finished","step":"plan","attempts":1,"ms":160986,"costUsd":0.443006}
+{"at":"2026-10-07T05:49:47.022Z","runId":"run_20261007T054706Z_11a8d289","t":"step_started","step":"model","reason":"planned"}
+{"at":"2026-10-07T05:50:29.444Z","runId":"run_20261007T054706Z_11a8d289","t":"attempt","step":"model","n":1,"ms":42350,"usage":{"inputTokens":4,"outputTokens":7709,"cacheReadTokens":83406,"cacheWriteTokens":75352},"costUsd":0.3951872,"outcome":{"kind":"accepted","warnings":0},"dump":"runs/run_20261007T054706Z_11a8d289/002-model-1.json"}
+{"at":"2026-10-07T05:50:29.445Z","runId":"run_20261007T054706Z_11a8d289","t":"step_finished","step":"model","attempts":1,"ms":42423,"costUsd":0.3951872}
+{"at":"2026-10-07T05:50:29.445Z","runId":"run_20261007T054706Z_11a8d289","t":"step_started","step":"workflow","reason":"planned"}
+{"at":"2026-10-07T05:51:05.609Z","runId":"run_20261007T054706Z_11a8d289","t":"attempt","step":"workflow","n":1,"ms":35878,"usage":{"inputTokens":2,"outputTokens":6726,"cacheReadTokens":0,"cacheWriteTokens":80591},"costUsd":0.389628,"outcome":{"kind":"accepted","warnings":4},"dump":"runs/run_20261007T054706Z_11a8d289/003-workflow-1.json"}
+{"at":"2026-10-07T05:51:05.609Z","runId":"run_20261007T054706Z_11a8d289","t":"step_finished","step":"workflow","attempts":1,"ms":36164,"costUsd":0.389628}
+{"at":"2026-10-07T05:51:05.610Z","runId":"run_20261007T054706Z_11a8d289","t":"step_started","step":"seed","reason":"planned"}
+{"at":"2026-10-07T05:54:42.245Z","runId":"run_20261007T054706Z_11a8d289","t":"attempt","step":"seed","n":1,"ms":216169,"usage":{"inputTokens":2,"outputTokens":28478,"cacheReadTokens":0,"cacheWriteTokens":81705},"costUsd":0.611604,"outcome":{"kind":"accepted","warnings":1},"dump":"runs/run_20261007T054706Z_11a8d289/004-seed-1.json"}
+{"at":"2026-10-07T05:54:42.247Z","runId":"run_20261007T054706Z_11a8d289","t":"step_finished","step":"seed","attempts":1,"ms":216637,"costUsd":0.611604}
+{"at":"2026-10-07T05:54:42.247Z","runId":"run_20261007T054706Z_11a8d289","t":"step_started","step":"tasks","reason":"planned"}
+{"at":"2026-10-07T05:58:50.240Z","runId":"run_20261007T054706Z_11a8d289","t":"attempt","step":"tasks","n":1,"ms":246240,"usage":{"inputTokens":2,"outputTokens":36197,"cacheReadTokens":0,"cacheWriteTokens":88960},"costUsd":0.717814,"outcome":{"kind":"accepted","warnings":1},"dump":"runs/run_20261007T054706Z_11a8d289/005-tasks-1.json"}
+{"at":"2026-10-07T05:58:50.243Z","runId":"run_20261007T054706Z_11a8d289","t":"step_finished","step":"tasks","attempts":1,"ms":247996,"costUsd":0.717814}
+{"at":"2026-10-07T05:58:50.243Z","runId":"run_20261007T054706Z_11a8d289","t":"run_finished","ms":704212,"costUsd":2.5572392,"worldWritten":true,"result":{"kind":"done","worldDir":"/Users/yossieliaz/wt/regress-warehouse/prod/worlds/gen-warehouse-inventory"}}

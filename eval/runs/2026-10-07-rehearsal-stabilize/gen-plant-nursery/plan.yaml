@@ -1,0 +1,339 @@
+revision: 1
+software: Shopify-style order desk for a plant nursery (orders, fulfilment and plant stock)
+summary: PlantDesk is an order desk for an online plant shop. Customers place orders for plants in a pot size. Staff pay-confirm, ship or cancel the orders. Paying an order reserves stock from the plant catalog. Cancelling a paid order puts the stock back. Pending orders that sit unpaid for 5 days are cancelled by a daily job. The imported plant_orders CSV seeds the first 12 orders, and the seed adds generated orders so the order list spans two pages.
+clock:
+  start: 2026-10-07T09:00:00Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: customer
+    purpose: A shopper identified by a unique email. Derived from the distinct customer_email values in the CSV, plus a few generated ones.
+    keyFields:
+      - name
+      - email
+  - name: plant
+    purpose: A catalog plant with a base price and a stock count. Derived from the distinct plant names in the CSV, plus a few generated ones.
+    keyFields:
+      - name
+      - price_cents
+      - stock_qty
+      - active
+  - name: plant_order
+    purpose: 'One order line: one customer, one plant, one pot size and a quantity. The unit price is a snapshot taken at placement. It moves through pending, paid, shipped and cancelled. Status and the time fields are readonly and are changed only by actions.'
+    keyFields:
+      - order_code
+      - customer_id
+      - plant_id
+      - pot_size
+      - qty
+      - unit_price_cents
+      - total_cents
+      - status
+      - placed_at
+      - shipped_at
+      - cancelled_at
+workflows:
+  - name: order_fulfilment
+    entity: plant_order
+    states:
+      - pending
+      - paid
+      - shipped
+      - cancelled
+    rules:
+      - rule: A new order starts pending. unit_price_cents is the plant price_cents plus the pot surcharge (small 0, medium 500, large 1500). total_cents is unit_price_cents times qty. placed_at is the engine time.
+        by:
+          - place_order
+      - rule: Orders can only be placed for an active plant. qty is 1 to 20.
+        by:
+          - place_order
+      - rule: Paying moves pending to paid. It needs stock_qty at least qty, and it reduces the plant's stock_qty by qty. Otherwise it answers 409 insufficient_stock and nothing changes.
+        by:
+          - pay_order
+      - rule: Shipping moves paid to shipped and sets shipped_at to the engine time. A pending, shipped or cancelled order answers 409 invalid_state.
+        by:
+          - ship_order
+      - rule: Cancelling moves pending or paid to cancelled and sets cancelled_at. A paid order gives its qty back to the plant's stock_qty. A pending order leaves stock alone. A shipped or cancelled order answers 409 invalid_state.
+        by:
+          - cancel_order
+      - rule: A pending order placed 5 or more days ago is cancelled by a daily job.
+        by:
+          - auto_cancel_stale_pending
+      - shipped and cancelled are final. Status, shipped_at, cancelled_at, total_cents and the unit price are readonly and change only through actions.
+    actions:
+      - place_order
+      - pay_order
+      - ship_order
+      - cancel_order
+jobs:
+  - name: auto_cancel_stale_pending
+    every: 1d
+    rule: Cancel every pending plant_order placed 5 or more days before the engine time. Set cancelled_at to the engine time. Leave stock alone, because pending orders reserve none.
+acceptanceTests:
+  - id: place_order_prices_and_validates
+    intent: place_order creates a pending order with the pot surcharge priced in, and refuses a quantity of zero
+    actions:
+      - place_order
+    description: Creates a customer and a plant, places a large pot order of qty 2 and checks status pending, unit price 3500, total 7000, placed_at and an order_code. Then qty 0 answers 400 input.invalid.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Acc Tester One', email: 'acc.one@plantdesk.test' });
+        ctx.assert(c.status === 201, 'create customer returned ' + c.status + ' ' + JSON.stringify(c.body));
+        const p = ctx.api('POST', '/plants', { name: 'Acc Calathea Orbifolia One', price_cents: 2000, stock_qty: 10, active: true });
+        ctx.assert(p.status === 201, 'create plant returned ' + p.status + ' ' + JSON.stringify(p.body));
+        const at = ctx.now();
+        const o = ctx.api('POST', '/plant_orders', { customer_id: c.body.id, plant_id: p.body.id, pot_size: 'large', qty: 2 });
+        ctx.assert(o.status === 201, 'place_order returned ' + o.status + ' ' + JSON.stringify(o.body));
+        ctx.assert(o.body.status === 'pending', 'new order is pending, got ' + o.body.status);
+        ctx.assert(o.body.unit_price_cents === 3500, 'unit price 2000 + 1500 large surcharge = 3500, got ' + o.body.unit_price_cents);
+        ctx.assert(o.body.total_cents === 7000, 'total 7000, got ' + o.body.total_cents);
+        ctx.assert(o.body.placed_at === at, 'placed_at is the call time ' + at + ', got ' + o.body.placed_at);
+        ctx.assert(typeof o.body.order_code === 'string' && /^PO-\d+$/.test(o.body.order_code), 'order_code looks like PO-1234, got ' + o.body.order_code);
+        ctx.assert(o.body.shipped_at === null && o.body.cancelled_at === null, 'no shipped_at or cancelled_at yet');
+        const small = ctx.api('POST', '/plant_orders', { customer_id: c.body.id, plant_id: p.body.id, pot_size: 'small', qty: 1 });
+        ctx.assert(small.status === 201 && small.body.unit_price_cents === 2000, 'small pot has no surcharge: ' + JSON.stringify(small.body));
+        const zero = ctx.api('POST', '/plant_orders', { customer_id: c.body.id, plant_id: p.body.id, pot_size: 'small', qty: 0 });
+        ctx.assert(zero.status === 400 && zero.body.error.code === 'input.invalid', 'qty 0: ' + JSON.stringify(zero));
+      }
+  - id: pay_reserves_stock
+    intent: pay_order reserves stock, and an order that needs more than the stock is refused until the plant is restocked
+    actions:
+      - place_order
+      - pay_order
+    description: Stock 2, order qty 3. Paying answers 409 insufficient_stock and changes nothing. After a restock to 3, paying works and leaves stock 0. Paying twice answers 409 invalid_state.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Acc Tester Two', email: 'acc.two@plantdesk.test' }).body;
+        const p = ctx.api('POST', '/plants', { name: 'Acc Fiddle Leaf Fig Two', price_cents: 4500, stock_qty: 2, active: true }).body;
+        ctx.assert(c.id && p.id, 'setup rows created');
+        const o = ctx.api('POST', '/plant_orders', { customer_id: c.id, plant_id: p.id, pot_size: 'medium', qty: 3 }).body;
+        ctx.assert(o.id && o.status === 'pending', 'order placed pending: ' + JSON.stringify(o));
+        const short = ctx.api('POST', '/plant_orders/' + o.id + '/pay', {});
+        ctx.assert(short.status === 409 && short.body.error.code === 'insufficient_stock', 'pay with too little stock: ' + JSON.stringify(short));
+        ctx.assert(ctx.api('GET', '/plant_orders/' + o.id).body.status === 'pending', 'order is still pending after the refused pay');
+        ctx.assert(ctx.api('GET', '/plants/' + p.id).body.stock_qty === 2, 'stock is still 2 after the refused pay');
+        const restock = ctx.api('PATCH', '/plants/' + p.id, { stock_qty: 3 });
+        ctx.assert(restock.status === 200 && restock.body.stock_qty === 3, 'restock: ' + JSON.stringify(restock));
+        const paid = ctx.api('POST', '/plant_orders/' + o.id + '/pay', {});
+        ctx.assert(paid.status === 200 && paid.body.status === 'paid', 'pay: ' + JSON.stringify(paid));
+        ctx.assert(ctx.api('GET', '/plants/' + p.id).body.stock_qty === 0, 'stock is 0 after paying qty 3');
+        const again = ctx.api('POST', '/plant_orders/' + o.id + '/pay', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second pay: ' + JSON.stringify(again));
+        ctx.assert(ctx.api('GET', '/plants/' + p.id).body.stock_qty === 0, 'the refused second pay left stock at 0');
+      }
+  - id: ship_only_paid_orders
+    intent: ship_order ships a paid order and stamps shipped_at, and refuses pending and shipped orders
+    actions:
+      - place_order
+      - pay_order
+      - ship_order
+      - cancel_order
+    description: Shipping a pending order answers 409 invalid_state. After paying, shipping sets shipped_at to the call time. Shipping, paying or cancelling a shipped order answers 409 invalid_state.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Acc Tester Three', email: 'acc.three@plantdesk.test' }).body;
+        const p = ctx.api('POST', '/plants', { name: 'Acc Snake Plant Three', price_cents: 1800, stock_qty: 5, active: true }).body;
+        const o = ctx.api('POST', '/plant_orders', { customer_id: c.id, plant_id: p.id, pot_size: 'small', qty: 1 }).body;
+        ctx.assert(o.id, 'order placed');
+        const early = ctx.api('POST', '/plant_orders/' + o.id + '/ship', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'ship pending: ' + JSON.stringify(early));
+        ctx.assert(ctx.api('POST', '/plant_orders/' + o.id + '/pay', {}).status === 200, 'pay the order');
+        const at = ctx.now();
+        const shipped = ctx.api('POST', '/plant_orders/' + o.id + '/ship', {});
+        ctx.assert(shipped.status === 200 && shipped.body.status === 'shipped', 'ship: ' + JSON.stringify(shipped));
+        ctx.assert(shipped.body.shipped_at === at, 'shipped_at is the call time ' + at + ', got ' + shipped.body.shipped_at);
+        const twice = ctx.api('POST', '/plant_orders/' + o.id + '/ship', {});
+        ctx.assert(twice.status === 409 && twice.body.error.code === 'invalid_state', 'ship twice: ' + JSON.stringify(twice));
+        const pay = ctx.api('POST', '/plant_orders/' + o.id + '/pay', {});
+        ctx.assert(pay.status === 409 && pay.body.error.code === 'invalid_state', 'pay shipped: ' + JSON.stringify(pay));
+        const cancel = ctx.api('POST', '/plant_orders/' + o.id + '/cancel', {});
+        ctx.assert(cancel.status === 409 && cancel.body.error.code === 'invalid_state', 'cancel shipped: ' + JSON.stringify(cancel));
+        ctx.assert(ctx.api('GET', '/plants/' + p.id).body.stock_qty === 4, 'stock stays at 4 (5 minus the paid 1) after shipping');
+      }
+  - id: cancel_restocks_only_paid
+    intent: cancel_order restores stock for a paid order, leaves stock alone for a pending order and cannot be repeated
+    actions:
+      - place_order
+      - pay_order
+      - cancel_order
+    description: Cancelling a pending order leaves stock at 5. Paying then cancelling a qty 3 order takes stock to 2 and back to 5 and stamps cancelled_at. A cancelled order cannot be cancelled or paid again.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Acc Tester Four', email: 'acc.four@plantdesk.test' }).body;
+        const p = ctx.api('POST', '/plants', { name: 'Acc Pothos Four', price_cents: 1200, stock_qty: 5, active: true }).body;
+        const a = ctx.api('POST', '/plant_orders', { customer_id: c.id, plant_id: p.id, pot_size: 'small', qty: 2 }).body;
+        const at1 = ctx.now();
+        const ca = ctx.api('POST', '/plant_orders/' + a.id + '/cancel', {});
+        ctx.assert(ca.status === 200 && ca.body.status === 'cancelled' && ca.body.cancelled_at === at1, 'cancel pending: ' + JSON.stringify(ca));
+        ctx.assert(ctx.api('GET', '/plants/' + p.id).body.stock_qty === 5, 'cancelling a pending order leaves stock at 5');
+        const b = ctx.api('POST', '/plant_orders', { customer_id: c.id, plant_id: p.id, pot_size: 'medium', qty: 3 }).body;
+        ctx.assert(ctx.api('POST', '/plant_orders/' + b.id + '/pay', {}).status === 200, 'pay b');
+        ctx.assert(ctx.api('GET', '/plants/' + p.id).body.stock_qty === 2, 'stock is 2 after paying qty 3');
+        const cb = ctx.api('POST', '/plant_orders/' + b.id + '/cancel', {});
+        ctx.assert(cb.status === 200 && cb.body.status === 'cancelled', 'cancel paid: ' + JSON.stringify(cb));
+        ctx.assert(ctx.api('GET', '/plants/' + p.id).body.stock_qty === 5, 'cancelling a paid order restores stock to 5');
+        const again = ctx.api('POST', '/plant_orders/' + b.id + '/cancel', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'cancel twice: ' + JSON.stringify(again));
+        const pay = ctx.api('POST', '/plant_orders/' + b.id + '/pay', {});
+        ctx.assert(pay.status === 409 && pay.body.error.code === 'invalid_state', 'pay cancelled: ' + JSON.stringify(pay));
+        ctx.assert(ctx.api('GET', '/plants/' + p.id).body.stock_qty === 5, 'refused calls left stock at 5');
+      }
+  - id: inactive_plant_and_lookups
+    intent: Orders for an inactive plant are refused. Orders can be read and filtered. Duplicate customer emails and unknown orders use the engine errors
+    actions:
+      - place_order
+      - pay_order
+    description: An inactive plant answers 409 plant_inactive. Once reactivated, two orders for one customer are listed and filtered by status. A duplicate email answers 409 field.unique and an unknown order id answers 404 row.not_found.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Acc Tester Five', email: 'acc.five@plantdesk.test' }).body;
+        const dup = ctx.api('POST', '/customers', { name: 'Acc Tester Five Again', email: 'acc.five@plantdesk.test' });
+        ctx.assert(dup.status === 409 && dup.body.error.code === 'field.unique', 'duplicate email: ' + JSON.stringify(dup));
+        const p = ctx.api('POST', '/plants', { name: 'Acc Rubber Plant Five', price_cents: 2600, stock_qty: 9, active: false }).body;
+        const blocked = ctx.api('POST', '/plant_orders', { customer_id: c.id, plant_id: p.id, pot_size: 'medium', qty: 1 });
+        ctx.assert(blocked.status === 409 && blocked.body.error.code === 'plant_inactive', 'inactive plant: ' + JSON.stringify(blocked));
+        ctx.assert(ctx.api('PATCH', '/plants/' + p.id, { active: true }).status === 200, 'reactivate the plant');
+        const o1 = ctx.api('POST', '/plant_orders', { customer_id: c.id, plant_id: p.id, pot_size: 'medium', qty: 1 });
+        const o2 = ctx.api('POST', '/plant_orders', { customer_id: c.id, plant_id: p.id, pot_size: 'small', qty: 2 });
+        ctx.assert(o1.status === 201 && o2.status === 201, 'both orders placed');
+        ctx.assert(ctx.api('POST', '/plant_orders/' + o1.body.id + '/pay', {}).status === 200, 'pay o1');
+        const all = ctx.api('GET', '/plant_orders?customer_id=' + c.id);
+        ctx.assert(all.status === 200 && all.body.data.length === 2, 'two orders for this customer, got ' + JSON.stringify(all.body));
+        const paid = ctx.api('GET', '/plant_orders?customer_id=' + c.id + '&status=paid');
+        ctx.assert(paid.body.data.length === 1 && paid.body.data[0].id === o1.body.id, 'one paid order, o1: ' + JSON.stringify(paid.body));
+        const byCode = ctx.api('GET', '/plant_orders?order_code=' + o2.body.order_code);
+        ctx.assert(byCode.body.data.length === 1 && byCode.body.data[0].id === o2.body.id, 'order_code filter finds o2');
+        const got = ctx.api('GET', '/plant_orders/' + o2.body.id);
+        ctx.assert(got.status === 200 && got.body.status === 'pending' && got.body.qty === 2, 'get o2: ' + JSON.stringify(got));
+        const missing = ctx.api('GET', '/plant_orders/ord_9999999');
+        ctx.assert(missing.status === 404 && missing.body.error.code === 'row.not_found', 'unknown order: ' + JSON.stringify(missing));
+      }
+routes:
+  - id: list_customers
+    method: GET
+    path: /customers
+    purpose: List customers. Filter by email, search by name.
+  - id: get_customer
+    method: GET
+    path: /customers/{id}
+    purpose: Fetch one customer.
+  - id: create_customer
+    method: POST
+    path: /customers
+    purpose: Create a customer. A duplicate email answers 409 field.unique.
+  - id: list_plants
+    method: GET
+    path: /plants
+    purpose: List plants. Filter by active, search by name.
+  - id: get_plant
+    method: GET
+    path: /plants/{id}
+    purpose: Fetch one plant with its stock_qty.
+  - id: create_plant
+    method: POST
+    path: /plants
+    purpose: Add a plant to the catalog.
+  - id: update_plant
+    method: PATCH
+    path: /plants/{id}
+    purpose: Edit price, stock_qty or active (restock, deactivate).
+  - id: list_plant_orders
+    method: GET
+    path: /plant_orders
+    purpose: List orders. Filter by status, customer_id, plant_id, pot_size and order_code. Sort by placed_at. Page size 25.
+  - id: get_plant_order
+    method: GET
+    path: /plant_orders/{id}
+    purpose: Fetch one order.
+  - id: place_order
+    method: POST
+    path: /plant_orders
+    purpose: Built as an action. Place a new pending order.
+  - id: pay_order
+    method: POST
+    path: /plant_orders/{id}/pay
+    purpose: Built as an action. Confirm payment and reserve stock.
+  - id: ship_order
+    method: POST
+    path: /plant_orders/{id}/ship
+    purpose: Built as an action. Ship a paid order.
+  - id: cancel_order
+    method: POST
+    path: /plant_orders/{id}/cancel
+    purpose: Built as an action. Cancel a pending or paid order.
+seed:
+  rowsPerEntity:
+    customer: 10
+    plant: 14
+    plant_order: 30
+  mix: The 12 CSV orders are loaded as fixtures and kept as they are, with status mapped to the 4 workflow states. 18 generated orders bring the total to 30 so the list spans two pages (page size 25). The mix is about 27% pending, 27% paid, 27% shipped and 19% cancelled. shipped_at is set only on shipped rows and falls after placed_at. All placed_at values are on or before 2026-10-03. Paid orders reserved their stock, so seeded plant stock_qty values are consistent with them. Several paid and pending orders were placed before 2026-09-25, some of them on page 2 of the default list, and a few orders have the same customer.
+  stateMix:
+    plant_order:
+      pending: 27
+      paid: 27
+      shipped: 27
+      cancelled: 19
+tasks:
+  - id: ship_paid_order_by_code
+    difficulty: easy
+    intent: Ship one named order. The instruction gives an order_code (one of the paid CSV orders, for example one the seed guarantees is paid). The agent finds it by the order_code filter and calls ship_order. The grader checks that the order is shipped with shipped_at set and that nothing else changed.
+    decoyIdea: Ships a different paid order for the same customer, or tries to PATCH the status (refused as a readonly or missing route), so the right order is not shipped.
+  - id: cancel_paid_order_and_restock
+    difficulty: medium
+    intent: A customer (named by email) asks to cancel their paid order for a named plant. The agent finds the right order among the customer's several orders (different plants and statuses), cancels it, and so the plant's stock_qty rises by the order qty. The grader checks the target is cancelled, the plant stock is the seed value plus qty, and nothing else changed.
+    decoyIdea: Cancels the customer's pending order for another plant, or cancels a different customer's paid order for the same plant, or edits the plant stock_qty by hand instead of cancelling.
+  - id: clear_orders_before_cutoff
+    difficulty: hard
+    intent: Ship every paid order placed before 2026-09-25T00:00:00Z and cancel every pending order placed before that date. Some of these are on page 2 of the default list. Orders placed on or after the cutoff, and shipped or cancelled orders, must not change. Stock must end consistent (cancelling pending orders leaves stock alone). The grader checks each target's final status, and guards that no other order or plant row changed.
+    decoyIdea: Reads only page 1 of the list. Or ignores the cutoff and processes all paid and pending orders. Or cancels the old paid orders instead of shipping them (which also restocks the plants), or hand-edits plant stock.
+open_questions:
+  - question: What are the 4 status values in the CSV?
+    default_answer: pending, paid, shipped, cancelled. The shipped_at values mark the shipped rows.
+  - question: Should plants and customers be separate entities, or stay as strings on the order?
+    default_answer: Separate entities (plant with stock, customer with a unique email). Orders reference them by id.
+  - question: When is stock deducted?
+    default_answer: When the order is paid. Cancelling a paid order restores it.
+  - question: How is the unit price set for new orders?
+    default_answer: Plant price_cents plus a pot surcharge (small 0, medium 500, large 1500). Seeded orders keep the CSV price.
+  - question: Should unpaid orders expire?
+    default_answer: Yes. A daily job cancels pending orders that are 5 or more days old.
+  - question: What currency is used?
+    default_answer: USD, in minor units (cents), as the CSV column name suggests.
+  - question: What is the clock start?
+    default_answer: 2026-10-07T09:00:00Z with a 0s tick, after the latest CSV placed_at of 2026-10-03.
+assumptions:
+  - decision: 'The CSV status column holds 4 values: pending, paid, shipped and cancelled. The 4 rows with a shipped_at are the shipped ones. The other 8 rows are spread over pending, paid and cancelled by the seed stage.'
+    why: Only 4 distinct statuses and 4 non-null shipped_at values are known. Order lifecycle names are not given, so the most common storefront lifecycle is assumed.
+  - decision: The CSV plant name becomes a plant catalog row and customer_email becomes a customer row. Orders reference them by id. The CSV order_id is kept as order_code (unique, PO-xxxx).
+    why: Stock and customer rules need real entities. A ref also lets tests and tasks look orders up by customer.
+  - decision: "unit_price_cents in the CSV is kept on the order as a snapshot. New orders compute it as the plant's price_cents plus a pot surcharge: small 0, medium 500, large 1500. Currency is USD."
+    why: The CSV gives no catalog price or surcharge. A fixed surcharge table is a simple, testable rule. Seeded orders keep their imported price.
+  - decision: Stock is reserved when an order is paid, not when it is placed. Cancelling a paid order restores stock. Cancelling a pending order does not change stock. Shipping does not change stock.
+    why: This is the usual order-desk model and gives the stock rule one clear enforcement point.
+  - decision: Orders are single-line (one plant per order), qty 1 to 20.
+    why: The CSV has one plant and qty per order_id.
+  - decision: place_order is an action at POST /plant_orders and answers 201 with the order. pay_order, ship_order and cancel_order answer 200 with the updated order. The plant_order entity has no standard create or update route, so its status cannot be edited directly.
+    why: Keeps all workflow transitions in actions.
+  - decision: The action error codes are invalid_state (409) for an action not allowed in the current status, insufficient_stock (409) when stock_qty is below qty at pay time, and plant_inactive (409) when placing an order for an inactive plant. Engine errors keep their engine codes.
+    why: Gives acceptance tests stable codes.
+  - decision: The job auto_cancel_stale_pending runs every 1d and cancels pending orders placed 5 or more days before the current engine time.
+    why: A time-based rule needs a scheduled job. The seed history is not touched until the clock advances, which only world tests can do.
+  - decision: clock.start is 2026-10-07T09:00:00Z, four days after the latest CSV placed_at (2026-10-03). tick is 0s, so time moves only on an explicit advance. Seeded history is all in the past and nothing scheduled lies in the future.
+    why: Deterministic time after the imported events. A zero tick keeps placed_at, shipped_at and cancelled_at equal to the ctx.now() read before a call.
+  - decision: New order_code values are PO- followed by 1000 plus the order number in creation order (PO-1031 for the first order after the seed). They are unique.
+    why: Matches the CSV key style (PO-1001).
+  - decision: List routes use the default cursor mode, with data and next_cursor.
+    why: No paging style is given in the source.
+outOfScope:
+  - what: Real payment processing, refunds and payment gateways
+    why: pay_order only records that payment was confirmed. Money movement is not stateful records an agent reads.
+  - what: Shipping carriers, tracking numbers and delivery confirmation
+    why: The CSV has only shipped_at. There is no delivered status.
+  - what: Multi-line orders, discounts, taxes and shipping fees
+    why: The CSV models one plant per order.
+  - what: Plant care content, photos and storefront UI
+    why: Not stateful order-desk records.
+  - what: Deleting orders, customers or plants
+    why: Orders are cancelled, not deleted, so no delete routes are built.
+changes: []

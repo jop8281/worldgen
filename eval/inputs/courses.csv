@@ -1,0 +1,31 @@
+course_id,title,department,credits,capacity,starts_on
+C101,Physics Advanced Topics 1,Computing,4,45,2026-11-02
+C102,Biology Advanced Topics 2,Physics,5,30,2026-10-13
+C103,Art Advanced Topics 3,Physics,3,12,2026-10-08
+C104,Computing Advanced Topics 4,Computing,2,30,2026-10-10
+C105,History Advanced Topics 5,History,3,12,2026-10-18
+C106,History Lab 6,Biology,2,45,2026-10-20
+C107,Math Lab 7,History,2,20,2026-10-23
+C108,Math Seminar 8,Art,3,45,2026-09-22
+C109,Math Seminar 9,Biology,5,20,2026-10-05
+C110,Physics Seminar 10,Art,2,45,2026-10-12
+C111,Physics Lab 11,Biology,5,45,2026-10-01
+C112,History Workshop 12,Math,5,45,2026-09-25
+C113,Physics Lab 13,Biology,4,12,2026-11-02
+C114,Math Workshop 14,Biology,3,45,2026-11-04
+C115,Physics Advanced Topics 15,Computing,4,30,2026-09-27
+C116,History Foundations 16,Math,4,45,2026-10-02
+C117,Biology Advanced Topics 17,Physics,5,30,2026-09-27
+C118,Biology Advanced Topics 18,Art,2,20,2026-10-11
+C119,Computing Lab 19,Biology,4,20,2026-10-03
+C120,History Lab 20,Art,3,30,2026-10-21
+C121,History Foundations 21,Biology,2,20,2026-10-14
+C122,Math Seminar 22,Physics,3,30,2026-09-15
+C123,Physics Seminar 23,Art,4,30,2026-09-27
+C124,Physics Seminar 24,Biology,4,12,2026-10-10
+C125,Art Foundations 25,Math,2,20,2026-09-26
+C126,Biology Advanced Topics 26,History,5,30,2026-10-29
+C127,Math Seminar 27,Math,5,45,2026-11-02
+C128,Physics Seminar 28,Math,5,45,2026-10-25
+C129,Computing Foundations 29,Biology,3,30,2026-10-24
+C130,History Foundations 30,Computing,3,45,2026-09-08

@@ -1,0 +1,394 @@
+revision: 1
+software: 'Shopify-style order desk (Shopify Admin / WooCommerce orders API): customers place orders that are paid, shipped, delivered, cancelled or refunded.'
+summary: An order-management desk built around the imported orders table. Customers own orders. Each order moves through pending, paid, shipped, delivered, with cancellation and refund exits. Status changes happen only through guarded actions (pay, ship, deliver, cancel, refund) that stamp timestamps and write an audit trail, and an hourly job cancels orders left unpaid for 72 hours.
+clock:
+  start: 2026-04-08T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: customer
+    purpose: A buyer who places orders. Seeded so the 18 customer ids cus_0001..cus_0018 referenced by the imported orders resolve.
+    keyFields:
+      - name
+      - email
+      - vip
+  - name: order
+    purpose: A purchase, loaded from the imported orders table (ids ord_0001..ord_0072 kept). Status is a state machine driven by actions. Timestamps shipped_at, delivered_at, cancelled_at and refunded_at are stamped by actions.
+    keyFields:
+      - customer_id
+      - status
+      - total_cents
+      - currency
+      - item_count
+      - placed_at
+      - shipped_at
+      - delivered_at
+      - cancelled_at
+      - refunded_at
+      - tracking_number
+      - note
+  - name: order_event
+    purpose: Append-only audit trail of status changes on an order, written by actions and the auto-cancel job.
+    keyFields:
+      - order_id
+      - kind
+      - note
+workflows:
+  - name: order_fulfillment
+    entity: order
+    states:
+      - pending
+      - paid
+      - shipped
+      - delivered
+      - cancelled
+      - refunded
+    rules:
+      - rule: A pending order becomes paid only through pay_order; paying any other status is refused with 409 invalid_state.
+        by:
+          - pay_order
+        test: order_listing_filters
+      - rule: Only a paid order can be shipped; ship_order sets shipped_at to the current engine time and stores the optional tracking_number.
+        by:
+          - ship_order
+        test: order_happy_path
+      - rule: Only a shipped order can be delivered; deliver_order sets delivered_at.
+        by:
+          - deliver_order
+        test: order_out_of_order_refused
+      - rule: Only pending or paid orders can be cancelled, with a required reason; cancel_order sets cancelled_at. Shipped, delivered, cancelled and refunded orders are refused with 409 invalid_state.
+        by:
+          - cancel_order
+        test: order_cancel_rules
+      - rule: Only paid, shipped or delivered orders can be refunded, once, with a required reason; refund_order sets refunded_at and the order is final.
+        by:
+          - refund_order
+        test: order_refund_rules
+      - rule: Pending orders unpaid for 72 hours are cancelled automatically with an event whose note starts with 'auto:'.
+        by:
+          - auto_cancel_unpaid
+        test: auto_cancel_unpaid_orders
+      - rule: Every pay, ship, deliver, cancel and refund writes one order_event of the matching kind.
+        by:
+          - pay_order
+          - ship_order
+          - deliver_order
+          - cancel_order
+          - refund_order
+        test: order_status_is_action_only
+      - Status, shipped_at, delivered_at, cancelled_at, refunded_at and tracking_number cannot be written by plain create or update; the state machine rejects every undeclared transition.
+    actions:
+      - pay_order
+      - ship_order
+      - deliver_order
+      - cancel_order
+      - refund_order
+jobs:
+  - name: auto_cancel_unpaid
+    every: 1h
+    rule: "Cancel every pending order whose placed_at is 72 hours or more before now: status cancelled, cancelled_at now, plus an order_event of kind cancelled with note 'auto: unpaid for 72h'."
+acceptanceTests:
+  - id: order_happy_path
+    intent: An order moves pending -> paid -> shipped -> delivered through the actions, stamping timestamps and writing events.
+    actions:
+      - pay_order
+      - ship_order
+      - deliver_order
+    description: Create a customer and an order, pay, ship with tracking, deliver. Check statuses, shipped_at equals the call time, delivered_at is set, and the event trail has one paid, shipped and delivered event.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Flow Buyer', email: 'flow.buyer@acceptance.example' });
+        ctx.assert(c.status === 200 || c.status === 201, 'create customer returned ' + c.status + ' ' + JSON.stringify(c.body));
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 4599, currency: 'USD', item_count: 2 });
+        ctx.assert(o.status === 200 || o.status === 201, 'create order returned ' + o.status + ' ' + JSON.stringify(o.body));
+        ctx.assert(o.body.status === 'pending' && o.body.shipped_at === null, 'new order is pending with no shipped_at, got ' + JSON.stringify(o.body));
+        const id = o.body.id;
+        const paid = ctx.api('POST', '/orders/' + id + '/pay', {});
+        ctx.assert(paid.status === 200 && paid.body.status === 'paid', 'pay: ' + JSON.stringify(paid));
+        const at = ctx.now();
+        const shipped = ctx.api('POST', '/orders/' + id + '/ship', { tracking_number: '1Z999AA10123456784' });
+        ctx.assert(shipped.status === 200 && shipped.body.status === 'shipped', 'ship: ' + JSON.stringify(shipped));
+        ctx.assert(shipped.body.shipped_at === at, 'shipped_at is the call time ' + at + ', got ' + shipped.body.shipped_at);
+        ctx.assert(shipped.body.tracking_number === '1Z999AA10123456784', 'tracking number stored, got ' + shipped.body.tracking_number);
+        const delivered = ctx.api('POST', '/orders/' + id + '/deliver', {});
+        ctx.assert(delivered.status === 200 && delivered.body.status === 'delivered' && delivered.body.delivered_at !== null, 'deliver: ' + JSON.stringify(delivered));
+        const ev = ctx.api('GET', '/orders/' + id + '/events').body.data;
+        for (const k of ['paid', 'shipped', 'delivered']) {
+          ctx.assert(ev.filter((e) => e.kind === k).length === 1, 'exactly one ' + k + ' event, got ' + JSON.stringify(ev));
+        }
+        const got = ctx.api('GET', '/orders/' + id).body;
+        ctx.assert(got.status === 'delivered', 'GET shows delivered, got ' + got.status);
+      }
+  - id: order_out_of_order_refused
+    intent: Actions that skip a step are refused with 409 invalid_state and change nothing; unknown orders are 404.
+    actions:
+      - pay_order
+      - ship_order
+      - deliver_order
+    description: Ship and deliver a pending order, pay twice, deliver a paid order, and act on a missing order. Each is refused and the order stays as it was.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Order Skipper', email: 'skipper@acceptance.example' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 1250, currency: 'USD', item_count: 1 });
+        const id = o.body.id;
+        const early = ctx.api('POST', '/orders/' + id + '/ship', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'ship a pending order: ' + JSON.stringify(early));
+        const earlyDeliver = ctx.api('POST', '/orders/' + id + '/deliver', {});
+        ctx.assert(earlyDeliver.status === 409 && earlyDeliver.body.error.code === 'invalid_state', 'deliver a pending order: ' + JSON.stringify(earlyDeliver));
+        ctx.assert(ctx.api('POST', '/orders/' + id + '/pay', {}).status === 200, 'pay');
+        const twice = ctx.api('POST', '/orders/' + id + '/pay', {});
+        ctx.assert(twice.status === 409 && twice.body.error.code === 'invalid_state', 'pay twice: ' + JSON.stringify(twice));
+        const paidDeliver = ctx.api('POST', '/orders/' + id + '/deliver', {});
+        ctx.assert(paidDeliver.status === 409 && paidDeliver.body.error.code === 'invalid_state', 'deliver a paid order: ' + JSON.stringify(paidDeliver));
+        const after = ctx.api('GET', '/orders/' + id).body;
+        ctx.assert(after.status === 'paid' && after.shipped_at === null && after.delivered_at === null, 'order is still paid, got ' + JSON.stringify(after));
+        const missing = ctx.api('POST', '/orders/ord_9999/pay', {});
+        ctx.assert(missing.status === 404 && missing.body.error.code === 'not_found', 'missing order: ' + JSON.stringify(missing));
+      }
+  - id: order_cancel_rules
+    intent: Pending and paid orders can be cancelled with a reason; shipped and cancelled orders cannot.
+    actions:
+      - cancel_order
+      - pay_order
+      - ship_order
+    description: Cancel a pending order and a paid order, check cancelled_at and the event, then show a shipped order, a cancelled order and a missing reason are refused.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Cancel Buyer', email: 'cancel.buyer@acceptance.example' });
+        const mk = () => ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 3000, currency: 'USD', item_count: 3 }).body.id;
+        const a = mk();
+        const at = ctx.now();
+        const r = ctx.api('POST', '/orders/' + a + '/cancel', { reason: 'Changed my mind' });
+        ctx.assert(r.status === 200 && r.body.status === 'cancelled' && r.body.cancelled_at === at, 'cancel pending: ' + JSON.stringify(r));
+        const ev = ctx.api('GET', '/orders/' + a + '/events').body.data.filter((e) => e.kind === 'cancelled');
+        ctx.assert(ev.length === 1 && ev[0].note === 'Changed my mind', 'one cancelled event with the reason, got ' + JSON.stringify(ev));
+        const again = ctx.api('POST', '/orders/' + a + '/cancel', { reason: 'again' });
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'cancel twice: ' + JSON.stringify(again));
+        const payCancelled = ctx.api('POST', '/orders/' + a + '/pay', {});
+        ctx.assert(payCancelled.status === 409 && payCancelled.body.error.code === 'invalid_state', 'pay a cancelled order: ' + JSON.stringify(payCancelled));
+        const b = mk();
+        ctx.assert(ctx.api('POST', '/orders/' + b + '/pay', {}).status === 200, 'pay b');
+        const noReason = ctx.api('POST', '/orders/' + b + '/cancel', {});
+        ctx.assert(noReason.status === 400 && noReason.body.error.code === 'input.invalid', 'cancel without reason: ' + JSON.stringify(noReason));
+        const paidCancel = ctx.api('POST', '/orders/' + b + '/cancel', { reason: 'Out of stock' });
+        ctx.assert(paidCancel.status === 200 && paidCancel.body.status === 'cancelled', 'cancel paid: ' + JSON.stringify(paidCancel));
+        const d = mk();
+        ctx.assert(ctx.api('POST', '/orders/' + d + '/pay', {}).status === 200, 'pay d');
+        ctx.assert(ctx.api('POST', '/orders/' + d + '/ship', {}).status === 200, 'ship d');
+        const shippedCancel = ctx.api('POST', '/orders/' + d + '/cancel', { reason: 'Too late' });
+        ctx.assert(shippedCancel.status === 409 && shippedCancel.body.error.code === 'invalid_state', 'cancel shipped: ' + JSON.stringify(shippedCancel));
+        ctx.assert(ctx.api('GET', '/orders/' + d).body.status === 'shipped', 'shipped order is unchanged');
+      }
+  - id: order_refund_rules
+    intent: Paid, shipped and delivered orders can be refunded once with a reason; pending, cancelled and refunded orders cannot.
+    actions:
+      - refund_order
+      - pay_order
+      - ship_order
+      - deliver_order
+      - cancel_order
+    description: Refund a paid order and a delivered order, check refunded_at and events, then show a pending order, a repeat refund, a cancelled order and a missing reason are refused.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Refund Buyer', email: 'refund.buyer@acceptance.example' });
+        const mk = () => ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 8000, currency: 'USD', item_count: 4 }).body.id;
+        const pending = mk();
+        const early = ctx.api('POST', '/orders/' + pending + '/refund', { reason: 'Not paid yet' });
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'refund a pending order: ' + JSON.stringify(early));
+        const a = mk();
+        ctx.assert(ctx.api('POST', '/orders/' + a + '/pay', {}).status === 200, 'pay a');
+        const noReason = ctx.api('POST', '/orders/' + a + '/refund', {});
+        ctx.assert(noReason.status === 400 && noReason.body.error.code === 'input.invalid', 'refund without reason: ' + JSON.stringify(noReason));
+        const at = ctx.now();
+        const r = ctx.api('POST', '/orders/' + a + '/refund', { reason: 'Duplicate charge' });
+        ctx.assert(r.status === 200 && r.body.status === 'refunded' && r.body.refunded_at === at, 'refund paid: ' + JSON.stringify(r));
+        const ev = ctx.api('GET', '/orders/' + a + '/events').body.data.filter((e) => e.kind === 'refunded');
+        ctx.assert(ev.length === 1 && ev[0].note === 'Duplicate charge', 'one refunded event with the reason, got ' + JSON.stringify(ev));
+        const twice = ctx.api('POST', '/orders/' + a + '/refund', { reason: 'again' });
+        ctx.assert(twice.status === 409 && twice.body.error.code === 'invalid_state', 'refund twice: ' + JSON.stringify(twice));
+        const b = mk();
+        for (const step of ['pay', 'ship', 'deliver']) ctx.assert(ctx.api('POST', '/orders/' + b + '/' + step, {}).status === 200, step + ' b');
+        const delivered = ctx.api('POST', '/orders/' + b + '/refund', { reason: 'Arrived damaged' });
+        ctx.assert(delivered.status === 200 && delivered.body.status === 'refunded', 'refund delivered: ' + JSON.stringify(delivered));
+        const cancelled = mk();
+        ctx.assert(ctx.api('POST', '/orders/' + cancelled + '/cancel', { reason: 'Oops' }).status === 200, 'cancel');
+        const late = ctx.api('POST', '/orders/' + cancelled + '/refund', { reason: 'Nothing was charged' });
+        ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'refund a cancelled order: ' + JSON.stringify(late));
+      }
+  - id: order_status_is_action_only
+    intent: Status and timestamps cannot be set by plain create or update; only the note is editable.
+    actions:
+      - pay_order
+    description: PATCH status to shipped is refused and leaves the order pending, PATCH note works, and creating an order with a status other than pending is refused or ignored so the order starts pending.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Patch Buyer', email: 'patch.buyer@acceptance.example' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 999, currency: 'USD', item_count: 1 });
+        const id = o.body.id;
+        const bad = ctx.api('PATCH', '/orders/' + id, { status: 'shipped' });
+        ctx.assert(bad.status >= 400 && bad.status < 500, 'PATCH status must be refused with a 4xx, got ' + bad.status + ' ' + JSON.stringify(bad.body));
+        ctx.assert(ctx.api('GET', '/orders/' + id).body.status === 'pending', 'order is still pending');
+        const ok = ctx.api('PATCH', '/orders/' + id, { note: 'Gift wrap, no receipt' });
+        ctx.assert(ok.status === 200 && ok.body.note === 'Gift wrap, no receipt', 'PATCH note: ' + JSON.stringify(ok));
+        const forged = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 500, currency: 'USD', item_count: 1, status: 'delivered' });
+        ctx.assert(forged.status >= 400 || forged.body.status === 'pending', 'create cannot start an order past pending, got ' + JSON.stringify(forged));
+        const ghost = ctx.api('POST', '/orders', { customer_id: 'cus_9999', total_cents: 500, currency: 'USD', item_count: 1 });
+        ctx.assert(ghost.status >= 400 && ghost.status < 500, 'order for an unknown customer is refused, got ' + ghost.status);
+      }
+  - id: auto_cancel_unpaid_orders
+    intent: The hourly job cancels pending orders after 72 hours and leaves paid orders alone.
+    actions:
+      - pay_order
+    description: Create a pending order and a paid order. After 2 days both are unchanged. After 4 days the pending one is cancelled with an auto event and the paid one is still paid.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Slow Payer', email: 'slow.payer@acceptance.example' });
+        const mk = () => ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 2200, currency: 'USD', item_count: 2 }).body.id;
+        const unpaid = mk();
+        const paid = mk();
+        ctx.assert(ctx.api('POST', '/orders/' + paid + '/pay', {}).status === 200, 'pay');
+        ctx.advance('2d');
+        ctx.assert(ctx.api('GET', '/orders/' + unpaid).body.status === 'pending', 'still pending after 2 days');
+        const run = ctx.advance('2d');
+        ctx.assert(run.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(run.jobsFailed));
+        const after = ctx.api('GET', '/orders/' + unpaid).body;
+        ctx.assert(after.status === 'cancelled' && after.cancelled_at !== null, 'unpaid order cancelled after 96 hours, got ' + JSON.stringify(after));
+        const ev = ctx.api('GET', '/orders/' + unpaid + '/events').body.data.filter((e) => e.kind === 'cancelled');
+        ctx.assert(ev.length === 1 && typeof ev[0].note === 'string' && ev[0].note.indexOf('auto:') === 0, 'one auto cancelled event, got ' + JSON.stringify(ev));
+        ctx.assert(ctx.api('GET', '/orders/' + paid).body.status === 'paid', 'paid order untouched');
+      }
+  - id: order_listing_filters
+    intent: Orders can be filtered by status and customer and paged with a cursor.
+    actions:
+      - pay_order
+    description: Create two customers, three orders for the first and one for the second, pay one. Filtering by customer and status returns exactly the right orders, and limit=2 pages through all three without repeats.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/customers', { name: 'List Buyer A', email: 'list.a@acceptance.example' }).body.id;
+        const b = ctx.api('POST', '/customers', { name: 'List Buyer B', email: 'list.b@acceptance.example' }).body.id;
+        const mk = (cid) => ctx.api('POST', '/orders', { customer_id: cid, total_cents: 1000, currency: 'USD', item_count: 1 }).body.id;
+        const a1 = mk(a); const a2 = mk(a); const a3 = mk(a); mk(b);
+        ctx.assert(ctx.api('POST', '/orders/' + a2 + '/pay', {}).status === 200, 'pay a2');
+        const mine = ctx.api('GET', '/orders?customer_id=' + a).body.data.map((o) => o.id).sort();
+        ctx.assert(JSON.stringify(mine) === JSON.stringify([a1, a2, a3].sort()), 'customer filter, got ' + JSON.stringify(mine));
+        const paid = ctx.api('GET', '/orders?customer_id=' + a + '&status=paid').body.data;
+        ctx.assert(paid.length === 1 && paid[0].id === a2, 'status filter, got ' + JSON.stringify(paid));
+        const seen = [];
+        let cursor = null;
+        let pages = 0;
+        do {
+          const r = ctx.api('GET', '/orders?customer_id=' + a + '&limit=2' + (cursor === null ? '' : '&cursor=' + cursor));
+          ctx.assert(r.status === 200, 'page failed ' + JSON.stringify(r.body));
+          for (const o of r.body.data) seen.push(o.id);
+          cursor = r.body.next_cursor;
+          pages += 1;
+        } while (cursor !== null && pages < 5);
+        ctx.assert(pages === 2 && seen.length === 3 && new Set(seen).size === 3, 'two pages, three distinct orders, got ' + pages + ' pages ' + JSON.stringify(seen));
+      }
+routes:
+  - id: list_orders
+    method: GET
+    path: /orders
+    purpose: List orders with filters status, customer_id, currency, item_count; search on note; sort by placed_at, total_cents, shipped_at. Cursor paging.
+  - id: get_order
+    method: GET
+    path: /orders/{id}
+    purpose: Fetch one order.
+  - id: create_order
+    method: POST
+    path: /orders
+    purpose: Place an order (customer_id, total_cents, currency, item_count, optional note). Starts pending with placed_at set to now.
+  - id: update_order
+    method: PATCH
+    path: /orders/{id}
+    purpose: Edit only the note (status, timestamps and tracking are readonly and move through actions).
+  - id: list_order_events
+    method: GET
+    path: /orders/{order_id}/events
+    purpose: Audit trail of one order.
+  - id: list_customers
+    method: GET
+    path: /customers
+    purpose: List customers; filter vip; search name and email.
+  - id: get_customer
+    method: GET
+    path: /customers/{id}
+    purpose: Fetch one customer.
+  - id: create_customer
+    method: POST
+    path: /customers
+    purpose: Create a customer (name, email unique).
+seed:
+  rowsPerEntity:
+    customer: 18
+    order: 72
+    order_event: 60
+  mix: 'order rows come from the imported orders fixture (72 rows, ids and customer ids kept, status as imported: about 17% pending, 19% paid, 17% shipped, 25% delivered, 14% cancelled, 8% refunded; shipped_at non-null for the 32 shipped, delivered and shipped-then-refunded rows). 18 customers named so cus_0001..cus_0018 resolve, a few flagged vip. order_event rows give a plausible paid/shipped/delivered/cancelled/refunded trail for a sample of seeded orders, all dated before clock.start.'
+  stateMix:
+    order:
+      pending: 17
+      paid: 19
+      shipped: 17
+      delivered: 25
+      cancelled: 14
+      refunded: 8
+tasks:
+  - id: pay_oldest_pending_for_customer
+    difficulty: easy
+    intent: Mark the oldest still-pending order of one named customer (identified by customer id in the instruction) as paid using the pay action, changing nothing else.
+    decoyIdea: Pays the newest pending order, or the first pending order in id order instead of the oldest by placed_at, or PATCHes status directly.
+  - id: refund_delivered_big_orders_for_customer
+    difficulty: medium
+    intent: For one customer, refund every delivered order whose total is above a stated dollar threshold, with a reason on each, leaving their other orders (shipped, paid, smaller delivered) untouched.
+    decoyIdea: Refunds all of the customer's delivered orders ignoring the threshold, or also refunds shipped orders, or misreads the threshold in dollars versus total_cents.
+  - id: cancel_stale_pending_with_gift_note
+    difficulty: medium
+    intent: Cancel every pending order placed before a stated date whose note is a given text (for example 'Gift wrap, no receipt'), with a reason, and leave pending orders with other notes or later dates alone.
+    decoyIdea: Cancels all pending orders before the date regardless of note, or cancels paid orders with that note as well.
+  - id: ship_all_paid_large_orders
+    difficulty: hard
+    intent: Ship every paid order that has at least a stated item_count and a total above a stated amount, across more than one page of results, giving each a tracking number, without touching other paid orders.
+    decoyIdea: Reads only the first page of paid orders, ignores one of the two conditions, delivers instead of ships, or marks them shipped by PATCH so shipped_at stays empty.
+open_questions:
+  - question: Should the orders table be the seed source exactly, including its statuses and ids?
+    default_answer: Yes. The fixture is loaded as the order seed unchanged, and customers and events are generated around it.
+  - question: Which customer attributes exist, since the CSV only has customer ids?
+    default_answer: Name, unique email and a vip flag, generated by the seed.
+  - question: Can shipped orders be cancelled?
+    default_answer: No. Once shipped an order can only be delivered or refunded.
+  - question: Are refunds partial?
+    default_answer: No, full refund only, and it is allowed from paid, shipped and delivered.
+  - question: Should unpaid orders expire?
+    default_answer: Yes, pending orders are auto-cancelled after 72 hours by an hourly job.
+  - question: How should the clock behave?
+    default_answer: Start 2026-04-08T09:00:00Z, no per-call tick, time moves only on explicit advance.
+assumptions:
+  - decision: clock.start is 2026-04-08T09:00:00Z and tick is 0s.
+    why: The latest imported timestamp is shipped_at 2026-04-07T14:00Z, so the world starts after all imported history. Time moves only by explicit advance, so timestamp assertions are exact.
+  - decision: Fixture ids (ord_0001..ord_0072) and customer ids are kept as given; a customer entity with idPrefix cus is seeded with 18 rows so every orders.customer_id resolves.
+    why: The CSV only has orders but references cus_0001..cus_0018.
+  - decision: Money is kept as total_cents (int) with a currency enum limited to USD, as imported.
+    why: This matches the CSV and only one currency exists, so no conversion logic is needed.
+  - decision: Orders have no line-item table. item_count and total_cents are plain fields that are not recomputed.
+    why: The CSV carries only aggregates, and line items would add scope with no source data.
+  - decision: 'Order status machine: pending->paid|cancelled; paid->shipped|cancelled|refunded; shipped->delivered|refunded; delivered->refunded; cancelled and refunded are final.'
+    why: Standard order desk lifecycle covering all six imported statuses. Shipped orders cannot be cancelled, only refunded, because they have left the warehouse.
+  - decision: Status, shipped_at, delivered_at, cancelled_at, refunded_at and tracking_number are readonly on plain create/update. Only the action routes change them. Illegal actions answer 409 with error code invalid_state, unknown ids 404 not_found, a missing required input 400 input.invalid.
+    why: Forces agents to use the business actions, and gives tests and graders a stable error contract.
+  - decision: Refund is always a full refund of total_cents, and a reason is required. Cancel also requires a reason. Ship takes an optional tracking_number. Pay and deliver need no input.
+    why: Keeps the money logic simple while still giving each action a visible side effect.
+  - decision: Job auto_cancel_unpaid runs every 1h and cancels pending orders whose placed_at is at least 72h before now, writing a cancelled event with note starting 'auto:'.
+    why: Gives a time-driven rule. Old seeded pending orders will be cancelled the first time the clock advances, which only tests (not tasks) can trigger.
+  - decision: Acceptance tests create their own customers with emails ending @acceptance.example and orders through the API, and never read seed rows. The job test lists only workflow actions in its actions field; the job is exercised through ctx.advance.
+    why: The workflow stage runs tests before any seed exists, and the actions field accepts only workflow action keys.
+outOfScope:
+  - what: Payment gateway, card capture, partial refunds, and refund amounts
+    why: The value here is order state and workflow, not payment processing; refunds are full and just change state.
+  - what: Line items, products, inventory and shipping-rate calculation
+    why: Not in the imported data and would multiply scope.
+  - what: Multi-currency and tax
+    why: The CSV has USD only.
+  - what: Authentication, webhooks and an admin UI
+    why: Agents talk to the REST API directly; no user interface is part of the world.
+changes: []

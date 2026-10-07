@@ -1,0 +1,7 @@
+{
+  "provider": "anthropic",
+  "operation": "list models",
+  "generation_calls": 0,
+  "http_status": 200,
+  "sonnet_model_present": true
+}
