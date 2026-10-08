@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { NextTurn } from '../src/dataset/episode.ts';
-import { runLocalEpisode, type LocalEpisodeResult } from '../src/dataset/local.ts';
+import { finishAtOnce, runLocalEpisode, type LocalEpisodeResult } from '../src/dataset/local.ts';
 import { redactor } from '../src/dataset/schema.ts';
 
 const HELPDESK = path.resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
@@ -54,5 +54,20 @@ describe('runLocalEpisode: an agent that calls the world', () => {
       'assistant tool_call', 'tool tool_result',
       'assistant final_reply',
     ]);
+  });
+});
+
+describe('runLocalEpisode: the noop agent', () => {
+  it('records model null, because it called no model, and the engine scores its untouched end state 0', async () => {
+    const out = await mkdtemp(path.join(tmpdir(), 'wg-local-noop-'));
+    try {
+      const { episode: e } = await runLocalEpisode({
+        worldDir: HELPDESK, taskId: 'assign_newest_acme_ticket', out, runId: 'noop', engineCommit: 'abcdef1', model: null,
+        nextTurn: finishAtOnce, maxTurns: 3, budgetUsd: 0.01, maxMinutes: 2, redact: redactor([]),
+      });
+      assert.deepEqual([e.model, e.usage.model_calls, e.usage.cost_usd, e.stop_reason, e.score], [null, 0, 0, 'done', 0]);
+    } finally {
+      await rm(out, { recursive: true, force: true });
+    }
   });
 });

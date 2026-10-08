@@ -23,6 +23,8 @@ const SOLVER_MAX_OUTPUT_TOKENS = 4096;
 /** The agents an episode can run. `noop` finishes at once and costs nothing; `sonnet` runs DEFAULT_MODEL, whatever config's model, and spends. */
 export const AGENTS = ['noop', 'sonnet'] as const;
 export type Agent = (typeof AGENTS)[number];
+/** The model each agent calls, recorded on its episode. The noop agent calls none. */
+const AGENT_MODEL: Record<Agent, string | null> = { noop: null, sonnet: DEFAULT_MODEL };
 
 export const USAGE = `usage: episode --world <dir> --task <id> --out <dir> --run-id <id> --engine-commit <sha> [options]
 Runs one agent episode of one proven task on this machine: the engine serves the world on loopback,
@@ -119,7 +121,7 @@ export async function main(argv: readonly string[], env: Env = process.env): Pro
       nextTurn = solverTurn(makeModel(config, env, args.transport ?? transportOf(config)));
     }
     const r = await runLocalEpisode({
-      worldDir: args.world, taskId: args.task, out: args.out, runId: args.runId, engineCommit: args.engineCommit, model: DEFAULT_MODEL, nextTurn,
+      worldDir: args.world, taskId: args.task, out: args.out, runId: args.runId, engineCommit: args.engineCommit, model: AGENT_MODEL[args.agent], nextTurn,
       maxTurns: args.maxTurns, budgetUsd: args.budgetUsd, maxMinutes: args.maxMinutes, redact, interrupt: controller.signal,
     });
     const e = r.episode;
