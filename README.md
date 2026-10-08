@@ -42,7 +42,7 @@ bun run live ../prod/prompts                                     # every prompt 
 
 ### On this repository
 
-One `bun run worldgen` on the spec's own example description, "an IT asset tracker with laptops, assignments, repair tickets and a quarterly audit". It ran on `8ce44508`, whose code is identical to the hand-in commit `2825d29a`, with the default model and budget. Its source is [eval/runs/2026-10-08-handin-smoke/](eval/runs/2026-10-08-handin-smoke/).
+One `bun run worldgen` on the spec's own example description, "an IT asset tracker with laptops, assignments, repair tickets and a quarterly audit". It ran on `8ce44508`, with the default model and budget. The hand-in commit adds only a studio shutdown fix, test fixes and this README, nothing on the generation path. Its source is [eval/runs/2026-10-08-handin-smoke/](eval/runs/2026-10-08-handin-smoke/).
 
 | Measure | Result |
 |---|---|

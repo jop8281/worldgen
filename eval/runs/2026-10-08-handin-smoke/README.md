@@ -1,6 +1,6 @@
 # Hand-in smoke run, 2026-10-08
 
-One WorldGen run on the spec's own example description, on `stabilize/main` `8ce44508`. Its code is identical to the hand-in commit `2825d29a`; the two differ only in `README.md`.
+One WorldGen run on the spec's own example description, on `stabilize/main` `8ce44508`. The hand-in commit adds only a studio shutdown fix, test fixes and the README, nothing on the generation path.
 
 ```sh
 cd code
