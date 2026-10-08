@@ -11,7 +11,8 @@ RUN bun install --frozen-lockfile
 COPY code/ ./
 # Owned by bun, the user the studio runs as: generation writes gen-* worlds here, and a new volume copies this ownership.
 COPY --chown=bun:bun prod/worlds/ /app/prod/worlds/
-RUN mkdir -p /home/bun/.worldgen && chown bun:bun /home/bun/.worldgen
+# Episode exports go to /app/eval/episodes, a volume of its own in scripts/studio-deploy.sh, so they survive a container swap (YOS-236).
+RUN mkdir -p /home/bun/.worldgen /app/eval/episodes && chown bun:bun /home/bun/.worldgen /app/eval/episodes
 # No claude CLI or login lives in the image, so generation uses the Anthropic SDK. Its key comes only at run time
 # (`docker run -e LLM_KEY`, or an env file outside the repo), never from the image or git (A-326).
 ENV WORLDGEN_TRANSPORT=sdk
