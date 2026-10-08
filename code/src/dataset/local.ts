@@ -59,6 +59,8 @@ export type LocalEpisodeOptions = {
   readonly out: string;
   readonly runId: string;
   readonly engineCommit: string;
+  /** The model `nextTurn` calls, recorded on the episode. */
+  readonly model: string;
   readonly nextTurn: NextTurn;
   readonly maxTurns: number;
   readonly budgetUsd: number;
@@ -95,7 +97,7 @@ export async function runLocalEpisode(o: LocalEpisodeOptions): Promise<LocalEpis
     const grade = engineGrader({ world: prep.world, wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: o.engineCommit });
     const { episode, artifacts } = await runEpisode({
       runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION,
-      configVersion: configVersion({ maxTurns: o.maxTurns, budgetUsd: o.budgetUsd, maxMinutes: o.maxMinutes }),
+      configVersion: configVersion({ maxTurns: o.maxTurns, budgetUsd: o.budgetUsd, maxMinutes: o.maxMinutes }), model: o.model,
       task, index: 1, openapi: prep.openapi, seedHash: prep.seedHash, port: loopbackPort(server), grade, nextTurn: o.nextTurn,
       maxTurns: o.maxTurns, budgetLeftUsd: o.budgetUsd, deadline: now() + o.maxMinutes * 60_000, now, redact: o.redact, interrupt: o.interrupt,
     });

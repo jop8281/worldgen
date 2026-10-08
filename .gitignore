@@ -12,3 +12,7 @@ worlds/generated/**/transcripts/
 !.claude/hooks/
 # The studio run registry (A-329), written into whatever worlds dir the studio serves.
 .studio-runs.json
+# The studio audit log of POST requests (YOS-187), written into whatever worlds dir the studio serves.
+.studio-audit.jsonl
+# Agent Playground episodes (YOS-190): the studio and `bun run episode` write one directory per run here.
+eval/episodes/

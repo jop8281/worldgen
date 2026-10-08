@@ -103,13 +103,15 @@ Jobs: none.
 
 The engine check passed: 5 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_859993d4e88e773278e9aadcc465bb97dd66a1d305b0d19480fea4a785ed1650`.
+World id (WID): `wid_edf565274ff4f3c136cbeeb6fd76361206cc292d7d11fba57d2f5c2f8191c667`.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix | TID |
-|---|---|---|---|---|---|---|
-| update_northwind_contact | easy | 1.000 | 0.000 | 0.000, 0.500, 0.000 | n/a | `tid_a03d1a0abd8b7d62324bd1e772474522ee995d0f37b654685440c31c115d2775` |
-| delete_older_duplicate_acme | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | `tid_38615db5119f5d3cee450f177691bc5f3fafde79eba495121e1038351f6bf606` |
-| mark_registered_nonprofits_exempt | hard | 1.000 | 0.000 | 0.400, 0.000, 0.000 | 0.800 | `tid_b7150bc5577938567f65e75cb15ecc789b57407381e055dc934adfafb22cb383` |
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| update_northwind_contact | easy | 1.000 | 0.000 | 0.000, 0.500, 0.000 | n/a | legacy; mutants 3/7 | `tid_33ce630311d82cfb9df466e13f7a31204cb3a7b4fac40938a99904ab161bb858` |
+| delete_older_duplicate_acme | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 2/7 | `tid_44ef0f7fd939b54d30328ca05546ed2f91c3d31d053235f5936f64211f57029e` |
+| mark_registered_nonprofits_exempt | hard | 1.000 | 0.000 | 0.400, 0.000, 0.000 | 0.800 | legacy; mutants 3/7 | `tid_a6da0cab72a631250baa78ffe248ca294bd5b9be6fade670321505355e66036c` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -122,6 +124,16 @@ Decoys:
 - `mark_registered_nonprofits_exempt` 0.400: reads only the first page of 25 customers and so misses the registered nonprofits on later pages
 - `mark_registered_nonprofits_exempt` 0.000: matches any description containing 'nonprofit' and so also changes the lookalike customers
 - `mark_registered_nonprofits_exempt` 0.000: sets tax_exempt on the right customers but also clears their descriptions
+
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| update_northwind_contact | easy | 1 | none | none | none declared |
+| delete_older_duplicate_acme | medium | 1 | none | none | none declared |
+| mark_registered_nonprofits_exempt | hard | 5 | customer | none | hard: met |
 
 ## Run
 

@@ -12,7 +12,7 @@ import type { SpendEvent } from '../costs/ledger.ts';
 import type { CostBasis } from '../costs/basis.ts';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { BUILTIN_PRICES, DEFAULT_CLAUDE_BIN, EFFORTS, PINNED_MODEL, isPinnedModel, type Config, type Effort } from './config.ts';
+import { BUILTIN_PRICES, DEFAULT_CLAUDE_BIN, EFFORTS, isClaudeModelId, type Config, type Effort } from './config.ts';
 
 export type ProposeRequest = {
   readonly system: string;
@@ -188,9 +188,14 @@ export function estimateCallUsd(config: Config, model: string, promptChars: numb
   return costOf({ inputTokens: Math.ceil(promptChars / 4), outputTokens: config.maxOutputTokens, cacheReadTokens: 0 }, model, prices);
 }
 
-/** Throws before any request unless `model` is the pinned model and `effort` a known level. Covers a hand-built Config or ProposeRequest that skipped parsing. */
-function requireAllowed(model: string, effort: Effort | undefined): void {
-  if (!isPinnedModel(model)) throw new ModelError(`model "${model}" is not allowed: WorldGen runs only ${PINNED_MODEL}`, undefined, { kind: 'not_started' });
+/**
+ * Throws before any request unless `model` is a Claude model id with a known price and `effort` a known level
+ * (A-283). Covers a hand-built Config or ProposeRequest that skipped parsing. The named model is the one called:
+ * no transport substitutes another when it fails.
+ */
+function requireAllowed(model: string, effort: Effort | undefined, prices: Prices): void {
+  if (!isClaudeModelId(model)) throw new ModelError(`model "${model}" is not allowed: use a Claude model id such as claude-sonnet-5-5`, undefined, { kind: 'not_started' });
+  if (prices[model] === undefined) throw new ModelError(`model "${model}" has no known price: add it to prices in worldgen.config.json`, undefined, { kind: 'not_started' });
   if (effort !== undefined && !EFFORTS.includes(effort)) throw new ModelError(`effort "${String(effort)}" is not allowed: use one of ${EFFORTS.join(', ')}`, undefined, { kind: 'not_started' });
 }
 
@@ -269,7 +274,7 @@ export function anthropicModel(config: Config, opts: AnthropicOptions): Model {
   return {
     async propose(req) {
       const model = req.model ?? config.model;
-      requireAllowed(model, req.effort);
+      requireAllowed(model, req.effort, prices);
       if (req.signal?.aborted) throw new ModelError('model request aborted before starting', undefined, { kind: 'not_started' });
       const started = now();
       const params = {
@@ -653,7 +658,7 @@ export function claudeCliModel(config: Config, spawnCli: SpawnClaude = spawnClau
   return {
     async propose(req) {
       const model = req.model ?? config.model;
-      requireAllowed(model, req.effort);
+      requireAllowed(model, req.effort, prices);
       if (req.signal?.aborted) throw new ModelError('model request aborted before starting', undefined, { kind: 'not_started' });
       if (!Number.isFinite(config.maxCostUsd) || config.maxCostUsd <= 0 || (req.maxCostUsd !== undefined && (!Number.isFinite(req.maxCostUsd) || req.maxCostUsd <= 0))) throw new ModelError('model cost budget must be a positive finite number of USD', undefined, { kind: 'not_started' });
       const budgetUsd = Math.min(config.maxCostUsd, req.maxCostUsd ?? config.maxCostUsd);

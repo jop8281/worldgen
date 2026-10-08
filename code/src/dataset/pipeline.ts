@@ -273,6 +273,8 @@ export type PipelineOptions = {
   readonly out: string;
   readonly runId: string;
   readonly engineCommit: string;
+  /** The model the solver calls, recorded on every episode (A-283). */
+  readonly model: string;
   readonly maxTurns: number;
   readonly budgetUsd: number;
   readonly maxMinutes: number;
@@ -420,7 +422,7 @@ export async function runPipeline(o: PipelineOptions, deps: PipelineDeps): Promi
         break;
       }
       const { episode, artifacts } = await runEpisode({
-        runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION, configVersion: cfg,
+        runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION, configVersion: cfg, model: o.model,
         task, index: 1, openapi: prep.openapi, seedHash: prep.seedHash, port: world, grade, nextTurn: deps.nextTurn,
         maxTurns: o.maxTurns, budgetLeftUsd: o.budgetUsd - spent, deadline, now, redact, interrupt: deps.interrupt,
       });

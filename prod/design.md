@@ -52,7 +52,7 @@ Each guarantee names the mechanism that fails when it breaks. `AGENTS.md` lists 
 
 ## 3. The WorldGen loop
 
-One command turns an input into a checked world (A-38). The input passes through `redact()` before any model or log sees it. Every call uses `claude-sonnet-5-5`, and any other model is rejected before a call. Calls go through `claude -p` under the logged-in session by default, and the SDK transport is opt-in with `LLM_KEY` (A-56, A-66).
+One command turns an input into a checked world (A-38). The input passes through `redact()` before any model or log sees it. Every call uses `claude-sonnet-5-5` unless config or `--model` names another priced Claude model, and an unknown or unpriced model is refused before a call (A-283). Calls go through `claude -p` under the logged-in session by default, and the SDK transport is opt-in with `LLM_KEY` (A-56, A-66).
 
 ```
 digest input

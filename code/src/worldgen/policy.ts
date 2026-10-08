@@ -176,12 +176,13 @@ export const NO_CALLS: CallHistory = { plan: [], model: [], workflow: [], seed: 
 
 /**
  * Ms a later step keeps while an earlier step runs: the estimate of its next call at its configured effort (A-311).
- * A step that already made a first call runs again only after a backtrack, as a repair (A-139). Tasks is the last step
- * and has no retry to spare, so it always keeps a first call (A-114). `steps[step].reserve` of `maxMinutes` is a floor.
+ * A step that already made a first call runs again only after a backtrack, as a repair (A-139). Tasks keeps a whole
+ * first call until it has made one (A-114); after that it can only rerun with its own rejection as feedback, as a repair
+ * (A-330). `steps[step].reserve` of `maxMinutes` is a floor.
  */
 function reserveMs(config: Config, step: StepId, history: CallHistory): number {
   const calls = history[step];
-  const rerun = step !== 'tasks' && calls.some((c) => !c.repair);
+  const rerun = calls.some((c) => !c.repair);
   const estimate = estimateCallMs(stepModel(config, step, false).effort, calls, rerun, step);
   return Math.max(estimate, (config.steps[step].reserve ?? 0) * config.maxMinutes * 60_000);
 }

@@ -34,6 +34,45 @@ Depth: [research/architecture.md](research/architecture.md) for the reasoning, [
 | Generated worlds | 23 `prod/worlds/gen-*` worlds, each with its `REPORT.md`. 11 came from a description, 4 from an OpenAPI spec, 6 from CSVs and 2 from live iterate runs. With the 2 hand-built worlds that is 25 worlds and 95 tasks. [All worlds](#all-worlds) lists each one with its input, task count and PR. |
 | The live-run runbook | [research/live-run-runbook.md](research/live-run-runbook.md) |
 
+## Evaluator runbook
+
+The shortest path through the hand-in. [prod/README.md](prod/README.md) maps every spec item to the file that implements it and the command that shows it, and this section only orders the visit. Steps 1 to 5 call no model.
+
+1. Install with `cd code && bun install --frozen-lockfile`, on Bun 1.4.2.
+2. Watch the engine work. From the repo root, `scripts/demo-all.sh` runs 25 numbered steps and prints PASS or FAIL for each, in about a minute.
+3. Open the Studio with `bun run studio` from `code/`, then go to http://127.0.0.1:8787. [research/studio-demo-runbook.md](research/studio-demo-runbook.md) is the click path. The screenshots below follow it, plus the Agent Playground's engine proof and one noop episode.
+4. Read one generated world. Each `prod/worlds/gen-*/` holds `plan.yaml`, the plan the run followed, and `REPORT.md`, which says what was built, assumed and left out, with the task proofs.
+5. Check the numbers. [Measured results](#measured-results) gives the last full eval run and its source files.
+6. Optionally, run WorldGen once with `bun run worldgen "<description>" --budget-usd 3 --out ../prod/worlds/gen-<slug>` from `code/`. It calls the model through the logged-in `claude` CLI and spends up to $3.
+
+### Studio screenshots
+
+Taken from the real app on `b2b980f9`, with no model call. [prod/screenshots/README.md](prod/screenshots/README.md) gives the command, viewport, runtime and digest of each one.
+
+| | |
+|---|---|
+| ![The Worlds dashboard](prod/screenshots/01-dashboard.png) The Worlds table lists 25 worlds with kind, tasks, wid, model and cost. | ![An API call on the world port](prod/screenshots/04-console-get.png) A real GET on helpdesk's world port, answered 200. |
+| ![A refused write](prod/screenshots/05-console-illegal-write.png) An illegal status move, refused whole with 422 `state.transition`. | ![A generated world's report](prod/screenshots/07-report.png) `REPORT.md` of gen-library-loans, built from two CSV files. |
+| ![The engine proof](prod/screenshots/10-proof.png) The engine proof scores each reference 1, doing nothing 0, and decoys below 1. | ![A noop agent episode](prod/screenshots/11-noop-episode.png) A free noop agent episode, scored 0 from its end state. |
+
+## Measured results
+
+These numbers are historical. They come from eval runs made before this repository's one-commit snapshot, so a SHA here names a commit of the earlier repository, jop8281/zozo123-genworld, not of this one. No run here was repeated on this repository.
+
+The last full run is stress-2, on 2026-10-07. It ran the whole 29-case `stress` suite on `3ff2c3a`, with `claude-sonnet-5-5` through `claude -p`, at $3 and 12 minutes per run. Its source is [eval/runs/2026-10-07-stress-2/summary.md](eval/runs/2026-10-07-stress-2/summary.md).
+
+| Measure | stress-2 |
+|---|---|
+| Cases that ended as expected | 22 of 29 (75.9%), including 3 impossible inputs refused as expected |
+| Time per run, over 30 runs | p50 6.4 min, p90 8.9 min, max 9.8 min |
+| Cost per run, over 30 runs | p50 $1.27, p90 $1.64, max $1.88 |
+| Whole suite, summed over the runs of 4 parallel lanes | 177.7 min and $34.65 |
+
+- The 7 misses have three root causes, each explained in the summary. In 5, the frozen acceptance tests contradict the API the model step built. In 1, a frozen test assumes empty tables. In 1, a long plan call used up the plan step's time share.
+- The 14 cases stress-2 shares with stress-1b went from 7 to 12 passing, and none went from pass to fail. The source is the same summary.
+- There are 30 runs because helpdesk-add-refunds is a create plus a change. Its `events.jsonl` keeps only the create run, and [lane-b/summary.md](eval/runs/2026-10-07-stress-2/lane-b/summary.md) gives both runs together as 11.0 min and $2.73.
+- stress-3 ([summary](eval/runs/2026-10-07-stress-3/summary.md)) is not a full-suite result. A Claude account session limit stopped 18 of its 29 cases, and 10 of its 11 valid cases passed.
+
 ## Status
 
 Everything below is built and merged into the trunk. Each row links the PRs that built it. This repository starts from a one-commit snapshot of `stabilize/main` at c2528607 in the earlier repository, jop8281/zozo123-genworld, so the PR links are a historical record from that repository, not PRs of this one.
@@ -181,7 +220,7 @@ bun run worldgen "add partial refunds" --world ../prod/worlds/gen-refunds
 
 `--world` edits an existing world in place. Only the stages the change reaches rerun, and the rest are logged as `step_skipped`. Every stage passes the preservation gate, so a run that stops leaves `world.yaml` and `plan.yaml` as they were. Evidence: the live `gen-petstore-refunds` run (#264, $1.42, 5.5 minutes, 4 old tasks kept and 3 refund tasks added), and 20 change requests on `gen-todo-projects` (#298, [research/iterate-evidence.md](research/iterate-evidence.md)). 17 of the 19 valid runs passed check and verify with every base task kept. The 2 renames stopped and left the world unchanged.
 
-**Model path (A-66).** Every call uses `claude-sonnet-5-5`, and any other model is rejected before a call is made. Calls go through `claude -p` under your logged-in Claude Code session by default. The Anthropic SDK is opt-in with `--transport sdk` and reads its key from `LLM_KEY`. `.env` is never read. Each run uses a $5 cost estimate budget and 15-minute time budget by default, and `--budget-usd` and `--max-minutes` override that. A call whose estimated cost or allotted time won't fit is refused before it starts. Client pricing estimates do not guarantee the provider's invoice amount.
+**Model path (A-66, A-283).** Every call uses `claude-sonnet-5-5` by default. `model`, `stepModels` and `escalate` in `code/worldgen.config.json`, or `--model`, may name another Claude model that has a known price, built in or in `prices`; anything else is refused before a call, and no call falls back to a different model. Calls go through `claude -p` under your logged-in Claude Code session by default. The Anthropic SDK is opt-in with `--transport sdk` and reads its key from `LLM_KEY`. `.env` is never read. Each run uses a $5 cost estimate budget and 15-minute time budget by default, and `--budget-usd` and `--max-minutes` override that. A call whose estimated cost or allotted time won't fit is refused before it starts. Client pricing estimates do not guarantee the provider's invoice amount.
 
 If `claude` on your PATH is a shell shim or wrapper, `claude -p` exits 127 inside WorldGen. Set `WORLDGEN_CLAUDE_BIN` to the real binary, for example `WORLDGEN_CLAUDE_BIN=$HOME/.local/bin/claude` (read at `code/src/cli/models.ts:49`).
 
