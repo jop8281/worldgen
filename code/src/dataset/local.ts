@@ -13,9 +13,8 @@
  */
 import type { CallRecord } from '#engine';
 import { isolatedEnv, listeningPorts, nodeRunner, nodeSpawn, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
-import path from 'node:path';
 import { runEpisode, type NextTurn, type SendableRequest, type WorldPort } from './episode.ts';
-import { stateFromAdmin, type PreparedWorld } from './pipeline.ts';
+import { CODE_DIR, prepareInChild, stateFromAdmin } from './pipeline.ts';
 import { PROMPT_VERSION, canonicalJson, configVersion, type Episode, type Redactor } from './schema.ts';
 import { appendEpisode, exportDataset, startRunLog, writeArtifacts, type ExportResult } from './store.ts';
 import { childGrader } from './verifier.ts';
@@ -87,22 +86,7 @@ export type LocalEpisodeResult = {
   readonly export: ExportResult;
 };
 
-type Prepared = Omit<PreparedWorld, 'world'>;
-
-const CODE_DIR = path.resolve(import.meta.dirname, '../..');
-const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-async function prepareInChild(o: LocalEpisodeOptions, runner: Runner, env: Record<string, string>): Promise<Prepared> {
-  const res = await runner(['bun', 'src/cli/episode-prepare.ts', o.worldDir, o.out], { cwd: CODE_DIR, env, timeoutMs: 300_000 });
-  if (res.code === 3) throw new Error(res.stderr.trim());
-  if (res.code !== 0) throw new Error(`the prepare process failed (exit ${res.code}): ${lastLine(res.stderr) || 'no output'}`);
-  try {
-    return JSON.parse(res.stdout) as Prepared;
-  } catch {
-    throw new Error(`the prepare process answered with something other than a prepared world (${lastLine(res.stderr) || 'no output'})`);
-  }
-}
 
 /** The serve child's ports once it reports both listening, or an error with its last output when it exits first or 120 s pass. */
 async function untilServing(child: SpawnedChild): Promise<{ readonly world: number; readonly admin: number }> {
@@ -126,14 +110,14 @@ export async function runLocalEpisode(o: LocalEpisodeOptions): Promise<LocalEpis
   const now = o.now ?? Date.now;
   const runner = o.runner ?? nodeRunner;
   const src = o.env ?? process.env;
-  const prep = await prepareInChild(o, runner, isolatedEnv(src));
+  const prep = await prepareInChild(o.worldDir, o.out, runner, src);
   const task = prep.tasks.find((t) => t.id === o.taskId);
   if (task === undefined) throw new Error(`task ${o.taskId} is not a proven task of ${prep.worldId}: ${prep.tasks.map((t) => t.id).join(', ')}`);
   if (!(await startRunLog(o.out, o.runId))) throw new Error(`run id ${o.runId} is already used in ${o.out}`);
   const child = (o.spawner ?? nodeSpawn)(['bun', 'src/cli/worldplay.ts', 'serve', prep.frozenDir, '--port', '0'], { cwd: CODE_DIR, env: isolatedEnv(src) });
   try {
     const ports = await untilServing(child);
-    const grade = childGrader({ codeDir: CODE_DIR, out: o.out, runner, launcher: ['bun'] })({
+    const grade = childGrader({ codeDir: CODE_DIR, out: o.out, runner, launcher: ['bun'], env: src })({
       wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: o.engineCommit,
     });
     const server = { url: `http://127.0.0.1:${ports.world}`, adminUrl: `http://127.0.0.1:${ports.admin}` };

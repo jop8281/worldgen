@@ -37,7 +37,7 @@ import {
 import { collectBundle } from '../src/sandboxes/files.ts';
 import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { prepareWorld, runPipeline, type PreparedWorld } from '../src/dataset/pipeline.ts';
-import { childGrader, type GraderWorld } from '../src/dataset/verifier.ts';
+import { childGrader, type HeldWorld } from '../src/dataset/verifier.ts';
 import { checkedForTest, minimalWorld } from './helpers/world.ts';
 import { COMMIT, EASY, HELPDESK_DIR, fakeBackend, randomPort, solveAll, tmp } from './dataset-kit.ts';
 import type { World } from '../src/engine/format.ts';
@@ -94,8 +94,8 @@ async function checkedHelpdesk(): Promise<CheckedWorld> {
   return report.world;
 }
 
-const heldOf = (prep: PreparedWorld): GraderWorld => ({
-  world: prep.world, wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: COMMIT,
+const heldOf = (prep: PreparedWorld): HeldWorld => ({
+  wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: COMMIT,
 });
 
 /** A recorded run of the easy task, driven over the world port of the served PUBLIC form. */
@@ -372,6 +372,18 @@ describe('the verifier child process', () => {
     const result = await grade(submission('child-5', recorded.trace, recorded.state));
     if (result.ok) assert.fail('a killed verifier child still graded');
     assert.match(result.reason, /^the verifier process failed \(exit \d+\): /);
+  });
+
+  it('builds the child environment from the injected source through the one allowlist', async () => {
+    const envs: (Readonly<Record<string, string | undefined>> | undefined)[] = [];
+    const runner: Runner = async (_argv, opts) => {
+      envs.push(opts?.env);
+      return { code: 0, stdout: `${JSON.stringify({ task: EASY, wid: prep.wid, score: 1, stop: 'graded' })}\n`, stderr: '' };
+    };
+    const env = { PATH: process.env.PATH ?? '', HOME: '/home/op', LLM_KEY: 'sk-live-1', BOAT_API_KEY: 'boat-3', WORLDGEN_GUARD_SCALE: '4' };
+    const grade = childGrader({ codeDir: CODE_DIR, out: tmp('verify-child-injected-env'), runner, env })(heldOf(prep));
+    assert.deepEqual(await grade(submission('child-env', recorded.trace, recorded.state)), { ok: true, score: 1 });
+    assert.deepEqual(envs, [{ TZ: 'UTC', PATH: process.env.PATH ?? '', WORLDGEN_GUARD_SCALE: '4' }]);
   });
 
   it('the spawn carries no controller credential and passes the private world by path', async () => {

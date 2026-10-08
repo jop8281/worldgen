@@ -13,9 +13,9 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { ORG_ENV } from '../boat/client.ts';
 import { backendFor, sandboxName } from '../sandboxes/registry.ts';
-import { nodeRunner, type SandboxBackend, type WorldBundle } from '../sandboxes/backend.ts';
+import { nodeRunner, type Runner, type SandboxBackend, type WorldBundle } from '../sandboxes/backend.ts';
 import { collectBundle } from '../sandboxes/files.ts';
-import { PreflightError, checkForRun, runPipeline, type CheckedForRun, type PipelineResult } from '../dataset/pipeline.ts';
+import { PreflightError, checkInChild, runPipeline, type CheckedForRun, type PipelineResult } from '../dataset/pipeline.ts';
 import type { NextTurn } from '../dataset/episode.ts';
 import { childGrader, type GraderFactory } from '../dataset/verifier.ts';
 import { solverTurn, type SolverProposer } from '../dataset/solver.ts';
@@ -79,6 +79,8 @@ export type CliDeps = {
   /** Replaces the verifier child, for tests. Default: childGrader, one process per submission (YOS-159). */
   readonly grader?: GraderFactory;
   readonly fetch?: typeof globalThis.fetch;
+  /** Runs the check, prepare and verifier children. Default nodeRunner; tests whose env has no PATH inject one. */
+  readonly runner?: Runner;
   /** Where lines go. Default: stdout and stderr. */
   readonly out?: (line: string) => void;
   readonly err?: (line: string) => void;
@@ -211,7 +213,7 @@ export async function main(argv: readonly string[], env: Env = process.env, deps
   // Offline first: a world that does not check or prove its tasks needs no key and no sandbox.
   let checked: CheckedForRun;
   try {
-    checked = await checkForRun(args.world);
+    checked = await checkInChild(args.world, deps.runner ?? nodeRunner, env);
   } catch (e) {
     err(e instanceof PreflightError ? e.message : `preflight failed: ${messageOf(e)}`);
     return 1;
@@ -260,8 +262,8 @@ export async function main(argv: readonly string[], env: Env = process.env, deps
           makeBundle: deps.makeBundle ?? ((dir) => collectBundle(CODE_DIR, dir, { publicOnly: true })),
           // The production grader: a separate verifier process per submission, spawned through
           // nodeRunner with a clean environment, holding the private world by path (YOS-159).
-          grader: deps.grader ?? childGrader({ codeDir: CODE_DIR, out: args.out, runner: nodeRunner }),
-          checked, interrupt: controller.signal, log: (l) => out(l),
+          grader: deps.grader ?? childGrader({ codeDir: CODE_DIR, out: args.out, runner: deps.runner ?? nodeRunner, launcher: ['bun'], env }),
+          checked, runner: deps.runner ?? nodeRunner, env, interrupt: controller.signal, log: (l) => out(l),
           ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
         },
       );
