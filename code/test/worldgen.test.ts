@@ -1497,6 +1497,48 @@ describe('runWorldGen create: model and effort per step', () => {
   });
 });
 
+describe('runWorldGen create: a retry sees the step\'s history (YOS-246, A-364)', () => {
+  /** CUSTOMERS without its last row: 14 of the planned 15. */
+  const SHORT = CUSTOMERS.replace("  { name: 'Massive Dynamic', tier: 'enterprise' },\n", '');
+  const config = configSchema.parse({ model: 'claude-sonnet-5-5', maxCostUsd: 5, stepModels: { seed: { effort: 'medium' } }, escalate: { effort: 'max' } });
+
+  it('keeps the best full seed when a retry answers in part, lists every earlier attempt, and does not escalate', async () => {
+    const nearlyRight = { note: 'customers and tickets', upsert: { seed: { ...TARGET.seed, customer: SHORT } } };
+    const customersOnly = { note: 'one more customer', upsert: { seed: { customer: CUSTOMERS } } };
+    const { result, events, calls } = await run([
+      { input: PLAN }, { input: EDITS.model }, { input: EDITS.workflow }, { input: nearlyRight }, { input: customersOnly }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { config });
+    assert.equal(result.kind, 'done');
+    assert.deepEqual(attempts(events).filter((a) => a[0] === 'seed'), [['seed', 1, 'rejected'], ['seed', 2, 'rejected'], ['seed', 3, 'accepted']]);
+    // Attempt 2 rose from no issue on ticket to one only because it left seed.ticket out: no escalation.
+    assert.deepEqual(calls.slice(3, 6).map((c) => c.effort), ['medium', 'medium', 'medium']);
+    const third = calls[5]?.prompt ?? '';
+    assert.equal(third.includes('Your best answer so far (attempt 1):'), true);
+    assert.equal(third.includes(JSON.stringify(SHORT)), true);
+    assert.equal(third.includes('"note": "one more customer"'), false);
+    assert.equal(third.includes('## Earlier attempts in this step'), true);
+    assert.equal(third.includes([
+      '- attempt 1: plan.seed_rows_short at plan.seed.rowsPerEntity.customer',
+      '- attempt 2, which left seed.ticket untouched: plan.seed_rows_short at plan.seed.rowsPerEntity.ticket',
+    ].join('\n')), true);
+  });
+
+  it('shows both earlier issue sets when a third answer could go back to the first (course-enrollments)', async () => {
+    const { result, events, calls } = await run([{ input: PLAN }, { input: BAD_ENTITY }, { input: BAD_FILTER }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }], { config });
+    assert.equal(result.kind, 'done');
+    assert.deepEqual(attempts(events).filter((a) => a[0] === 'model'), [['model', 1, 'rejected'], ['model', 2, 'rejected'], ['model', 3, 'accepted']]);
+    const third = calls[3]?.prompt ?? '';
+    assert.equal(third.includes('## Earlier attempts in this step'), true);
+    assert.equal(third.includes([
+      '- attempt 1: ref.unknown at routes.get_ticket.entity',
+      '- attempt 2: ref.unknown at routes.list_tickets.filters.0',
+    ].join('\n')), true);
+    // A tie keeps the latest answer, and two full answers with no fewer issues still escalate.
+    assert.equal(third.includes('Your previous answer:'), true);
+    assert.deepEqual(calls.slice(1, 4).map((c) => c.effort), [undefined, undefined, 'max']);
+  });
+});
+
 describe('stage briefs name what the judge checks (YOS-45)', () => {
   /** PLAN with a custom route the resolve_ticket action claims, its action annotated with its route as real plans write it. */
   const ACTION_ROUTE_PLAN = {
