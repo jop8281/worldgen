@@ -27,7 +27,7 @@ async function main(argv: readonly string[]): Promise<number> {
   if (!loaded.ok) return fail(3, `${name} does not load: ${loaded.error[0].code}`);
   const report = checkWorld(loaded.value);
   if (!report.ok) return fail(3, `${name} does not check: ${report.issues.map((i) => i.code).slice(0, 5).join(', ')}`);
-  process.stdout.write(`${JSON.stringify(explorerOf(name, report.world))}\n`);
+  process.stdout.write(`${JSON.stringify(explorerOf(name, report.world, report.stats))}\n`);
   return 0;
 }
 
