@@ -10,10 +10,14 @@ meta:
     tick: 0s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -1036,6 +1040,7 @@ tasks:
               for (const s of subs) ctx.api('POST', '/subscriptions/' + s.id + '/cancel', {});
             }
           }
+    alternatives: []
   recover_bluefin_labs_with_backup_card:
     difficulty: medium
     instruction: Bluefin Labs' subscription is past due because its default card keeps getting declined. They already have a backup card ending in 4444 on file. Make that card the customer's default payment method, then collect their open invoice now using it. Do not add new cards or cancel anything.
@@ -1123,6 +1128,7 @@ tasks:
             ctx.api('POST', '/customers/' + cus.id + '/default_payment_method', { payment_method_id: fresh.id });
             ctx.api('POST', '/invoices/' + inv.id + '/pay', {});
           }
+    alternatives: []
   cancel_final_retry_business_subscriptions:
     difficulty: hard
     instruction: Finance wants to stop dunning for the biggest accounts about to take their last retry. Cancel every subscription on the Business plan that is past due and whose open invoice is on its third charge attempt, so only the 7-day retry is left. Leave every other subscription alone, including other past due ones. Change nothing else.
@@ -1240,3 +1246,4 @@ tasks:
             }
             ctx.api('POST', '/subscriptions/' + extra.id + '/cancel', {});
           }
+    alternatives: []
