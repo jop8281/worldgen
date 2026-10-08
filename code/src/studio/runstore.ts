@@ -17,10 +17,12 @@ export type JobKind = 'generate' | 'episode';
 export const DEFAULT_TENANT = 'default';
 /** Which studio may act on an unfinished job, and until when. Past `expiresAt` the holder counts as dead. */
 export type Lease = { readonly holder: string; readonly expiresAt: string };
-/** What a studio did with a job whose holder died. */
+/** Why the lease rules stop a job whose holder died. */
+export type RecoveryStop = 'process_gone' | 'start_unconfirmed';
+/** What a studio did with a job whose holder died, or with a job it held when it closed (`studio_closed`, A-363). */
 export type Recovery =
   | { readonly at: string; readonly from: string; readonly outcome: 'resumed' }
-  | { readonly at: string; readonly from: string; readonly outcome: 'stopped'; readonly reason: 'process_gone' | 'start_unconfirmed' };
+  | { readonly at: string; readonly from: string; readonly outcome: 'stopped'; readonly reason: RecoveryStop | 'studio_closed' };
 
 /** What survives a restart about one job. */
 export type StoredRun = {
@@ -68,7 +70,7 @@ const storedRunSchema = z.object({
   lease: z.object({ holder: z.string(), expiresAt: z.string() }).nullable(),
   recovery: z.discriminatedUnion('outcome', [
     z.object({ at: z.string(), from: z.string(), outcome: z.literal('resumed') }),
-    z.object({ at: z.string(), from: z.string(), outcome: z.literal('stopped'), reason: z.enum(['process_gone', 'start_unconfirmed']) }),
+    z.object({ at: z.string(), from: z.string(), outcome: z.literal('stopped'), reason: z.enum(['process_gone', 'start_unconfirmed', 'studio_closed']) }),
   ]).optional(),
   episode: z.object({ world: z.string(), task: z.string(), agent: z.string() }).optional(),
   iterate: z.object({ source: z.string(), world: z.string() }).optional(),
@@ -123,7 +125,7 @@ export const osProcesses: Processes = {
 export type RecoveryDecision =
   | { readonly kind: 'leave'; readonly why: 'finished' | 'held' | 'lease_live' }
   | { readonly kind: 'resume'; readonly from: string; readonly pid: number }
-  | { readonly kind: 'stop'; readonly from: string; readonly reason: Extract<Recovery, { outcome: 'stopped' }>['reason'] };
+  | { readonly kind: 'stop'; readonly from: string; readonly reason: RecoveryStop };
 
 export function recoveryOf(job: Pick<StoredRun, 'phase' | 'lease' | 'pid'>, at: number, holder: string | null, processes: Processes): RecoveryDecision {
   if (job.phase === 'finished') return { kind: 'leave', why: 'finished' };

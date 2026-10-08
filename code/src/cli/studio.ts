@@ -3,7 +3,8 @@
  * only; the page is studio/page.ts and the routes are studio/server.ts. The children
  * (`worldplay serve`, `worldgen`, `costs`) are spawned by the server through the injected
  * spawners from sandboxes/backend.ts; this file never imports llm.ts and makes no model call.
- * Exit codes: 0 never (the listening server keeps the process alive), 1 failure, 2 bad usage.
+ * Exit codes: 0 after SIGTERM and 130 after SIGINT, once every child is gone; 143 or 130 when a second signal cuts
+ * that wait; 1 failure; 2 bad usage.
  *
  *   bun run studio [--port 8787] [--host 127.0.0.1] [--transport claude-cli|sdk] [--users <file>] [--origin <url>] [--worlds-dir <dir>] [--repo-root <dir>]
  */
@@ -14,7 +15,7 @@ import { nodeRunner, nodeSpawn } from '../sandboxes/backend.ts';
 import { DEFAULT_TENANT } from '../studio/runstore.ts';
 import { reconcileJobs } from '../studio/reconcile.ts';
 import { osProcesses } from '../studio/runstore.ts';
-import { originOf, parseUsersFile, studioServer, type StudioUser } from '../studio/server.ts';
+import { originOf, parseUsersFile, stopOnSignals, studioServer, type StudioUser } from '../studio/server.ts';
 
 const DEFAULT_PORT = 8787;
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
@@ -30,7 +31,9 @@ episode children get the environment whole, so the operator's own env carries ev
 world's snippets (serve, the Explorer check, the proof) gets only TZ, PATH and the guard scale.
 --repo-root defaults to the repository this file lives in; --worlds-dir defaults to
 <repo-root>/prod/worlds. A served world keeps its own two ports; the studio port has no
-/_world route. Ctrl-C stops the studio; the studio SIGTERMs its tracked children.
+/_world route. SIGTERM or Ctrl-C stops the studio: it stops every served world and running check,
+waits until each is gone, then exits 0 (SIGTERM) or 130 (SIGINT); a second signal exits at once.
+Generation runs and episodes get SIGTERM, their own clean stop, and bill their call on their own.
 --host binds another interface. The studio starts worldgen runs, so it refuses to bind a
 non-loopback host unless sign-in is on: --users <file>, or WORLDGEN_STUDIO_TOKEN (one admin,
 named admin in tenant default, whose token is that value). Give only one of the two.
@@ -174,6 +177,7 @@ async function main(argv: readonly string[]): Promise<number> {
       runner: nodeRunner,
     });
     process.stdout.write(`studio on ${server.url} (worlds under ${args.worldsDir ?? path.join(args.repoRoot, 'prod', 'worlds')})\n`);
+    stopOnSignals(server, process);
   } catch (e) {
     process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
@@ -181,5 +185,6 @@ async function main(argv: readonly string[]): Promise<number> {
   return 0;
 }
 
-// The listening server holds the process open, so the exit code is only reached on a failure.
+// The listening server holds the process open, so this exit code is only reached on a failure; a stop signal exits
+// through stopOnSignals.
 process.exitCode = await main(process.argv.slice(2));
