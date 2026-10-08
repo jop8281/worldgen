@@ -141,6 +141,23 @@ describe('planCoverage', () => {
     assert.deepEqual(planCoverage(actionPlan, world()), []);
   });
 
+  // stress-6 stripe-charges (YOS-258): the plan said GET /v1/charges/{charge}, the model built GET /v1/charges/{id}.
+  it('accepts a planned route or claimed action whose path names its params differently', () => {
+    const renamed: Plan = { ...plan, routes: [
+      { id: 'get_ticket', method: 'GET', path: '/tickets/{ticket}', purpose: 'read one ticket' },
+      { id: 'solve', method: 'POST', path: '/tickets/{ticket_id}/solve', purpose: 'solve a ticket' },
+    ] };
+    assert.deepEqual(planCoverage(renamed, world()), []);
+  });
+
+  it('still rejects a renamed param path whose literal segments differ', () => {
+    const renamed: Plan = { ...plan, routes: [{ id: 'get_ticket', method: 'GET', path: '/ticket/{ticket}', purpose: 'read one ticket' }] };
+    const issues = planCoverage(renamed, world());
+    assert.deepEqual(summary(issues), [['plan.not_covered', 'error', ['routes', 'get_ticket']]]);
+    assert.equal(issues[0]?.expected, 'the planned route "get_ticket" at GET /ticket/{ticket} exists in the world');
+    assert.equal(issues[0]?.found, 'GET /tickets/{id}');
+  });
+
   it('reports a missing claimed action once and assigns its repair to workflow', () => {
     const actionPlan: Plan = { ...plan, routes: [{ id: 'solve', method: 'POST', path: '/tickets/{id}/solve', purpose: 'solve a ticket' }] };
     const issues = planCoverage(actionPlan, world({ actions: { assign: action('/tickets/{id}/assign') } }));

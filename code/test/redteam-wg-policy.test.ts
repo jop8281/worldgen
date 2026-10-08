@@ -301,16 +301,17 @@ describe('redteam policy: the loop always stops (scripted fake model)', () => {
     assert.deepEqual(r.decision, { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY.actionError, lastIssues: [I.actionError] } });
   });
 
-  it('WG-P14 a frozen test workflow keeps failing goes back to plan twice, then stops attempts_exhausted on workflow (11 calls, A-161)', async () => {
+  // Each rerun of workflow has its full budget (A-383), so the third visit also fails the test twice, with no backtrack left.
+  it('WG-P14 a frozen test workflow keeps failing goes back to plan twice, then stops backtrack_limit on workflow (12 calls, A-161, A-383)', async () => {
     const r = await drive(RT_CONFIG, (step) =>
       step === 'workflow' ? { outcome: rejected(I.testFailed), issues: owned([I.testFailed, 'workflow']), costUsd: 0.01 } : accept);
     assert.deepEqual(r.calls, [
       'plan', 'model', 'workflow', 'workflow',
       'plan', 'model', 'workflow', 'workflow',
-      'plan', 'model', 'workflow',
+      'plan', 'model', 'workflow', 'workflow',
     ]);
     assert.equal(r.ledger.backtracks, 2);
-    assert.deepEqual(r.decision, { kind: 'stop', reason: { kind: 'attempts_exhausted', step: 'workflow', attempts: 5, lastIssues: [I.testFailed] } });
+    assert.deepEqual(r.decision, { kind: 'stop', reason: { kind: 'backtrack_limit', step: 'workflow', backtracks: 2 } });
   });
 
   it('WG-P14 always-new rejections on tasks stop attempts_exhausted after exactly 5 tasks calls', async () => {

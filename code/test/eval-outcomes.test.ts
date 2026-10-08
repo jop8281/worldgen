@@ -190,6 +190,26 @@ describe('all expected eval outcomes', () => {
     assert.equal(backtracked.completeSuite, true);
   });
 
+  it('R3 lets a step rerun after a backtrack restart at 1 (YOS-258) or continue its count (runs before it), and nothing else', () => {
+    const start = { t: 'step_started', runId: 'r', step: 'plan' };
+    const finish = { t: 'step_finished', runId: 'r', step: 'plan', attempts: 1 };
+    const attempt = { t: 'attempt', runId: 'r', step: 'plan', n: 1 };
+    const rerun = (...ns: number[]) => analyzeEvalOutcomes([expected[0]!], [{ ...evidence('alpha'), logs: { create: [
+      { t: 'run_started', runId: 'r', mode: 'create' },
+      start, attempt, finish,
+      { ...start, step: 'model' }, { ...attempt, step: 'model' },
+      { t: 'backtracked', runId: 'r', from: 'model', to: 'plan' },
+      start, attempt, finish,
+      { ...start, step: 'model' }, ...ns.map((n) => ({ ...attempt, step: 'model', n })), { ...finish, step: 'model', attempts: ns.length },
+      { t: 'run_finished', runId: 'r', ms: 1, costUsd: 0, result: { kind: 'done' } },
+    ].map((e) => JSON.stringify(e)).join('\n') } }]);
+    for (const [ns, total] of [[[1], 4], [[2], 4], [[1, 2], 5], [[3], null], [[1, 3], null], [[1, 1], null]] as const) {
+      const report = rerun(...ns);
+      assert.equal(report.metrics.attempts.total, total, JSON.stringify(ns));
+      assert.equal(report.completeSuite, total !== null, JSON.stringify(ns));
+    }
+  });
+
   it('R3 refuses orphan events, impossible backtracks and completion after refusal as complete attempt coverage', () => {
     const start = { t: 'step_started', step: 'plan' };
     const attempt = { t: 'attempt', step: 'plan', n: 1 };

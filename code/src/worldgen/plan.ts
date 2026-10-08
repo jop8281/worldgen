@@ -8,7 +8,7 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import type { InputKind } from './input.ts';
 import { fixtureFed } from './input-coverage.ts';
-import { issue, machineOf, worldSchema, type CheckIssue, type IssuePath, type World, type WorldStats } from '#engine';
+import { issue, machineOf, routeKey, worldSchema, type CheckIssue, type IssuePath, type World, type WorldStats } from '#engine';
 
 /** How many percentage points a seeded state share may stray from `seed.stateMix`. */
 export const MIX_WITHIN = 10;
@@ -391,7 +391,7 @@ export function seedPlanIssues(plan: Plan, stats: Pick<WorldStats, 'rows' | 'sta
   return [...seedRowIssues(plan, stats.rows, fed), ...mix];
 }
 
-/** Missing keys point into the plan; mismatched method/path contracts point at the world item to repair. */
+/** Missing keys point into the plan; mismatched method/path contracts point at the world item to repair. Param names do not count, as in `routeKey`. */
 export function planCoverage(plan: Plan, world: World): readonly CheckIssue[] {
   const missing = plannedItems(plan)
     .filter((p) => !Object.hasOwn(world[p.section], p.key))
@@ -400,7 +400,7 @@ export function planCoverage(plan: Plan, world: World): readonly CheckIssue[] {
   const mismatched = plan.routes.flatMap((r): CheckIssue[] => {
     const section = claimed.has(r.id) ? 'actions' : 'routes';
     const actual = Object.hasOwn(world[section], r.id) ? world[section][r.id] : undefined;
-    if (actual === undefined || (actual.method === r.method && actual.path === r.path)) return [];
+    if (actual === undefined || routeKey(actual.method, actual.path) === routeKey(r.method, r.path)) return [];
     const kind = section === 'actions' ? 'action' : 'route';
     return [issue('plan.not_covered', [section, r.id], {
       item: `${kind} "${r.id}" at ${r.method} ${r.path}`,

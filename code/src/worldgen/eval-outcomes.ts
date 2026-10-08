@@ -88,7 +88,9 @@ function analyzeLog(text: string | null | undefined): PhaseAnalysis {
   let attemptsKnown = starts.length === 1;
   let attempts = 0;
   const sequence = new Map<string, number>();
-  // step_finished.attempts is per invocation; backtracking resets only the target's attempt.n.
+  // step_finished.attempts is per invocation. A backtrack resets the target's attempt.n, and since YOS-258 every step it
+  // reruns restarts at 1 too; runs recorded before that continue a later step's count, so either is accepted.
+  const restartable = new Set<string>();
   const active = new Map<string, { attempts: number; refused: boolean }>();
   let refused = false;
   let backtrackTo: string | null = null;
@@ -103,9 +105,11 @@ function analyzeLog(text: string | null | undefined): PhaseAnalysis {
     } else if (e.t === 'attempt') {
       attempts++;
       const n = count(e.n);
-      if (typeof e.step !== 'string' || n === null || n !== (sequence.get(e.step) ?? 0) + 1) attemptsKnown = false;
+      const next = typeof e.step === 'string' && n !== null && (n === (sequence.get(e.step) ?? 0) + 1 || (n === 1 && restartable.has(e.step)));
+      if (!next) attemptsKnown = false;
       if (typeof e.step === 'string') {
         if (n !== null) sequence.set(e.step, n);
+        restartable.delete(e.step);
         const step = active.get(e.step);
         if (step === undefined || step.refused) attemptsKnown = false;
         else step.attempts++;
@@ -125,6 +129,7 @@ function analyzeLog(text: string | null | undefined): PhaseAnalysis {
       if (step === undefined || step.attempts === 0 || step.refused || typeof e.to !== 'string') attemptsKnown = false;
       if (typeof e.from === 'string') active.delete(e.from);
       if (typeof e.to === 'string') {
+        for (const step of sequence.keys()) restartable.add(step);
         sequence.set(e.to, 0);
         backtrackTo = e.to;
       }

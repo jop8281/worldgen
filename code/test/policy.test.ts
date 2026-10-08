@@ -98,6 +98,16 @@ const unreach = issue('plan.pressure_unreachable', ['plan', 'tasks', 1, 'pressur
 /** The key the loop records for a seed rejection with these issues. */
 const seedKey = (...is: CheckIssue[]): string => attemptIssueSet(rejected(...is), is.map((i) => ({ issue: i, owner: 'seed' as const }))) ?? '';
 const tasksKey = (i: CheckIssue): string => attemptIssueSet(rejected(i), owned([i, 'tasks'])) ?? '';
+// stress-6 stripe-charges (YOS-258): model used 3 of its 4 attempts, workflow backtracked to plan, and the model's rerun
+// failed once on this, which stopped the run as attempts_exhausted.
+const ncGetCharge = issue('plan.not_covered', ['routes', 'get_charge'], { item: 'route "get_charge" at GET /v1/charges/{charge}' }, 'GET /v1/charges/{id}');
+const modelKey = (i: CheckIssue): string => attemptIssueSet(rejected(i), owned([i, 'model'])) ?? '';
+/** The ledger as the loop builds it: `attempts` used before a backtrack to `to`, then each rerun attempt recorded with its issue set key. */
+const rerunAfter = (to: StepId, attempts: Ledger['attempts'], reruns: readonly (readonly [StepId, string | null])[]): Ledger => {
+  let l = recordBacktrack(ledger({ attempts }), to);
+  for (const [step, key] of reruns) l = record(l, step, 0, key);
+  return l;
+};
 /**
  * worldgen-97: tasks saw `before` sets, backtracked to seed, then saw `after` sets. Built with record and
  * recordBacktrack as the loop does.
@@ -153,6 +163,17 @@ const rows: Row[] = [
   { name: 'attempts at the limit stops attempts_exhausted', step: 'workflow', ledger: { attempts: { plan: 0, model: 0, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: ['a', 'b', 'c', KEY_TF], seed: [], tasks: [] } },
     outcome: rejected(tf), issues: owned([tf, 'workflow']),
     want: { kind: 'stop', reason: { kind: 'attempts_exhausted', step: 'workflow', attempts: 4, lastIssues: [tf] } } },
+  // YOS-258: a backtrack gives its target and every later step a fresh attempt budget, so the caps hold per visit.
+  { name: 'a step rerun after a backtrack to an earlier step has its full attempts again', step: 'model',
+    ledger: rerunAfter('plan', { plan: 1, model: 3, workflow: 2, seed: 0, tasks: 0 }, [['plan', null], ['model', modelKey(ncGetCharge)]]),
+    outcome: rejected(ncGetCharge), issues: owned([ncGetCharge, 'model']), want: { kind: 'retry' } },
+  { name: 'the step that backtracked has its full attempts again on its rerun', step: 'workflow',
+    ledger: rerunAfter('plan', { plan: 1, model: 1, workflow: 3, seed: 0, tasks: 0 }, [['plan', null], ['model', null], ['workflow', KEY_TF]]),
+    outcome: rejected(tf), issues: owned([tf, 'workflow']), want: { kind: 'retry' } },
+  { name: 'after a backtrack the cap still stops a step at its 4th failed attempt in that visit', step: 'model',
+    ledger: rerunAfter('plan', { plan: 1, model: 3, workflow: 2, seed: 0, tasks: 0 }, [['plan', null], ['model', 'a'], ['model', 'b'], ['model', 'c'], ['model', modelKey(ncGetCharge)]]),
+    outcome: rejected(ncGetCharge), issues: owned([ncGetCharge, 'model']),
+    want: { kind: 'stop', reason: { kind: 'attempts_exhausted', step: 'model', attempts: 4, lastIssues: [ncGetCharge] } } },
   { name: 'per-step maxAttempts is honoured', step: 'plan', config: { steps: { plan: { maxAttempts: 1 }, model: budget, workflow: budget, seed: budget, tasks: budget } },
     ledger: { attempts: { plan: 1, model: 0, workflow: 0, seed: 0, tasks: 0 }, seenIssueSets: { plan: ['x'], model: [], workflow: [], seed: [], tasks: [] } },
     outcome: rejected(nc), issues: owned([nc, 'plan']),
@@ -447,16 +468,18 @@ describe('record', () => {
     assert.equal(before.backtracks, 1);
   });
 
-  it('recordBacktrack resets the target step attempts, keeps the other attempts, and starts a new stretch of seen sets', () => {
+  it('recordBacktrack resets the attempts and stall retries of the target and every later step, keeps the earlier steps, and starts a new stretch of seen sets', () => {
     const before = ledger({
       backtracks: 0,
       attempts: { plan: 1, model: 4, workflow: 2, seed: 1, tasks: 3 },
+      stallRetries: { plan: 1, model: 1, workflow: 1, seed: 0, tasks: 1 },
       seenIssueSets: { plan: [], model: ['a'], workflow: [], seed: [], tasks: ['b'] },
     });
     Object.freeze(before.attempts);
     Object.freeze(before);
     const after = recordBacktrack(before, 'model');
-    assert.deepEqual(after.attempts, { plan: 1, model: 0, workflow: 2, seed: 1, tasks: 3 });
+    assert.deepEqual(after.attempts, { plan: 1, model: 0, workflow: 0, seed: 0, tasks: 0 });
+    assert.deepEqual(after.stallRetries, { plan: 1, model: 0, workflow: 0, seed: 0, tasks: 0 });
     assert.deepEqual(after.seenIssueSets, { plan: [], model: [], workflow: [], seed: [], tasks: [] });
     assert.equal(after.backtracks, 1);
     assert.deepEqual(before.attempts, { plan: 1, model: 4, workflow: 2, seed: 1, tasks: 3 });
@@ -472,11 +495,11 @@ describe('record', () => {
     assert.deepEqual(before.stallRetries, { plan: 0, model: 0, workflow: 0, seed: 0, tasks: 0 });
   });
 
-  it('recordBacktrack gives the target step its stall retry back with its attempts', () => {
+  it('recordBacktrack gives the target and every later step their stall retry back with their attempts', () => {
     const before = ledger({ attempts: { plan: 1, model: 3, workflow: 2, seed: 0, tasks: 0 }, stallRetries: { plan: 1, model: 1, workflow: 1, seed: 0, tasks: 0 } });
     const after = recordBacktrack(before, 'model');
-    assert.deepEqual(after.stallRetries, { plan: 1, model: 0, workflow: 1, seed: 0, tasks: 0 });
-    assert.deepEqual(after.attempts, { plan: 1, model: 0, workflow: 2, seed: 0, tasks: 0 });
+    assert.deepEqual(after.stallRetries, { plan: 1, model: 0, workflow: 0, seed: 0, tasks: 0 });
+    assert.deepEqual(after.attempts, { plan: 1, model: 0, workflow: 0, seed: 0, tasks: 0 });
   });
 
   it('a step backtracked to after using all its attempts gets its repair budget again', () => {

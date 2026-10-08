@@ -33,7 +33,8 @@ Percentiles use nearest-rank over measured case totals: sort ascending and selec
 Attempts count logged completed `attempt` events, not unlogged or abandoned provider calls.
 Coverage requires a single identified run bounded by start and finish, matching active step
 invocations, consecutive per-step attempt numbers and consistency with step completion counts.
-Backtracking resets the target step's attempt number; completion counts belong to one invocation.
+Backtracking resets the target step's attempt number, and since YOS-258 (A-383) every step it reruns restarts at 1;
+a rerun step may also continue its count, as runs recorded before that do. Completion counts belong to one invocation.
 Create/change logs must have their respective create/iterate modes and distinct run identities.
 A preflight refusal may have zero
 attempts. A started step with neither attempt nor refusal has unknown attempt coverage.
