@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { z } from 'zod';
-import { FIELD_TYPES, ISSUES, SECTIONS, formatReference, worldFormatDoc } from '#engine';
+import { FIELD_TYPES, ISSUES, SECTIONS, formatReference, loadWorld, worldFormatDoc } from '#engine';
 import { CLIENT_CTX, GRADER_CTX, HANDLER_CTX, JOB_CTX, SEED_CTX } from '../src/engine/ctx.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
@@ -575,5 +575,28 @@ describe('research/decisions.md tables', () => {
   it('every row of research/decisions.md has a unique A-<n> id or its legacy one, five columns, a date and a yes or no', () => {
     const file = 'research/decisions.md';
     assert.deepEqual(decisionProblems(file, readFileSync(path.join(REPO_DIR, file), 'utf8'), LEGACY_DECISION_IDS), []);
+  });
+});
+
+describe('world inventory (YOS-206)', () => {
+  it('README.md, AGENTS.md and prod/design.md state the world and task counts prod/worlds holds', async () => {
+    const root = path.join(REPO_DIR, 'prod/worlds');
+    const dirs = (await readdir(root, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.') && !e.name.endsWith('.partial')).map((e) => e.name);
+    let tasks = 0;
+    for (const d of dirs) {
+      const w = await loadWorld(path.join(root, d));
+      assert.ok(w.ok, d);
+      tasks += Object.keys((w.value as { tasks?: object }).tasks ?? {}).length;
+    }
+    const gen = dirs.filter((d) => d.startsWith('gen-')).length;
+    const hand = dirs.length - gen;
+    const read = (f: string): string => readFileSync(path.join(REPO_DIR, f), 'utf8');
+    const want: Record<string, string[]> = {
+      'README.md': [`holds ${dirs.length} worlds and ${tasks} tasks`, `WorldGen generated the other ${gen},`],
+      'AGENTS.md': [`holds ${hand} hand-built worlds (helpdesk and retail-tau2) and ${gen} generated ones`],
+      'prod/design.md': [`Of the ${gen} generated worlds`, `holds ${gen} \`gen-*\` worlds and ${hand} hand-built worlds`, `The ${dirs.length} worlds hold ${tasks} tasks`],
+    };
+    const missing = Object.entries(want).flatMap(([f, ss]) => ss.filter((x) => !read(f).includes(x)).map((x) => `${f}: "${x}"`));
+    assert.deepEqual(missing, []);
   });
 });
