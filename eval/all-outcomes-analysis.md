@@ -4,15 +4,14 @@ From `code/`, run the offline reader against the suite used for the run:
 
 ```sh
 bun scripts/analyze-eval.ts ../eval/suite.yaml ../eval/runs/<run-directory>
-# Node alternative:
-node --import tsx scripts/analyze-eval.ts ../eval/suite.yaml ../eval/runs/<run-directory>
 ```
 
 The JSON report keeps one slot for every manifest case, in manifest order. The success
 denominator is always the number of expected cases. Invalid, missing and duplicate slots
 cannot pass. Unexpected records are listed separately and prevent a complete-suite verdict.
 The manifest must be nonempty with unique lowercase kebab-case IDs. An expected stopped
-case passes only with a recorded known stop reason other than `model_error`.
+case passes only on a recorded `input_rejected` stop: only an input_rejected stop counts as
+an expected refusal (A-384).
 
 The reader reads the existing `<case>/case.json`, `<case>/events.jsonl` and
 `<case>/change/events.jsonl` layout. It never executes a world, invokes a provider, reads
