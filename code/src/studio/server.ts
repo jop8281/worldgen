@@ -67,7 +67,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
-import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
+import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, RUN_TEXT_WITHHELD, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { parsePlanYaml } from '../worldgen/plan.ts';
 import { renderPlanMd } from '../worldgen/plan-md.ts';
@@ -970,7 +970,19 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   async function worldReport(p: Params, who: User, filter: string | null): Promise<Reply> {
     const w = await worldDirOf(p['name'] ?? '', who, filter);
-    return w.ok ? reportOf(p['name'] ?? '', w.dir) : w.reply;
+    if (!w.ok) return w.reply;
+    return await sensitiveRefusal(who, w.dir, p['name'] ?? '', 'report') ?? reportOf(p['name'] ?? '', w.dir);
+  }
+
+  /**
+   * A 403 for a role below admin when the world at `dir` has a sensitive field or cannot be read: its REPORT.md and plan
+   * quote issue hints and run text that can hold seed values, as its export holds the seed (A-356, A-367). Null otherwise.
+   */
+  async function sensitiveRefusal(who: User, dir: string, name: string, what: 'report' | 'plan'): Promise<Reply | null> {
+    if (who.role === 'admin') return null;
+    const sensitive = await sensitivityOf(dir);
+    if (sensitive !== null && sensitive.size === 0) return null;
+    return fail(403, `${what}.sensitive`, `${name} ${sensitive === null ? 'cannot be read to find its sensitive fields' : 'has sensitive fields'}, so only an admin may read its ${what}`);
   }
 
   /** REPORT.md and capsule.json of a resolved world dir, refused when the report embeds private task source. */
@@ -996,6 +1008,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const name = p['name'] ?? '';
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
+    const refused = await sensitiveRefusal(who, w.dir, name, 'plan');
+    if (refused !== null) return refused;
     const yaml = await readFile(path.join(w.dir, 'plan.yaml'), 'utf8').catch(() => null);
     if (yaml === null) return fail(404, 'plan.missing', `${name} has no plan.yaml; only a generated world has a plan`);
     const plan = parsePlanYaml(yaml);
@@ -1719,15 +1733,19 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const events = await readEvents(run);
     const running = run.phase !== 'finished';
     const tail = events.slice(-EVENT_TAIL);
+    // Issue text, error messages and the child's own output can quote seed values or model output, so below admin they
+    // show only for a run whose saved world has no sensitive field. The out dir holds a world only once the run is done,
+    // so a run with none fails closed (A-367).
+    const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await sensitivityOf(run.outDir);
+    const output = run.child?.output() ?? '';
+    const said = (sensitive !== null && sensitive.size === 0) || output.trim() === '' ? output : RUN_TEXT_WITHHELD;
     return {
       status: 200,
       body: {
         running,
-        ...stateOf(running, run.exitCode, events, run.child?.output() ?? '', run.recovery),
+        ...stateOf(running, run.exitCode, events, said, run.recovery),
         ...(running ? {} : { exitCode: run.exitCode }),
-        // Issue text can quote seed values, so below admin it shows only for a run whose saved world has no sensitive
-        // field. The out dir holds a world only once the run is done, so a run with none fails closed (A-367).
-        events: who.role === 'admin' ? tail : runEventsBelowAdmin(tail, await sensitivityOf(run.outDir)),
+        events: runEventsBelowAdmin(tail, sensitive),
         totals: totalsOf(events),
         job: jobView(run),
         ...(run.iterate === undefined ? {} : { iterate: { ...run.iterate, published: !running && await file(path.join(run.outDir, 'world.yaml')) } }),
@@ -1975,8 +1993,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (run === undefined && !await isDir(out)) return unknown;
     const exported = await exportedEpisode(out, runId);
     // Tool results hold the world's answers, so a role below admin sees them masked like the console's (A-356).
-    const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, await episodeSensitivity(exported, out));
-    const output = run?.child?.output() ?? '';
+    const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await episodeSensitivity(exported, out);
+    const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, sensitive);
+    // The child's last lines can quote a world answer, so they are withheld below admin like a run's (A-367).
+    const raw = run?.child?.output() ?? '';
+    const output = (sensitive !== null && sensitive.size === 0) || raw.trim() === '' ? raw : RUN_TEXT_WITHHELD;
     const running = run !== undefined && run.phase !== 'finished';
     return {
       status: 200,

@@ -116,8 +116,15 @@ export function sensitiveOf(world: unknown): ReadonlyMap<string, ReadonlySet<str
 export const SENSITIVE_MESSAGE = '[withheld: the message names a sensitive field]';
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-/** Whether `text` names `field` as a word: `status` in `tkt_0002 status cannot move`, not in `statuses`. */
-const namesField = (text: string, field: string): boolean => new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(field)}($|[^A-Za-z0-9_])`).test(text);
+/**
+ * Whether `text` names `field` as a word, in any case and with `_`, `-`, a space or nothing between its parts:
+ * `api_key` is named by `API-KEY` and `api key`, `photoUrls` by `photo urls`, `status` by `tkt_0002 status`, but
+ * `status` not by `statuses` and `ssn` not by `lessons`.
+ */
+const namesField = (text: string, field: string): boolean => {
+  const parts = field.split(/[_\- ]+|(?<=[a-z0-9])(?=[A-Z])/).filter((p) => p !== '').map(escapeRegExp);
+  return parts.length > 0 && new RegExp(`(^|[^a-z0-9])${parts.join('[_\\- ]?')}($|[^a-z0-9])`, 'i').test(text);
+};
 
 /**
  * `value` with every sensitive field of every row it holds replaced by SENSITIVE_MASK. A row is an object whose `id` is
@@ -167,16 +174,19 @@ export function mergeSensitivity(all: readonly Sensitivity[]): Sensitivity {
   return out;
 }
 
-/** What a role below admin sees in place of an issue's found and hint, and of a repeated issue set, in a run's events. */
+/** What a role below admin sees in place of a run's free text that can quote seed values or model output (A-367). */
 export const RUN_TEXT_WITHHELD = "[withheld: it can quote seed values, and the run's world has a sensitive field or saved none to tell]";
 
 const isIssue = (v: Readonly<Record<string, unknown>>): boolean =>
   typeof v['code'] === 'string' && typeof v['severity'] === 'string' && Array.isArray(v['path']) && typeof v['found'] === 'string';
+/** Outcomes and stop reasons whose `message` is free text: a model's or the judge's error, or a crash. */
+const MESSAGE_KINDS: ReadonlySet<unknown> = new Set(['model_error', 'judge_error', 'crashed']);
 
 /**
  * A generation run's events as a role below admin sees them (A-367). An issue's found and hint can quote a seed value
- * or a test's message, and a no_progress stop's repeated issue set holds the found texts, so all three are withheld
- * unless the run's saved world has no sensitive field. A run that saved no world, or whose world is unread, fails closed.
+ * or a test's message, a no_progress stop's repeated issue set holds the found texts, and a model error, judge error or
+ * crash message can quote model output, so all of them are withheld unless the run's saved world has no sensitive
+ * field. A run that saved no world, or whose world is unread, fails closed.
  */
 export function runEventsBelowAdmin(events: readonly unknown[], sensitive: Sensitivity): unknown[] {
   if (sensitive !== null && sensitive.size === 0) return [...events];
@@ -184,7 +194,8 @@ export function runEventsBelowAdmin(events: readonly unknown[], sensitive: Sensi
     if (Array.isArray(v)) return v.map(walk);
     if (!obj(v)) return v;
     if (isIssue(v)) return { ...v, found: RUN_TEXT_WITHHELD, ...(typeof v['hint'] === 'string' ? { hint: RUN_TEXT_WITHHELD } : {}) };
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'repeatedIssueSet' && typeof x === 'string' ? RUN_TEXT_WITHHELD : walk(x)]));
+    const freeText = (k: string, x: unknown): boolean => typeof x === 'string' && (k === 'repeatedIssueSet' || (k === 'message' && MESSAGE_KINDS.has(v['kind'])));
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, freeText(k, x) ? RUN_TEXT_WITHHELD : walk(x)]));
   };
   return events.map(walk);
 }
