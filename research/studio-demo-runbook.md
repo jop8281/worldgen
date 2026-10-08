@@ -2,7 +2,7 @@
 
 How to show WorldGen Studio in a browser in 15 minutes, on one seeded repository, signed in, with no terminal after setup. This is the YOS-193 click path. The offline terminal demo stays in [demo-runbook.md](demo-runbook.md) and is the fallback for every step here.
 
-`code/scripts/studio-rehearse.ts` drives the same path in headless Chrome and prints one line per step. It starts its own signed-in studio and signs in through the page's token field. It ran clean 3 times in a row on jop8281/worldgen `96e9fa3f`: 17 of 17 steps `ok`, 0 page errors each time. That covers the sign-in, the engine proof, the noop episode, a retried request, and a second tenant's view.
+`code/scripts/studio-rehearse.ts` drives the same path in headless Chrome and prints one line per step. It starts its own signed-in studio and signs in through the page's token field. It ran clean 3 times in a row on jop8281/worldgen `cc06db5e`: 17 of 17 steps `ok`, 0 page errors each time. That covers the sign-in, the engine proof, the noop episode, a retried request, and a second tenant's view.
 
 ## Setup (terminal, before the talk)
 
