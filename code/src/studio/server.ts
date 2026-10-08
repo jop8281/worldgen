@@ -67,7 +67,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
-import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, RUN_TEXT_WITHHELD, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
+import { bodyBelowAdmin, CHILD_TEXT_WITHHELD, episodeBelowAdmin, mergeSensitivity, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { parsePlanYaml } from '../worldgen/plan.ts';
 import { renderPlanMd } from '../worldgen/plan-md.ts';
@@ -1352,7 +1352,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     if (report.kind === 'exited') {
       const said = child.output().trim().split('\n').pop()?.trim() ?? '';
-      return fail(502, 'serve.failed', `worldplay serve for ${name} exited ${report.code ?? 'by a signal'} before it listened${said === '' ? '' : `: ${said}`}`);
+      // The line can quote the world's source, a check failure on a task's grader included, so only an admin reads it (A-377).
+      const shown = said === '' || who.role === 'admin' ? said : CHILD_TEXT_WITHHELD;
+      return fail(502, 'serve.failed', `worldplay serve for ${name} exited ${report.code ?? 'by a signal'} before it listened${shown === '' ? '' : `: ${shown}`}`);
     }
     if (report.kind === 'timeout') {
       await signalAndWait(child, ['SIGTERM', 'SIGKILL']);
@@ -1846,7 +1848,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   async function readEvents(run: Job): Promise<unknown[]> {
     const file = await eventsFileOf(run);
-    if (file === null) return [];
+    return file === null ? [] : eventsIn(file);
+  }
+
+  /** The events an events.jsonl holds, none when it cannot be read. */
+  async function eventsIn(file: string): Promise<unknown[]> {
     const text = await readFile(file, 'utf8').catch(() => '');
     const out: unknown[] = [];
     for (const line of text.split('\n')) {
@@ -1858,6 +1864,24 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
     }
     return out;
+  }
+
+  /**
+   * What a past run's own events say of it, for a run no capsule.json covers: run_started's model and transport, and the
+   * last run_finished's ms, cost and result. A fact the run never logged stays null.
+   */
+  function runFactsOf(all: readonly unknown[]): { model: string | null; transport: string | null; costUsd: number | null; ms: number | null; outcome: 'done' | 'stopped' | null } {
+    const events = all.filter(isObject);
+    const started = events.find((e) => e['t'] === 'run_started');
+    const finished = [...events].reverse().find((e) => e['t'] === 'run_finished');
+    const result = finished !== undefined && isObject(finished['result']) ? finished['result']['kind'] : undefined;
+    const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+    const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    return {
+      model: text(started?.['model']), transport: text(started?.['transport']),
+      costUsd: num(finished?.['costUsd']), ms: num(finished?.['ms']),
+      outcome: result === 'done' || result === 'stopped' ? result : null,
+    };
   }
 
   function totalsOf(events: readonly unknown[]): { ms: number; costUsd: number } | null {
@@ -1898,12 +1922,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const events = await readEvents(run);
     const running = run.phase !== 'finished';
     const tail = events.slice(-EVENT_TAIL);
-    // Issue text, error messages and the child's own output can quote seed values or model output, so below admin they
-    // show only for a run whose saved world has no sensitive field. The out dir holds a world only once the run is done,
-    // so a run with none fails closed (A-367).
+    // Issue text and error messages can quote seed values or model output, so below admin they show only for a run whose
+    // saved world has no sensitive field; the out dir holds a world only once the run is done, so a run with none fails
+    // closed (A-367). The child's own output can quote world or task source, as an episode's can, so below admin it is
+    // withheld whatever the world's sensitivity (A-374, A-377).
     const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await sensitivityOf(run.outDir);
     const output = run.child?.output() ?? '';
-    const said = (sensitive !== null && sensitive.size === 0) || output.trim() === '' ? output : RUN_TEXT_WITHHELD;
+    const said = who.role === 'admin' || output.trim() === '' ? output : CHILD_TEXT_WITHHELD;
     return {
       status: 200,
       body: {
@@ -1939,19 +1964,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         const capsule = await readCapsule(dir);
         const hasReport = await file(path.join(dir, 'REPORT.md'));
         for (const runId of await dirsOf(path.join(dir, 'runs'))) {
-          if (!await file(path.join(dir, 'runs', runId, 'events.jsonl'))) continue;
-          const mine = capsule !== null && capsule.runId === runId;
-          out.push({
-            name,
-            tenant: shelf.tenant,
-            runId,
-            model: mine ? capsule.model : null,
-            transport: mine ? capsule.transport : null,
-            costUsd: mine ? capsule.costUsd : null,
-            ms: mine ? capsule.ms : null,
-            outcome: mine ? (capsule.worldId !== null ? 'done' : 'stopped') : null,
-            hasReport,
-          });
+          const events = path.join(dir, 'runs', runId, 'events.jsonl');
+          if (!await file(events)) continue;
+          // The capsule speaks for the run that wrote it; any other run speaks through its own events.
+          const facts = capsule !== null && capsule.runId === runId
+            ? { model: capsule.model, transport: capsule.transport, costUsd: capsule.costUsd, ms: capsule.ms, outcome: capsule.worldId !== null ? 'done' as const : 'stopped' as const }
+            : runFactsOf(await eventsIn(events));
+          out.push({ name, tenant: shelf.tenant, runId, ...facts, hasReport });
         }
       }
     }
@@ -2165,9 +2184,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     // Tool results hold the world's answers, so a role below admin sees them masked like the console's (A-356).
     const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await episodeSensitivity(exported, out);
     const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, sensitive);
-    // The child's last lines can quote a world answer, so they are withheld below admin like a run's (A-367).
+    // The child's last lines can quote a world answer or task source, so only an admin reads them, whatever the world (A-377).
     const raw = run?.child?.output() ?? '';
-    const output = (sensitive !== null && sensitive.size === 0) || raw.trim() === '' ? raw : RUN_TEXT_WITHHELD;
+    const output = who.role === 'admin' || raw.trim() === '' ? raw : CHILD_TEXT_WITHHELD;
     const running = run !== undefined && run.phase !== 'finished';
     return {
       status: 200,

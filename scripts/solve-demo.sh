@@ -10,6 +10,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "${1:-}" in -h|--help) sed -n '2,9p' "$0"; exit 0 ;; esac
 PORT="${1:-4200}"
 ADMIN=$((PORT + 1))
 WORLD_URL="http://127.0.0.1:$PORT"

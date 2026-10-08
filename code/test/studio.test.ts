@@ -427,13 +427,14 @@ describe('studio', () => {
   });
 
   describe('past runs', () => {
-    it('lists every run dir with the capsule facts of the run that wrote it', async () => {
+    it('lists every run dir with the capsule facts of the run that wrote it, and another run\'s facts from its own events (YOS-193)', async () => {
       const r = await json(base, 'GET', '/api/runs');
       assert.equal(r.status, 200);
+      // gen-canary's capsule is another run's, so its run reads run_started's model and transport, and logged no run_finished.
       assert.deepEqual(r.body, {
         runs: [
           { name: 'gen-alpha', tenant: null, runId: 'run_20261007T181329Z_old1111', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, ms: 24000, outcome: 'done', hasReport: true },
-          { name: 'gen-canary', tenant: null, runId: 'run_20261007T000000Z_canary01', model: null, transport: null, costUsd: null, ms: null, outcome: null, hasReport: true },
+          { name: 'gen-canary', tenant: null, runId: 'run_20261007T000000Z_canary01', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: null, ms: null, outcome: null, hasReport: true },
         ],
       });
     });
@@ -871,7 +872,11 @@ describe('studio', () => {
       try {
         const listed = (JSON.parse((await call(base, 'GET', '/api/worlds')).text) as { worlds: { name: string }[] }).worlds.map((w) => w.name);
         assert.equal(listed.includes('gen-stopped-zeta'), false);
-        assert.match((await call(base, 'GET', '/api/runs')).text, /gen-stopped-zeta/);
+        // No capsule, so its outcome, ms and cost come from its run_finished (YOS-193).
+        const runs = (JSON.parse((await call(base, 'GET', '/api/runs')).text) as { runs: Json[] }).runs;
+        assert.deepEqual(runs.find((x) => x['name'] === 'gen-stopped-zeta'), {
+          name: 'gen-stopped-zeta', tenant: null, runId: 'run_stop', model: null, transport: null, costUsd: 0, ms: 1, outcome: 'stopped', hasReport: true,
+        });
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
@@ -1294,7 +1299,8 @@ describe('studio page error states, narrow tables and focus (YOS-209)', () => {
     notFound: 'Not found. It may have been removed; refresh the list and try again.',
     server: 'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
     network: 'The studio did not answer. Check that it is still running, then try again.',
-    refused: 'The studio refused this request. Check what you entered and try again.'
+    refused: 'The studio refused this request. Check what you entered and try again.',
+    resetConfirm: 'Type the world name exactly to confirm the reset.'
   };`;
 
   it('says what went wrong and what to do from one message map', () => {
@@ -1317,6 +1323,7 @@ describe('studio page error states, narrow tables and focus (YOS-209)', () => {
       problemText(0, 'network', ''),
       problemText(422, 'iterate.no_world', 'helpdesk has no world.yaml to iterate'),
       problemText(400, 'http.400', ''),
+      problemText(400, 'reset.confirm', 'a reset throws away every change to helpdesk\'s state; send {"confirm": "helpdesk"} to go ahead'),
     ], [
       'You are signed out. Sign in again with your studio token.',
       'You are signed out. Sign in again with your studio token.',
@@ -1330,7 +1337,13 @@ describe('studio page error states, narrow tables and focus (YOS-209)', () => {
       'The studio did not answer. Check that it is still running, then try again.',
       'helpdesk has no world.yaml to iterate',
       'The studio refused this request. Check what you entered and try again.',
+      'Type the world name exactly to confirm the reset.',
     ]);
+  });
+
+  it('shows a fact a past run never logged as not recorded, never null, and an unknown cost as unknown (YOS-193)', () => {
+    assert.equal(script.includes("function recorded(v) { return v === null || v === undefined ? 'not recorded' : v; }"), true);
+    assert.equal(script.includes("{ world: r.name, 'run id': r.runId, model: recorded(r.model), transport: recorded(r.transport), cost: usd(r.costUsd), ms: recorded(r.ms), outcome: recorded(r.outcome) }"), true);
   });
 
   it('never shows a raw error body or a bare exception, and every request resolves to a body', () => {

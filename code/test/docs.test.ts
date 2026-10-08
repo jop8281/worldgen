@@ -266,6 +266,128 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
   });
 });
 
+/** The docs an evaluator follows (YOS-201). Every command in them, fenced or inline, is checked. */
+const EVALUATOR_DOCS = ['README.md', 'prod/README.md', 'prod/prompts/README.md', 'research/live-run-runbook.md', 'research/studio-demo-runbook.md'];
+
+/**
+ * One documented command: a package.json script (`bun run x`, `npm run x`), a repo script (`scripts/x.sh`, from the repo
+ * root or code/), or a code/scripts entry (`bun scripts/x.ts`), with its arguments up to the next `&&`, `;`, `|` or `#`.
+ */
+type DocCommand = { readonly file: string; readonly line: number; readonly head: string; readonly args: readonly string[] };
+const COMMAND = /(?<![\w./-])(bun run [a-z][\w:-]*|npm run [a-z][\w:-]*|(?:\.\.\/)?scripts\/[\w.-]+\.sh|bun (?:\.\.\/)?scripts\/[\w./-]+\.ts)([^`&;|#\n]*)/g;
+
+/** Every command in `file`'s fenced blocks (with `\` continuations joined) and inline code spans, with its 1-based line. */
+function docCommands(file: string): DocCommand[] {
+  const out: DocCommand[] = [];
+  const take = (text: string, line: number): void => {
+    // A `$(…)` inside the arguments is another command's (`--commit $(git rev-parse --short HEAD)`), so it is dropped.
+    for (const m of text.matchAll(COMMAND)) out.push({ file, line, head: m[1]!, args: m[2]!.replace(/\$\([^)]*\)/g, '').trim().split(/\s+/).filter((a) => a !== '') });
+  };
+  let fenced = false;
+  let pending: { text: string; line: number } | null = null;
+  readFileSync(path.join(REPO_DIR, file), 'utf8').split('\n').forEach((raw, i) => {
+    if (raw.trimStart().startsWith('```')) {
+      fenced = !fenced;
+      return;
+    }
+    if (fenced) {
+      const text = pending === null ? raw : `${pending.text} ${raw.trim()}`;
+      const line = pending === null ? i + 1 : pending.line;
+      if (text.trimEnd().endsWith('\\')) pending = { text: text.trimEnd().slice(0, -1), line };
+      else {
+        pending = null;
+        take(text, line);
+      }
+      return;
+    }
+    for (const span of raw.matchAll(/`([^`]+)`/g)) take(span[1]!, i + 1);
+  });
+  return out;
+}
+
+/** The file a repo or code/scripts command runs, from the repo root. */
+const scriptFileOf = (head: string): string => {
+  const rel = head.replace(/^bun /, '');
+  if (rel.endsWith('.sh')) return rel.replace(/^\.\.\//, '');
+  return rel.startsWith('../') ? rel.slice(3) : `code/${rel}`;
+};
+
+describe('every command the evaluator docs give is checked (YOS-201)', () => {
+  const commands = EVALUATOR_DOCS.flatMap(docCommands);
+  const at = (c: DocCommand): string => `${c.file}:${c.line}: ${c.head} ${c.args.join(' ')}`.trim();
+  type Help = { readonly what: string; readonly status: number | null; readonly out: string };
+  const helps = new Map<string, Help>();
+  /**
+   * What `c` runs, asked for its --help once per distinct target: a package.json CLI (with worldplay's subcommand), a
+   * repo script or a code/scripts entry. Null for a script that runs the suite or the build, whose existence is all.
+   */
+  const helpFor = (c: DocCommand): Help | null => {
+    let what: string;
+    let run: () => ReturnType<typeof spawnSync>;
+    if (c.head.includes('scripts/')) {
+      const file = scriptFileOf(c.head);
+      what = file;
+      run = () => (file.endsWith('.sh')
+        ? spawnSync('bash', [file, '--help'], { cwd: REPO_DIR, encoding: 'utf8' })
+        : spawnSync('node', ['--import', 'tsx', path.relative(CODE_DIR, path.join(REPO_DIR, file)), '--help'], { cwd: CODE_DIR, encoding: 'utf8' }));
+    } else {
+      const script = c.head.split(' ')[2]!;
+      const m = NOT_CLI.has(script) ? null : /^(?:bun|tsx) (\S+\.ts)(?: (\w+))?$/.exec(PACKAGE.scripts[script] ?? '');
+      if (m === null) return null;
+      const [, entry, fixed] = m;
+      const first = c.args[0] === '--' ? c.args[1] : c.args[0];
+      const sub = fixed ?? (script === 'worldplay' && /^[a-z]+$/.test(first ?? '') ? first : undefined);
+      what = `${entry} ${sub ?? ''}`.trim();
+      run = () => spawnSync('node', ['--import', 'tsx', entry!, ...(sub === undefined ? [] : [sub]), '--help'], { cwd: CODE_DIR, encoding: 'utf8' });
+    }
+    if (!helps.has(what)) {
+      const r = run();
+      helps.set(what, { what, status: r.status, out: `${String(r.stdout)}${String(r.stderr)}` });
+    }
+    return helps.get(what)!;
+  };
+  const subs = [...helpOf('src/cli/worldplay.ts').stdout.matchAll(/^ {2}([a-z]+) /gm)].map((m) => m[1]);
+
+  it('finds the documented commands in each file, fenced and inline', () => {
+    const heads = (file: string): string[] => [...new Set(commands.filter((c) => c.file === file).map((c) => c.head))].sort();
+    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'npm run check:node', 'scripts/demo-all.sh']);
+    assert.deepEqual(heads('prod/README.md'), ['../scripts/live.sh', 'bun run docs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay']);
+    assert.deepEqual(heads('prod/prompts/README.md'), ['bun run live', 'bun run worldgen']);
+    assert.deepEqual(heads('research/live-run-runbook.md'), [
+      'bun run check', 'bun run costs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'npm run check:node',
+      'scripts/boat-ci.sh', 'scripts/live.sh', 'scripts/solve-demo.sh',
+    ]);
+    assert.deepEqual(heads('research/studio-demo-runbook.md'), ['bun run studio', 'bun scripts/studio-rehearse.ts', 'scripts/studio-deploy.sh']);
+  });
+
+  it('names a package.json script for every `bun run` and `npm run`, and each CLI answers --help with 0', () => {
+    for (const c of commands.filter((x) => !x.head.includes('scripts/'))) {
+      const script = c.head.split(' ')[2]!;
+      assert.ok(PACKAGE.scripts[script] !== undefined, `${at(c)}: package.json has no script "${script}"`);
+      const h = helpFor(c);
+      if (h !== null) assert.equal(h.status, 0, `${at(c)}: ${h.what} --help`);
+    }
+  });
+
+  it('names a script that exists for every repo or code/scripts command, and each answers --help with 0', () => {
+    for (const c of commands.filter((x) => x.head.includes('scripts/'))) {
+      assert.ok(existsSync(path.join(REPO_DIR, scriptFileOf(c.head))), `${at(c)}: no ${scriptFileOf(c.head)}`);
+      assert.equal(helpFor(c)?.status, 0, `${at(c)}: ${scriptFileOf(c.head)} --help`);
+    }
+  });
+
+  it('gives worldplay only its subcommands, and every command only flags its --help names', () => {
+    for (const c of commands) {
+      if (c.head === 'bun run worldplay' && /^[a-z]+$/.test(c.args[0] ?? '')) assert.ok(subs.includes(c.args[0]), `${at(c)}: worldplay ${c.args[0]} is not a subcommand`);
+      const h = helpFor(c);
+      if (h === null) continue;
+      for (const f of c.args.map((a) => a.replace(/=.*$/, '')).filter((a) => /^--[a-z][-a-z]*$/.test(a) && a !== '--help')) {
+        assert.ok(new RegExp(`(^|[^\\w-])${f}(?![\\w-])`).test(h.out), `${at(c)}: ${h.what} --help names no ${f}`);
+      }
+    }
+  });
+});
+
 describe('Docker', () => {
   const dockerfile = readFileSync(path.join(REPO_DIR, 'Dockerfile'), 'utf8');
   const run = shCommands(readmeDocs()).filter((c) => c.startsWith('docker '));

@@ -20,6 +20,8 @@
  * Snippets are plain JS strings. They stay far under SNIPPET_LIMITS.ctxCallsPerRun, use only
  * ctx members from the registries in src/engine/ctx.ts, and never touch Date or Math.random.
  */
+import path from 'node:path';
+import { checkWorld, saveWorld } from '#engine';
 import type { CheckedWorld } from '../../src/engine/check.ts';
 import { emptyWorld, worldSchema, type World } from '../../src/engine/format.ts';
 
@@ -293,4 +295,19 @@ export function withStubTasks(world: World, target: StubTarget = CUSTOMER_STUB):
  */
 export function checkedForTest(world: World): CheckedWorld {
   return world as CheckedWorld;
+}
+
+export const GRADER_CANARY = 'SANDBOX_GRADER_CANARY_e4b1';
+
+/** Saves minimalWorld with a comment canary in its first grader to `<parent>/<name>`; returns that dir and the checked world. */
+export async function saveCanaryWorld(parent: string, name: string): Promise<{ dir: string; checked: CheckedWorld }> {
+  const world = minimalWorld();
+  const first = Object.values(world.tasks)[0];
+  if (first === undefined || first.grader === undefined) throw new Error('minimalWorld has no grader to mark');
+  first.grader = first.grader.replace('=>', `=> /* ${GRADER_CANARY} */`);
+  const report = checkWorld(world);
+  if (!report.ok) throw new Error(`canary world does not check: ${report.issues[0].code}`);
+  const dir = path.join(parent, name);
+  await saveWorld(dir, report.world);
+  return { dir, checked: report.world };
 }
