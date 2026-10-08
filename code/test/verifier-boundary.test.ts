@@ -393,11 +393,13 @@ describe('the verifier child process', () => {
       return { code: 0, stdout: `${JSON.stringify({ task: EASY, wid: prep.wid, score: 1, stop: 'graded' })}\n`, stderr: '' };
     };
     const out = tmp('verify-child-env');
-    const grade = childGrader({ codeDir: CODE_DIR, out, runner })(heldOf(prep));
+    // The env source is pinned, so the expectation does not depend on the runner's own environment (CI sets WORLDGEN_GUARD_SCALE).
+    const env = { PATH: '/usr/bin:/bin', HOME: '/home/op', LLM_KEY: 'sk-live-1', BOAT_API_KEY: 'boat-3' };
+    const grade = childGrader({ codeDir: CODE_DIR, out, runner, env })(heldOf(prep));
     assert.deepEqual(await grade(submission('child-6', recorded.trace, recorded.state)), { ok: true, score: 1 });
     assert.deepEqual(calls, [{
       argv: [tsx, 'src/cli/verifier.ts', prep.frozenDir, path.join(out, 'private', 'verifier', 'requests', 'child-6.json'), COMMIT, path.join(out, 'private', 'verifier', 'submissions.jsonl')],
-      env: { TZ: 'UTC', PATH: process.env.PATH ?? '' },
+      env: { TZ: 'UTC', PATH: '/usr/bin:/bin' },
     }]);
     assert.equal(Object.keys(calls[0]?.env ?? {}).includes('BOAT_API_KEY'), false);
   });

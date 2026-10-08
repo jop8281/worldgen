@@ -16,7 +16,8 @@ import { checkWorld, loadWorld, type World } from '#engine';
 import { loadConfig, transportOf, TRANSPORTS, type Config } from '../worldgen/config.ts';
 import { createEmitter, describeStop } from '../worldgen/events.ts';
 import { inputSchema, parseInputArgs, type Input } from '../worldgen/input.ts';
-import { delivered, planIntake, renderLiveRun, type LiveCase, type LiveCheck, type LiveMeta, type LiveRow } from '../worldgen/live.ts';
+import { commitLabel, delivered, planIntake, renderLiveRun, type LiveCase, type LiveCheck, type LiveMeta, type LiveRow } from '../worldgen/live.ts';
+import { nodeRunner, type Runner } from '../sandboxes/backend.ts';
 import { runWorldGen, type Job } from '../worldgen/run.ts';
 import { loadExampleWorld, makeModel, mtimeOf, writeReport } from './models.ts';
 
@@ -33,7 +34,9 @@ then checks and verifies each world and writes the results table.
 options:
   --only <id,...>         run only these prompt ids, such as 03-dental-clinic
   --dry-run               list the prompts and any intake problem; no model call, nothing written
-  --commit <sha>          the release commit to print in the table (default: unknown)
+  --commit <sha>          the release commit to print in the table (default: the checkout's git HEAD, with -dirty
+                          when it has changes outside prod/prompts, prod/worlds, prod/LIVE-RUN.md and the run's
+                          eval/runs/<date>-live folder; unknown when git cannot say)
   --date <YYYY-MM-DD>     run date, used in the artifacts folder name (default: today, UTC)
   --report <file>         the results table (default ../prod/LIVE-RUN.md)
   --worlds-dir <dir>      where delivered worlds go (default ../prod/worlds)
@@ -63,7 +66,8 @@ export type LiveArgs = {
   readonly promptsDir: string;
   readonly only: readonly string[] | null;
   readonly dryRun: boolean;
-  readonly commit: string;
+  /** `--commit`, or null to name the checkout's HEAD. */
+  readonly commit: string | null;
   readonly date: string;
   readonly report: string;
   readonly worldsDir: string;
@@ -118,13 +122,34 @@ export function parseArgs(argv: readonly string[]): LiveArgs | 'help' {
     promptsDir,
     only: only === undefined ? null : only.split(',').map((s) => s.trim()).filter((s) => s !== ''),
     dryRun,
-    commit: values.get('--commit') ?? 'unknown',
+    commit: values.get('--commit') ?? null,
     date,
     report: path.resolve(values.get('--report') ?? DEFAULT_REPORT),
     worldsDir: path.resolve(values.get('--worlds-dir') ?? path.join(REPO_DIR, 'prod/worlds')),
     outDir: values.has('--out-dir') ? path.resolve(values.get('--out-dir')!) : null,
     overrides,
   };
+}
+
+/**
+ * The release commit the table names: `explicit` when `--commit` gave one, else the checkout's HEAD from git, labelled
+ * by commitLabel. `unknown` when git is missing or cannot read HEAD or the status.
+ */
+export async function releaseCommit(explicit: string | null, runner: Runner, cwd: string): Promise<string> {
+  if (explicit !== null) return explicit;
+  const git = async (...args: string[]): Promise<string | null> => {
+    try {
+      const r = await runner(['git', ...args], { cwd });
+      return r.code === 0 ? r.stdout : null;
+    } catch {
+      return null;
+    }
+  };
+  const head = (await git('rev-parse', '--verify', 'HEAD'))?.trim() ?? '';
+  if (!/^[0-9a-f]{40,64}$/.test(head)) return commitLabel(null, '');
+  // Every untracked file by name, so a new folder is never collapsed into a parent such as `prod/`.
+  const status = await git('status', '--porcelain=v1', '-z', '--untracked-files=all');
+  return status === null ? commitLabel(null, '') : commitLabel(head, status);
 }
 
 /** Every file under `dir` at most one folder deep, as relative POSIX paths. */
@@ -298,7 +323,7 @@ async function main(argv: readonly string[]): Promise<number> {
     err(message(e));
     return 2;
   }
-  const meta: LiveMeta = { date: args.date, commit: args.commit, model: config.model, maxCostUsd: config.maxCostUsd, maxMinutes: config.maxMinutes };
+  const meta: LiveMeta = { date: args.date, commit: await releaseCommit(args.commit, nodeRunner, REPO_DIR), model: config.model, maxCostUsd: config.maxCostUsd, maxMinutes: config.maxMinutes };
   out(`live: ${cases.length} prompts, one at a time (model ${config.model}, budget $${config.maxCostUsd.toFixed(2)} and ${config.maxMinutes} min each)`);
   const { code } = await runLive(args, cases, meta, deps);
   out(`results table: ${args.report}`);
