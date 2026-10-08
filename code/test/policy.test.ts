@@ -92,6 +92,9 @@ const KEY_PU_AND_NOOP = 'task.noop_not_zero@tasks/refund: 1|task.pressure_unmet@
 const nameDefaulted = issue('openapi.required_field_missing', ['input', 'openapi', 'POST /pet', 'request', 'name'], { op: 'POST /pet', field: 'name' }, 'name has a default, so a request may leave it out');
 const KEY_NAME_OPTIONAL = 'openapi.required_field_missing@input/openapi/POST /pet/request/name: name is optional';
 const KEY_NAME_DEFAULTED = 'openapi.required_field_missing@input/openapi/POST /pet/request/name: name has a default, so a request may leave it out';
+// stress-5 stripe-customers (YOS-253): the plan pressed customer.active, a state only its removal lifecycle names.
+const unreach = issue('plan.pressure_unreachable', ['plan', 'tasks', 1, 'pressure', 'states', 0],
+  { task: 'mark_delinquent_exempt', entity: 'customer', state: 'active', workflows: ['customer_lifecycle'] }, 'customer.active is a state only of customer_lifecycle (lifecycle removal)');
 /** The key the loop records for a seed rejection with these issues. */
 const seedKey = (...is: CheckIssue[]): string => attemptIssueSet(rejected(...is), is.map((i) => ({ issue: i, owner: 'seed' as const }))) ?? '';
 const tasksKey = (i: CheckIssue): string => attemptIssueSet(rejected(i), owned([i, 'tasks'])) ?? '';
@@ -185,6 +188,13 @@ const rows: Row[] = [
   { name: 'an unmet pressure claim repeated beside another tasks error still stops no_progress', step: 'tasks', ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 1, tasks: 2 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [], tasks: [KEY_PU_AND_NOOP, KEY_PU_AND_NOOP] } },
     outcome: rejected(pu, noop), issues: owned([pu, 'tasks'], [noop, 'tasks']),
     want: { kind: 'stop', reason: { kind: 'no_progress', step: 'tasks', repeatedIssueSet: KEY_PU_AND_NOOP, lastIssues: [pu, noop] } } },
+  // A-369: a pressed state no seed can meet is the plan's, so it goes to plan on its first sight, from seed or tasks, not back to seed.
+  { name: 'a pressed state no state field can hold, raised at seed, backtracks to plan', step: 'seed', ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 1, tasks: 0 } },
+    outcome: rejected(unreach), issues: owned([unreach, 'plan']), want: { kind: 'backtrack', to: 'plan' } },
+  { name: 'a pressed state no state field can hold, raised at tasks, backtracks to plan, not to seed', step: 'tasks', ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 1, tasks: 1 } },
+    outcome: rejected(unreach), issues: owned([unreach, 'plan']), want: { kind: 'backtrack', to: 'plan' } },
+  { name: 'a pressed state no state field can hold stops backtrack_limit when no backtrack is left', step: 'tasks', ledger: { backtracks: 2, attempts: { plan: 1, model: 1, workflow: 1, seed: 1, tasks: 1 } },
+    outcome: rejected(unreach), issues: owned([unreach, 'plan']), want: { kind: 'stop', reason: { kind: 'backtrack_limit', step: 'tasks', backtracks: 2 } } },
   { name: 'a different earlier set does not trigger no_progress', step: 'workflow', ledger: { attempts: { plan: 0, model: 0, workflow: 2, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: ['other', KEY_TF], seed: [], tasks: [] } },
     outcome: rejected(tf), issues: owned([tf, 'workflow']), want: { kind: 'retry' } },
   { name: 'a spec-required field that went from optional to defaulted is progress: retry (YOS-241)', step: 'workflow',
@@ -348,6 +358,7 @@ describe('ownerOf', () => {
     ['at_path with path[0] seed maps to seed', cv, 'seed'],
     ['at_path with path[0] plan maps to plan', planShape, 'plan'],
     ['plan.lifecycle_unrepresented maps to plan, which writes the lifecycle the path names, not to the model or workflow stage (YOS-155)', issue('plan.lifecycle_unrepresented', ['plan', 'workflows', 0, 'lifecycle'], { workflow: 'escalation', entity: 'ticket', states: ['escalated', 'acknowledged'] }, 'no state field of ticket declares any state of this workflow'), 'plan'],
+    ['plan.pressure_unreachable maps to plan, which wrote the claim no seed can meet (A-369)', unreach, 'plan'],
     ['plan.not_covered for an entity maps to model', nc, 'model'],
     ['plan.not_covered for a route maps to model', ncRoute, 'model'],
     ['plan.not_covered for a workflow action maps to workflow', ncAction, 'workflow'],

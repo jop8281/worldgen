@@ -132,6 +132,30 @@ export type LiveMeta = {
   readonly maxMinutes: number;
 };
 
+/**
+ * The paths a live run writes itself: the intake, the delivered worlds, the results table and each run's own folder
+ * under eval/runs. A change there does not make the checkout dirty, so a second `bun run live` names the same commit.
+ */
+const runOwns = (p: string): boolean =>
+  p === 'prod/LIVE-RUN.md' || p.startsWith('prod/prompts/') || p.startsWith('prod/worlds/') || /^eval\/runs\/\d{4}-\d{2}-\d{2}-live\//.test(p);
+
+/**
+ * The commit the results table names: `head`, with `-dirty` when `porcelain` (the output of
+ * `git status --porcelain=v1 -z --untracked-files=all`) lists a change outside the run's own paths, or `unknown` with no head.
+ */
+export function commitLabel(head: string | null, porcelain: string): string {
+  if (head === null) return 'unknown';
+  const fields = porcelain.split('\0').filter((f) => f !== '');
+  const paths: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const entry = fields[i]!;
+    paths.push(entry.slice(3));
+    // A rename or copy is `XY new` then `old` as its own field; both paths count.
+    if (entry[0] === 'R' || entry[0] === 'C') paths.push(fields[++i] ?? '');
+  }
+  return paths.some((p) => !runOwns(p)) ? `${head}-dirty` : head;
+}
+
 /** A row's world is delivered when WorldGen finished and the engine accepts it. */
 export const delivered = (r: LiveRow): boolean => r.outcome === 'done' && r.check.kind === 'pass';
 

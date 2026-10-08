@@ -55,11 +55,11 @@ describe('the page script', () => {
     { who: 'a page that is not signed in', me: { status: 401, body: { error: { code: 'auth.required', message: 'GET /api/me needs sign-in' } } }, costs: false },
   ] as const;
   for (const c of cases) {
-    it(`${c.costs ? 'asks' : 'never asks'} for /api/costs as ${c.who}, and ${c.costs ? 'shows' : 'hides'} Spend`, async () => {
+    it(`${c.costs ? 'asks' : 'never asks'} for /api/costs and /api/eval as ${c.who}, and ${c.costs ? 'shows' : 'hides'} Spend and Eval (A-370)`, async () => {
       const page = await boot(c.me);
       assert.equal(page.fetched.includes('/api/me'), true);
-      assert.equal(page.fetched.includes('/api/costs'), c.costs);
-      assert.equal(page.byId('sec-spend').hidden === true, !c.costs);
+      assert.deepEqual([page.fetched.includes('/api/costs'), page.fetched.includes('/api/eval')], [c.costs, c.costs]);
+      assert.deepEqual([page.byId('sec-spend').hidden === true, page.byId('sec-eval').hidden === true], [!c.costs, !c.costs]);
     });
   }
 });
