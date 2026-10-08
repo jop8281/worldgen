@@ -114,14 +114,19 @@ describe('studio isolation: the check and proof children', () => {
       assert.equal(served.status, 200);
       const episode = await fetch(`${s.url}/api/episodes`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ world: 'good', task, agent: 'noop' }) });
       assert.equal(episode.status, 200, await episode.clone().text());
+      const generated = await fetch(`${s.url}/api/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'description', outSlug: 'env-check', text: 'A tiny shop' }) });
+      assert.equal(generated.status, 200, await generated.clone().text());
     } finally {
       await s.close();
     }
     const serve = spawned.find((c) => c.argv[1] === 'src/cli/worldplay.ts' && c.argv[2] === 'serve');
     const ep = spawned.find((c) => c.argv[1] === 'src/cli/episode.ts');
-    assert.ok(serve !== undefined && ep !== undefined, JSON.stringify(spawned.map((c) => c.argv.slice(0, 3))));
+    const gen = spawned.find((c) => c.argv[1] === 'src/cli/worldgen.ts');
+    assert.ok(serve !== undefined && ep !== undefined && gen !== undefined, JSON.stringify(spawned.map((c) => c.argv.slice(0, 3))));
     assert.deepEqual(serve.env, { TZ: 'UTC', PATH: '/usr/bin:/bin', WORLDGEN_GUARD_SCALE: '4' });
-    assert.deepEqual(ep.env, env);
+    const model = { PATH: '/usr/bin:/bin', HOME: '/home/op', LLM_KEY: 'sk-live-1', BOAT_API_KEY: 'boat-3', WORLDPLAY_HOST: '0.0.0.0', WORLDPLAY_ADMIN_HOST: '0.0.0.0', WORLDGEN_GUARD_SCALE: '4' };
+    assert.deepEqual(ep.env, model);
+    assert.deepEqual(gen.env, model);
   });
 
   it('starts one check child for concurrent requests to the same unchecked world', async () => {

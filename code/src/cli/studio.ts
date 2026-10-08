@@ -91,7 +91,7 @@ function parse(argv: readonly string[]): Args | 'help' {
     if (usersFile !== undefined) throw new UsageError('give --users or WORLDGEN_STUDIO_TOKEN, not both');
     users = [{ name: 'admin', role: 'admin', tokenSha256: createHash('sha256').update(token).digest('hex') }];
   }
-  // Children inherit this environment; none of them needs the studio's own credential.
+  // Generation and episode children get this environment; none of them needs the studio's own credential.
   delete process.env['WORLDGEN_STUDIO_TOKEN'];
   return { port, host, transport, users, origin, repoRoot: repoRoot ?? path.resolve(CODE_DIR, '..'), worldsDir };
 }

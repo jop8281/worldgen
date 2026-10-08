@@ -12,8 +12,9 @@
  *   answers the world's real status and body, or the real failure.
  * - Children only. The studio never imports llm.ts and never makes a model call: generation and
  *   serving are spawned CLIs through an injected `Spawner`, and `costs` runs through an injected
- *   `Runner`. The environment passes through untouched, so the operator's own env carries every
- *   key; the studio stores and logs none.
+ *   `Runner`. Generation and episodes get the operator's environment, so it carries every key, minus the
+ *   studio's own sign-in token; a child that runs a world's snippets (check, proof, serve) gets only an
+ *   allowlist (A-338, A-343). The studio stores and logs no key.
  * - No private task material. The worlds route counts tasks, it never returns task source. The
  *   report route serves REPORT.md and capsule.json and refuses a report that embeds any
  *   grader, solution or decoy source. test/studio.test.ts proves both with canaries.
@@ -560,8 +561,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const src = opts.env ?? process.env;
     return { TZ: 'UTC', PATH: src['PATH'] ?? '', ...(src['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: src['WORLDGEN_GUARD_SCALE'] }) };
   };
-  /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included. */
-  const modelEnv = (): Readonly<Record<string, string | undefined>> => opts.env ?? process.env;
+  /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
+  const modelEnv = (): Record<string, string | undefined> => {
+    const { WORLDGEN_STUDIO_TOKEN: _token, ...rest } = opts.env ?? process.env;
+    return rest;
+  };
   const checkTimeoutMs = opts.checkTimeoutMs ?? 300_000;
   const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
 
