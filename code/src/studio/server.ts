@@ -552,6 +552,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly body: Record<string, unknown> }>();
+  /** Checks in flight, by world dir and world.yaml version: a repeated request joins the running child instead of starting another. */
+  const checking = new Map<string, Promise<Reply>>();
 
   /** The check and proof children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338). */
   const childEnv = (): Record<string, string> => {
@@ -607,6 +609,15 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (yaml !== null && cached !== undefined && cached.mtimeMs === yaml.mtimeMs && cached.size === yaml.size) {
       return { status: 200, body: cached.body };
     }
+    const key = `${dir}\n${yaml?.mtimeMs}\n${yaml?.size}`;
+    const running = checking.get(key);
+    if (running !== undefined) return running;
+    const reply = checkInChild(dir, name, yaml).finally(() => checking.delete(key));
+    checking.set(key, reply);
+    return reply;
+  }
+
+  async function checkInChild(dir: string, name: string, yaml: { readonly mtimeMs: number; readonly size: number } | null): Promise<Reply> {
     let res: RunResult;
     try {
       res = await opts.runner(['bun', 'src/cli/studio-check.ts', dir, name], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
