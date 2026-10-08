@@ -237,6 +237,23 @@ describe('npm run live', () => {
     assert.equal(existsSync(path.join(root, 'LIVE-RUN.md')), false);
   });
 
+  it('--dry-run names the --worlds-dir and --report it would write, relative to the repository root inside it', async () => {
+    const { args } = await setup('dest', { '01-a.txt': 'one' });
+    const r = live([args.promptsDir, '--dry-run', '--worlds-dir', '../eval/scratch-worlds', '--report', '../eval/scratch-worlds/LIVE-RUN.md']);
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, '01-a  description  -> eval/scratch-worlds/gen-a\nresults table -> eval/scratch-worlds/LIVE-RUN.md\n1 prompts ready. No model was called.\n');
+    assert.equal(existsSync(path.join(CODE_DIR, '../eval/scratch-worlds')), false);
+  });
+
+  it('--dry-run shows a --worlds-dir outside the repository as its absolute path', async () => {
+    const { args, root } = await setup('abs', { '01-a.txt': 'one' });
+    const scratch = path.join(root, 'scratch');
+    const r = live([args.promptsDir, '--dry-run', '--worlds-dir', scratch]);
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, `01-a  description  -> ${scratch}/gen-a\n1 prompts ready. No model was called.\n`);
+    assert.equal(existsSync(scratch), false);
+  });
+
   it('exits 2 on an intake problem, naming the file, before any model call', async () => {
     const { args } = await setup('bad', { '01-a.txt': 'one', 'stray.pdf': 'x' });
     const r = live([args.promptsDir]);
