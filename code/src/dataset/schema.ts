@@ -190,7 +190,8 @@ const episodeBase = z.strictObject({
   task_id: z.string().regex(TASK_ID),
   difficulty: z.enum(['easy', 'medium', 'hard']),
   provider: z.literal(PROVIDER),
-  model: claudeModelId,
+  /** The Claude model the agent called, or null when it called none (the noop agent). Rows from before the noop agent always name one. */
+  model: claudeModelId.nullable(),
   prompt_version: z.string().min(1),
   config_version: z.string().min(1),
   initial_state_hash: sha.nullable(),

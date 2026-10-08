@@ -386,7 +386,7 @@ describe('renderReport: a stopped run', () => {
       '',
       'Last issues:',
       '',
-      '- `task.decoy_full_marks` at `tasks.escalate_acme.decoys.0`: The grader cannot tell apart the decoy "skips page 2". Tighten it.',
+      '- `task.decoy_full_marks` at `tasks.escalate_acme.decoys.0`: The decoy "skips page 2" scored 1. Its script may not do what its why says (a list read right after a write often returns the row the script just created), or the grader cannot tell it apart. Check the script\'s calls first, then tighten the grader.',
       '- `plan.not_covered` at `plan.tasks.2`: Build what the plan says, or change the plan in the plan step.',
       '',
     ].join('\n'));
@@ -451,7 +451,7 @@ describe('renderReport: a stopped run', () => {
   it('takes the last issues from the last attempt when the stop reason carries none', () => {
     const budget: StopReason = { kind: 'budget_exhausted', spentUsd: 5.5, limitUsd: 5 };
     const rejected = renderReport({ plan: PLAN, events: EVENTS.slice(0, 14), stop: budget });
-    assert.equal(rejected.includes('Last issues:\n\n- `task.decoy_full_marks` at `tasks.escalate_acme.decoys.0`: The grader cannot tell apart the decoy "skips page 2". Tighten it.\n\n## What was built'), true);
+    assert.equal(rejected.includes('Last issues:\n\n- `task.decoy_full_marks` at `tasks.escalate_acme.decoys.0`: The decoy "skips page 2" scored 1. Its script may not do what its why says (a list read right after a write often returns the row the script just created), or the grader cannot tell it apart. Check the script\'s calls first, then tighten the grader.\n\n## What was built'), true);
     const accepted = renderReport({ plan: PLAN, events: EVENTS, stop: budget });
     assert.equal(accepted.includes('Last issues: none recorded.\n\n## What was built'), true);
   });

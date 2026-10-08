@@ -10,10 +10,14 @@ meta:
     tick: 0s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -695,6 +699,7 @@ tasks:
         script: (ctx) => { const os = ctx.api('GET', '/orders?status=confirmed').body.data; const other = os[os.length - 1]; ctx.api('POST', '/orders/' + other.id + '/ready', {}); }
       - why: marks Maria's order ready and then also completes the pickup, moving it past ready
         script: (ctx) => { const cs = ctx.api('GET', '/customers?q=Maria+Lopez').body.data.filter((c) => c.name === 'Maria Lopez'); const os = ctx.api('GET', '/orders?customer_id=' + cs[0].id + '&status=confirmed').body.data; ctx.api('POST', '/orders/' + os[0].id + '/ready', {}); ctx.api('POST', '/orders/' + os[0].id + '/pickup', {}); }
+    alternatives: []
   bake_croissants_after_restock:
     difficulty: medium
     instruction: The planned Butter Croissant production batch cannot be completed because the bakery is short of an ingredient. Restock that ingredient by exactly the missing amount (no more), then complete the croissant batch. Do not touch other batches, products or ingredients.
@@ -709,6 +714,7 @@ tasks:
         script: "(ctx) => { const p = ctx.api('GET', '/products?q=Butter+Croissant').body.data.find((x) => x.name === 'Butter Croissant'); const b = ctx.api('GET', '/batches?product_id=' + p.id + '&status=planned').body.data[0]; const low = ctx.api('GET', '/ingredients?low_stock=true').body.data; for (const ing of low) ctx.api('POST', '/ingredients/' + ing.id + '/restock', { quantity: 10000 }); ctx.api('POST', '/batches/' + b.id + '/complete', {}); }"
       - why: restocks and completes the croissant batch correctly, then also renames the Butter Croissant product
         script: "(ctx) => { ((ctx) => { const prods = ctx.api('GET', '/products?q=Butter+Croissant').body.data.filter((p) => p.name === 'Butter Croissant'); ctx.assert(prods.length === 1, 'expected one Butter Croissant product, found ' + prods.length); const p = prods[0]; const batches = ctx.api('GET', '/batches?product_id=' + p.id + '&status=planned').body.data; ctx.assert(batches.length === 1, 'expected one planned croissant batch, found ' + batches.length); const b = batches[0]; const lines = ctx.api('GET', '/products/' + p.id + '/recipe').body.data; ctx.assert(lines.length > 0, 'croissant has no recipe'); for (const l of lines) { const ing = ctx.api('GET', '/ingredients/' + l.ingredient_id).body; const need = b.quantity * l.qty_per_unit; if (ing.stock_qty < need) { const r = ctx.api('POST', '/ingredients/' + ing.id + '/restock', { quantity: need - ing.stock_qty }); ctx.assert(r.status === 200, 'restock failed: ' + JSON.stringify(r.body)); } } const done = ctx.api('POST', '/batches/' + b.id + '/complete', {}); ctx.assert(done.status === 200, 'complete failed: ' + JSON.stringify(done.body)); })(ctx); const p = ctx.api('GET', '/products?q=' + 'Butter+Croissant').body.data.find((x) => x.name === 'Butter Croissant'); ctx.api('PATCH', '/products/' + p.id, { name: 'Butter Croissant (edited)' }); }"
+    alternatives: []
   cancel_tomorrows_orders_for_discontinued_product:
     difficulty: hard
     instruction: The bakery has discontinued the Baguette and the Almond Croissant. Cancel every order that is still placed or confirmed, is due for pickup tomorrow (6 January 2026, UTC) and contains at least one of those two products. Leave ready and picked-up orders, orders due on other days and orders without these products untouched.
@@ -727,3 +733,4 @@ tasks:
         script: "(ctx) => { const ids = new Set(['Baguette', 'Almond+Croissant'].map((n) => ctx.api('GET', '/products?q=' + n).body.data.find((x) => x.name === n.replace('+', ' '))).map((p) => p.id)); const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : '&cursor=' + cursor)); rows.push(...r.body.data); cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor; } while (cursor !== null); return rows; }; const out = []; for (const status of ['placed', 'confirmed']) { for (const o of pages('/orders?status=' + status)) { if (!o.pickup_at.startsWith('2026-01-06')) continue; const lines = ctx.api('GET', '/orders/' + o.id + '/lines').body.data; if (lines.length > 0 && ids.has(lines[0].product_id)) out.push(o.id); } } for (const id of out) ctx.api('POST', '/orders/' + id + '/cancel', {}); }"
       - why: cancels the right orders correctly, then also renames the Baguette product
         script: "(ctx) => { ((ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body)); rows.push(...r.body.data); cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor; } while (cursor !== null); return rows; }; const ids = new Set(); for (const n of ['Baguette', 'Almond Croissant']) { const p = ctx.api('GET', '/products?q=' + n.replace(' ', '+')).body.data.find((x) => x.name === n); ctx.assert(p, 'product ' + n + ' not found'); ids.add(p.id); } const targets = []; for (const status of ['placed', 'confirmed']) { for (const o of pages('/orders?status=' + status)) { if (!o.pickup_at.startsWith('2026-01-06')) continue; const lines = ctx.api('GET', '/orders/' + o.id + '/lines').body.data; if (lines.some((l) => ids.has(l.product_id))) targets.push(o.id); } } ctx.assert(targets.length > 0, 'no matching orders found'); for (const id of targets) { const r = ctx.api('POST', '/orders/' + id + '/cancel', {}); ctx.assert(r.status === 200, 'cancel ' + id + ' failed: ' + JSON.stringify(r.body)); } })(ctx); const p = ctx.api('GET', '/products?q=' + 'Baguette').body.data.find((x) => x.name === 'Baguette'); ctx.api('PATCH', '/products/' + p.id, { name: 'Baguette (edited)' }); }"
+    alternatives: []
