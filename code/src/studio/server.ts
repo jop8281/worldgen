@@ -12,8 +12,9 @@
  *   answers the world's real status and body, or the real failure.
  * - Children only. The studio never imports llm.ts and never makes a model call: generation and
  *   serving are spawned CLIs through an injected `Spawner`, and `costs` runs through an injected
- *   `Runner`. The environment passes through untouched, so the operator's own env carries every
- *   key; the studio stores and logs none.
+ *   `Runner`. Generation and episodes get the operator's environment, so it carries every key, minus the
+ *   studio's own sign-in token; a child that runs a world's snippets (check, proof, serve) gets only an
+ *   allowlist (A-338, A-343). The studio stores and logs no key.
  * - No private task material. The worlds route counts tasks, it never returns task source. The
  *   report route serves REPORT.md and capsule.json and refuses a report that embeds any
  *   grader, solution or decoy source. test/studio.test.ts proves both with canaries.
@@ -128,7 +129,7 @@ export type StudioOptions = {
   readonly users?: readonly StudioUser[] | undefined;
   /** The one public origin the studio is also reached at, such as http://127.0.0.1:9000 for a published container port or https://studio.example.com behind a proxy. */
   readonly origin?: string | undefined;
-  /** The environment the isolated check and proof children are built from; defaults to process.env. */
+  /** The environment the studio's children are built from: check, proof and serve get an allowlist of it, generation and episodes all of it. Defaults to process.env. */
   readonly env?: Readonly<Record<string, string | undefined>> | undefined;
   /** How long an isolated check or proof child may run. Default 300000 (the verifier's CHILD_TIMEOUT_MS). */
   readonly checkTimeoutMs?: number | undefined;
@@ -741,10 +742,15 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   /** Checks in flight, by world dir and world.yaml version: a repeated request joins the running child instead of starting another. */
   const checking = new Map<string, Promise<Reply>>();
 
-  /** The check and proof children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338). */
+  /** The check, proof and serve children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338, A-343). */
   const childEnv = (): Record<string, string> => {
     const src = opts.env ?? process.env;
     return { TZ: 'UTC', PATH: src['PATH'] ?? '', ...(src['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: src['WORLDGEN_GUARD_SCALE'] }) };
+  };
+  /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
+  const modelEnv = (): Record<string, string | undefined> => {
+    const { WORLDGEN_STUDIO_TOKEN: _token, ...rest } = opts.env ?? process.env;
+    return rest;
   };
   const checkTimeoutMs = opts.checkTimeoutMs ?? 300_000;
   const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
@@ -903,7 +909,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       port = wanted;
     }
-    const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir });
+    const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
     const id = `svc-${(serviceSeq += 1)}`;
     const record: ServiceRecord = { id, name, pid: child.pid, worldPort: port, adminPort: port + 1, startedAt: new Date().toISOString() };
     services.set(id, { record, child });
@@ -1033,7 +1039,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     let child: SpawnedChild;
     try {
-      child = opts.spawner(argv, { cwd: codeDir });
+      child = opts.spawner(argv, { cwd: codeDir, env: modelEnv() });
     } catch (e) {
       // A start that never happened is finished, so its derived key cannot answer every later retry with a dead intent.
       job.phase = 'finished';
