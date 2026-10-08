@@ -188,9 +188,14 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
 };
 
+/** One route the studio answers, as its router holds it: what the route-policy test checks every route against. */
+export type StudioRoute = { readonly method: 'GET' | 'POST'; readonly path: string; readonly need: StudioRole | 'public' };
+
 export interface StudioServer {
   readonly url: string;
   readonly port: number;
+  /** Every route the router answers, in its order: `/api/worlds/:name/report` and the role it needs. */
+  readonly routes: readonly StudioRoute[];
   /**
    * Drops the port and open connections, stops every served world (SIGTERM, then SIGKILL) and every running check, and
    * resolves once each is gone. A generation run or an episode gets SIGTERM, its own clean stop, and finishes billing
@@ -2092,8 +2097,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId', 'events'], run: (p, _b, who, ctx) => runStatus(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'generate', ':runId', 'stop'], run: (p, _b, who, ctx) => stopRun(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'runs'], run: (_p, _b, who, ctx) => listRuns(who, ctx.filter) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'eval'], run: () => listEval() },
-    { method: 'GET', need: 'viewer', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
+    // An eval run is the operator's rehearsal of the repo, no tenant's: its summary quotes crash lines and issue hints,
+    // which can hold an eval world's seed values, so only an admin reads it (A-370).
+    { method: 'GET', need: 'admin', parts: ['api', 'eval'], run: () => listEval() },
+    { method: 'GET', need: 'admin', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
     { method: 'GET', need: 'admin', parts: ['api', 'costs'], run: () => costs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'tasks'], run: (p, _b, who, ctx) => worldTasks(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p, _b, who, ctx) => worldProof(p, who, ctx) },
@@ -2276,6 +2283,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   return {
     url: `http://${host.includes(':') ? `[${host}]` : host}:${port}`,
     port,
+    routes: routes.map((r) => ({ method: r.method, path: `/${r.parts.join('/')}`, need: r.need })),
     close() {
       closing ??= (async () => {
         // Each job this studio holds is stopped by the close, so it is recorded as stopped in the last write, its lease

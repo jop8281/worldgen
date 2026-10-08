@@ -236,11 +236,15 @@ a { margin-right: 0.5rem; }
   var signedIn = fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
     return r.json().then(function (body) {
       authNote(r.status, body);
-      // Spend needs the admin role, so any other page neither shows it nor asks for it.
-      if (r.status === 200 && body.role === 'admin') refreshSpend();
-      else {
-        byId('sec-spend').hidden = true;
-        document.querySelector('nav a[href="#sec-spend"]').hidden = true;
+      // Spend and Eval need the admin role (A-370), so any other page neither shows them nor asks for them.
+      if (r.status === 200 && body.role === 'admin') {
+        refreshSpend();
+        refreshEval();
+      } else {
+        ['sec-spend', 'sec-eval'].forEach(function (id) {
+          byId(id).hidden = true;
+          document.querySelector('nav a[href="#' + id + '"]').hidden = true;
+        });
       }
       if (r.status !== 200) return false;
       if (!body.signIn) {
@@ -1134,7 +1138,6 @@ a { margin-right: 0.5rem; }
   });
   var worldsReady = Promise.all([refreshWorlds(), fillExplorerWorlds(), loadPlayWorlds()]);
   refreshRuns();
-  refreshEval();
   refreshEpisodes();
   Promise.all([signedIn, worldsReady]).then(function (done) {
     if (!done[0]) return;
