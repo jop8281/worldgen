@@ -47,6 +47,9 @@ function fakeSpawner(): { spawner: Spawner; spawned: Spawned[] } {
   const spawner: Spawner = (argv) => {
     const one: Spawned = { argv: [...argv], signals: [] };
     spawned.push(one);
+    // A fake `worldplay serve` reports its listening ports, as the real one does (A-348); other children print nothing.
+    const serve = argv[1] === 'src/cli/worldplay.ts' && argv[2] === 'serve';
+    const listening = serve ? `${JSON.stringify({ listening: { world: 46000 + 2 * spawned.length, admin: 46001 + 2 * spawned.length } })}\n` : '';
     const child: SpawnedChild = {
       pid: 45000 + spawned.length,
       exited: new Promise<number | null>(() => {}),
@@ -54,7 +57,7 @@ function fakeSpawner(): { spawner: Spawner; spawned: Spawned[] } {
         one.signals.push(signal);
         return true;
       },
-      output: () => '',
+      output: () => listening,
     };
     return child;
   };
@@ -301,7 +304,8 @@ describe('studio tenancy: the library (A-344)', () => {
     assert.deepEqual([refused.status, refused.body], unknown('gen-acme-only'));
     assert.equal(f.spawned.length, 0);
     assert.equal((await call(base, 'POST', '/api/worlds/gen-acme-only/serve', OTTO, { port: 4610 })).status, 200);
-    assert.deepEqual(f.spawned.map((s) => s.argv), [['bun', 'src/cli/worldplay.ts', 'serve', path.join(f.worldsDir, 'acme', 'gen-acme-only'), '--port', '4610']]);
+    // An operator's body port is ignored (A-348): the child is asked for an OS-picked port, 0.
+    assert.deepEqual(f.spawned.map((s) => s.argv), [['bun', 'src/cli/worldplay.ts', 'serve', path.join(f.worldsDir, 'acme', 'gen-acme-only'), '--port', '0']]);
 
     const health = async (token: string | undefined): Promise<unknown> => (await call(base, 'GET', '/api/health', token)).body['worlds'];
     assert.deepEqual([await health(undefined), await health(ANN), await health(ADA)], [1, 1, 1]);

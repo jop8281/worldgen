@@ -92,7 +92,9 @@ describe('studio isolation: the check and proof children', () => {
       spawned.push({ argv: [...argv], env: o?.env });
       let gone: (code: number | null) => void = () => {};
       const exited = new Promise<number | null>((resolve) => (gone = resolve));
-      const child: SpawnedChild = { pid: 4242, exited, kill: () => (gone(null), true), output: () => '' };
+      // A worldplay serve child reports its listening ports, as the real one does (A-348).
+      const said = argv[2] === 'serve' ? `${JSON.stringify({ listening: { world: 45555, admin: 45556 } })}\n` : '';
+      const child: SpawnedChild = { pid: 4242, exited, kill: () => (gone(null), true), output: () => said };
       return child;
     };
     const runner: Runner = async () => ({ code: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' });

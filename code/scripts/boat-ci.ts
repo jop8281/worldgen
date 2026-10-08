@@ -1,17 +1,16 @@
 /**
  * The test gate on a large Boat VM: `bun run check` and `npm run check:node` in parallel on one
  * archived ref, with a summary per runtime. Driven by scripts/boat-ci.sh; reads BOAT_API_KEY from
- * the environment only. The VM always goes down.
+ * the environment only. The VM always goes down. It is metered like every Boat VM: its 2-hour TTL
+ * is reserved in the spend ledger before creation, so `reconcile-orphans` sees a live claim.
  *
  *   bun scripts/boat-ci.ts <archive.tgz> [label] [junit-out]
  *
  * When the ref has scripts/factory-check.sh it runs too, and its .factory/junit.xml is copied to junit-out.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { boatClientFromEnv } from '../src/boat/client.ts';
-import { SANDBOX_BUN_VERSION } from '../src/sandboxes/backend.ts';
-import { boatBackend } from '../src/sandboxes/boat.ts';
-import { sizeOf } from '../src/sandboxes/registry.ts';
+import { SANDBOX_BUN_VERSION, nodeRunner } from '../src/sandboxes/backend.ts';
+import { backendFor } from '../src/sandboxes/registry.ts';
 
 const [archive, label = 'ref', junitOut] = process.argv.slice(2);
 if (archive === undefined) {
@@ -52,8 +51,8 @@ async function retry<T>(f: () => Promise<T>, tries = 15): Promise<T> {
   }
 }
 
-const b = boatBackend({ client: boatClientFromEnv(), ttlSeconds: 7200 });
-const sb = await b.up([{ path: 'repo.tgz', data: readFileSync(archive) }], { name: 'boat-ci', size: sizeOf('large') });
+const b = backendFor('boat', process.env, nodeRunner, { size: 'large', ttlSeconds: 7200, runId: `boat-ci ${label}` }).backend;
+const sb = await b.up([{ path: 'repo.tgz', data: readFileSync(archive) }], { name: 'boat-ci' });
 log(`up ${sb.id} (large)`);
 let failed = false;
 try {
