@@ -14,7 +14,7 @@ export const CONFIG_FILE = path.resolve(import.meta.dirname, '../../worldgen.con
 /** A bad command line. The CLI prints the message and exits 2, before any model call. */
 export class UsageError extends Error {}
 
-/** The options that override worldgen.config.json, in the order their values are checked. Each takes one value. */
+/** The options that override worldgen.config.json. Each takes one value. modelOverrides checks them in this order; eval checks them in argv order. */
 export const MODEL_OPTIONS = ['--model', '--transport', '--budget-usd', '--max-minutes'] as const;
 export type ModelOption = (typeof MODEL_OPTIONS)[number];
 export const isModelOption = (arg: string): arg is ModelOption => MODEL_OPTIONS.some((o) => o === arg);

@@ -48,7 +48,8 @@ export function parseEvalArgs(argv: readonly string[], defaultSuite: string): Ev
   const args: EvalArgs = { suite: defaultSuite, only: null, tags: null, dryRun: false, outDir: null, backend: 'local', parallel: 1, overrides: {} };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]!;
-    // eval alone takes a blank value, such as --model "" (YOS-203 lists it for a decision).
+    // Unlike worldgen, live and studio, eval takes a blank value such as --model "", and the config load refuses it
+    // later; dataset passes one on too. Kept as it is (YOS-203).
     const value = (): string => optionValue(flag, argv[++i], 'accept');
     if (flag === '--help' || flag === '-h') return 'help';
     else if (flag === '--dry-run') args.dryRun = true;
