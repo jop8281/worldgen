@@ -37,7 +37,7 @@ import {
 import { collectBundle } from '../src/sandboxes/files.ts';
 import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { prepareWorld, runPipeline, type PreparedWorld } from '../src/dataset/pipeline.ts';
-import { childGrader, type GraderWorld } from '../src/dataset/verifier.ts';
+import { childGrader, type HeldWorld } from '../src/dataset/verifier.ts';
 import { checkedForTest, minimalWorld } from './helpers/world.ts';
 import { COMMIT, EASY, HELPDESK_DIR, fakeBackend, randomPort, solveAll, tmp } from './dataset-kit.ts';
 import type { World } from '../src/engine/format.ts';
@@ -94,8 +94,8 @@ async function checkedHelpdesk(): Promise<CheckedWorld> {
   return report.world;
 }
 
-const heldOf = (prep: PreparedWorld): GraderWorld => ({
-  world: prep.world, wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: COMMIT,
+const heldOf = (prep: PreparedWorld): HeldWorld => ({
+  wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: COMMIT,
 });
 
 /** A recorded run of the easy task, driven over the world port of the served PUBLIC form. */

@@ -16,14 +16,14 @@ import {
   checkWorld, createRuntime, dumpSha256, loadWorld, openApiOf, publicWorldOf, renderWorldYaml, saveWorld, taskPrivacy, worldIdOf,
   type CheckedWorld, type Difficulty, type OpenApiDocument, type StateDump, type Wid,
 } from '#engine';
-import { READY_TIMEOUT_SEC, SERVE_LOG, reachWorld, upWorld, type Runner, type SandboxBackend, type WorldBundle } from '../sandboxes/backend.ts';
+import { READY_TIMEOUT_SEC, SERVE_LOG, isolatedEnv, nodeRunner, reachWorld, upWorld, type Runner, type SandboxBackend, type WorldBundle } from '../sandboxes/backend.ts';
 import { runEpisode, type NextTurn, type SendableRequest, type WorldPort } from './episode.ts';
 import {
   DatasetError, GRADING_NOTE, PROMPT_VERSION, RUN_ID, TASK_ID, configVersion, hashState, isCompleteSuccess, redactor, sha256Hex,
   type Episode, type Manifest, type Redactor,
 } from './schema.ts';
 import { appendEpisode, diagnosticsDir, exportDataset, startRunLog, writeArtifacts, writeDiagnostic, worldArtifactPath } from './store.ts';
-import { engineGrader, type GraderFactory } from './verifier.ts';
+import { type GraderFactory } from './verifier.ts';
 
 /** A problem found before anything was started: bad option, world that does not check, run id already used. Nothing is created but the frozen world, which runs share. */
 export class PreflightError extends Error {
@@ -58,8 +58,8 @@ const MAX_ISSUES_SHOWN = 5;
  * Checks `worldDir` with the deterministic engine and requires at least one task and a proof
  * for every task. Nothing is written. Throws a PreflightError naming the first issues.
  */
-export type CheckedForRun = { readonly world: CheckedWorld; readonly tasks: PreparedWorld['tasks'] };
-export async function checkForRun(worldDir: string): Promise<CheckedForRun> {
+export type CheckedWorldForRun = { readonly world: CheckedWorld; readonly tasks: PreparedWorld['tasks'] };
+export async function checkForRun(worldDir: string): Promise<CheckedWorldForRun> {
   const loaded = await loadWorld(worldDir);
   const issues = !loaded.ok ? loaded.error : null;
   const report = loaded.ok ? checkWorld(loaded.value) : null;
@@ -85,6 +85,41 @@ export async function checkForRun(worldDir: string): Promise<CheckedForRun> {
   return { world: report.world, tasks };
 }
 
+/** What a controller learns of a checked world: plain data, so it never holds a CheckedWorld. `source` is the world as JSON, for the secret guard. */
+export type CheckedForRun = { readonly tasks: PreparedWorld['tasks']; readonly source: string };
+
+export const CODE_DIR = path.resolve(import.meta.dirname, '../..');
+const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
+
+async function inChild(argv: readonly string[], runner: Runner, env: Readonly<Record<string, string | undefined>>, what: string): Promise<string> {
+  const res = await runner(['bun', 'src/cli/episode-prepare.ts', ...argv], { cwd: CODE_DIR, env: isolatedEnv(env), timeoutMs: 300_000 });
+  if (res.code === 3) throw new PreflightError(res.stderr.trim());
+  if (res.code !== 0) throw new DatasetError(`the ${what} process failed (exit ${res.code}): ${lastLine(res.stderr) || 'no output'}`);
+  return res.stdout;
+}
+
+/** `checkForRun` in the allowlisted prepare child (A-353): the controller holds the model and Boat keys and never runs a world's snippets. */
+export async function checkInChild(worldDir: string, runner: Runner, env: Readonly<Record<string, string | undefined>>): Promise<CheckedForRun> {
+  const stdout = await inChild(['--check', worldDir], runner, env, 'check');
+  try {
+    return JSON.parse(stdout) as CheckedForRun;
+  } catch {
+    throw new DatasetError('the check process answered with something other than a checked world');
+  }
+}
+
+/** `prepareWorld` in the allowlisted prepare child: everything of the prepared world but the CheckedWorld. */
+export async function prepareInChild(
+  worldDir: string, out: string, runner: Runner, env: Readonly<Record<string, string | undefined>>,
+): Promise<Omit<PreparedWorld, 'world'>> {
+  const stdout = await inChild([worldDir, out], runner, env, 'prepare');
+  try {
+    return JSON.parse(stdout) as Omit<PreparedWorld, 'world'>;
+  } catch {
+    throw new DatasetError('the prepare process answered with something other than a prepared world');
+  }
+}
+
 /**
  * Checks the world, then freezes both forms of it under `out` (YOS-159): the private world as
  * `private/worlds/<hash>/world.yaml` and its public form as `private/worlds/<hash>/public/world.yaml`,
@@ -93,7 +128,7 @@ export async function checkForRun(worldDir: string): Promise<CheckedForRun> {
  * form is what gets uploaded; the private world is what the verifier grades against, and it never
  * leaves the trusted side.
  */
-export async function prepareWorld(worldDir: string, out: string, checked?: CheckedForRun): Promise<PreparedWorld> {
+export async function prepareWorld(worldDir: string, out: string, checked?: CheckedWorldForRun): Promise<PreparedWorld> {
   const { world, tasks } = checked ?? (await checkForRun(worldDir));
   const worldVersion = sha256Hex(renderWorldYaml(world));
   const artifact = path.join(out, ...worldArtifactPath(worldVersion).split('/'));
@@ -295,11 +330,11 @@ export type PipelineDeps = {
    */
   readonly makeBundle: (frozenDir: string) => Promise<WorldBundle>;
   /**
-   * Builds the trusted grader the episodes grade through. Default `engineGrader`: the protocol
-   * verified in this process through #engine. The CLI passes `childGrader`, one separate host
-   * process per submission with the private world by path.
+   * Builds the trusted grader the episodes grade through. Required, so the controller never grades
+   * in its own process by default: production passes `childGrader`, one separate host process per
+   * submission with the private world by path. Tests may pass `engineGrader`.
    */
-  readonly grader?: GraderFactory;
+  readonly grader: GraderFactory;
   readonly fetch?: typeof globalThis.fetch;
   readonly now?: () => number;
   /** The result of `checkForRun(worldDir)` when the caller already ran it, so the world is not checked twice. */
@@ -362,9 +397,11 @@ export async function runPipeline(o: PipelineOptions, deps: PipelineDeps): Promi
   const log = deps.log ?? ((): void => undefined);
   const now = deps.now ?? Date.now;
   const base = redactor(o.secrets);
-  const checked = deps.checked ?? (await checkForRun(o.worldDir));
-  base.assertClean('the source world', JSON.stringify(checked.world));
-  const prep = await prepareWorld(o.worldDir, o.out, checked);
+  const runner = deps.runner ?? nodeRunner;
+  const env = deps.env ?? process.env;
+  const checked = deps.checked ?? (await checkInChild(o.worldDir, runner, env));
+  base.assertClean('the source world', checked.source);
+  const prep = await prepareInChild(o.worldDir, o.out, runner, env);
   if (!(await startRunLog(o.out, o.runId))) throw new PreflightError(`run id ${o.runId} is already used in ${o.out}: pick another --run-id`);
   log(`world ${prep.worldId} ${prep.worldVersion.slice(0, 12)} checked and frozen; ${prep.tasks.length} proven task(s)`);
 
@@ -416,8 +453,8 @@ export async function runPipeline(o: PipelineOptions, deps: PipelineDeps): Promi
     log(`sandbox ${sandboxId} is up`);
     const world = sandboxPort({ backend: deps.backend, sandboxId, workdir: up.sandbox.workdir, url: up.url, adminPort: port + 1, ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }) });
     // The trusted grader (YOS-159): one verifier session for the whole run, so a submission graded once cannot be graded again.
-    const grade = (deps.grader ?? engineGrader)({
-      world: prep.world, wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: o.engineCommit,
+    const grade = deps.grader({
+      wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: o.engineCommit,
     });
     // 2. Episodes, one after another, each from a reset world and an empty conversation.
     for (const task of prep.tasks) {

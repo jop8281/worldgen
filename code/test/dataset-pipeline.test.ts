@@ -177,7 +177,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       maxTurns: 10, budgetUsd: 1, maxMinutes: 1, secrets: [secret], sandboxName: 'reject-secret', port,
     }, {
       grader: engineGrader,
-      checked: { world: report.world, tasks: Object.entries(report.world.tasks).map(([id, t]) => ({ id, difficulty: t.difficulty, instruction: t.instruction })) },
+      checked: { tasks: Object.entries(report.world.tasks).map(([id, t]) => ({ id, difficulty: t.difficulty, instruction: t.instruction })), source: JSON.stringify(report.world) },
       backend,
       makeBundle: async (dir) => { bundleCalls += 1; return tinyBundle(dir); },
       nextTurn: async (view, signal) => { modelCalls += 1; return lazySolver(view, signal); },
