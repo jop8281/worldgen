@@ -526,3 +526,39 @@ describe('studio tenancy: serving for a tenant, and pins still starting (#46 fol
     assert.deepEqual([done.status, done.body['worldPort'], done.body['adminPort']], [200, 4700, 4701]);
   });
 });
+
+describe('studio tenancy: work an admin starts with ?tenant= is that tenant\'s (YOS-187)', () => {
+  it('records an episode an admin runs on a tenant\'s world under that tenant, never under the admin\'s own', async () => {
+    const f = await fixture();
+    await mkdir(path.join(f.worldsDir, 'globex', 'gen-globex-only'), { recursive: true });
+    const base = await start(f);
+    const begun = await call(base, 'POST', '/api/episodes?tenant=globex', ADA, { world: 'gen-globex-only', task: 't1', agent: 'noop' });
+    assert.equal(begun.status, 200, JSON.stringify(begun.body));
+    const runId = String(begun.body['runId']);
+    const seen = await call(base, 'GET', `/api/episodes/${runId}`, GINA);
+    assert.deepEqual([seen.status, seen.body['runId'], seen.body['world']], [200, runId, 'gen-globex-only']);
+    assert.deepEqual(await episodeIds(base, GINA), [runId]);
+    const foreign = await call(base, 'GET', `/api/episodes/${runId}`, ANN);
+    assert.deepEqual([foreign.status, (foreign.body['error'] as Json)['code']], [404, 'episode.unknown']);
+    assert.deepEqual(await episodeIds(base, ANN), []);
+    const own = await call(base, 'GET', `/api/episodes/${runId}?tenant=ops`, ADA);
+    assert.deepEqual([own.status, (own.body['error'] as Json)['code']], [404, 'episode.unknown']);
+    assert.deepEqual(await episodeIds(base, ADA, '?tenant=ops'), []);
+  });
+
+  it('keeps a proof an admin runs on a tenant\'s world in that tenant\'s key space, so its operator replays it', async () => {
+    const f = await fixture();
+    await mkdir(path.join(f.worldsDir, 'globex', 'gen-globex-only'), { recursive: true });
+    const verifies: string[][] = [];
+    const counting: Runner = async (argv, o) => {
+      if (argv[2] === 'verify') verifies.push([...argv]);
+      return runner(argv, o);
+    };
+    const base = await start(f, { runner: counting });
+    const key = { 'idempotency-key': 'proof-1' };
+    const byAdmin = await call(base, 'POST', '/api/worlds/gen-globex-only/proof?tenant=globex', ADA, undefined, key);
+    const byGina = await call(base, 'POST', '/api/worlds/gen-globex-only/proof', GINA, undefined, key);
+    assert.deepEqual([byAdmin.status, byGina.status, verifies.length], [200, 200, 1]);
+    assert.deepEqual(byGina.body, byAdmin.body);
+  });
+});

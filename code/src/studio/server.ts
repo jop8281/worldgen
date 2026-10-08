@@ -1827,7 +1827,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!clientKey.ok) return clientKey.reply;
     const fingerprint = fingerprintOf('proof', [w.dir]);
     const key = clientKey.key ?? `derived:${fingerprint}`;
-    const slot = `${who.tenant} ${key}`;
+    // The key space is the world's tenant's, as the world was resolved for it.
+    const slot = `${ctx.filter ?? who.tenant} ${key}`;
     const known = proofsDone.get(slot) ?? proofsRunning.get(slot);
     if (known !== undefined) {
       if (known.fingerprint === fingerprint) return known.reply;
@@ -1868,7 +1869,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { world: name, verified: res.code === 0, tasks } };
   }
 
-  /** Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. */
+  /**
+   * Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. An admin's `?tenant=` names
+   * the world's shelf and the job's tenant, as for serve and iterate, so the transcript of a tenant's world stays its own.
+   */
   async function startEpisode(body: unknown, who: User, ctx: Ctx): Promise<Reply> {
     if (!isObject(body)) return fail(400, 'episode.body', 'body must be {"world": ..., "task": ..., "agent": "noop" | "sonnet"}');
     const world = typeof body['world'] === 'string' ? body['world'] : '';
@@ -1889,7 +1893,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory and no build sha is set, so the episode would have no engine identity');
     return startJob({
       kind: 'episode',
-      tenant: who.tenant,
+      tenant: ctx.filter ?? who.tenant,
       rawKey: ctx.key,
       request: ['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--agent', agent, ...flags],
       label: agent,
