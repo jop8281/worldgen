@@ -180,8 +180,46 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
 export interface StudioServer {
   readonly url: string;
   readonly port: number;
-  /** Drops the port and open connections, and SIGTERMs every tracked child so none outlives its record. */
+  /**
+   * Drops the port and open connections, stops every served world (SIGTERM, then SIGKILL) and every running check, and
+   * resolves once each is gone. A generation run or an episode gets SIGTERM, its own clean stop, and finishes billing
+   * on its own (A-279).
+   */
   close(): Promise<void>;
+}
+
+/** What stopOnSignals needs of a process: its two stop signals, its exit and stderr. `process` is one. */
+export type SignalHost = {
+  on(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
+  exit(code: number): void;
+  readonly stderr: { write(text: string): unknown };
+};
+
+/**
+ * Stops the studio on SIGTERM or SIGINT: close() stops every served world and check and waits for them, then the
+ * process exits 0 after SIGTERM or 130 after SIGINT, or 1 when close fails. A second signal while closing exits at
+ * once, 143 or 130 by that signal, as worldgen does (A-279).
+ */
+export function stopOnSignals(server: Pick<StudioServer, 'close'>, host: SignalHost): void {
+  let closing = false;
+  const onSignal = (signal: 'SIGINT' | 'SIGTERM'): void => {
+    if (closing) {
+      host.stderr.write(`studio: ${signal} again, exiting before every child is gone\n`);
+      host.exit(signal === 'SIGINT' ? 130 : 143);
+      return;
+    }
+    closing = true;
+    host.stderr.write(`studio: ${signal}, stopping every served world and check (send it again to quit now)\n`);
+    server.close().then(
+      () => host.exit(signal === 'SIGINT' ? 130 : 0),
+      (e: unknown) => {
+        host.stderr.write(`studio: close failed: ${e instanceof Error ? e.message : String(e)}\n`);
+        host.exit(1);
+      },
+    );
+  };
+  host.on('SIGINT', () => onSignal('SIGINT'));
+  host.on('SIGTERM', () => onSignal('SIGTERM'));
 }
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -575,7 +613,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const starting = new Set<string>();
   /** Ports an admin pinned for a `worldplay serve` that has not reported yet: the world port and its admin port. */
   const pinning = new Set<number>();
+  /** Each `worldplay serve` child that has not reported yet, so close() stops it too. */
+  const startingChildren = new Set<SpawnedChild>();
   const jobs = new Map<string, Job>();
+  /** Aborted by close(): it stops every runner child, the Explorer check and the proof among them. */
+  const stopping = new AbortController();
+  /** The runner calls still running, so close() can wait until their children are gone. */
+  const runnerCalls = new Set<Promise<RunResult>>();
+  const runChild: Runner = (argv, runOpts) => {
+    const call = opts.runner(argv, { ...runOpts, signal: stopping.signal });
+    runnerCalls.add(call);
+    const done = (): void => void runnerCalls.delete(call);
+    call.then(done, done);
+    return call;
+  };
   /** A generation run `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
   const runOf = (runId: string, who: User, filter: string | null): Job | undefined => {
     const job = jobs.get(runId);
@@ -884,7 +935,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   async function checkInChild(dir: string, name: string, yaml: { readonly mtimeMs: number; readonly size: number } | null): Promise<Reply> {
     let res: RunResult;
     try {
-      res = await opts.runner(['bun', 'src/cli/studio-check.ts', dir, name], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
+      res = await runChild(['bun', 'src/cli/studio-check.ts', dir, name], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
     } catch {
       return fail(502, 'check.failed', 'the check process could not start');
     }
@@ -1005,15 +1056,19 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       port = wanted;
     }
     // From the checks above to here nothing awaits, so a second pin of the same port cannot pass them before this one is held.
+    // Nor can close() start in between, so a child spawned here is always one that close() stops.
+    if (closed) return fail(503, 'studio.closing', `The studio is closing, so it did not serve ${name}`);
     const pinned = port === 0 ? [] : [port, port + 1];
     for (const held of pinned) pinning.add(held);
     const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
     starting.add(startKey);
+    startingChildren.add(child);
     let report: Awaited<ReturnType<typeof firstReport>>;
     try {
       report = await firstReport(child, opts.serveWaitMs ?? SERVE_WAIT_MS);
     } finally {
       starting.delete(startKey);
+      startingChildren.delete(child);
       for (const held of pinned) pinning.delete(held);
     }
     if (report.kind === 'exited') {
@@ -1024,6 +1079,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       await signalAndWait(child, ['SIGTERM', 'SIGKILL']);
       return fail(504, 'serve.timeout', `worldplay serve for ${name} reported no listening ports within ${opts.serveWaitMs ?? SERVE_WAIT_MS} ms, so the studio stopped it`);
     }
+    // It reported while close() was stopping it: close() waits for it, so it is never served.
+    if (closed) return fail(503, 'studio.closing', `The studio is closing, so it stopped ${name} before serving it`);
     let id = `svc-${randomBytes(4).toString('hex')}`;
     while (services.has(id)) id = `svc-${randomBytes(4).toString('hex')}`;
     const record: ServiceRecord = { id, name, tenant: owner, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
@@ -1420,7 +1477,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   async function runCosts(): Promise<unknown> {
-    const res = await opts.runner(['bun', 'src/cli/costs.ts', '--json', '--by', 'day'], { cwd: codeDir });
+    const res = await runChild(['bun', 'src/cli/costs.ts', '--json', '--by', 'day'], { cwd: codeDir });
     if (res.code !== 0) {
       const why = res.stderr.split('\n').filter((l) => l.trim() !== '').slice(-1)[0] ?? res.stdout.split('\n').filter((l) => l.trim() !== '').slice(-1)[0] ?? 'no output';
       throw new Error(`costs exited ${res.code}: ${why}`);
@@ -1456,7 +1513,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   async function engineCommit(): Promise<string | null> {
     if (commit !== null) return commit;
     const isSha = (s: string | undefined): s is string => s !== undefined && /^[0-9a-f]{7,64}$/.test(s);
-    const r = await opts.runner(['git', 'rev-parse', 'HEAD'], { cwd: codeDir }).catch(() => null);
+    const r = await runChild(['git', 'rev-parse', 'HEAD'], { cwd: codeDir }).catch(() => null);
     const sha = r === null ? '' : r.stdout.trim();
     const found = r !== null && r.code === 0 && isSha(sha) ? sha : isSha(opts.build) ? opts.build : null;
     if (found === null) return null;
@@ -1514,7 +1571,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   async function proveWorld(dir: string, name: string): Promise<Reply> {
-    const res = await opts.runner(['bun', 'src/cli/worldplay.ts', 'verify', dir, '--json'], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
+    const res = await runChild(['bun', 'src/cli/worldplay.ts', 'verify', dir, '--json'], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
     const tasks: unknown[] = [];
     for (const line of res.stdout.split('\n')) {
       if (line.trim() === '') continue;
@@ -1864,22 +1921,24 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     url: `http://${host.includes(':') ? `[${host}]` : host}:${port}`,
     port,
     close() {
-      closing ??= new Promise<void>((resolve) => {
+      closing ??= (async () => {
         closed = true;
         clearInterval(renewal);
-        for (const { child } of services.values()) child.kill('SIGTERM');
-        for (const job of jobs.values()) if (job.phase !== 'finished') job.child?.kill('SIGTERM');
-        if (!server.listening) {
-          resolve();
-          return;
-        }
-        server.close(() => resolve());
+        const unbound = server.listening ? new Promise<void>((resolve) => server.close(() => resolve())) : Promise.resolve();
         server.closeAllConnections();
-      }).then(async () => {
+        stopping.abort();
+        // A generation run or an episode takes SIGTERM as its clean stop and bills its call on its own (A-279), so close
+        // does not wait for it or SIGKILL it.
+        for (const job of jobs.values()) if (job.phase !== 'finished') job.child?.kill('SIGTERM');
+        await Promise.all([
+          unbound,
+          ...[...services.values()].map(({ child }) => child).concat([...startingChildren]).map((child) => signalAndWait(child, ['SIGTERM', 'SIGKILL'])),
+          ...[...runnerCalls].map((call) => call.catch(() => undefined)),
+        ]);
         // Writes queued before close land before close returns; none is queued after (#28).
         await persisting;
         await auditing;
-      });
+      })();
       return closing;
     },
   };
