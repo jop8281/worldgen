@@ -339,7 +339,7 @@ export async function episodeInput(port: WorldPort, nextTurn: NextTurn, over: Pa
   const task = prep.tasks.find((t) => t.id === EASY);
   if (task === undefined) throw new Error('no easy task');
   return {
-    runId: 'run1', engineCommit: COMMIT, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION, configVersion: 'cfg-000000000000',
+    runId: 'run1', engineCommit: COMMIT, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION, configVersion: 'cfg-000000000000', model: 'claude-sonnet-5-5',
     task, index: 1, openapi: prep.openapi, seedHash: prep.seedHash, port,
     grade: engineGrader({ world: prep.world, wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: COMMIT }),
     nextTurn, maxTurns: 10, budgetLeftUsd: 1, deadline: Date.now() + 60_000, now: Date.now, redact: noSecrets, ...over,

@@ -400,7 +400,7 @@ describe('the pipeline grades through the verifier with bounded failure', () => 
     const backend = fakeBackend(world, { port });
     const out = tmp('verify-pipeline');
     const result = await runPipeline(
-      { worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, maxTurns: 60, budgetUsd: 5, maxMinutes: 5, secrets: [], sandboxName: 'ds-verify-1', port },
+      { worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 60, budgetUsd: 5, maxMinutes: 5, secrets: [], sandboxName: 'ds-verify-1', port },
       {
         backend, nextTurn: solveAll,
         makeBundle: async (dir) => ({ files: [{ path: 'worlds/w/world.yaml', data: readFileSync(path.join(dir, 'public', 'world.yaml')) }], world: 'worlds/w' }),

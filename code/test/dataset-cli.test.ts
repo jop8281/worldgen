@@ -227,6 +227,29 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(r.out.some((l) => l.startsWith('dataset run')), false);
   });
 
+  it('records a --model override on the manifest and every episode, and the default model without one (A-283)', async () => {
+    const lines = (dir: string, file: string): unknown[] => readFileSync(path.join(dir, file), 'utf8').split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { model: unknown }).model);
+    for (const [flag, model] of [[[], 'claude-sonnet-5-5'], [['--model', 'claude-opus-5-5'], 'claude-opus-5-5']] as const) {
+      const outDir = tmp('cli-model');
+      const port = randomPort();
+      const r = await run([...required(outDir), ...flag], { backend: fakeBackend(await helpdesk(), { port }), nextTurn: solveAll, port });
+      assert.equal(r.code, 0, r.err.join('\n'));
+      assert.equal((JSON.parse(readFileSync(path.join(outDir, 'manifest.json'), 'utf8')) as { model: unknown }).model, model);
+      assert.deepEqual(lines(outDir, 'dataset.jsonl'), [model, model, model]);
+    }
+  });
+
+  it('refuses a --model with no known price before it touches the sandbox, and creates nothing', async () => {
+    const outDir = path.join(tmp('cli-unpriced'), 'out');
+    const port = randomPort();
+    const backend = fakeBackend(await helpdesk(), { port });
+    const r = await run([...required(outDir), '--model', 'claude-haiku-4-5'], { backend, nextTurn: solveAll, port });
+    assert.equal(r.code, 1);
+    assert.equal(r.err.some((l) => l.includes('model: model "claude-haiku-4-5" has no known price: add prices.claude-haiku-4-5 with inputPerMTok and outputPerMTok, or use claude-sonnet-5-5')), true, r.err.join('\n'));
+    assert.deepEqual(backend.events, []);
+    assert.equal(existsSync(outDir), false);
+  });
+
   it('exits 1 with the problem named when the sandbox stop is not confirmed', async () => {
     const port = randomPort();
     const r = await run(required(tmp('cli-down')), { backend: fakeBackend(await helpdesk(), { port, failDown: true }), nextTurn: solveAll, port });

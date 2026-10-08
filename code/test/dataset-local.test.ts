@@ -35,7 +35,7 @@ describe('runLocalEpisode: an agent that calls the world', () => {
   before(async () => {
     out = await mkdtemp(path.join(tmpdir(), 'wg-local-'));
     result = await runLocalEpisode({
-      worldDir: HELPDESK, taskId: 'assign_newest_acme_ticket', out, runId: 'replay', engineCommit: 'abcdef1',
+      worldDir: HELPDESK, taskId: 'assign_newest_acme_ticket', out, runId: 'replay', engineCommit: 'abcdef1', model: 'claude-sonnet-5-5',
       nextTurn: replay, maxTurns: 12, budgetUsd: 0.01, maxMinutes: 2, redact: redactor([]),
     });
   });

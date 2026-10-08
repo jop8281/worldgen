@@ -13,14 +13,14 @@ import type { NextTurn } from '../dataset/episode.ts';
 import { finishAtOnce, runLocalEpisode } from '../dataset/local.ts';
 import { GRADING_NOTE, redactor } from '../dataset/schema.ts';
 import { solverTurn } from '../dataset/solver.ts';
-import { DEFAULT_API_KEY_ENV, TRANSPORTS, loadConfig, transportOf, type Transport } from '../worldgen/config.ts';
+import { DEFAULT_API_KEY_ENV, DEFAULT_MODEL, TRANSPORTS, loadConfig, transportOf, type Transport } from '../worldgen/config.ts';
 import { makeModel } from './models.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 const CONFIG_FILE = path.join(CODE_DIR, 'worldgen.config.json');
 /** A solver turn is one tool call, so the reply cap is far below the generator's. */
 const SOLVER_MAX_OUTPUT_TOKENS = 4096;
-/** The agents an episode can run. `noop` finishes at once and costs nothing; `sonnet` is the pinned model and spends. */
+/** The agents an episode can run. `noop` finishes at once and costs nothing; `sonnet` runs DEFAULT_MODEL, whatever config's model, and spends. */
 export const AGENTS = ['noop', 'sonnet'] as const;
 export type Agent = (typeof AGENTS)[number];
 
@@ -115,11 +115,11 @@ export async function main(argv: readonly string[], env: Env = process.env): Pro
   try {
     let nextTurn: NextTurn = finishAtOnce;
     if (args.agent === 'sonnet') {
-      const config = await loadConfig(CONFIG_FILE, { maxOutputTokens: SOLVER_MAX_OUTPUT_TOKENS });
+      const config = await loadConfig(CONFIG_FILE, { maxOutputTokens: SOLVER_MAX_OUTPUT_TOKENS, model: DEFAULT_MODEL });
       nextTurn = solverTurn(makeModel(config, env, args.transport ?? transportOf(config)));
     }
     const r = await runLocalEpisode({
-      worldDir: args.world, taskId: args.task, out: args.out, runId: args.runId, engineCommit: args.engineCommit, nextTurn,
+      worldDir: args.world, taskId: args.task, out: args.out, runId: args.runId, engineCommit: args.engineCommit, model: DEFAULT_MODEL, nextTurn,
       maxTurns: args.maxTurns, budgetUsd: args.budgetUsd, maxMinutes: args.maxMinutes, redact, interrupt: controller.signal,
     });
     const e = r.episode;

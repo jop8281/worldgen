@@ -33,7 +33,7 @@ async function run(s: Setup = {}) {
   const logs: string[] = [];
   const result = await runPipeline(
     {
-      worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, maxTurns: 60, budgetUsd: 5, maxMinutes: 5,
+      worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 60, budgetUsd: 5, maxMinutes: 5,
       secrets: [ANTHROPIC, BOAT], sandboxName: 'ds-run-1-abc123', port, ...s.opts,
     },
     { backend, nextTurn: s.solver ?? solveAll, makeBundle: tinyBundle, log: (l) => logs.push(l), ...s.deps },
@@ -157,7 +157,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     let modelCalls = 0;
     const logs: string[] = [];
     await assert.rejects(runPipeline({
-      worldDir: HELPDESK_DIR, out, runId: 'reject-secret', engineCommit: COMMIT,
+      worldDir: HELPDESK_DIR, out, runId: 'reject-secret', engineCommit: COMMIT, model: 'claude-sonnet-5-5',
       maxTurns: 10, budgetUsd: 1, maxMinutes: 1, secrets: [secret], sandboxName: 'reject-secret', port,
     }, {
       checked: { world: report.world, tasks: Object.entries(report.world.tasks).map(([id, t]) => ({ id, difficulty: t.difficulty, instruction: t.instruction })) },
@@ -275,7 +275,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       return sandbox;
     };
     const result = await runPipeline({
-      worldDir: HELPDESK_DIR, out: tmp('startup-deadline'), runId: 'run-1', engineCommit: COMMIT,
+      worldDir: HELPDESK_DIR, out: tmp('startup-deadline'), runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5',
       maxTurns: 60, budgetUsd: 5, maxMinutes: 1 / 60, secrets: [], sandboxName: 'ds-deadline', port,
     }, {
       backend, makeBundle: tinyBundle, now: () => clock,
@@ -438,7 +438,7 @@ describe('refusals before anything starts', () => {
     const backend = fakeBackend(world, { port: randomPort() });
     const out = s.out ?? tmp('refused');
     await assert.rejects(
-      runPipeline({ worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'x-abc123', ...s.opts }, { backend, nextTurn: lazySolver, makeBundle: tinyBundle }),
+      runPipeline({ worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'x-abc123', ...s.opts }, { backend, nextTurn: lazySolver, makeBundle: tinyBundle }),
       (e: unknown) => e instanceof PreflightError && (typeof re === 'string' ? e.message === re : re.test(e.message)),
     );
     assert.deepEqual(backend.events, []);

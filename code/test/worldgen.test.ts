@@ -1339,7 +1339,14 @@ describe('runWorldGen create: the hard run deadline', () => {
 });
 
 describe('runWorldGen create: model and effort per step', () => {
-  it('uses each step effort from config, and the escalation effort after a stall, always on the pinned model', async () => {
+  it('runs a configured override model on every step it covers, and a step pin on its own step, with no fallback (A-283)', async () => {
+    const config = configSchema.parse({ model: 'claude-opus-5-5', maxCostUsd: 5, stepModels: { seed: { model: 'claude-sonnet-5-5' } } });
+    const { result, calls } = await run(HAPPY, { config });
+    assert.equal(result.kind, 'done');
+    assert.deepEqual(calls.map((c) => c.model), ['claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
+  });
+
+  it('uses each step effort from config, and the escalation effort after a stall, always on the default model', async () => {
     const config = configSchema.parse({
       model: 'claude-sonnet-5-5',
       effort: 'medium',
@@ -1362,7 +1369,7 @@ describe('runWorldGen create: model and effort per step', () => {
     ]);
   });
 
-  it('refuses a step or escalation model other than the pinned one when the config is parsed, so no step can pick it', () => {
+  it('refuses a step or escalation model that is not a Claude model id when the config is parsed, so no step can pick it', () => {
     const r = configSchema.safeParse({
       model: 'claude-sonnet-5-5',
       maxCostUsd: 5,
@@ -1371,8 +1378,8 @@ describe('runWorldGen create: model and effort per step', () => {
     });
     const got = new Map(r.error?.issues.map((i) => [i.path.join('.'), i.message]));
     assert.equal(got.size, 2);
-    assert.equal(got.get('stepModels.plan.model'), 'model "m-plan" is not allowed: WorldGen runs only claude-sonnet-5-5');
-    assert.equal(got.get('escalate.model'), 'model "m-big" is not allowed: WorldGen runs only claude-sonnet-5-5');
+    assert.equal(got.get('stepModels.plan.model'), 'model "m-plan" is not a Claude model id such as claude-sonnet-5-5');
+    assert.equal(got.get('escalate.model'), 'model "m-big" is not a Claude model id such as claude-sonnet-5-5');
   });
 
   it('does not escalate while each retry has fewer issues than the one before', async () => {
