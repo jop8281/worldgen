@@ -9,7 +9,8 @@ import path from 'node:path';
 import { checkWorld, loadWorld, worldSchema } from '#engine';
 import { fidelityScore, parseFidelityReference, type FidelityReference } from '../worldgen/fidelity.ts';
 import { type Config } from '../worldgen/config.ts';
-import { evalConfig, parseEvalArgs, USAGE, UsageError, type EvalArgs } from './eval-args.ts';
+import { evalConfig, parseEvalArgs, USAGE, type EvalArgs } from './eval-args.ts';
+import { CONFIG_FILE, UsageError } from './options.ts';
 import {
   caseLayout,
   fidelityCell,
@@ -40,7 +41,6 @@ import { runWorldGen } from '../worldgen/run.ts';
 import { withEvalAttempt } from './eval-retention.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
-const CONFIG_FILE = path.join(CODE_DIR, 'worldgen.config.json');
 const DEFAULT_SUITE = path.resolve(CODE_DIR, '../eval/suite.yaml');
 const RUNS_DIR = path.resolve(CODE_DIR, '../eval/runs');
 
