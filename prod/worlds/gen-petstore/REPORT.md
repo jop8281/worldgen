@@ -97,13 +97,15 @@ None. The input names every field.
 
 The engine check passed: 8 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_1574df506ee1d337f283358cb8b93186dfd9b996a33cf8bc7a7bbb7029d22c69`.
+World id (WID): `wid_f119814c616eb24dae058f683feadaede880f80030d9d624601058c97d9e07fd`.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix | TID |
-|---|---|---|---|---|---|---|
-| order_biscuit | easy | 1.000 | 0.000 | 0.000, 0.700 | n/a | `tid_ef7fbd46328ac2cf0ac551781d06e4913ff76629e3cf75244f09bdd61428f73e` |
-| deliver_cat_juniper | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.500 | n/a | `tid_e25d93ad2cafba8c79bb7c926cf1f1518b2ac909a840c6caab8d54e31aee9049` |
-| release_stale_placed_orders | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000 | 0.500 | `tid_f41b9f76c3fbf0b0f7989c5f43791443cee09d35bb163c0ed6bfa260e340e3a8` |
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| order_biscuit | easy | 1.000 | 0.000 | 0.000, 0.700 | n/a | legacy; mutants 4/7 | `tid_4549cbb2c5747ba370c83c6feada75318f92e70c91a7998974e148be58a31be1` |
+| deliver_cat_juniper | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.500 | n/a | legacy; mutants 5/7 | `tid_1fcddd015a39124188e3d3f0a3b6ec0af453ea6d930b3b20fa517de4b767e9a3` |
+| release_stale_placed_orders | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000 | 0.500 | legacy; mutants 4/7 | `tid_25289cca1e683ff73ed211cd99d1e2ba963471d1201c902113b0872289926dc4` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -116,6 +118,16 @@ Decoys:
 - `release_stale_placed_orders` 0.500: deletes only the first stale placed order and stops, leaving the others
 - `release_stale_placed_orders` 0.000: deletes every order with a past ship date, including the approved one
 - `release_stale_placed_orders` 0.000: deletes all placed orders including the future-dated ones
+
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| order_biscuit | easy | 2 | none | pet | none declared |
+| deliver_cat_juniper | medium | 2 | none | none | none declared |
+| release_stale_placed_orders | hard | 4 | none | store_order | hard: met |
 
 ## Run
 

@@ -35,7 +35,7 @@ The rehearsal writes one PNG per step into `<out-dir>`. These six keep their ste
 The worlds shown:
 
 - helpdesk is `wid_e833c3b8d51fabafb42aff407ec68e6ce7a060289162ee6bef9e3ead755bb521`, the hand-built world.
-- gen-library-loans is `wid_14b93ec57fdb9839d5023a5aa1069ed87f3c187d8afbe2c27e563fb3bd664297` in the Explorer of 07, computed from its `world.yaml` as it is now. Its `REPORT.md` and `capsule.json`, and so the dashboard in 01, give `wid_ef4057042f754ae3c63939a0287a6ecb17602c3e4e2c42beb785defec6ba1f6a`, the id recorded when WorldGen generated it. The world changed after generation.
+- gen-library-loans is `wid_14b93ec57fdb9839d5023a5aa1069ed87f3c187d8afbe2c27e563fb3bd664297`, as the Explorer in 07 shows. Its `REPORT.md` and `capsule.json` have cited this id since PR #13. The dashboard in 01 was captured before PR #13, and it shows `wid_ef4057042f754ae3c63939a0287a6ecb17602c3e4e2c42beb785defec6ba1f6a`, the id the report cited then. The `world.yaml` never changed. A schema default added after generation, `alternatives: []` on every task, moved the id of the parsed world. PR #13 records the bisect.
 
 ## What to read with care
 

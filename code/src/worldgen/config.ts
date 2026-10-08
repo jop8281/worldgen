@@ -36,19 +36,28 @@ const priceEntry = z.strictObject({
 });
 export type PriceEntry = z.output<typeof priceEntry>;
 
-/** The one model WorldGen calls (YOS-107). Config, CLI overrides and both transports reject any other id. */
-export const PINNED_MODEL = 'claude-sonnet-5-5';
-export const isPinnedModel = (m: string): boolean => m === PINNED_MODEL;
-const pinnedModel = z.string().refine(isPinnedModel, { error: (iss) => `model "${String(iss.input)}" is not allowed: WorldGen runs only ${PINNED_MODEL}` });
+/** The model every step runs unless config or `--model` names another (A-283; A-66 pinned it). */
+export const DEFAULT_MODEL = 'claude-sonnet-5-5';
+/** A Claude model id: `claude-` and lowercase words joined by `-` or `.`. Nothing else reaches a transport. */
+const CLAUDE_MODEL_ID = /^claude-[a-z0-9]+(?:[-.][a-z0-9]+)*$/;
+export const isClaudeModelId = (m: string): boolean => CLAUDE_MODEL_ID.test(m);
+export const claudeModelId = z.string().refine(isClaudeModelId, { error: (iss) => `model "${String(iss.input)}" is not a Claude model id such as ${DEFAULT_MODEL}` });
 
 /**
  * Prices known without config, used for a model that `prices` does not list. `prices` wins per
  * field within a model. Sonnet 5.5 lists $2 / $10, 5-minute cache writes $2.50 (1.25x), 1-hour
- * cache writes $4 (2x), cache reads $0.20 (0.1x). The claude CLI writes 1-hour entries.
+ * cache writes $4 (2x), cache reads $0.20 (0.1x). The claude CLI writes 1-hour entries. Opus 5.5
+ * lists $4 / $20, cache writes $5, cache reads $0.20, as config held it before A-66. Any other
+ * model runs only once `prices` gives it an input and an output price.
  */
 export const BUILTIN_PRICES: Readonly<Record<string, PriceEntry>> = {
-  [PINNED_MODEL]: { inputPerMTok: 2, outputPerMTok: 10, cacheWritePerMTok: 2.5, cacheWrite1hPerMTok: 4, cacheReadPerMTok: 0.2 },
+  [DEFAULT_MODEL]: { inputPerMTok: 2, outputPerMTok: 10, cacheWritePerMTok: 2.5, cacheWrite1hPerMTok: 4, cacheReadPerMTok: 0.2 },
+  'claude-opus-5-5': { inputPerMTok: 4, outputPerMTok: 20, cacheWritePerMTok: 5, cacheReadPerMTok: 0.2 },
 };
+
+/** Whether `model` has an input and an output price, built in or from a `prices` entry that `configSchema` accepted. */
+export const isPriced = (model: string, prices: Readonly<Record<string, Partial<PriceEntry>>>): boolean =>
+  BUILTIN_PRICES[model] !== undefined || (prices[model]?.inputPerMTok !== undefined && prices[model]?.outputPerMTok !== undefined);
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -63,7 +72,7 @@ export const DEFAULT_API_KEY_ENV = 'LLM_KEY';
 
 /** Model and effort for one step. An absent field falls back to the top-level `model` and `effort`. */
 const modelChoice = z.strictObject({
-  model: pinnedModel.optional(),
+  model: claudeModelId.optional(),
   effort: effort.optional(),
 });
 
@@ -74,7 +83,7 @@ const envName = z
 
 export const configSchema = z
   .strictObject({
-    model: pinnedModel.describe(`default model for every step that stepModels does not pin; only ${PINNED_MODEL}`),
+    model: claudeModelId.describe(`default model for every step that stepModels does not set, ${DEFAULT_MODEL} in the shipped config; it needs a price, built in or in prices`),
     effort: effort.optional().describe('default effort; absent means the model default'),
     transport: z.enum(TRANSPORTS).optional().describe(`how model calls are made, default ${DEFAULT_TRANSPORT}`),
     claudeBin: z.string().min(1).optional().describe(`claude CLI binary, default "${DEFAULT_CLAUDE_BIN}" from PATH`),
@@ -88,6 +97,18 @@ export const configSchema = z
     escalate: modelChoice.optional().describe('model and effort for a step that stalls'),
     prices: z.record(z.string(), priceEntry).default({}),
     exampleWorld: z.string().default('../prod/worlds/helpdesk').describe('few-shot world, read by path'),
+  })
+  .superRefine((c, ctx) => {
+    // Refused at load, before any call: a model with no price could not be metered against the caps.
+    const named: [readonly PropertyKey[], string | undefined][] = [
+      [['model'], c.model],
+      ...STEP_IDS.map((id): [readonly PropertyKey[], string | undefined] => [['stepModels', id, 'model'], c.stepModels?.[id]?.model]),
+      [['escalate', 'model'], c.escalate?.model],
+    ];
+    for (const [path, model] of named) {
+      if (model === undefined || !isClaudeModelId(model) || isPriced(model, c.prices)) continue;
+      ctx.addIssue({ code: 'custom', path: [...path], message: `model "${model}" has no known price: add prices.${model} with inputPerMTok and outputPerMTok, or use ${DEFAULT_MODEL}` });
+    }
   });
 export type Config = z.output<typeof configSchema>;
 

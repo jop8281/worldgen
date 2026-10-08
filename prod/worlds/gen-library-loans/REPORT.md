@@ -67,6 +67,20 @@ Jobs (1):
 - Open-loan fines in the CSV are counted to 2026-10-01. All 70 unreturned loans match that date, and only 36 match the clock start of 2026-10-07T09:00Z. The seed keeps the CSV values. loan.status is not a CSV column: the seed derives returned, overdue or active from returned_at and due_at.
   - Why: The CSV was exported before the world's clock start. accrue_overdue recomputes every overdue fine with the world's rule each time it fires, so the seeded open-loan fines change on the first clock advance.
 
+## Fields not in the input
+
+9 fields match no column or property name in the input. WorldGen invented each one, or renamed an input field.
+
+- `member.code`
+- `member.name`
+- `member.email`
+- `member.status`
+- `loan.loan_ref`
+- `loan.book_id`
+- `loan.status`
+- `loan.renewals`
+- `loan.fine_paid`
+
 ## Questions asked of the input
 
 - Should members be separate records, given the CSV only has member_id strings on loans?
@@ -103,13 +117,15 @@ Jobs (1):
 
 The engine check passed: 8 world tests, 2 warnings. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_ef4057042f754ae3c63939a0287a6ecb17602c3e4e2c42beb785defec6ba1f6a`.
+World id (WID): `wid_14b93ec57fdb9839d5023a5aa1069ed87f3c187d8afbe2c27e563fb3bd664297`.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix | TID |
-|---|---|---|---|---|---|---|
-| return_longest_overdue_loan | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | `tid_3e0366fdda4c91cc7db58a299dc5166aac8604d96a467a309d3565d27ae95679` |
-| collect_top_fines_member | medium | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.000 | 0.667 | `tid_c30636f1143fb7506d817f351c9f77b2edb53f274d5edd389bdb0fb46b356a9d` |
-| clear_riverside_overdue | hard | 1.000 | 0.000 | 0.833, 0.500, 0.000, 0.000 | 0.917 | `tid_63b9f90fb99488a52a8e2c2fb74b6295e5f220871b9925f3f4a4e0e4af32d474` |
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| return_longest_overdue_loan | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 1/7 | `tid_88310ae562d39f80f23ee74e2caf4f809b0cd6a54e541ec656ffca32ac8c905c` |
+| collect_top_fines_member | medium | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.000 | 0.667 | legacy; mutants 2/7 | `tid_3eb45ce6caebd4486b54cf6eacc493788d5709be37643ca93cacd04595ba5f74` |
+| clear_riverside_overdue | hard | 1.000 | 0.000 | 0.833, 0.500, 0.000, 0.000 | 0.917 | legacy; mutants 2/7 | `tid_97133acd03ff1ba2f30eb6751849509813b54b731e3414dd894bb74725107a7d` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -123,6 +139,16 @@ Decoys:
 - `clear_riverside_overdue` 0.500: returns every overdue riverside loan but never pays the fines the returns created
 - `clear_riverside_overdue` 0.000: returns and pays every open riverside loan, including active ones that are not overdue
 - `clear_riverside_overdue` 0.000: ignores the branch and returns and pays every overdue loan in the library
+
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| return_longest_overdue_loan | easy | 1 | none | none | none declared |
+| collect_top_fines_member | medium | 3 | loan | loan | none declared |
+| clear_riverside_overdue | hard | 6 | loan | loan | hard: met |
 
 ## Run
 

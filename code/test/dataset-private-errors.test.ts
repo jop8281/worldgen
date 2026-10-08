@@ -31,7 +31,7 @@ describe('private controller errors in dataset exports', () => {
       const redact = redactor([secret]);
       const input: EpisodeInput = {
         runId: 'privacy-test', engineCommit: 'a'.repeat(40), worldId: 'toy', worldVersion: sha256Hex(frozen),
-        promptVersion: 'solver-prompt-1', configVersion: 'test-config-1',
+        promptVersion: 'solver-prompt-1', configVersion: 'test-config-1', model: 'claude-sonnet-5-5',
         task: { id: 'visible_task', difficulty: 'easy', instruction: 'Complete the visible task using the public API.' },
         index: 1, openapi: { openapi: '3.1.0', info: { title: 'toy', version: '1', description: '' }, paths: {}, tags: [], components: { schemas: {} }, 'x-error-codes': {} },
         seedHash: hashState(state), port,
