@@ -760,3 +760,14 @@ describe('memory bound and worker reuse', { skip: HEAP_BOUND_SKIP }, () => {
     assert.deepEqual(log, ['now0', 'now1', 'now2']);
   });
 });
+
+describe('snippet process request budget', () => {
+  it('retires a snippet process after 2000 requests and starts a fresh one for the next', () => {
+    const h = createVmHost({ ctxCallsPerRun: 20_000, guardMs: 2000, maxOldGenerationSizeMb: 77, maxYoungGenerationSizeMb: 7 });
+    const started = snippetWorkersStarted();
+    const c = h.compile('job', '(ctx) => 1', PATH);
+    if (!c.ok) throw new Error('compile failed');
+    for (let i = 0; i < 2000; i++) assert.equal(c.run(jobCtx()), 1);
+    assert.equal(snippetWorkersStarted() - started, 2);
+  });
+});
