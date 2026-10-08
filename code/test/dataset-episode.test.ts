@@ -266,7 +266,8 @@ describe('runEpisode against the golden helpdesk over HTTP', () => {
     }) as typeof globalThis.fetch;
     const model = anthropicModel(configSchema.parse({ model: 'claude-sonnet-5-5', maxCostUsd: 5 }), { apiKey: 'sk-test-abc123456', fetch: hangingFetch });
     const input = await episodeInput(world.port, solverTurn(model));
-    const { episode } = await runEpisode({ ...input, deadline: Date.now() + 100 });
+    // The deadline must outlast the reset and state read before the first call: 32 to 46 ms on an idle Mac, more on a loaded runner.
+    const { episode } = await runEpisode({ ...input, deadline: Date.now() + 1000 });
     assert.equal(httpAborted, true);
     assert.equal(httpCalls, 1);
     assert.equal(episode.stop_reason, 'time_limit');

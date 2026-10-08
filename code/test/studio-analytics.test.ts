@@ -16,7 +16,7 @@ describe('summarizeEpisodes: agent-episode analytics (YOS-190)', () => {
     out = await mkdtemp(path.join(tmpdir(), 'wg-analytics-'));
     for (const runId of ['noop-a', 'noop-b']) {
       const r = await runLocalEpisode({
-        worldDir: HELPDESK, taskId: 'assign_newest_acme_ticket', out, runId, engineCommit: 'abcdef1',
+        worldDir: HELPDESK, taskId: 'assign_newest_acme_ticket', out, runId, engineCommit: 'abcdef1', model: 'claude-sonnet-5-5',
         nextTurn: finishAtOnce, maxTurns: 3, budgetUsd: 0.01, maxMinutes: 2, redact: redactor([]),
       });
       real.push(r.episode);

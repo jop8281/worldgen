@@ -445,7 +445,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const processes = opts.processes ?? osProcesses;
   // One write at a time, in order, so the file on disk is always the latest whole registry.
   let persisting: Promise<void> = Promise.resolve();
+  // Once close starts, the registry is final: a run still going is stored as unfinished, so a later studio
+  // marks it interrupted (A-329) and nothing writes into the worlds dir after close resolves.
+  let closed = false;
   const persist = (): Promise<void> => {
+    if (closed) return persisting;
     const snapshot: StoredRun[] = [...runs.values()].map((r) => ({
       runId: r.runId, outDir: r.outDir, pid: r.child.pid ?? null, knownRuns: [...r.knownRuns], startedAt: r.startedAt,
       exitCode: r.exitCode, finished: !r.running,
@@ -1322,17 +1326,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     url: `http://${host.includes(':') ? `[${host}]` : host}:${port}`,
     port,
     close() {
-      closing ??= new Promise<void>((resolve) => {
+      closing ??= (async () => {
+        closed = true;
         for (const { child } of services.values()) child.kill('SIGTERM');
         for (const { child } of runs.values()) child.kill('SIGTERM');
         for (const { child } of episodes.values()) child.kill('SIGTERM');
-        if (!server.listening) {
-          resolve();
-          return;
+        if (server.listening) {
+          await new Promise<void>((resolve) => {
+            server.close(() => resolve());
+            server.closeAllConnections();
+          });
         }
-        server.close(() => resolve());
-        server.closeAllConnections();
-      });
+        await persisting;
+        await auditing;
+      })();
       return closing;
     },
   };

@@ -126,8 +126,11 @@ function helpOf(file: string, ...args: string[]): { status: number | null; stdou
   return { status: r.status, stdout: r.stdout };
 }
 
+/** The README and its reference page, research/readme-reference.md, which holds the detail the README links to. */
+const readmeDocs = (): string => ['README.md', 'research/readme-reference.md'].map((f) => readFileSync(path.join(REPO_DIR, f), 'utf8')).join('\n');
+
 describe('documented commands exist', () => {
-  const docs = { 'README.md': shCommands(readFileSync(path.join(REPO_DIR, 'README.md'), 'utf8')), 'AGENTS.md': shCommands(readFileSync(path.join(REPO_DIR, 'AGENTS.md'), 'utf8')) };
+  const docs = { 'README.md': shCommands(readmeDocs()), 'AGENTS.md': shCommands(readFileSync(path.join(REPO_DIR, 'AGENTS.md'), 'utf8')) };
 
   it('R17 the parser finds the documented commands', () => {
     assert.ok(docs['README.md'].includes('bun run worldplay serve ../prod/worlds/helpdesk --port 4000'));
@@ -200,7 +203,7 @@ function shLines(file: string): DocLine[] {
   return out;
 }
 
-const DOC_FILES = ['README.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md'];
+const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md'];
 
 describe('documented worldplay subcommands, worldgen flags and runner', () => {
   const lines = DOC_FILES.flatMap(shLines);
@@ -256,7 +259,7 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
 
   it('R17 a costs script runs cli/costs.ts and README.md documents it in one block', () => {
     assert.equal(PACKAGE.scripts.costs, 'bun src/cli/costs.ts');
-    const readme = readFileSync(path.join(REPO_DIR, 'README.md'), 'utf8');
+    const readme = readmeDocs();
     const blocks = [...readme.matchAll(/```sh\n([\s\S]*?)```/g)].filter((b) => b[1]!.includes('bun run costs'));
     assert.equal(blocks.length, 1);
     assert.ok(!readme.includes('There is no `bun run costs`'));
@@ -265,7 +268,7 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
 
 describe('Docker', () => {
   const dockerfile = readFileSync(path.join(REPO_DIR, 'Dockerfile'), 'utf8');
-  const run = shCommands(readFileSync(path.join(REPO_DIR, 'README.md'), 'utf8')).filter((c) => c.startsWith('docker '));
+  const run = shCommands(readmeDocs()).filter((c) => c.startsWith('docker '));
   const jsonArray = (instruction: string): string[] => {
     const m = new RegExp(`^${instruction} (\\[.*\\])$`, 'm').exec(dockerfile);
     assert.ok(m !== null, `Dockerfile has no ${instruction}`);
@@ -301,7 +304,7 @@ describe('Docker', () => {
     const health = dockerfile.replace(/\\\n\s*/g, ' ').split('\n').find((l) => l.startsWith('HEALTHCHECK '));
     assert.ok(health !== undefined, 'Dockerfile has no HEALTHCHECK');
     assert.ok(health.includes('http://127.0.0.1:4000/openapi.json'));
-    const readme = readFileSync(path.join(REPO_DIR, 'README.md'), 'utf8');
+    const readme = readmeDocs();
     assert.ok(readme.includes("docker inspect -f '{{.State.Health.Status}}' worldplay)\" = healthy"));
   });
 

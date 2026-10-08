@@ -18,7 +18,6 @@ import {
   PROVIDER, SCHEMA_VERSION, hashState, parseEpisode,
   type Episode, type EpisodeUsage, type PublicMessage, type PublicRequest, type Redactor, type StopReason,
 } from './schema.ts';
-import { PINNED_MODEL } from '../worldgen/config.ts';
 
 // ---------------------------------------------------------------------------------------------
 // The seams
@@ -188,6 +187,8 @@ export type EpisodeInput = {
   readonly worldVersion: string;
   readonly promptVersion: string;
   readonly configVersion: string;
+  /** The model `nextTurn` calls, recorded on the episode. A scripted or noop turn records the default model. */
+  readonly model: string;
   readonly task: { readonly id: string; readonly difficulty: Difficulty; readonly instruction: string };
   readonly index: number;
   readonly openapi: OpenApiDocument;
@@ -406,7 +407,7 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
     task_id: a.task.id,
     difficulty: a.task.difficulty,
     provider: PROVIDER,
-    model: PINNED_MODEL,
+    model: a.model,
     prompt_version: a.promptVersion,
     config_version: a.configVersion,
     initial_state_hash: initialHash,

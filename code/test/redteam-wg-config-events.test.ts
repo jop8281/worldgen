@@ -107,7 +107,7 @@ describe('redteam config: strictness', () => {
     await assert.rejects(loadConfig(file, { maxCostUsd: -2 }));
     await assert.rejects(loadConfig(file, { maxMinutes: 0 }));
     await assert.rejects(loadConfig(file, { bogus: 1 } as unknown as Partial<Config>));
-    await assert.rejects(loadConfig(file, { model: 'other' }), /model "other" is not allowed: WorldGen runs only claude-sonnet-5-5/);
+    await assert.rejects(loadConfig(file, { model: 'other' }), /model "other" is not a Claude model id such as claude-sonnet-5-5/);
     const c = await loadConfig(file, { maxCostUsd: 0.5, model: 'claude-sonnet-5-5' });
     assert.equal(c.maxCostUsd, 0.5);
     assert.equal(c.model, 'claude-sonnet-5-5');
