@@ -10,8 +10,6 @@ Name files in lowercase kebab-case. Record each design call as a row in `decisio
 - `architecture.md` explains the code structure. `decisions.md` is the append-only decision log.
 - `design-review.md` is the merged design we agreed on before building.
 - `spec-traceability.md` maps each spec requirement to the unit and test that deliver it.
-- `archive/design-draft.md` is a draft, in progress.
-- `archive/design-doc-gap.md` compares the WorldGen Design Doc PDF with `main`: what is built, what is missing, and the path to end to end.
 - `design-laws.md` freezes the Proof-Carrying Worlds design laws (L1 to L12) and maps each one to the mechanism or issue that enforces it.
 - `cleanup-manifest.md` is the post-delivery cleanup baseline and inventory (YOS-200). It holds the baseline refs, world and fixture digests, the sensitive-content audit of `prod/`, 40 candidates with consumers, decisions and owners, and the contract tests for each refactor class.
 
@@ -40,6 +38,13 @@ Hand-checked behaviour tables that units and eval runs check worlds against.
 - `related-work.md` verifies prior work. `benchmark-reuse.md` says what we take from public benchmarks.
 - `claude-cli-transport.md` is the fact sheet for the `claude -p` model transport.
 - `reports/` holds long write-ups. `research_notes/<topic>/` holds the notes behind them.
+
+## Archive
+
+`archive/` holds dated records kept for evidence and moved out of the way (cleanup manifest rows 5 to 10, YOS-210): the 2026-10-07 handoff notes, the release-1 freeze record, the resolved YOS-87 payer memo, the pre-build plan drafts and critiques, and the factory ledger copy below.
+
+- `archive/design-draft.md` was the draft of the design doc; `prod/design.md` replaced it (YOS-56).
+- `archive/design-doc-gap.md` compared the WorldGen Design Doc PDF with `main` at the time it was written, before `prod/design.md` existed.
 
 ## Factory
 
