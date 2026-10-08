@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { issue, type CheckIssue } from '#engine';
+import { checkWorld, issue, worldSchema, type CheckIssue } from '#engine';
 import { configSchema, type Config } from '../src/worldgen/config.ts';
+import { minimalWorld } from './helpers/world.ts';
 import type { AttemptOutcome } from '../src/worldgen/events.ts';
 import type { StepId } from '../src/worldgen/stages.ts';
 import { attemptIssueSet, decide, issueSetKey, estimateCallMs, nextIsRepair, NO_CALLS, preflight, stepShareMs, ownerOf, record, recordBacktrack, recordStallRetry, type Decision, type Ledger, type OwnedIssue } from '../src/worldgen/policy.ts';
@@ -59,6 +60,19 @@ const KEY_TF_AND_ACTION = 'snippet.runtime_error@actions/close_ticket/handler: b
 // A frozen test that throws, as billing-dunning's did at the model step before workflow built POST /subscriptions (stress-4).
 const threw = issue('snippet.runtime_error', ['tests', 'close_ticket', 'script'], { message: 'inv is undefined' }, 'inv is undefined');
 const KEY_THREW = 'snippet.runtime_error@tests/close_ticket/script: inv is undefined';
+// course-enrollments-csv in stress-4: the model typed the CSV's date-only enrolled_on as datetime, so the seed missed it
+// one way (a fixture value written as 09:00 UTC) and then the other (a date the datetime type refuses).
+const fixtureMiss = issue('plan.not_covered', ['seed', 'enrollment'], { item: 'CSV fixture enrollments values in enrollment seed' },
+  'row 1 enrolled_on: expected "2026-08-28", found "2026-08-28T09:00:00.000Z"; 207 more differ');
+const typeMiss = issue('constraint.violation', ['seed', 'enrollment'], { entity: 'enrollment', field: 'enrolled_on', rule: 'field.type (an ISO 8601 UTC timestamp)' },
+  'row 0, field enrolled_on: "2026-08-28"');
+const otherFieldMiss = issue('plan.not_covered', ['seed', 'enrollment'], { item: 'CSV fixture enrollments values in enrollment seed' },
+  'row 1 (student_id="s1") course_code: expected "CS101", found "cs-101"');
+const skippedTests = issue('layer.blocked', ['tests'], { layer: 'tests' }, 'skipped layers: tests');
+const rowsShort = issue('plan.seed_rows_short', ['plan', 'seed', 'rowsPerEntity', 'course'], { entity: 'course', planned: 12, built: 11 }, '11 rows');
+const KEY_FIXTURE_MISS = 'plan.not_covered@seed/enrollment: row 1 enrolled_on: expected "*", found "*"; 207 more differ';
+const KEY_TYPE_MISS = 'constraint.violation@seed/enrollment: row 0, field enrolled_on: "*"|layer.blocked@tests: skipped layers: tests';
+const KEY_OTHER_FIELD = 'plan.not_covered@seed/enrollment: row 1 (student_id="*") course_code: expected "*", found "*"';
 
 // The airline live run run_20261007T051502Z_6b44181a: seed attempt 2 fixed booking_id on row 0 and failed flight_id on it.
 const seatRef = (field: string, of: string, found: string) =>
@@ -263,6 +277,29 @@ const rows: Row[] = [
   { name: 'elapsed just under maxMinutes proceeds', step: 'model', nowMs: START + 30 * MIN - 1, outcome: { kind: 'accepted', warnings: 0 }, issues: [], want: { kind: 'advance' } },
   { name: 'budget beats time when both are spent', step: 'model', ledger: { spentUsd: 6 }, nowMs: START + 99 * MIN, outcome: { kind: 'accepted', warnings: 0 }, issues: [],
     want: { kind: 'stop', reason: { kind: 'budget_exhausted', spentUsd: 6, limitUsd: 5 } } },
+  // A-368: a seed that misses one field twice in a row, the second time on its type, goes back to the model step that typed it.
+  { name: 'a seed missing one field twice, now refused by its type, backtracks to model', step: 'seed',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 2, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_FIXTURE_MISS, KEY_TYPE_MISS], tasks: [] } },
+    outcome: rejected(typeMiss, skippedTests), issues: owned([typeMiss, 'seed'], [skippedTests, 'seed']), want: { kind: 'backtrack', to: 'model' } },
+  { name: 'a seed missing one field twice the other way round, a fixture value after a refused type, backtracks to model', step: 'seed',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 2, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_TYPE_MISS, KEY_FIXTURE_MISS], tasks: [] } },
+    outcome: rejected(fixtureMiss), issues: owned([fixtureMiss, 'seed']), want: { kind: 'backtrack', to: 'model' } },
+  { name: 'a first miss on one field retries at seed, which may fix its own value', step: 'seed',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 1, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_TYPE_MISS], tasks: [] } },
+    outcome: rejected(typeMiss, skippedTests), issues: owned([typeMiss, 'seed'], [skippedTests, 'seed']), want: { kind: 'retry' } },
+  { name: 'a type miss beside a seed-only issue stays at seed', step: 'seed',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 2, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_FIXTURE_MISS, 'x'], tasks: [] } },
+    outcome: rejected(typeMiss, rowsShort), issues: owned([typeMiss, 'seed'], [rowsShort, 'seed']), want: { kind: 'retry' } },
+  { name: 'misses on two different fields stay at seed', step: 'seed',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 2, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_OTHER_FIELD, KEY_TYPE_MISS], tasks: [] } },
+    outcome: rejected(typeMiss, skippedTests), issues: owned([typeMiss, 'seed'], [skippedTests, 'seed']), want: { kind: 'retry' } },
+  { name: 'the same type miss seen twice stops no_progress as before', step: 'seed',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 2, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_TYPE_MISS, KEY_TYPE_MISS], tasks: [] } },
+    outcome: rejected(typeMiss, skippedTests), issues: owned([typeMiss, 'seed'], [skippedTests, 'seed']),
+    want: { kind: 'stop', reason: { kind: 'no_progress', step: 'seed', repeatedIssueSet: KEY_TYPE_MISS, lastIssues: [typeMiss, skippedTests] } } },
+  { name: 'with no backtrack left the seed retries as before', step: 'seed',
+    ledger: { backtracks: 2, attempts: { plan: 1, model: 1, workflow: 1, seed: 2, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_FIXTURE_MISS, KEY_TYPE_MISS], tasks: [] } },
+    outcome: rejected(typeMiss, skippedTests), issues: owned([typeMiss, 'seed'], [skippedTests, 'seed']), want: { kind: 'retry' } },
 ];
 
 describe('decide', () => {
@@ -277,6 +314,23 @@ describe('decide', () => {
 
   it('table has at least 12 rows', () => {
     assert.equal(rows.length >= 12, true);
+  });
+
+  it('A-368 keys match what issueSetKey writes for the course-enrollments misses', () => {
+    assert.deepEqual([issueSetKey([fixtureMiss]), issueSetKey([typeMiss, skippedTests]), issueSetKey([otherFieldMiss])], [KEY_FIXTURE_MISS, KEY_TYPE_MISS, KEY_OTHER_FIELD]);
+  });
+
+  it('A-368 reads the field from the refusal the engine itself writes for a seed value its type rejects', () => {
+    const w = minimalWorld();
+    const seed = String(w.seed['ticket']).replace("sla_due_at: ctx.time.plus(ctx.now(), ((i % 4) + 1) * 2 + 'h'),", "sla_due_at: '2026-08-28',");
+    const report = checkWorld(worldSchema.parse({ ...w, seed: { ...w.seed, ticket: seed } }));
+    assert.equal(report.ok, false);
+    const refused = report.ok ? [] : report.issues.filter((i) => i.code === 'constraint.violation');
+    assert.deepEqual(refused.map((i) => [i.path, i.found.slice(0, 26)]), [[['seed', 'ticket'], 'row 0, field sla_due_at: "']]);
+    const before = 'plan.not_covered@seed/ticket: row 1 sla_due_at: expected "*", found "*"';
+    const got = decide(config, { step: 'seed', ledger: ledger({ seenIssueSets: { plan: [], model: [], workflow: [], seed: [before], tasks: [] } }), nowMs: START + MIN },
+      rejected(...refused), owned(...refused.map((i): [CheckIssue, StepId] => [i, 'seed'])));
+    assert.deepEqual(got, { kind: 'backtrack', to: 'model' });
   });
 });
 
