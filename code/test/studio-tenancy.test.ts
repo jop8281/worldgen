@@ -383,3 +383,94 @@ describe('studio tenancy: users files and startup (A-344)', () => {
     assert.equal((await call(await start(f), 'GET', '/api/me', ANN)).status, 200);
   });
 });
+
+describe('studio tenancy: costs, ids, buckets and shelves (A-344)', () => {
+  it('serves /api/costs to an admin only, because the ledger carries no tenant', async () => {
+    const f = await fixture();
+    const costsRunner: Runner = async () => ({ code: 0, stdout: '{"total":0}', stderr: '' });
+    const base = await start(f, { runner: costsRunner });
+    const forbidden = (role: string, article: string, name: string): unknown => [403, { error: { code: 'auth.forbidden', message: `GET /api/costs needs the admin role; ${name} is ${article} ${role}` } }];
+    const asPair = async (token: string): Promise<unknown> => {
+      const r = await call(base, 'GET', '/api/costs', token);
+      return [r.status, r.body];
+    };
+    assert.deepEqual(await asPair(ANN), forbidden('viewer', 'a', 'ann'));
+    assert.deepEqual(await asPair(OTTO), forbidden('operator', 'an', 'otto'));
+    const admin = await call(base, 'GET', '/api/costs', ADA);
+    assert.deepEqual([admin.status, admin.body], [200, { total: 0 }]);
+  });
+
+  it('refuses tenant default in a users file, and the CLI exits 2 naming it', async () => {
+    const d = digest(ANN);
+    const message = 'users.0.tenant: tenant default is the library\'s own (open mode and the WORLDGEN_STUDIO_TOKEN admin); give each team a tenant of its own';
+    assert.throws(() => parseUsersFile(JSON.stringify({ users: [{ name: 'ann', role: 'viewer', tenant: 'default', token_sha256: d }] })), { message });
+    const dir = await mkdtemp(path.join(tmpdir(), 'studio-tenancy-default-'));
+    roots.push(dir);
+    const file = path.join(dir, 'users.json');
+    await writeFile(file, JSON.stringify({ users: [{ name: 'ann', role: 'viewer', tenant: 'default', token_sha256: d }] }));
+    const env = { ...process.env };
+    delete env['WORLDGEN_STUDIO_TOKEN'];
+    delete env['WORLDGEN_STUDIO_ORIGIN'];
+    const r = spawnSync('bun', ['src/cli/studio.ts', '--users', file], { cwd: CODE_DIR, env, encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr.includes(message), true, r.stderr);
+  });
+
+  it('mints random ids, so two tenants with one slug in one second share no counter', async () => {
+    const f = await fixture();
+    await writeWorld(path.join(f.worldsDir, 'hand-beta'), minimalWorld());
+    const base = await start(f);
+    const a = await call(base, 'POST', '/api/generate', OTTO, gen('same'));
+    const b = await call(base, 'POST', '/api/generate', GINA, gen('same'));
+    const idA = String(a.body['runId']);
+    const idB = String(b.body['runId']);
+    assert.match(idA, /^\d{8}T\d{6}Z-same-[0-9a-f]{6}$/);
+    assert.match(idB, /^\d{8}T\d{6}Z-same-[0-9a-f]{6}$/);
+    assert.notEqual(idA, idB);
+    const ep = await call(base, 'POST', '/api/episodes', OTTO, EPISODE);
+    assert.match(String(ep.body['runId']), /^\d{8}T\d{6}Z-noop-[0-9a-f]{6}$/);
+    const svc = await call(base, 'POST', '/api/worlds/hand-beta/serve', OTTO, { port: 4620 });
+    assert.match(String(svc.body['id']), /^svc-[0-9a-f]{8}$/);
+  });
+
+  it('keys the POST bucket by address and tenant', async () => {
+    const f = await fixture();
+    const base = await start(f, { rateLimit: { capacity: 1, refillPerSecond: 0 } });
+    const first = await call(base, 'POST', '/api/generate', OTTO, gen('one'));
+    const other = await call(base, 'POST', '/api/generate', GINA, gen('two'));
+    const second = await call(base, 'POST', '/api/generate', OTTO, gen('three'));
+    assert.deepEqual([first.status, other.status, second.status], [200, 200, 429]);
+    assert.equal((second.body['error'] as Json)['code'], 'studio.rate_limited');
+  });
+
+  it('lets an admin open a tenant\'s world by name with ?tenant=, and only then', async () => {
+    const f = await fixture();
+    await writeWorld(path.join(f.worldsDir, 'acme', 'gen-acme-only'), minimalWorld());
+    const base = await start(f);
+    const report = await call(base, 'GET', '/api/worlds/gen-acme-only/report?tenant=acme', ADA);
+    assert.deepEqual([report.status, report.body['name']], [200, 'gen-acme-only']);
+    assert.equal((await call(base, 'GET', '/api/worlds/gen-acme-only/tasks?tenant=acme', ADA)).status, 200);
+    const bare = await call(base, 'GET', '/api/worlds/gen-acme-only/report', ADA);
+    assert.deepEqual([bare.status, (bare.body['error'] as Json)['code']], [404, 'world.unknown']);
+  });
+
+  it('never shows a removed tenant\'s dir as a world or a run source, and keeps run-only and plan-only dirs', async () => {
+    const f = await fixture();
+    await writeWorld(path.join(f.worldsDir, 'oldco', 'gen-x'), minimalWorld());
+    await mkdir(path.join(f.worldsDir, 'oldco', 'gen-x', 'runs', 'run_old'), { recursive: true });
+    await writeFile(path.join(f.worldsDir, 'oldco', 'gen-x', 'runs', 'run_old', 'events.jsonl'), '{"t":"run_started"}\n');
+    await mkdir(path.join(f.worldsDir, 'planonly'), { recursive: true });
+    await writeFile(path.join(f.worldsDir, 'planonly', 'plan.yaml'), 'x: 1\n');
+    const base = await start(f);
+    const names = (await worldRows(base, ADA)).map((r) => (r as unknown[])[0]);
+    assert.equal(names.includes('oldco'), false);
+    assert.equal(names.includes('planonly'), true);
+    const gone = await call(base, 'GET', '/api/worlds/oldco/report', ADA);
+    assert.deepEqual([gone.status, (gone.body['error'] as Json)['code']], [404, 'world.unknown']);
+    assert.equal((await call(base, 'GET', '/api/worlds/planonly/report', ADA)).status, 200);
+    const runNames = (await runRows(base, ADA)).map((r) => (r as unknown[])[0]);
+    assert.equal(runNames.includes('oldco'), false);
+    assert.equal(runNames.includes('hand-beta'), true);
+    assert.equal((await call(base, 'GET', '/api/worlds/hand-beta/report', ADA)).status, 200);
+  });
+});

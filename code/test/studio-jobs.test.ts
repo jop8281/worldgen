@@ -150,7 +150,7 @@ describe('studio jobs: idempotent starts (A-335)', () => {
     const first = await json(studio.url, 'POST', '/api/generate', body, key);
     const runId = String(first.body['runId']);
     const outDir = path.join(f.worldsDir, 'gen-keyed');
-    assert.match(runId, /^\d{8}T\d{6}Z-keyed$/);
+    assert.match(runId, /^\d{8}T\d{6}Z-keyed-[0-9a-f]{6}$/);
     assert.deepEqual([first.status, first.body], [200, { runId, outDir, running: true, replayed: false }]);
     const again = await json(studio.url, 'POST', '/api/generate', body, key);
     assert.deepEqual([again.status, again.body], [200, { runId, outDir, running: true, replayed: true }]);
@@ -416,7 +416,7 @@ describe('studio jobs: leases and recovery (A-335)', () => {
     const key = { 'idempotency-key': 'ep-1' };
     const first = await json(a.url, 'POST', '/api/episodes', body, key);
     const runId = String(first.body['runId']);
-    assert.match(runId, /^\d{8}T\d{6}Z-noop-1$/);
+    assert.match(runId, /^\d{8}T\d{6}Z-noop-[0-9a-f]{6}$/);
     assert.deepEqual(first.body, { runId, world: 'w1', task: 't1', agent: 'noop', running: true, replayed: false });
     const again = await json(a.url, 'POST', '/api/episodes', body, key);
     assert.deepEqual(again.body, { runId, world: 'w1', task: 't1', agent: 'noop', running: true, replayed: true });

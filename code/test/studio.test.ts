@@ -409,7 +409,7 @@ describe('studio', () => {
       const r = await json(base, 'POST', '/api/worlds/gen-alpha/serve', { port: 4123 });
       assert.equal(r.status, 200);
       const rec = r.body;
-      assert.match(String(rec['id']), /^svc-[1-9][0-9]*$/);
+      assert.match(String(rec['id']), /^svc-[0-9a-f]{8}$/);
       assert.equal(rec['name'], 'gen-alpha');
       assert.equal(rec['pid'], 43210);
       assert.equal(rec['worldPort'], 4123);
@@ -520,7 +520,7 @@ describe('studio', () => {
       const post = await json(base, 'POST', '/api/generate', { kind: 'description', text: 'A helpdesk with SLA tiers', outSlug: 'alpha' });
       assert.equal(post.status, 200);
       const runId = String(post.body['runId']);
-      assert.match(runId, /^\d{8}T\d{6}Z-alpha$/);
+      assert.match(runId, /^\d{8}T\d{6}Z-alpha-[0-9a-f]{6}$/);
       assert.equal(post.body['outDir'], path.join(worldsDir, 'gen-alpha'));
       assert.equal(post.body['running'], true);
       assert.deepEqual(lastSpawn().argv, ['bun', 'src/cli/worldgen.ts', 'A helpdesk with SLA tiers', '--out', path.join(worldsDir, 'gen-alpha')]);

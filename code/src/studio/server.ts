@@ -43,7 +43,7 @@
  *   because its child may have started before the crash. So a retried POST, a double click or a crash never starts a
  *   second paid run.
  * - Web hardening (YOS-234). Every answer carries SECURITY_HEADERS (frame, sniffing, referrer and a CSP the offline page
- *   meets). Each POST route has one token bucket per client address, and a failed bearer draws from one bucket per
+ *   meets). Each POST route has one token bucket per client address and tenant, and a failed bearer draws from one bucket per
  *   client that slows token guessing; both read the injected clock. Unfinished runs and episodes are capped, counted
  *   after the idempotency lookup so a replay never gets 429. CSRF is the own-names guard's job (#12), not a check here.
  * - Stops never leave zombies: SIGTERM, a short wait, SIGKILL, and the answer says which signal
@@ -83,7 +83,7 @@ const usersFileSchema = z.strictObject({
   users: z.array(z.strictObject({
     name: z.string().min(1),
     role: z.enum(STUDIO_ROLES),
-    tenant: z.string().regex(TENANT, TENANT_RULE),
+    tenant: z.string().regex(TENANT, TENANT_RULE).refine((t) => t !== DEFAULT_TENANT, 'tenant default is the library\'s own (open mode and the WORLDGEN_STUDIO_TOKEN admin); give each team a tenant of its own'),
     token_sha256: z.string().regex(/^[0-9a-f]{64}$/, 'token_sha256 must be 64 lowercase hex characters'),
   })).min(1, 'list at least one user: an empty list would turn sign-in off'),
 });
@@ -544,7 +544,21 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   /** What `who` reads: the library, then each tenant dir it sees, in name order. */
   const shelvesOf = (who: User, filter: string | null): Shelf[] => [LIBRARY, ...[...tenants].filter((t) => visible(t, who, filter)).map(shelfOf)];
   /** The dirs on a shelf. A tenant's own dir is never a dir of the library. */
-  const dirsOn = async (shelf: Shelf): Promise<string[]> => (await dirsOf(shelf.root)).filter((name) => shelf.tenant !== null || !tenants.has(name));
+  const dirsOn = async (shelf: Shelf): Promise<string[]> => {
+    const names = (await dirsOf(shelf.root)).filter((name) => shelf.tenant !== null || !tenants.has(name));
+    if (shelf.tenant !== null) return names;
+    const kept: string[] = [];
+    for (const name of names) if (!await isTenantShelf(path.join(shelf.root, name))) kept.push(name);
+    return kept;
+  };
+  /** A library dir with no world.yaml or plan.yaml of its own but worlds below it is a removed tenant's shelf, never a world. */
+  const isTenantShelf = async (dir: string): Promise<boolean> => {
+    if (await file(path.join(dir, 'world.yaml')) || await file(path.join(dir, 'plan.yaml'))) return false;
+    for (const child of await dirsOf(dir)) {
+      if (await file(path.join(dir, child, 'world.yaml')) || await file(path.join(dir, child, 'plan.yaml'))) return true;
+    }
+    return false;
+  };
 
   type ServiceRecord = { readonly id: string; readonly name: string; readonly tenant: string; readonly pid: number | undefined; readonly worldPort: number; readonly adminPort: number; readonly startedAt: string };
   type EpisodeRequest = { readonly world: string; readonly task: string; readonly agent: string };
@@ -571,7 +585,6 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   };
 
   const services = new Map<string, { record: ServiceRecord; dir: string; child: SpawnedChild }>();
-  let serviceSeq = 0;
   const jobs = new Map<string, Job>();
   /** A generation run `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
   const runOf = (runId: string, who: User, filter: string | null): Job | undefined => {
@@ -781,7 +794,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const own = who.role === 'admin' && filter !== null ? filter : who.tenant;
     for (const shelf of [...(tenants.has(own) ? [shelfOf(own)] : []), LIBRARY]) {
       const dir = path.join(shelf.root, name);
-      if ((shelf.tenant !== null || !tenants.has(name)) && await isDir(dir)) return { ok: true, dir };
+      if ((shelf.tenant !== null || !tenants.has(name)) && await isDir(dir) && (shelf.tenant !== null || !await isTenantShelf(dir))) return { ok: true, dir };
     }
     return { ok: false, reply: fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`) };
   }
@@ -986,7 +999,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       port = wanted;
     }
     const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
-    const id = `svc-${(serviceSeq += 1)}`;
+    let id = `svc-${randomBytes(4).toString('hex')}`;
+    while (services.has(id)) id = `svc-${randomBytes(4).toString('hex')}`;
     const record: ServiceRecord = { id, name, tenant: who.tenant, pid: child.pid, worldPort: port, adminPort: port + 1, startedAt: new Date().toISOString() };
     services.set(id, { record, dir, child });
     void child.exited.then(() => {
@@ -1102,8 +1116,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       return fail(429, start.kind === 'generate' ? 'generate.concurrent_limit' : 'episode.concurrent_limit', `the studio runs at most ${maxJobs[start.kind]} ${what} at once; wait for one to finish`);
     }
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-    let runId = `${stamp}-${start.label}`;
-    for (let n = 2; jobs.has(runId); n++) runId = `${stamp}-${start.label}-${n}`;
+    // A random suffix, so an id never counts another tenant's starts.
+    let runId = `${stamp}-${start.label}-${randomBytes(3).toString('hex')}`;
+    while (jobs.has(runId)) runId = `${stamp}-${start.label}-${randomBytes(3).toString('hex')}`;
     const { outDir, argv } = start.launch(runId);
     const job: Job = {
       runId, kind: start.kind, tenant: start.tenant, key, fingerprint, outDir, knownRuns: start.knownRuns, startedAt: new Date().toISOString(),
@@ -1372,7 +1387,6 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   // ---------------------------------------------------------------- agent playground (YOS-190)
 
-  let episodeSeq = 0;
   let commit: string | null = null;
   /** The commit of the code the studio runs, recorded on every episode as its engine. Read once, through the injected runner. */
   async function engineCommit(): Promise<string | null> {
@@ -1475,7 +1489,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       tenant: who.tenant,
       rawKey: ctx.key,
       request: ['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--agent', agent, ...flags],
-      label: `${agent}-${++episodeSeq}`,
+      label: agent,
       knownRuns: new Set(),
       episode: { world, task, agent },
       launch: (runId) => {
@@ -1609,7 +1623,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'runs'], run: (_p, _b, who, ctx) => listRuns(who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'eval'], run: () => listEval() },
     { method: 'GET', need: 'viewer', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'costs'], run: () => costs() },
+    { method: 'GET', need: 'admin', parts: ['api', 'costs'], run: () => costs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'tasks'], run: (p, _b, who, ctx) => worldTasks(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p, _b, who, ctx) => worldProof(p, who, ctx) },
     { method: 'GET', need: 'viewer', parts: ['api', 'episodes'], run: (_p, _b, who, ctx) => listEpisodes(who, ctx.filter) },
@@ -1696,7 +1710,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     if (method === 'POST') {
       const joined = route.parts.join('/');
-      const key = `POST ${joined} ${client}`;
+      const key = `POST ${joined} ${client} ${who.tenant}`;
       const seconds = postBuckets.wait(key);
       if (seconds > 0) {
         return fail(429, 'studio.rate_limited', `Too many POST /${joined} requests from ${client}: the studio allows a burst of ${rateLimit.capacity}, refilled ${rateLimit.refillPerSecond} per second`, { 'retry-after': String(seconds) });
