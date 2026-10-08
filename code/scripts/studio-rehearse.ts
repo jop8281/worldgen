@@ -1,6 +1,6 @@
 /**
  * Rehearses the Studio click path (research/studio-demo-runbook.md) in headless Chrome over CDP: one line per step with
- * its time, PASS or BREAK, and any page error, plus a screenshot per step. No Playwright: Chrome and Bun only.
+ * its time, ok or BREAK, and any page error, plus a screenshot per step. No Playwright: Chrome and Bun only.
  *
  *   bun scripts/studio-rehearse.ts [out-dir] [--record] [--viewport]
  *
@@ -22,7 +22,7 @@ import path from 'node:path';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const positional = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-if (positional[0]?.startsWith('http')) {
+if (/^https?:\/\//.test(positional[0] ?? '')) {
   console.error('studio-rehearse starts its own signed-in studio now; give only an output directory, not a studio URL');
   process.exit(2);
 }
@@ -51,17 +51,22 @@ const studioPort = await freePort();
 const STUDIO = `http://127.0.0.1:${studioPort}`;
 // The studio refuses --users together with WORLDGEN_STUDIO_TOKEN, and the rehearsal never needs a model key.
 const studioEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'WORLDGEN_STUDIO_TOKEN' && k !== 'LLM_KEY'));
-const studio = spawn(process.execPath, ['src/cli/studio.ts', '--port', String(studioPort), '--users', usersFile], { cwd: CODE_DIR, env: studioEnv, stdio: 'ignore' });
+const studio = spawn(process.execPath, ['src/cli/studio.ts', '--port', String(studioPort), '--users', usersFile], { cwd: CODE_DIR, env: studioEnv, stdio: 'ignore', detached: true });
 
 const CHROME = process.env['CHROME'] ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PROFILE = path.join(OUT, 'chrome-profile');
 // Port 0 lets Chrome pick a free port and write it to DevToolsActivePort; a fixed port can reach another session's Chrome.
 rmSync(path.join(PROFILE, 'DevToolsActivePort'), { force: true });
 const chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${PROFILE}`, '--window-size=1400,1000', 'about:blank'], { stdio: 'ignore' });
-const finish = (code: number): never => {
-  chrome.kill(); studio.kill(); rmSync(usersFile, { force: true });
-  process.exit(code);
-};
+// Every exit, a crash or Ctrl-C included, stops Chrome and the studio and removes the users file. The studio leads its
+// own process group, so one signal to the group also reaches each world it serves or checks.
+process.on('exit', () => {
+  chrome.kill();
+  try { process.kill(-studio.pid!, 'SIGTERM'); } catch {}
+  rmSync(usersFile, { force: true });
+});
+process.on('SIGINT', () => process.exit(130));
+const finish = (code: number): never => process.exit(code);
 
 let healthy = false;
 for (let i = 0; i < 100 && !healthy; i++) {
