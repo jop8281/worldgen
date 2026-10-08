@@ -37,7 +37,7 @@ Status: an audit of stabilize/main `ab512b17`, plus the two fixes in this PR (A-
 | 13 | Studio report and plan, quoting whole source | B | `studio` "refuses a REPORT.md that embeds private task source" (403 `report.private_source`); `studio-builder` |
 | 14 | Child stderr: studio-check (codes only), verifier (authored lines), episode (private errors) | B, D | `studio-isolation`, `verifier-boundary`, `dataset-private-errors` |
 | 15 | `plan.yaml`, `plan.md`, `capsule.json` | B, D | By schema: neither the plan schema nor the capsule schema has a source field. Acceptance-test scripts are public world tests (`split.ts`). |
-| 16 | Keys in children (`isolatedEnv`), the audit log and episode records | A, B, D | `verifier-boundary` env tests; `studio-isolation` "builds both children from an allowlisted environment"; `boat-key-boundary`; `studio-auth` "without tokens" |
+| 16 | Keys in children (`isolatedEnv`), the audit log and episode records | A, B, D | `verifier-boundary` env tests; `studio-isolation` "builds both children from an allowlisted environment"; `studio-model-env` (generate and iterate get no Boat or Anthropic key, A-372); `boat-key-boundary`; `studio-auth` "without tokens" |
 | 17 | **Studio world export** (`GET /api/worlds/:name/export`) | B | **New in this PR:** `studio-export` "refuses every role below admin, on a tenant shelf world and on a library world"; the `studio-route-policy` row is now admin-only (A-374) |
 | 18 | **Studio generation run events** (`GET /api/generate/:runId/events`) | B | **New in this PR:** `studio-sensitive` "withholds every text that can quote task source below admin" (A-374) |
 
@@ -70,8 +70,8 @@ Theoretical limits. Each needs an extra assumption, such as a vm escape, host ac
 
 - The playground serves the private frozen world in its serve child, so graders sit in that process (needs a vm escape).
 - Handler and grader snippets share the snippet process pool (needs a vm escape).
-- Studio generation and episode children receive `BOAT_API_KEY`, which they never use (needs a vm escape and a
-  same-user read of the parent's environment).
+- Studio episode children receive `BOAT_API_KEY`, which they never use (needs a vm escape and a same-user read of the
+  parent's environment). Generate and iterate children no longer do (A-372, `studio-model-env`).
 - `GET /api/services` shows viewers each served world's admin port, which only the Studio host's loopback can reach.
 - `bun run sandbox up --backend boat` uploads the private world without `publicOnly` (the demo path; needs a
   compromised world process).
