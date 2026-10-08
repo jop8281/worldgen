@@ -81,7 +81,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `worldgen/events.ts` | `RunEvent`, `StopReason` and the JSONL emitter. |
 | `worldgen/report.ts` | `REPORT.md` from plan, verdicts, delta, events, the WID and each TID. No model. |
 | `worldgen/openapi-report.ts` | The Markdown audit of an `openapiConformance` result for `worldplay openapi --profile` and `--report`. No model, no IO. |
-| `worldgen/capsule.ts` | `capsule.json` beside `REPORT.md` on every exit: input digest, world id, model, transport, attempts, costs. No model, no file IO. |
+| `worldgen/capsule.ts` | `capsule.json` beside `REPORT.md` on every exit: input digest and source (A-351), world id, model, transport, attempts, costs. No model, no file IO. |
 | `worldgen/fidelity.ts` | Fidelity to a frozen reference of the real software: the reference schema, `fidelityScore()`, and `fidelityGate()`, the last step's 0.80 floor for a description that names a reference (A-258). Pure. |
 | `worldgen/eval-outcomes.ts` | Offline eval analysis against an explicit expected case set, each case classed by `outcomeOf()` in `eval.ts`. No model, no file IO. |
 | `worldgen/eval.ts` | The rehearsal suite schema, case sequencing, the `summary.md` scorecard and `fidelityScore()` against `eval/fidelity/*.yaml`. `outcomeOf()` is the one classifier of a case into the five outcome classes, for `summary.md` and `eval-outcomes.ts` alike (A-340), and the pass rate counts every expected case (A-341). No model, no file IO. |
