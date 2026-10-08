@@ -1,0 +1,162 @@
+# WorldGen plan: Jane App / Zocdoc-style clinic appointment scheduling API
+
+A single-clinic scheduling system. Doctors publish time slots. Patients book one open slot at a time, so a slot can never be double booked. A booked appointment can be cancelled only if the visit starts at least 24 hours from now, and cancelling frees the slot. After the visit time the front desk checks patients in and completes them, or marks them as no-show. No-shows are counted per patient, and 3 of them block further booking. Time-based jobs auto-close expired open slots and auto-mark no-shows. The clock moves only through jobs and explicit advances. Every task now declares an allows list, taken from its instruction, that names the entities, change kinds, exact update fields and target rows it may change.
+
+- Revision: 4
+- Verdict: proceed
+- Clock: starts 2026-10-06T09:00:00.000Z, tick 0s
+
+## Entities
+
+| Entity | Purpose | Key fields |
+|---|---|---|
+| `doctor` | A clinician who owns time slots. Inactive doctors (on leave or left the clinic) cannot take new bookings. | name, specialty (enum: general_practice, cardiology, dermatology, pediatrics, orthopedics), email (unique), active (bool) |
+| `patient` | A person who books visits. Tracks no-show history and a booking block set by workflow. | name, email (unique), phone, no_show_count (int, readonly, incremented by the no-show action and job), booking_blocked (bool, readonly, true at 3 no-shows) |
+| `slot` | A bookable time window [starts_at, ends_at) on one doctor's calendar. The slot's own status is what prevents double booking. | doctor_id (ref doctor), starts_at, ends_at, status (state: open, booked, closed) |
+| `appointment` | A patient's claim on one slot, with its visit outcome. Created only by book_appointment. Changed only by actions and jobs. | slot_id (ref slot), patient_id (ref patient), doctor_id (ref doctor, copied from slot), starts_at (copied from slot), status (state: booked, checked_in, completed, cancelled, no_show), reason (text), cancel_reason (text, nullable), cancelled_at (datetime, nullable), checked_in_at (datetime, nullable) |
+
+## Workflows
+
+### appointment_lifecycle (appointment)
+- States: booked, checked_in, completed, cancelled, no_show
+- Actions: cancel_appointment, check_in_appointment, complete_appointment, mark_no_show
+- Rules:
+  - Appointments are created only by book_appointment, never by a plain create route. Status is readonly to plain updates.
+  - booked can go to checked_in, cancelled or no_show. checked_in can go to completed. completed, cancelled and no_show are final.
+  - Cancel (POST /appointments/{id}/cancel, input cancel_reason) is allowed only from booked, and only when slot.starts_at is at least 24 hours after now. Exactly 24h is allowed. Otherwise 409 cancellation_window_closed. It sets cancelled_at, stores cancel_reason, and returns the slot to open.
+  - Check-in (POST /appointments/{id}/check_in) is allowed from booked on or after 30 minutes before starts_at, and not after the slot's ends_at.
+  - No-show (POST /appointments/{id}/no_show) is allowed only from booked, and only once now is at or after the slot's starts_at (409 too_early otherwise). It increments patient.no_show_count, and at 3 sets patient.booking_blocked = true. The slot stays booked because the time is gone.
+  - Complete (POST /appointments/{id}/complete) is allowed only from checked_in.
+### slot_booking (slot)
+- States: open, booked, closed
+- Actions: book_appointment
+- Rules:
+  - open can go to booked or closed. booked can go back to open, but only through cancel. closed is final.
+  - book_appointment (POST /slots/{id}/book, input patient_id, reason) requires slot.status = open, 409 slot_taken otherwise. This is the no-double-booking rule.
+  - Book requires slot.starts_at after now (409 slot_in_past), an active doctor (409 doctor_inactive), and a patient who is not booking_blocked (409 patient_blocked).
+  - A patient cannot hold two booked or checked_in appointments whose slot windows overlap (409 patient_conflict).
+  - reason is required and must not be blank. Book copies doctor_id and starts_at onto the appointment, sets the slot to booked and the appointment to booked.
+  - create_slot refuses a window that overlaps another slot of the same doctor.
+
+## Jobs
+
+- `close_expired_slots` runs every 1h: Any slot with status open whose starts_at has passed becomes closed, so stale slots cannot be booked or listed as available.
+- `auto_no_show` runs every 30m: Any appointment still booked whose slot ends_at is more than 30 minutes ago becomes no_show, with the same patient counter and 3-strike block rule as mark_no_show.
+
+## Acceptance tests
+
+None. The plan records no acceptance test.
+
+## Routes
+
+| Route | Method | Path | Purpose |
+|---|---|---|---|
+| `list_doctors` | GET | /doctors | List doctors. Filter by specialty and active. Search by name. |
+| `get_doctor` | GET | /doctors/{id} | Fetch one doctor. |
+| `create_doctor` | POST | /doctors | Add a doctor. |
+| `update_doctor` | PATCH | /doctors/{id} | Edit a doctor, such as deactivating one on leave. |
+| `list_patients` | GET | /patients | List patients. Filter by booking_blocked. Search by name and email. Sort by no_show_count. |
+| `get_patient` | GET | /patients/{id} | Fetch one patient with their no-show count. |
+| `create_patient` | POST | /patients | Register a patient. |
+| `update_patient` | PATCH | /patients/{id} | Edit patient contact details. |
+| `list_slots` | GET | /slots | List slots. Filter by doctor_id and status. Sort by starts_at. Paged. |
+| `get_slot` | GET | /slots/{id} | Fetch one slot. |
+| `create_slot` | POST | /slots | Publish a new open slot for a doctor. |
+| `update_slot` | PATCH | /slots/{id} | Close an open slot (open to closed). |
+| `list_appointments` | GET | /appointments | List appointments. Filter by status, patient_id, doctor_id and slot_id. Sort by starts_at. Paged. |
+| `get_appointment` | GET | /appointments/{id} | Fetch one appointment. |
+| `list_patient_appointments` | GET | /patients/{patient_id}/appointments | A patient's appointments, scoped by the patient ref. |
+
+## Seed
+
+- Rows per entity: doctor: 8, patient: 60, slot: 342, appointment: 167
+- Mix: Clock starts 2026-10-06T09:00Z. Doctors: 8, with 1 inactive and 5 specialties, 2 of them cardiologists. Slots run from 14 days before the clock to 21 days after, 30 minutes each on weekdays 09:00-17:00. Slot status counts at reset: {"closed":34,"booked":142,"open":166}. The closed ones are mostly past unused slots. Appointment status counts at reset: {"completed":34,"no_show":26,"booked":73,"checked_in":9,"cancelled":25}. Of the booked ones, about two thirds are future visits (some inside the 24h window, most beyond it) and about one third are past visits that nobody has recorded yet (about 30 from yesterday, so they spill past one page, plus a few from earlier days as distractors). Cancelled appointments leave their slot open, or rebooked by another appointment. Patients: most have 0-1 no-shows, about 6 have 2, and 3 are already blocked at 3 or more no-shows. Every appointment's patient, doctor and starts_at matches its slot, a booked slot has exactly one live appointment, and patient.no_show_count equals that patient's no_show appointments. Anchor rows: patient Maria Lopez has one future booked appointment more than 24h away and one starting inside the 24h cancellation window. Doctor Priya Patel has several future booked appointments on both sides of the 24h line and several open slots. The tasks read them.
+
+## Tasks
+
+- `cancel_marias_far_appointment` (easy): Cancel the upcoming appointment of patient Maria Lopez that is more than 24 hours away, with a cancel_reason. She also has one inside the 24h window, which must stay untouched. Graded on: that appointment is cancelled with a reason, its slot is open again, and nothing else changed. Allows, from the instruction: appointment updated, fields status, cancel_reason, cancelled_at, where status booked and patient_id is Maria Lopez (the far one is the only target; the grader guards the in-window one); slot updated, fields status, where status booked (only the slot of that appointment, reopened). Nothing created or deleted, and no patient, doctor or other change.
+  - Decoy idea: Maria's other appointment starts in about 20h, so cancelling it is refused and she ends up with no change. A second decoy PATCHes the appointment status to cancelled, which is blocked because status is readonly, and the slot stays booked.
+- `book_earliest_cardiology_slot` (medium): Book patient Daniel Okoye into the earliest open slot, on or after the current time, with any active cardiologist, with the reason 'follow-up consultation'. The agent must list cardiologists, skip the inactive one, page through open slots sorted by starts_at, and call book. The grader checks one new appointment on the correct slot, for the right patient, with the slot booked. Allows, from the instruction: appointment created, where patient_id is Daniel Okoye, status booked and reason 'follow-up consultation' (end values); slot updated, fields status, where status open (only the chosen slot, open to booked). No patient, doctor or other updates, and nothing deleted.
+  - Decoy idea: Takes the first open slot by id order instead of the earliest starts_at. Books the earliest slot of the inactive cardiologist, which is refused. Books only a slot from page 1 of an unsorted list. Books the earliest slot of any specialty.
+- `record_yesterdays_no_shows` (hard): Yesterday's appointments that are still in status booked were never recorded. Staff say those patients did not come and nobody checked them in. Mark every appointment from yesterday that is still booked as no-show, and leave the ones checked in, completed or cancelled alone. There are more than one page of them, and a few older booked appointments are distractors that must not be touched. The patients' no-show counts and booking blocks follow from the action. The grader checks the exact set of appointments and the patient counters. Allows, from the instruction: appointment updated, fields status, where status booked (only yesterday's ones); patient updated, fields no_show_count and booking_blocked (only the patients of those appointments). Slots stay unchanged, and nothing is created or deleted.
+  - Decoy idea: Handles only page 1 of the list. Marks every past booked appointment, including the older distractors. Marks the appointment as completed or checked in instead. Also marks today's future appointments, which the action refuses.
+- `clear_dr_patel_calendar_for_leave` (hard): Dr. Priya Patel is going on leave. Deactivate her, and cancel every one of her booked appointments that can still be cancelled under the 24-hour rule, each with a cancel_reason. Appointments inside 24 hours cannot be cancelled and must stay booked. Also close her open slots so nobody else can book them. Leave every other doctor alone. The grader checks the doctor's active flag, the set of cancelled appointments, the untouched in-window ones, the closed open slots, and no collateral changes. Allows, from the instruction: doctor updated, fields active, where name Priya Patel; appointment updated, fields status, cancel_reason, cancelled_at, where doctor_id is Priya Patel and status booked (only the ones outside 24h); slot updated, fields status, where doctor_id is Priya Patel (her cancelled slots reopen and her open slots close). Nothing created or deleted, no patient changes, and no other doctor touched.
+  - Decoy idea: Cancels only the first page of her appointments. Deactivates her but leaves her open slots bookable. Cancels another doctor's appointments sharing a patient or name prefix. Skips the cancel_reason, or tries to force the in-window ones and leaves them half done.
+
+## Open questions
+
+- Which timezone do slots and the 24-hour cancellation window use?
+  - Default answer: UTC everywhere.
+- Is a cancellation exactly 24 hours before the visit allowed?
+  - Default answer: Yes. At least 24 hours is allowed, and anything less is refused with 409.
+- Who can cancel and mark no-shows, patients or staff?
+  - Default answer: No roles. Anyone calling the API can. The cancel rule is the same for everyone.
+- What happens to a no-show patient?
+  - Default answer: The count goes up, and at 3 no-shows booking_blocked becomes true and new bookings are refused.
+- Can a blocked patient be unblocked?
+  - Default answer: Not in this world. It is out of scope, and a blocked patient stays blocked.
+- Should the system auto-mark no-shows, or only staff?
+  - Default answer: Both. Staff can mark one after the start time, and a job marks any unrecorded booking 30 minutes after the slot ends.
+- Is rescheduling supported?
+  - Default answer: No. A patient cancels, if allowed, and books another slot.
+- Do slots have a fixed length, and can doctors have overlapping slots?
+  - Default answer: Seed slots are 30 minutes and do not overlap. create_slot refuses an overlap for the same doctor.
+- Can one patient hold overlapping appointments with different doctors?
+  - Default answer: No. Booking is refused with 409 patient_conflict.
+- How narrow should each allows where be, since a where matches field values and not row ids?
+  - Default answer: Use the narrowest seed field values the instruction implies (status, patient_id, doctor_id). The grader's own guards pin the exact rows, and the allows guard only rules out changes outside the instruction.
+
+## Assumptions
+
+- Single clinic, single timezone (UTC). All datetimes are UTC ISO 8601.
+  - Why: The input mentions one clinic. Multi-location or timezone logic would add noise without testing the rules.
+- The 24-hour cancellation cutoff is measured from engine time (ctx.now) to slot.starts_at. Exactly 24h is still allowed.
+  - Why: 'Up to 24 hours before' reads as inclusive. Engine time keeps it deterministic.
+- Slots are 30 minutes and are modelled as an explicit slot entity with a status, not computed from doctor availability rules.
+  - Why: The input says 'time slots'. A status field makes the no-double-booking rule enforceable and visible.
+- Double booking means two appointments on one slot. A patient also cannot hold two overlapping live appointments.
+  - Why: Both readings are plausible, and the second protects patients with little extra cost.
+- A cancelled appointment reopens its slot, and the appointment row is kept with status cancelled.
+  - Why: Real systems keep history, and the freed slot can be rebooked.
+- No-show is marked by staff through an action once the start time has passed, and by a job 30 minutes after the slot ends if staff never recorded an outcome.
+  - Why: The input asks for no-show tracking without saying who records it. Both paths are common.
+- 3 no-shows set patient.booking_blocked = true, and booking is refused for that patient.
+  - Why: 'No-show tracking' implies a consequence. 3 is a common clinic policy and gives tasks a checkable threshold.
+- No authentication or roles. Every caller can do every operation.
+  - Why: The input has no roles, and the engine's public API is the only interface.
+- Appointment status, patient counters and the block flag are readonly. They change only through actions and jobs.
+  - Why: This keeps the rules from being bypassed with a plain PATCH. The decoys will try exactly that.
+- Money, billing, insurance and visit notes are not modelled.
+  - Why: The input asks only about scheduling, cancellation and no-shows.
+- The clock starts 2026-10-06T09:00Z, not 08:00Z.
+  - Why: Slots begin at 09:00 and check-in opens 30 minutes before a visit, so at 08:00 no slot is inside the window and the seed has no checked_in appointment. At 09:00 the nine checked_in appointments exist. The seed is relative to the clock, so no slot or appointment changes its offset from now.
+- Seed slots follow ISO weekdays and 09:00-17:00 business hours. Maria's near cancellation anchor is on the same working day; the far anchor is on a later working day.
+  - Why: The clock-only correction left 105 weekend slots and one outside business hours. Restore the previously qualified calendar seed without changing the current clock, actions or graders.
+- The plan has no field for allows, so each task's intent states its allows list (entity, kind, exact fields, where). The tasks stage writes it as the allows property on every task, with no change to tasks' graders, solutions or decoys.
+  - Why: The request asks only for allows declared from each instruction. The seed, entities, routes, actions and jobs stay as they are.
+- Allows 'where' values use seed values of the target rows (status, patient_id, doctor_id), and a solution's own side effects such as the slot reopening on cancel are listed as separate allowed changes.
+  - Why: The engine matches where against seed values for updates and end values for creates, and the allowed set must come from the instruction, not from what the solution writes.
+
+## Out of scope
+
+- Rescheduling as a single operation
+  - Why: It is cancel plus book. Doing it in one call would hide the 24h rule the tasks test.
+- Unblocking patients and waiting lists
+  - Why: They need roles or policy not in the input.
+- Authentication, roles and audit of who acted
+  - Why: The input names no users or permissions.
+- Billing, insurance, visit notes and prescriptions
+  - Why: Not scheduling, and not asked for.
+- Reminders, email and SMS delivery
+  - Why: The engine has no outbound channel, and notifications are not graded state.
+- Multiple clinics, rooms, recurring availability rules and timezones
+  - Why: They add complexity without testing booking, cancellation or no-shows.
+- Changes to entities, routes, actions, jobs, seed or the clock
+  - Why: The request only adds allows lists to tasks.
+
+## Changes
+
+- tasks.cancel_marias_far_appointment
+- tasks.book_earliest_cardiology_slot
+- tasks.record_yesterdays_no_shows
+- tasks.clear_dr_patel_calendar_for_leave
