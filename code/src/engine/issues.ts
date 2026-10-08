@@ -219,7 +219,7 @@ export const ISSUES = {
     hint: (p) => `Make ${p.op} answer ${p.status}, for example with a route status or an action response. A 2XX or 4XX wildcard in the world covers any status of that class.` }),
   'openapi.required_field_missing': def<{ op: string; field: string }>()({ severity: 'error', owner: 'routes',
     expected: (p) => `the ${p.op} request body takes ${p.field}, which the source spec requires`,
-    hint: (p) => `Add ${p.field} to the entity or action input behind ${p.op}, under the spec's name, and make it required.` }),
+    hint: (p) => `Add ${p.field} to the entity or action input behind ${p.op}, under the spec's name, and make it required with no default: a field with a default may be left out of a request.` }),
   'openapi.required_field_extra': def<{ op: string; field: string }>()({ severity: 'error', owner: 'routes',
     expected: (p) => `${p.op} accepts requests without ${p.field}, which the source spec does not require`,
     hint: (p) => `Make ${p.field} optional in the input behind ${p.op}. Handle missing values according to the source operation instead of adding a required field.` }),

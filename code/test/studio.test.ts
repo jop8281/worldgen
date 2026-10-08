@@ -598,7 +598,7 @@ describe('studio', () => {
       assert.match(runId, /^\d{8}T\d{6}Z-alpha-[0-9a-f]{6}$/);
       assert.equal(post.body['outDir'], path.join(worldsDir, 'gen-alpha'));
       assert.equal(post.body['running'], true);
-      assert.deepEqual(lastSpawn().argv, ['bun', 'src/cli/worldgen.ts', 'A helpdesk with SLA tiers', '--out', path.join(worldsDir, 'gen-alpha')]);
+      assert.deepEqual(lastSpawn().argv, ['bun', 'src/cli/worldgen.ts', '--out', path.join(worldsDir, 'gen-alpha'), '--', 'A helpdesk with SLA tiers']);
       assert.equal(lastSpawn().cwd, path.join(root, 'code'));
 
       const live = await json(base, 'GET', `/api/generate/${runId}`);
@@ -659,7 +659,8 @@ describe('studio', () => {
       try {
         const r = await json(sdk.url, 'POST', '/api/generate', { kind: 'description', text: 'T', outSlug: 'sdk-kappa' });
         assert.equal(r.status, 200, JSON.stringify(r.body));
-        assert.deepEqual(calls[0]?.argv.slice(-2), ['--transport', 'sdk']);
+        // The transport is an option, so it comes before the `--` that the description follows.
+        assert.deepEqual(calls[0]?.argv.slice(-4), ['--transport', 'sdk', '--', 'T']);
       } finally {
         await sdk.close();
       }
@@ -1251,13 +1252,14 @@ describe('studio page accessibility (YOS-187)', () => {
 
   it('names every input, select and textarea', () => {
     const controls = [...tags('input'), ...tags('select'), ...tags('textarea')];
-    assert.equal(controls.length, 21);
+    assert.equal(controls.length, 22);
     const unnamed = controls.filter((c) => {
       const id = /\bid="([^"]+)"/.exec(c.tag)?.[1];
       return !c.tag.includes('aria-label=') && !(id !== undefined && labelledFor.has(id)) && !insideLabel(c.at);
     });
     assert.deepEqual(unnamed.map((c) => c.tag), []);
     assert.equal(html.includes('<input id="worlds-filter" type="search"'), true);
+    assert.equal(html.includes('<label>change for <span id="iterate-world"></span> <textarea id="iterate-change" rows="3"></textarea></label>'), true);
   });
 
   it('has one header, one main, a nav, and an h2 in every section', () => {
