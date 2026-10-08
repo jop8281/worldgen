@@ -22,6 +22,7 @@ import { loadExampleWorld, makeModel, mtimeOf, writeReport } from './models.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 const REPO_DIR = path.resolve(CODE_DIR, '..');
+const DEFAULT_REPORT = path.join(REPO_DIR, 'prod/LIVE-RUN.md');
 const CONFIG_FILE = path.join(CODE_DIR, 'worldgen.config.json');
 
 const USAGE = `usage: bun run live <prompts-dir> [options]
@@ -52,6 +53,11 @@ const err = (line: string): void => void process.stderr.write(`${line}\n`);
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const unique = <T>(xs: readonly T[]): T[] => [...new Set(xs)];
 const posix = (p: string): string => p.split(path.sep).join('/');
+/** Where the dry run says a file goes: relative to the repository root when inside it, else absolute. */
+const shown = (p: string): string => {
+  const rel = path.relative(REPO_DIR, p);
+  return rel.startsWith('..') || path.isAbsolute(rel) ? posix(p) : posix(rel);
+};
 
 export type LiveArgs = {
   readonly promptsDir: string;
@@ -114,7 +120,7 @@ export function parseArgs(argv: readonly string[]): LiveArgs | 'help' {
     dryRun,
     commit: values.get('--commit') ?? 'unknown',
     date,
-    report: path.resolve(values.get('--report') ?? path.join(REPO_DIR, 'prod/LIVE-RUN.md')),
+    report: path.resolve(values.get('--report') ?? DEFAULT_REPORT),
     worldsDir: path.resolve(values.get('--worlds-dir') ?? path.join(REPO_DIR, 'prod/worlds')),
     outDir: values.has('--out-dir') ? path.resolve(values.get('--out-dir')!) : null,
     overrides,
@@ -263,7 +269,8 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   if (args.dryRun) {
-    for (const c of cases) out(`${c.id}  ${c.input.kind}${c.changeFile === null ? '' : ' + change'}  -> prod/worlds/${c.outName}`);
+    for (const c of cases) out(`${c.id}  ${c.input.kind}${c.changeFile === null ? '' : ' + change'}  -> ${shown(path.join(args.worldsDir, c.outName))}`);
+    if (args.report !== DEFAULT_REPORT) out(`results table -> ${shown(args.report)}`);
     out(`${cases.length} prompts ready. No model was called.`);
     return 0;
   }

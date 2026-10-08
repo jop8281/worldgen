@@ -1,5 +1,5 @@
 /** Offline analysis against an explicit expected set; no providers or file IO. */
-import { CASE_ID, caseFileSchema, type PhaseName } from './eval.ts';
+import { CASE_ID, caseFileSchema, outcomeOf, OUTCOMES, type Outcome, type PhaseName } from './eval.ts';
 import type { RunEvent, StopReason } from './events.ts';
 
 export type ExpectedEvalCase = { readonly id: string; readonly expect: 'done' | 'stopped'; readonly change?: string };
@@ -12,7 +12,7 @@ export type EvalEvidence = {
 };
 type Metrics = { ms: number | null; costUsd: number | null; attempts: number | null };
 type CaseOutcome = {
-  id: string; status: 'valid' | 'invalid' | 'missing' | 'duplicate'; passed: boolean;
+  id: string; status: 'valid' | 'invalid' | 'missing' | 'duplicate'; outcome: Outcome; passed: boolean;
   sources: string[]; diagnostics: string[]; metrics: Metrics;
 };
 const EVENT_TAGS = {
@@ -140,9 +140,10 @@ function analyzeLog(text: string | null | undefined): PhaseAnalysis {
 }
 
 function analyzeCase(expected: ExpectedEvalCase, evidence: readonly EvalEvidence[]): CaseOutcome {
-  const out: CaseOutcome = { id: expected.id, status: 'valid', passed: false, sources: evidence.map((e) => e.source), diagnostics: [], metrics: unknownMetrics() };
+  // Evidence that cannot be read is an infra failure and no evidence at all is not run; a readable record goes through outcomeOf (A-340).
+  const out: CaseOutcome = { id: expected.id, status: 'valid', outcome: 'infra failure', passed: false, sources: evidence.map((e) => e.source), diagnostics: [], metrics: unknownMetrics() };
   const invalid = (why: string): CaseOutcome => ({ ...out, status: 'invalid', diagnostics: [...out.diagnostics, why], metrics: unknownMetrics() });
-  if (evidence.length === 0) return { ...out, status: 'missing', diagnostics: ['Expected case evidence missing'] };
+  if (evidence.length === 0) return { ...out, status: 'missing', outcome: 'not run', diagnostics: ['Expected case evidence missing'] };
   if (evidence.length > 1) return { ...out, status: 'duplicate', diagnostics: ['Multiple records for one expected case'] };
   const e = evidence[0]!;
   if (e.problem !== undefined) return invalid('Evidence path unreadable or unsafe');
@@ -173,10 +174,8 @@ function analyzeCase(expected: ExpectedEvalCase, evidence: readonly EvalEvidence
   out.metrics = {
     ms: sum(phases.map((p) => p.metrics.ms)), costUsd: sum(phases.map((p) => p.metrics.costUsd)), attempts: sum(phases.map((p) => p.metrics.attempts)),
   };
-  const stop = phases.at(-1)?.stop;
-  out.passed = expected.expect === 'done'
-    ? final.result === 'done' && file.verify.kind === 'pass'
-    : final.result === 'stopped' && stop != null && stop !== 'model_error';
+  out.outcome = outcomeOf(expected.expect, final.result ?? 'crashed', phases.at(-1)?.stop ?? null, file.verify);
+  out.passed = out.outcome === 'success' || out.outcome === 'expected refusal';
   return out;
 }
 
@@ -209,9 +208,10 @@ export function analyzeEvalOutcomes(expected: readonly ExpectedEvalCase[], evide
     attempts: summarize(cases.map((c) => c.metrics.attempts), expected.length),
   };
   const passed = cases.filter((c) => c.passed).length;
+  const outcomes = Object.fromEntries(OUTCOMES.map((o) => [o, cases.filter((c) => c.outcome === o).length])) as Record<Outcome, number>;
   const validSuite = counts.valid === expected.length && counts.unexpected === 0;
   return {
-    counts, cases, unexpected, passed, passRate: passed / expected.length,
+    counts, outcomes, cases, unexpected, passed, passRate: passed / expected.length,
     allPassed: validSuite && passed === expected.length,
     completeSuite: validSuite && Object.values(metrics).every((m) => m.total !== null), metrics,
     percentileMethod: 'nearest-rank: sorted measured case totals at ceil(p × n), one-based; no interpolation; null for no samples',

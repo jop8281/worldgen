@@ -282,12 +282,12 @@ describe('studio answers only to its own names', () => {
   });
 
   it('lets a client with no Origin and the studio page through', async () => {
-    const none = await raw(server.port, 'POST', '/api/generate', { host: `127.0.0.1:${server.port}`, ...json });
+    const none = await raw(server.port, 'POST', '/api/generate', { host: `127.0.0.1:${server.port}`, 'idempotency-key': 'origin-none', ...json });
     assert.equal(none.status, 200);
     assert.equal(f.spawned.length, 1);
-    const page = await raw(server.port, 'POST', '/api/generate', { host: `127.0.0.1:${server.port}`, origin: `http://127.0.0.1:${server.port}`, ...json });
+    const page = await raw(server.port, 'POST', '/api/generate', { host: `127.0.0.1:${server.port}`, origin: `http://127.0.0.1:${server.port}`, 'idempotency-key': 'origin-page', ...json });
     assert.equal(page.status, 200);
-    const named = await raw(server.port, 'POST', '/api/generate', { host: `localhost:${server.port}`, origin: `http://localhost:${server.port}`, ...json });
+    const named = await raw(server.port, 'POST', '/api/generate', { host: `localhost:${server.port}`, origin: `http://localhost:${server.port}`, 'idempotency-key': 'origin-named', ...json });
     assert.equal(named.status, 200);
     assert.equal(f.spawned.length, 3);
   });

@@ -9,14 +9,17 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 import { createServer as createNetServer } from 'node:net';
 import { checkWorld, saveWorld, serve, worldIdOf, type World, type WorldServer } from '#engine';
-import type { RunResult, Runner, SpawnedChild, Spawner } from '../src/sandboxes/backend.ts';
+import { nodeRunner, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../src/sandboxes/backend.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 // ---- transport: fetch against the loopback studio ----------------------------------------------
+
+const REAL_CODE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 type Json = { [k: string]: unknown };
 
@@ -32,6 +35,9 @@ async function json(base: string, method: string, p: string, body?: unknown): Pr
   const r = await call(base, method, p, body);
   return { status: r.status, type: r.type, body: (r.text === '' ? null : JSON.parse(r.text)) as Json };
 }
+
+/** A run status without its job record, which test/studio-jobs.test.ts covers. */
+const withoutJob = (body: Json): Json => Object.fromEntries(Object.entries(body).filter(([k]) => k !== 'job'));
 
 /** The error object of a JSON answer, narrowed. */
 function errorOf(body: Json): { code: unknown; message: unknown } | null {
@@ -275,10 +281,12 @@ describe('studio', () => {
     spawned = calls;
     const costsResult: RunResult = { code: 0, stdout: `${JSON.stringify(COSTS_JSON, null, 2)}\n`, stderr: '' };
     const runner: Runner = async (argv, opts) => {
+      // The Explorer's check child runs for real, in the real code dir; the fake root has none.
+      if (argv.includes('src/cli/studio-check.ts')) return nodeRunner(argv, { ...opts, cwd: REAL_CODE_DIR });
       costsCalls.push({ argv: [...argv], cwd: opts?.cwd });
       return costsResult;
     };
-    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, build: 'test-sha', startupGraceMs: 1500, runStopWaitMs: 1000 });
+    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, build: 'test-sha', startupGraceMs: 1500, runStopWaitMs: 1000, maxConcurrentRuns: 1000, maxConcurrentEpisodes: 1000 });
     base = server.url;
   });
 
@@ -523,7 +531,7 @@ describe('studio', () => {
 
       const live = await json(base, 'GET', `/api/generate/${runId}`);
       assert.equal(live.status, 200);
-      assert.deepEqual(live.body, { running: true, state: 'running', events: [E1, E2], totals: null });
+      assert.deepEqual(withoutJob(live.body), { running: true, state: 'running', events: [E1, E2], totals: null });
       assert.deepEqual((await json(base, 'GET', `/api/generate/${runId}/events`)).body, live.body);
 
       await writeFile(
@@ -533,7 +541,7 @@ describe('studio', () => {
       lastSpawn().handle.exitWith(0);
 
       const done = await json(base, 'GET', `/api/generate/${runId}`);
-      assert.deepEqual(done.body, { running: false, state: 'done', exitCode: 0, events: [E1, E2, E3], totals: { ms: 24000, costUsd: 0.51 } });
+      assert.deepEqual(withoutJob(done.body), { running: false, state: 'done', exitCode: 0, events: [E1, E2, E3], totals: { ms: 24000, costUsd: 0.51 } });
       spawnPlan = () => ({});
     });
 
@@ -552,7 +560,7 @@ describe('studio', () => {
       await mkdir(dir, { recursive: true });
       await writeFile(path.join(dir, 'events.jsonl'), `${JSON.stringify(E1)}\n`);
       const r = await json(base, 'GET', `/api/generate/${runId}`);
-      assert.deepEqual(r.body, { running: true, state: 'running', events: [E1], totals: null });
+      assert.deepEqual(withoutJob(r.body), { running: true, state: 'running', events: [E1], totals: null });
       spawnPlan = () => ({});
     });
 
@@ -1010,17 +1018,18 @@ describe('studio runs across a restart (YOS-191, A-329)', () => {
   after(async () => rm(root, { recursive: true, force: true }));
 
   it('adopts a run whose process outlived the studio, stops it by pid, and marks a dead one interrupted without rerunning it', async () => {
-    const first = fakeSpawner(() => ({ pid: 7777 }));
+    const first = fakeSpawner(() => ({ pid: 7777, diesOn: [] }));
     const a = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: first.spawner, runner, processes });
     const started = await json(a.url, 'POST', '/api/generate', { kind: 'description', text: 'T', outSlug: 'restart-lambda' });
     const runId = String(started.body['runId']);
     live.add(7777);
-    const stored = JSON.parse(await readFile(path.join(worldsDir, '.studio-runs.json'), 'utf8')) as { runId: string; pid: number; finished: boolean }[];
-    assert.deepEqual(stored.map((r) => [r.runId, r.pid, r.finished]), [[runId, 7777, false]]);
+    const stored = JSON.parse(await readFile(path.join(worldsDir, '.studio-runs.json'), 'utf8')) as { runId: string; pid: number; phase: string }[];
+    assert.deepEqual(stored.map((r) => [r.runId, r.pid, r.phase]), [[runId, 7777, 'running']]);
 
-    // The studio dies without stopping its children; a new one starts on the same data.
+    // The studio dies without its children ending; a new one starts on the same data once its lease has run out (A-335).
+    await a.close();
     const second = fakeSpawner(() => ({}));
-    const b = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: second.spawner, runner, processes, runStopWaitMs: 50 });
+    const b = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: second.spawner, runner, processes, runStopWaitMs: 50, now: () => Date.now() + 60_000 });
     try {
       assert.equal((await json(b.url, 'GET', `/api/generate/${runId}`)).body['running'], true);
       const stopped = await json(b.url, 'POST', `/api/generate/${runId}/stop`);
@@ -1032,14 +1041,13 @@ describe('studio runs across a restart (YOS-191, A-329)', () => {
       await b.close();
     }
 
-    const c = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: second.spawner, runner, processes, runStopWaitMs: 50 });
+    const c = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: second.spawner, runner, processes, runStopWaitMs: 50, now: () => Date.now() + 120_000 });
     try {
       const r = await json(c.url, 'GET', `/api/generate/${runId}`);
       assert.deepEqual([r.body['running'], r.body['state']], [false, 'interrupted']);
       assert.equal(second.spawned.length, 0);
     } finally {
       await c.close();
-      await a.close();
     }
   });
 });

@@ -187,8 +187,8 @@ export type EpisodeInput = {
   readonly worldVersion: string;
   readonly promptVersion: string;
   readonly configVersion: string;
-  /** The model `nextTurn` calls, recorded on the episode. A scripted or noop turn records the default model. */
-  readonly model: string;
+  /** The model `nextTurn` calls, recorded on the episode, or null when it calls none, as the noop agent does. */
+  readonly model: string | null;
   readonly task: { readonly id: string; readonly difficulty: Difficulty; readonly instruction: string };
   readonly index: number;
   readonly openapi: OpenApiDocument;
@@ -261,7 +261,7 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
     error ??= a.redact.text(why);
   };
   const account = (u: TurnResult['usage'], costUsd: number): void => {
-    usage.model_calls += 1;
+    if (a.model !== null) usage.model_calls += 1;
     usage.input_tokens += u.inputTokens;
     usage.output_tokens += u.outputTokens;
     usage.cache_read_tokens += u.cacheReadTokens;

@@ -1023,25 +1023,28 @@ describe('runWorldGen original input contracts', () => {
     ]);
   });
 
-  it('repairs an omitted OpenAPI operation even when the plan omitted it too', async () => {
+  it('repairs an omitted OpenAPI operation: the plan step names it first (YOS-244), then the model step builds it', async () => {
     const digest: InputDigest = { kind: 'openapi', summary: 'Imported helpdesk', fixtures: {},
       operations: [{ method: 'DELETE', path: '/imports/{id}' }], observations: [], apiShape: null };
     const repaired = { note: 'Include the input operation', upsert: {
       ...EDITS.model.upsert,
       routes: { ...TARGET.routes, delete_import: { method: 'DELETE', path: '/imports/{id}', op: 'delete', entity: 'customer' } },
     } };
+    const planned = { ...PLAN, routes: [...PLAN.routes, { id: 'delete_import', method: 'DELETE', path: '/imports/{id}', purpose: 'remove an import' }] };
     const { result, events, outDir } = await run([
-      { input: PLAN }, { input: EDITS.model }, { input: repaired },
+      { input: PLAN }, { input: planned }, { input: EDITS.model }, { input: repaired },
       { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
     ], { digest });
     assert.equal(result.kind, 'done');
     assert.deepEqual(attempts(events), [
-      ['plan', 1, 'accepted'], ['model', 1, 'rejected'], ['model', 2, 'accepted'],
+      ['plan', 1, 'rejected'], ['plan', 2, 'accepted'], ['model', 1, 'rejected'], ['model', 2, 'accepted'],
       ['workflow', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'accepted'],
     ]);
-    const rejected = events.find((e) => e.t === 'attempt' && e.outcome.kind === 'rejected');
-    assert.deepEqual(rejected?.t === 'attempt' && rejected.outcome.kind === 'rejected' ? brief(rejected.outcome.issues) : [], [
-      ['plan.not_covered', ['routes', 'DELETE /imports/{id}']],
+    const rejected = events.filter((e) => e.t === 'attempt' && e.outcome.kind === 'rejected')
+      .map((e) => (e.t === 'attempt' && e.outcome.kind === 'rejected' ? brief(e.outcome.issues) : []));
+    assert.deepEqual(rejected, [
+      [['plan.not_covered', ['plan', 'routes', 'DELETE /imports/{id}']]],
+      [['plan.not_covered', ['plan', 'routes', 3]], ['plan.not_covered', ['routes', 'DELETE /imports/{id}']]],
     ]);
     const saved = await loadWorld(outDir);
     const checked = saved.ok ? checkWorld(saved.value) : null;
@@ -1948,3 +1951,38 @@ describe('runWorldGen: a seed shortfall found at tasks goes back to seed with it
   });
 });
 
+
+describe('runWorldGen create: an OpenAPI operation a workflow action builds is planned as that action (YOS-244)', () => {
+  const RESOLVE = 'POST /tickets/{id}/resolve';
+  const operations = [['GET', '/tickets'], ['GET', '/tickets/{id}'], ['GET', '/customers'], ['POST', '/tickets/{id}/resolve']] as const;
+  const digest: InputDigest = { kind: 'openapi', summary: 'a helpdesk API', fixtures: {}, observations: [], apiShape: null, operations: operations.map(([method, path]) => ({ method, path })) };
+  const spec = (): string => {
+    const file = join(mkdtempSync(join(tmpdir(), 'wg-spec-')), 'spec.json');
+    const paths: Record<string, Record<string, unknown>> = {};
+    for (const [method, path] of operations) paths[path] = { ...paths[path], [method.toLowerCase()]: { responses: { '200': { description: 'ok' } } } };
+    writeFileSync(file, JSON.stringify({ openapi: '3.0.3', paths }));
+    return file;
+  };
+  const ACTION_ROUTE = { id: 'resolve_ticket', method: 'POST', path: '/tickets/{id}/resolve', purpose: 'resolve a pending ticket, built as the resolve_ticket action' };
+  /** Replies as the live model did (YOS-244): a plan without the action's route, then a plain route for any operation the judge says is uncovered. */
+  const liveLike = (req: ProposeRequest): Reply => {
+    if (req.tool.name === 'submit_plan') return { input: req.prompt.includes(`input operation ${RESOLVE}`) ? { ...PLAN, routes: [...PLAN.routes, ACTION_ROUTE] } : PLAN };
+    const stage = /for the (\w+) stage/.exec(req.tool.description)?.[1];
+    if (stage === 'model') {
+      if (!req.prompt.includes(`input operation ${RESOLVE}`)) return { input: EDITS.model };
+      return { input: { note: 'cover the resolve operation with a route', upsert: { entities: TARGET.entities, routes: { ...TARGET.routes, resolve_route: { op: 'update', entity: 'ticket', method: 'POST', path: '/tickets/{id}/resolve' } } } } };
+    }
+    if (stage === 'workflow') return { input: EDITS.workflow };
+    if (stage === 'seed') return { input: EDITS.seed };
+    return { input: EDITS.tasks };
+  };
+
+  it('asks the plan step to map every input operation, so the model step never routes a path the workflow builds as an action', async () => {
+    const { result, events } = await run(Array.from({ length: 12 }, () => liveLike), { input: { kind: 'openapi', path: spec(), only: [] }, digest });
+    assert.deepEqual(attempts(events), [['plan', 1, 'rejected'], ['plan', 2, 'accepted'], ['model', 1, 'accepted'], ['workflow', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'accepted']]);
+    const first = events.find((e) => e.t === 'attempt' && e.step === 'plan');
+    assert.deepEqual(first?.t === 'attempt' && first.outcome.kind === 'rejected' ? brief(first.outcome.issues) : null, [['plan.not_covered', ['plan', 'routes', RESOLVE]]]);
+    assert.equal(events.some((e) => e.t === 'attempt' && e.outcome.kind === 'rejected' && e.outcome.issues.some((i) => i.code === 'route.duplicate_path')), false);
+    assert.equal(result.kind, 'done');
+  });
+});
