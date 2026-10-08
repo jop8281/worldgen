@@ -8,6 +8,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1037,6 +1039,80 @@ describe('studio', () => {
       assert.deepEqual([r.body['service'], r.body['world'], r.body['hash'], typeof r.body['now']], [svc, 'console-delta', seedHash, 'string']);
       assert.equal(await state(), seedHash);
       assert.equal((await direct('GET', '/customers')).text.includes('Reset Co'), false);
+    });
+
+    /** hand-beta served with a scripted admin port: `answer` gets each request's path. `close` stops both. */
+    async function scriptedAdmin(answer: (path: string, res: ServerResponse) => void): Promise<{ id: string; close: () => Promise<void> }> {
+      const admin = createServer((req, res) => answer(req.url ?? '', res));
+      await new Promise<void>((resolve) => admin.listen(0, '127.0.0.1', resolve));
+      const adminPort = (admin.address() as AddressInfo).port;
+      const worldPort = await quietPort();
+      spawnPlan = () => ({ listening: { world: worldPort, admin: adminPort } });
+      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
+      assert.equal(served.status, 200, JSON.stringify(served.body));
+      const id = String(served.body['id']);
+      return {
+        id,
+        close: async () => {
+          await json(base, 'POST', `/api/services/${id}/stop`);
+          admin.closeAllConnections();
+          await new Promise<void>((resolve) => admin.close(() => resolve()));
+        },
+      };
+    }
+
+    it('answers 502 reset.failed, not reset.unreachable, when the admin port answers the reset or the state with no JSON', async () => {
+      let resetText = 'reset done';
+      let stateText = '{"hash":"h-1"}';
+      const svc2 = await scriptedAdmin((p, res) => res.end(p === '/_world/reset' ? resetText : stateText));
+      try {
+        const reset = async (): Promise<[number, Json]> => {
+          const r = await json(base, 'POST', `/api/services/${svc2.id}/reset`, { confirm: 'hand-beta' });
+          return [r.status, r.body];
+        };
+        const failed = { error: { code: 'reset.failed', message: 'the admin port of hand-beta gave no time or state hash after the reset' } };
+        assert.deepEqual(await reset(), [502, failed]);
+        resetText = '{"now":"2026-10-08T00:00:00.000Z"}';
+        stateText = '<html>not json</html>';
+        assert.deepEqual(await reset(), [502, failed]);
+        stateText = '{"hash":"h-1"}';
+        assert.deepEqual(await reset(), [200, { service: svc2.id, world: 'hand-beta', now: '2026-10-08T00:00:00.000Z', hash: 'h-1' }]);
+      } finally {
+        await svc2.close();
+      }
+    });
+
+    it('answers 409 reset.busy to a second reset of a service while the first runs, and resets again once it answered', async () => {
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let resets = 0;
+      const svc2 = await scriptedAdmin((p, res) => {
+        if (p !== '/_world/reset') {
+          res.end('{"hash":"h-2"}');
+          return;
+        }
+        resets += 1;
+        void held.then(() => res.end('{"now":"2026-10-08T00:00:00.000Z"}'));
+      });
+      try {
+        const reset = () => json(base, 'POST', `/api/services/${svc2.id}/reset`, { confirm: 'hand-beta' });
+        const first = reset();
+        for (let i = 0; resets === 0 && i < 200; i++) await new Promise((r) => setTimeout(r, 10));
+        assert.equal(resets, 1);
+        const second = await reset();
+        assert.deepEqual([second.status, second.body], [409, { error: { code: 'reset.busy', message: 'a reset of hand-beta is already running; wait for its answer' } }]);
+        release();
+        const done = await first;
+        const ok = { service: svc2.id, world: 'hand-beta', now: '2026-10-08T00:00:00.000Z', hash: 'h-2' };
+        assert.deepEqual([done.status, done.body, resets], [200, ok, 1]);
+        const third = await reset();
+        assert.deepEqual([third.status, third.body, resets], [200, ok, 2]);
+      } finally {
+        await svc2.close();
+      }
     });
 
     it('validates the method and the body, and 404s an unknown service', async () => {

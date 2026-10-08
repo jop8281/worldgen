@@ -610,6 +610,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   };
 
   const services = new Map<string, { record: ServiceRecord; dir: string; child: SpawnedChild }>();
+  /** Ids of the services a reset is running on, so a second reset of one waits for the first. */
+  const resetting = new Set<string>();
   /** `<tenant> <world dir>` of each `worldplay serve` that has not reported its ports yet. */
   const starting = new Set<string>();
   /** Ports an admin pinned for a `worldplay serve` that has not reported yet: the world port and its admin port. */
@@ -1101,23 +1103,31 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const hit = serviceOf(p['id'] ?? '', who, filter);
     if (hit === undefined) return fail(404, 'service.unknown', `No service ${p['id'] ?? ''}`);
     const name = hit.record.name;
+    // Typing the name guards against a mis-click on the page. It is no barrier to a client, since the refusal says what to send.
     if (!isObject(body) || body['confirm'] !== name) {
       return fail(400, 'reset.confirm', `a reset throws away every change to ${name}'s state; send {"confirm": "${name}"} to go ahead`);
     }
+    if (resetting.has(hit.record.id)) return fail(409, 'reset.busy', `a reset of ${name} is already running; wait for its answer`);
+    resetting.add(hit.record.id);
     const admin = `http://127.0.0.1:${hit.record.adminPort}`;
     const signal = (): AbortSignal => AbortSignal.timeout(CALL_TIMEOUT_MS);
     try {
       const reset = await fetch(`${admin}/_world/reset`, { method: 'POST', redirect: 'manual', signal: signal() });
       if (!reset.ok) return fail(502, 'reset.failed', `the admin port of ${name} answered ${reset.status} to the reset`);
-      const done: unknown = await reset.json();
+      // An answer that is not JSON is a failed reset, not an unreachable port.
+      const done: unknown = await reset.json().catch(() => null);
+      // The hash comes from a second call after the reset, so it is not atomic with it: a write through the world port in
+      // between shows in the hash.
       const state = await fetch(`${admin}/_world/state`, { redirect: 'manual', signal: signal() });
-      const dump: unknown = state.ok ? await state.json() : null;
+      const dump: unknown = state.ok ? await state.json().catch(() => null) : null;
       const now = isObject(done) && typeof done['now'] === 'string' ? done['now'] : null;
       const hash = isObject(dump) && typeof dump['hash'] === 'string' ? dump['hash'] : null;
       if (now === null || hash === null) return fail(502, 'reset.failed', `the admin port of ${name} gave no time or state hash after the reset`);
       return { status: 200, body: { service: hit.record.id, world: name, now, hash } };
     } catch (e) {
       return fail(502, 'reset.unreachable', `the admin port of ${name} did not answer the reset: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      resetting.delete(hit.record.id);
     }
   }
 
