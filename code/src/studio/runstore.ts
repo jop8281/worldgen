@@ -17,10 +17,12 @@ export type JobKind = 'generate' | 'episode';
 export const DEFAULT_TENANT = 'default';
 /** Which studio may act on an unfinished job, and until when. Past `expiresAt` the holder counts as dead. */
 export type Lease = { readonly holder: string; readonly expiresAt: string };
-/** What a studio did with a job whose holder died. */
+/** Why the lease rules stop a job whose holder died. */
+export type RecoveryStop = 'process_gone' | 'start_unconfirmed';
+/** What a studio did with a job whose holder died, or with a job it held when it closed (`studio_closed`, A-363). */
 export type Recovery =
   | { readonly at: string; readonly from: string; readonly outcome: 'resumed' }
-  | { readonly at: string; readonly from: string; readonly outcome: 'stopped'; readonly reason: 'process_gone' | 'start_unconfirmed' };
+  | { readonly at: string; readonly from: string; readonly outcome: 'stopped'; readonly reason: RecoveryStop | 'studio_closed' };
 
 /** What survives a restart about one job. */
 export type StoredRun = {
@@ -45,6 +47,8 @@ export type StoredRun = {
   readonly exitCode: number | null;
   /** Episodes only. */
   readonly episode?: { readonly world: string; readonly task: string; readonly agent: string } | undefined;
+  /** Iterate runs only (YOS-188): the world name copied from, and the copy `<source>-<n>` the run changes and publishes once done. */
+  readonly iterate?: { readonly source: string; readonly world: string } | undefined;
 };
 
 const sharedFields = {
@@ -66,9 +70,10 @@ const storedRunSchema = z.object({
   lease: z.object({ holder: z.string(), expiresAt: z.string() }).nullable(),
   recovery: z.discriminatedUnion('outcome', [
     z.object({ at: z.string(), from: z.string(), outcome: z.literal('resumed') }),
-    z.object({ at: z.string(), from: z.string(), outcome: z.literal('stopped'), reason: z.enum(['process_gone', 'start_unconfirmed']) }),
+    z.object({ at: z.string(), from: z.string(), outcome: z.literal('stopped'), reason: z.enum(['process_gone', 'start_unconfirmed', 'studio_closed']) }),
   ]).optional(),
   episode: z.object({ world: z.string(), task: z.string(), agent: z.string() }).optional(),
+  iterate: z.object({ source: z.string(), world: z.string() }).optional(),
 });
 
 /** The A-329 record: a generation run with a finished flag and no lease. */
@@ -109,6 +114,32 @@ export const osProcesses: Processes = {
     }
   },
 };
+
+/**
+ * What the lease rules (A-335) do with an unfinished job at `at`: leave it while it is finished, held by `holder` or
+ * leased to anyone, resume it when its lease ran out and its process lives, and stop it otherwise. An intent is
+ * stopped, never started, because its child may have started before the crash. `holder` is the studio asking, or null
+ * for a reader that holds no lease, such as reconcile-jobs. The one copy of the rule: the studio and reconcile-jobs both
+ * call it.
+ */
+export type RecoveryDecision =
+  | { readonly kind: 'leave'; readonly why: 'finished' | 'held' | 'lease_live' }
+  | { readonly kind: 'resume'; readonly from: string; readonly pid: number }
+  | { readonly kind: 'stop'; readonly from: string; readonly reason: RecoveryStop };
+
+export function recoveryOf(job: Pick<StoredRun, 'phase' | 'lease' | 'pid'>, at: number, holder: string | null, processes: Processes): RecoveryDecision {
+  if (job.phase === 'finished') return { kind: 'leave', why: 'finished' };
+  if (holder !== null && job.lease?.holder === holder) return { kind: 'leave', why: 'held' };
+  if (job.lease !== null && Date.parse(job.lease.expiresAt) > at) return { kind: 'leave', why: 'lease_live' };
+  const from = job.lease?.holder ?? 'legacy';
+  if (job.phase === 'running' && job.pid !== null && processes.alive(job.pid)) return { kind: 'resume', from, pid: job.pid };
+  return { kind: 'stop', from, reason: job.phase === 'intent' ? 'start_unconfirmed' : 'process_gone' };
+}
+
+/** A stored job as a stop decision leaves it: finished, its lease released, and why it stopped. */
+export function stoppedRun(run: StoredRun, decision: Extract<RecoveryDecision, { kind: 'stop' }>, at: number): StoredRun {
+  return { ...run, phase: 'finished', lease: null, recovery: { at: new Date(at).toISOString(), from: decision.from, outcome: 'stopped', reason: decision.reason } };
+}
 
 export async function loadRuns(worldsDir: string): Promise<StoredRun[]> {
   const text = await readFile(path.join(worldsDir, RUN_STORE_FILE), 'utf8').catch(() => null);

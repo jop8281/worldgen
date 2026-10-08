@@ -1,7 +1,9 @@
 /**
  * The studio page: one self-contained offline HTML document for the operator, served at `GET /`
  * on the studio port. The six sections — Worlds, Explorer, Generation runs, Eval, Agent Playground,
- * Spend — show only what they fetch at runtime from the studio's own routes.
+ * Spend — show only what they fetch at runtime from the studio's own routes. A generation reads an
+ * OpenAPI spec or CSV tables under eval/inputs or ones the operator uploads, read as text in the
+ * browser and posted to /api/uploads; a generated world's plan opens beside its report.
  *
  * Invariants (the operator-console pattern, `engine/ui.ts`):
  * - Pure. No import, no argument, no build-time value: the document is one constant string, so
@@ -70,28 +72,45 @@ a { margin-right: 0.5rem; }
 <p id="auth-error" hidden></p>
 </div>
 </header>
-<section>
+<nav aria-label="sections">
+<a href="#sec-worlds">Worlds</a>
+<a href="#sec-explorer">Explorer</a>
+<a href="#sec-generation">Generation runs</a>
+<a href="#sec-eval">Eval</a>
+<a href="#sec-playground">Agent Playground</a>
+<a href="#sec-spend">Spend</a>
+</nav>
+<main>
+<section id="sec-worlds">
 <h2>Worlds<span id="worlds-meta" class="meta"></span></h2>
-<p><button id="worlds-refresh" type="button">refresh</button></p>
+<p><button id="worlds-refresh" type="button">refresh</button> <label>filter <input id="worlds-filter" type="search" autocomplete="off" placeholder="world name"></label></p>
 <div id="worlds-table"></div>
+<form id="iterate-form" hidden>
+<p><label>change for <span id="iterate-world"></span> <textarea id="iterate-change" rows="3"></textarea></label></p>
+<p><button type="submit">iterate</button> <button id="iterate-cancel" type="button">cancel</button></p>
+</form>
+<div id="iterate-status" aria-live="polite"></div>
 <pre id="world-report" hidden></pre>
+<div id="world-plan" hidden></div>
 </section>
-<section>
+<section id="sec-explorer">
 <h2>Explorer<span id="explorer-meta" class="meta"></span></h2>
 <p><label>world <select id="explorer-world"></select></label> <button id="explorer-load" type="button">explore</button></p>
 <div id="explorer-body"></div>
 <h3>API console<span id="console-meta" class="meta">one real request to the world port of a served world, never its admin port</span></h3>
 <form id="console-form">
 <p>
-<select id="console-method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
-<input id="console-path" size="48" placeholder="/tickets?status=open">
+<select id="console-method" aria-label="HTTP method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+<input id="console-path" aria-label="request path" size="48" placeholder="/tickets?status=open">
 <button id="console-send" type="submit">send</button>
 </p>
 <p><label>JSON body, for POST, PUT and PATCH <textarea id="console-body" rows="4"></textarea></label></p>
 </form>
+<p><button id="console-openapi" type="button">OpenAPI</button> <span class="meta">the served world's own GET /openapi.json</span></p>
+<p><label>type the world's name to reset its state to the seed <input id="reset-confirm" size="24" autocomplete="off"></label> <button id="reset-send" type="button" class="danger">reset</button></p>
 <div id="console-result"></div>
 </section>
-<section>
+<section id="sec-generation">
 <h2>Generation runs</h2>
 <form id="generate-form">
 <p>
@@ -105,10 +124,14 @@ a { margin-right: 0.5rem; }
 </p>
 <p id="gen-desc-row"><label>description <textarea id="gen-text" rows="3" placeholder="A helpdesk with SLA tiers and on-call escalation"></textarea></label></p>
 <div id="gen-openapi-row" hidden>
-<p><label>OpenAPI spec under eval/inputs <select id="gen-spec"></select></label></p>
+<p><label>OpenAPI spec under eval/inputs, or uploaded <select id="gen-spec"></select></label></p>
+<p><label>upload a spec <input id="gen-spec-file" type="file" accept=".yaml,.yml,.json"></label> <button id="gen-spec-upload" type="button">upload</button> <span id="gen-spec-note" class="meta"></span></p>
 <fieldset id="gen-only"><legend>only these paths (--only; none ticked means the whole spec)</legend></fieldset>
 </div>
-<p id="gen-csv-row" hidden><label>CSV files under eval/inputs (pick one or more) <select id="gen-csv" multiple size="6"></select></label></p>
+<div id="gen-csv-row" hidden>
+<p><label>CSV files under eval/inputs, or uploaded (pick one or more) <select id="gen-csv" multiple size="6"></select></label></p>
+<p><label>upload CSV files <input id="gen-csv-file" type="file" accept=".csv" multiple></label> <button id="gen-csv-upload" type="button">upload</button> <span id="gen-csv-note" class="meta"></span></p>
+</div>
 <p>
 <label>out slug <input id="gen-slug" placeholder="helpdesk-demo"></label>
 <label>budget usd <input id="gen-budget" type="number" min="0" step="0.01"></label>
@@ -120,12 +143,12 @@ a { margin-right: 0.5rem; }
 <h3>Past runs<span id="runs-meta" class="meta"></span></h3>
 <div id="runs-table"></div>
 </section>
-<section>
+<section id="sec-eval">
 <h2>Eval<span id="eval-meta" class="meta"></span></h2>
 <div id="eval-table"></div>
 <pre id="eval-summary" hidden></pre>
 </section>
-<section>
+<section id="sec-playground">
 <h2>Agent Playground<span id="play-meta" class="meta">agent episodes on loopback, graded by the engine</span></h2>
 <p>
 <label>world <select id="play-world"></select></label>
@@ -149,11 +172,12 @@ a { margin-right: 0.5rem; }
 <h3>Analytics<span id="analytics-meta" class="meta">episodes by world, task and agent model; a success is an engine score of 1 with a reply and known cost</span></h3>
 <div id="analytics-table"></div>
 </section>
-<section>
+<section id="sec-spend">
 <h2>Spend<span id="spend-meta" class="meta">costs --json, cached up to 30 s</span></h2>
 <p><button id="spend-refresh" type="button">refresh</button></p>
 <div id="spend-body"></div>
 </section>
+</main>
 <script>
 (function () {
   'use strict';
@@ -209,18 +233,25 @@ a { margin-right: 0.5rem; }
     try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) { /* nothing stored to remove */ }
     location.reload();
   });
-  fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
+  var signedIn = fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
     return r.json().then(function (body) {
       authNote(r.status, body);
-      if (r.status !== 200) return;
+      // Spend needs the admin role, so any other page neither shows it nor asks for it.
+      if (r.status === 200 && body.role === 'admin') refreshSpend();
+      else {
+        byId('sec-spend').hidden = true;
+        document.querySelector('nav a[href="#sec-spend"]').hidden = true;
+      }
+      if (r.status !== 200) return false;
       if (!body.signIn) {
         whoLine.textContent = body.name + ' (' + body.role + '), sign-in off';
-        return;
+        return true;
       }
       whoLine.textContent = body.name + ' (' + body.role + ')';
       signoutBtn.hidden = false;
+      return true;
     });
-  }, function (e) { whoLine.textContent = 'unreachable: ' + e; });
+  }, function (e) { whoLine.textContent = 'unreachable: ' + e; return false; });
   /** Downloads a zip the header-less link cannot fetch: with the token, through an object URL. */
   function downloadZip(path, filename) {
     fetch(path, { headers: authHeaders({}) }).then(function (r) {
@@ -272,6 +303,29 @@ a { margin-right: 0.5rem; }
   var worldsMeta = byId('worlds-meta');
   var worldReport = byId('world-report');
   var reportWorld = null;
+  var worldsFilter = byId('worlds-filter');
+  var worldsBase = '';
+  var worldsTotal = 0;
+  /** Hides the rows whose world name lacks the filter text (case-insensitive); the meta shows shown of total while a filter is set. */
+  function applyFilter() {
+    var needle = worldsFilter.value.trim().toLowerCase();
+    var rows = worldsTable.querySelectorAll('tr');
+    var shown = 0;
+    for (var i = 1; i < rows.length; i++) {
+      var match = rows[i].cells[0].textContent.toLowerCase().indexOf(needle) !== -1;
+      rows[i].hidden = !match;
+      if (match) shown++;
+    }
+    worldsMeta.textContent = needle === '' ? worldsBase : shown + ' of ' + worldsTotal;
+  }
+  worldsFilter.addEventListener('input', applyFilter);
+  // ---- The view lives in the URL hash: #world=<name>&view=explorer|report|plan|play, written with replaceState ----
+  function setHash(world, view) {
+    var params = new URLSearchParams();
+    params.set('world', world);
+    params.set('view', view);
+    try { history.replaceState(null, '', '#' + params.toString()); } catch (e) { /* a blocked history keeps the page working */ }
+  }
 
   function serviceFor(name, services) {
     for (var i = 0; i < services.length; i++) if (services[i].name === name) return services[i];
@@ -279,6 +333,12 @@ a { margin-right: 0.5rem; }
   }
   function toggleReport(name) {
     if (reportWorld === name && !worldReport.hidden) { worldReport.hidden = true; reportWorld = null; return; }
+    openReport(name);
+  }
+  function openReport(name) {
+    setHash(name, 'report');
+    worldReport.hidden = false;
+    worldReport.textContent = 'loading…';
     getJson('/api/worlds/' + encodeURIComponent(name) + '/report').then(function (body) {
       reportWorld = name;
       worldReport.hidden = false;
@@ -287,11 +347,45 @@ a { margin-right: 0.5rem; }
         : (body.report === null ? 'no REPORT.md for ' + name : body.report);
     }, function (e) { worldReport.hidden = false; worldReport.textContent = 'unreachable: ' + e; });
   }
+  // ---- The plan of a generated world: its assumptions, open questions, out of scope, and plan.md ----
+  var worldPlan = byId('world-plan');
+  var planWorld = null;
+  function togglePlan(name) {
+    if (planWorld === name && !worldPlan.hidden) { worldPlan.hidden = true; planWorld = null; return; }
+    openPlan(name);
+  }
+  function planList(title, items, text) {
+    worldPlan.appendChild(el('h3', title + ' (' + items.length + ')'));
+    if (items.length === 0) { worldPlan.appendChild(el('p', 'none')); return; }
+    var list = document.createElement('ul');
+    items.forEach(function (x) { list.appendChild(el('li', text(x))); });
+    worldPlan.appendChild(list);
+  }
+  function openPlan(name) {
+    setHash(name, 'plan');
+    worldPlan.hidden = false;
+    clear(worldPlan);
+    worldPlan.appendChild(el('p', 'loading…'));
+    getJson('/api/worlds/' + encodeURIComponent(name) + '/plan').then(function (body) {
+      planWorld = name;
+      clear(worldPlan);
+      if (body.error !== undefined) { worldPlan.appendChild(el('p', body.error.code + ': ' + body.error.message)); return; }
+      worldPlan.appendChild(el('h3', 'plan of ' + body.name));
+      planList('assumptions', body.assumptions, function (a) { return a.decision + ' (why: ' + a.why + ')'; });
+      planList('open questions', body.openQuestions, function (q) { return q.question + ' (default answer: ' + q.default_answer + ')'; });
+      planList('out of scope', body.outOfScope, function (o) { return o.what + ' (why: ' + o.why + ')'; });
+      worldPlan.appendChild(el('h3', 'plan.md'));
+      worldPlan.appendChild(el('pre', body.planMd));
+    }, function (e) { clear(worldPlan); worldPlan.appendChild(el('p', 'unreachable: ' + e)); });
+  }
   function refreshWorlds() {
+    worldsMeta.textContent = 'loading…';
     return Promise.all([getJson('/api/worlds'), getJson('/api/services')]).then(function (pair) {
       var worlds = pair[0].worlds || [];
       var services = pair[1].services || [];
-      worldsMeta.textContent = worlds.length + ' world(s), ' + services.length + ' served';
+      worldsTotal = worlds.length;
+      worldsBase = worlds.length + ' world(s), ' + services.length + ' served';
+      worldsMeta.textContent = worldsBase;
       clear(worldsTable);
       if (worlds.length === 0) { worldsTable.appendChild(el('p', 'no worlds')); return; }
       var rows = worlds.map(function (w) {
@@ -321,11 +415,23 @@ a { margin-right: 0.5rem; }
         reportBtn.textContent = 'report';
         reportBtn.addEventListener('click', function () { toggleReport(w.name); });
         actions.appendChild(reportBtn);
+        if (w.generated) {
+          var planBtn = document.createElement('button');
+          planBtn.type = 'button';
+          planBtn.textContent = 'plan';
+          planBtn.addEventListener('click', function () { togglePlan(w.name); });
+          actions.appendChild(planBtn);
+        }
         var exportBtn = document.createElement('button');
         exportBtn.type = 'button';
         exportBtn.textContent = 'export';
         exportBtn.addEventListener('click', function () { downloadZip('/api/worlds/' + encodeURIComponent(w.name) + '/export', w.name + '.zip'); });
         actions.appendChild(exportBtn);
+        var iterateBtn = document.createElement('button');
+        iterateBtn.type = 'button';
+        iterateBtn.textContent = 'iterate';
+        iterateBtn.addEventListener('click', function () { openIterate(w.name); });
+        actions.appendChild(iterateBtn);
         return {
           name: w.name,
           kind: w.generated ? 'generated' : 'hand-built',
@@ -338,9 +444,114 @@ a { margin-right: 0.5rem; }
         };
       });
       worldsTable.appendChild(grid(['name', 'kind', 'tasks', 'wid', 'model', 'cost', 'attempts', 'actions'], rows));
+      applyFilter();
     }, function (e) { worldsMeta.textContent = 'unreachable: ' + e; });
   }
   byId('worlds-refresh').addEventListener('click', refreshWorlds);
+
+  // ---- Iterate: a change request run on a copy of the world, polled until its run ends ---------------
+  var iterateForm = byId('iterate-form');
+  var iterateWorld = byId('iterate-world');
+  var iterateChange = byId('iterate-change');
+  var iterateStatus = byId('iterate-status');
+  var iterateName = null;
+  var iterateKey = null;
+  var iterateRun = null;
+  var iterateTimer = null;
+  /** One Idempotency-Key per open of the form, so a double submit is one job. randomUUID needs a secure context, which a plain http origin off loopback is not. */
+  function mintKey() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    var hex = '';
+    for (var i = 0; i < 32; i++) hex += Math.floor(Math.random() * 16).toString(16);
+    return hex;
+  }
+  function iterateNote(text) {
+    clear(iterateStatus);
+    iterateStatus.appendChild(el('p', text));
+  }
+  function openIterate(name) {
+    iterateName = name;
+    iterateKey = mintKey();
+    iterateWorld.textContent = name;
+    iterateChange.value = '';
+    iterateForm.hidden = false;
+    iterateChange.focus();
+  }
+  function closeIterate() {
+    iterateForm.hidden = true;
+    iterateName = null;
+    iterateKey = null;
+  }
+  /** The text of a report's ## Changes section, from that heading to the next ## heading; null when it has none. */
+  function changesOf(report) {
+    var lines = report.split('\\n');
+    var at = lines.indexOf('## Changes');
+    if (at === -1) return null;
+    var end = at + 1;
+    while (end < lines.length && lines[end].indexOf('## ') !== 0) end++;
+    return lines.slice(at, end).join('\\n').trim();
+  }
+  function showStages(events) {
+    var lines = events.filter(function (e) { return e.t === 'attempt'; }).map(function (e) {
+      return e.step + ' attempt ' + e.n + ': ' + (e.outcome === undefined ? 'unknown' : e.outcome.kind);
+    });
+    if (lines.length === 0) { iterateNote('loading…'); return; }
+    clear(iterateStatus);
+    iterateStatus.appendChild(el('pre', lines.join('\\n')));
+  }
+  function finishIterate(body, name) {
+    var copy = body.iterate === undefined ? null : body.iterate;
+    if (body.state === 'done' && copy !== null && copy.published) {
+      iterateNote('done: ' + copy.world + ' is the changed copy of ' + name + '; loading its changes…');
+      refreshWorlds();
+      getJson('/api/worlds/' + encodeURIComponent(copy.world) + '/report').then(function (r) {
+        var changes = r.error !== undefined ? r.error.code + ': ' + r.error.message : (r.report === null ? null : changesOf(r.report));
+        iterateNote('done: ' + copy.world + ' is the changed copy of ' + name);
+        iterateStatus.appendChild(el('pre', changes === null ? 'its REPORT.md has no ## Changes section' : changes));
+      }, function (e) { iterateNote('unreachable: ' + e); });
+      return;
+    }
+    var why = body.state === 'done'
+      ? 'done, but ' + (copy === null ? 'the copy' : copy.world) + ' was not published'
+      : body.state + ': ' + (body.reason === undefined ? 'unknown reason' : body.reason);
+    iterateNote(why + '; the source world ' + name + ' is unchanged');
+  }
+  function stopIteratePoll() {
+    if (iterateTimer !== null) window.clearInterval(iterateTimer);
+    iterateTimer = null;
+    iterateRun = null;
+  }
+  function pollIterate(runId, name) {
+    stopIteratePoll();
+    iterateRun = runId;
+    iterateNote('loading…');
+    function once() {
+      getJson('/api/generate/' + encodeURIComponent(runId) + '/events').then(function (body) {
+        if (iterateRun !== runId) return;
+        if (body.error !== undefined) { stopIteratePoll(); iterateNote(body.error.code + ': ' + body.error.message); return; }
+        if (body.running) { showStages(body.events || []); return; }
+        stopIteratePoll();
+        finishIterate(body, name);
+      }, function (e) { if (iterateRun === runId) iterateNote('unreachable: ' + e); });
+    }
+    once();
+    iterateTimer = window.setInterval(once, 2000);
+  }
+  iterateForm.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var name = iterateName;
+    if (name === null) return;
+    fetch('/api/worlds/' + encodeURIComponent(name) + '/iterate', {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json', 'idempotency-key': iterateKey }),
+      body: JSON.stringify({ change: iterateChange.value })
+    }).then(answered).then(function (r) {
+      if (r.error !== undefined) { iterateNote(r.error.code + ': ' + r.error.message); return; }
+      closeIterate();
+      pollIterate(r.runId, name);
+    }, function (e) { iterateNote('unreachable: ' + e); });
+  });
+  byId('iterate-cancel').addEventListener('click', closeIterate);
 
   // ---- Generation runs: the form, the live panel, and the past runs ------------------
   var runLive = byId('run-live');
@@ -408,10 +619,52 @@ a { margin-right: 0.5rem; }
     pollTimer = window.setInterval(pollLiveOnce, 2000);
   }
   var inputsLoaded = null;
-  function fillSelect(select, values) {
-    clear(select);
-    values.forEach(function (v) { var o = document.createElement('option'); o.value = v; o.textContent = v; select.appendChild(o); });
+  var UPLOAD = 'upload:';
+  /** The eval/inputs files, then this tenant's uploads as upload:<id>; keeps what was picked, and picks \`picked\`. */
+  function loadInputs(picked) {
+    var spec = byId('gen-spec');
+    var csv = byId('gen-csv');
+    var keepSpec = spec.value;
+    var keep = Array.prototype.map.call(csv.selectedOptions, function (o) { return o.value; }).concat(picked || []);
+    inputsLoaded = Promise.all([getJson('/api/inputs'), getJson('/api/uploads')]).then(function (pair) {
+      var uploads = pair[1].uploads || [];
+      function options(files, kind) {
+        return files.map(function (f) { return { value: f, label: f }; }).concat(uploads
+          .filter(function (u) { return u.kind === kind; })
+          .map(function (u) { return { value: UPLOAD + u.id, label: 'uploaded: ' + u.name }; }));
+      }
+      fill(spec, options(pair[0].openapi || [], 'openapi'));
+      fill(csv, options(pair[0].csv || [], 'csv'));
+      var specPick = (picked || []).concat([keepSpec]).filter(function (v) { return hasOption(spec, v); });
+      if (specPick.length > 0) spec.value = specPick[0];
+      Array.prototype.forEach.call(csv.options, function (o) { o.selected = keep.indexOf(o.value) !== -1; });
+      loadPaths();
+    });
+    return inputsLoaded;
   }
+  /** Uploads each chosen file as \`kind\`, one at a time, says how each went, then lists the uploads with the new ones picked. */
+  function uploadChosen(kind, input, note) {
+    var files = Array.prototype.slice.call(input.files || []);
+    if (files.length === 0) { note.textContent = 'choose a file first'; return; }
+    note.textContent = 'uploading ' + files.length + ' file(s)…';
+    var said = [];
+    var picked = [];
+    files.reduce(function (chain, f) {
+      return chain.then(function () { return f.text(); }).then(function (content) {
+        return post('/api/uploads', { kind: kind, name: f.name, content: content });
+      }).then(function (r) {
+        if (r.error !== undefined) { said.push(f.name + ': ' + r.error.code + ': ' + r.error.message); return; }
+        picked.push(UPLOAD + r.upload.id);
+        said.push('uploaded ' + r.upload.name + ' (' + r.upload.bytes + ' bytes)');
+      });
+    }, Promise.resolve()).then(function () {
+      note.textContent = said.join('; ');
+      input.value = '';
+      return loadInputs(picked);
+    }, function (e) { note.textContent = 'upload failed: ' + e; });
+  }
+  byId('gen-spec-upload').addEventListener('click', function () { uploadChosen('openapi', byId('gen-spec-file'), byId('gen-spec-note')); });
+  byId('gen-csv-upload').addEventListener('click', function () { uploadChosen('csv', byId('gen-csv-file'), byId('gen-csv-note')); });
   function loadPaths() {
     var only = byId('gen-only');
     var legend = only.querySelector('legend');
@@ -419,7 +672,10 @@ a { margin-right: 0.5rem; }
     only.appendChild(legend);
     var spec = byId('gen-spec').value;
     if (spec === '') return;
-    getJson('/api/inputs/' + encodeURIComponent(spec) + '/paths').then(function (body) {
+    var source = spec.indexOf(UPLOAD) === 0
+      ? '/api/uploads/' + encodeURIComponent(spec.slice(UPLOAD.length)) + '/paths'
+      : '/api/inputs/' + encodeURIComponent(spec) + '/paths';
+    getJson(source).then(function (body) {
       if (body.error !== undefined) { only.appendChild(el('p', body.error.code + ': ' + body.error.message)); return; }
       body.paths.forEach(function (p) {
         var label = document.createElement('label');
@@ -427,6 +683,7 @@ a { margin-right: 0.5rem; }
         box.type = 'checkbox';
         box.value = p;
         box.name = 'gen-only-path';
+        box.setAttribute('aria-label', 'only ' + p);
         label.appendChild(box);
         label.appendChild(document.createTextNode(' ' + p));
         only.appendChild(label);
@@ -438,13 +695,7 @@ a { margin-right: 0.5rem; }
     byId('gen-desc-row').hidden = kind !== 'description';
     byId('gen-openapi-row').hidden = kind !== 'openapi';
     byId('gen-csv-row').hidden = kind !== 'csv';
-    if (kind !== 'description' && inputsLoaded === null) {
-      inputsLoaded = getJson('/api/inputs').then(function (body) {
-        fillSelect(byId('gen-spec'), body.openapi || []);
-        fillSelect(byId('gen-csv'), body.csv || []);
-        loadPaths();
-      });
-    }
+    if (kind !== 'description' && inputsLoaded === null) loadInputs([]);
   }
   byId('gen-kind').addEventListener('change', showKind);
   byId('gen-spec').addEventListener('change', loadPaths);
@@ -454,10 +705,17 @@ a { margin-right: 0.5rem; }
     var body = { kind: kind, outSlug: byId('gen-slug').value.trim() };
     if (kind === 'description') body.text = byId('gen-text').value;
     if (kind === 'openapi') {
-      body.spec = byId('gen-spec').value;
+      var spec = byId('gen-spec').value;
+      if (spec.indexOf(UPLOAD) === 0) body.upload = spec.slice(UPLOAD.length);
+      else body.spec = spec;
       body.only = Array.prototype.map.call(document.querySelectorAll('input[name="gen-only-path"]:checked'), function (b) { return b.value; });
     }
-    if (kind === 'csv') body.files = Array.prototype.map.call(byId('gen-csv').selectedOptions, function (o) { return o.value; });
+    if (kind === 'csv') {
+      var picked = Array.prototype.map.call(byId('gen-csv').selectedOptions, function (o) { return o.value; });
+      body.files = picked.filter(function (v) { return v.indexOf(UPLOAD) !== 0; });
+      var uploaded = picked.filter(function (v) { return v.indexOf(UPLOAD) === 0; }).map(function (v) { return v.slice(UPLOAD.length); });
+      if (uploaded.length > 0) body.uploads = uploaded;
+    }
     var budget = byId('gen-budget').value;
     var minutes = byId('gen-minutes').value;
     if (budget !== '') body.budgetUsd = Number(budget);
@@ -470,6 +728,7 @@ a { margin-right: 0.5rem; }
     }, function (e) { runState('unreachable: ' + e); });
   });
   function refreshRuns() {
+    runsMeta.textContent = 'loading…';
     return getJson('/api/runs').then(function (body) {
       var past = body.runs || [];
       runsMeta.textContent = past.length + ' run(s)';
@@ -497,6 +756,7 @@ a { margin-right: 0.5rem; }
     }, function (e) { evalSummary.hidden = false; evalSummary.textContent = 'unreachable: ' + e; });
   }
   function refreshEval() {
+    evalMeta.textContent = 'loading…';
     return getJson('/api/eval').then(function (body) {
       var runs = body.runs || [];
       evalMeta.textContent = runs.length + ' eval run(s)';
@@ -522,6 +782,7 @@ a { margin-right: 0.5rem; }
   var spendMeta = byId('spend-meta');
 
   function refreshSpend() {
+    spendMeta.textContent = 'loading…';
     return getJson('/api/costs').then(function (body) {
       clear(spendBody);
       var m = body.meters || {};
@@ -562,6 +823,7 @@ a { margin-right: 0.5rem; }
   var episodesTable = byId('episodes-table');
   var episodesMeta = byId('episodes-meta');
   var episodeView = byId('episode-view');
+  var PLAY_META = playMeta.textContent;
   var playTasks = [];
   var watching = null;
   function fill(select, values) {
@@ -574,11 +836,13 @@ a { margin-right: 0.5rem; }
   }
   function loadTasks() {
     if (!playWorld.value) return Promise.resolve();
+    playMeta.textContent = 'loading…';
     return getJson('/api/worlds/' + encodeURIComponent(playWorld.value) + '/tasks').then(function (body) {
       playTasks = body.tasks || [];
       fill(playTask, playTasks.map(function (t) { return { value: t.id, label: t.id }; }));
       showInstruction();
       clear(proofTable);
+      playMeta.textContent = PLAY_META;
     }, function (e) { playMeta.textContent = 'unreachable: ' + e; });
   }
   function loadPlayWorlds() {
@@ -587,7 +851,7 @@ a { margin-right: 0.5rem; }
       return loadTasks();
     }, function (e) { playMeta.textContent = 'unreachable: ' + e; });
   }
-  playWorld.addEventListener('change', loadTasks);
+  playWorld.addEventListener('change', function () { if (playWorld.value !== '') setHash(playWorld.value, 'play'); loadTasks(); });
   playTask.addEventListener('change', showInstruction);
   byId('play-proof').addEventListener('click', function () {
     clear(proofTable);
@@ -651,7 +915,9 @@ a { margin-right: 0.5rem; }
   }
   var analyticsTable = byId('analytics-table');
   var analyticsMeta = byId('analytics-meta');
+  var ANALYTICS_META = analyticsMeta.textContent;
   function refreshAnalytics() {
+    analyticsMeta.textContent = 'loading…';
     return getJson('/api/episodes/analytics').then(function (body) {
       clear(analyticsTable);
       var rows = (body.groups || []).map(function (g) {
@@ -666,10 +932,12 @@ a { margin-right: 0.5rem; }
       });
       if (rows.length > 0) analyticsTable.appendChild(grid(['world', 'task', 'model', 'runs', 'successes', 'success rate', 'cost usd', 'cost per success', 'mean turns', 'failure causes', 'provenance'], rows));
       if ((body.unreadable || []).length > 0) analyticsTable.appendChild(el('p', 'unreadable episode lines: ' + body.unreadable.join(', ')));
+      analyticsMeta.textContent = ANALYTICS_META;
     }, function (e) { analyticsMeta.textContent = 'unreachable: ' + e; });
   }
   function refreshEpisodes() {
     refreshAnalytics();
+    episodesMeta.textContent = 'loading…';
     return getJson('/api/episodes').then(function (body) {
       clear(episodesTable);
       var list = body.episodes || [];
@@ -734,7 +1002,8 @@ a { margin-right: 0.5rem; }
   function explore() {
     var name = explorerWorld.value;
     if (name === '') return;
-    explorerMeta.textContent = 'checking ' + name;
+    explorerMeta.textContent = 'loading…';
+    setHash(name, 'explorer');
     getJson('/api/worlds/' + encodeURIComponent(name) + '/explorer').then(function (x) {
       clear(explorerBody);
       if (x.error !== undefined) { explorerMeta.textContent = x.error.code + ': ' + x.error.message; return; }
@@ -743,6 +1012,21 @@ a { margin-right: 0.5rem; }
       explorerBody.appendChild(el('h3', 'entities (' + x.entities.length + ')'));
       explorerBody.appendChild(grid(['entity', 'id prefix', 'fields', 'refers to', 'referenced by'], x.entities.map(function (e) {
         return { entity: e.name, 'id prefix': e.idPrefix, fields: e.fields.map(fieldText).join(', '), 'refers to': e.refersTo.join(', ') || 'none', 'referenced by': e.referencedBy.join(', ') || 'none' };
+      })));
+      if (x.machines.length > 0) {
+        explorerBody.appendChild(el('h3', 'workflows (' + x.machines.length + ')'));
+        explorerBody.appendChild(grid(['field', 'states', 'starts', 'moves'], x.machines.map(function (m) {
+          var moves = Object.keys(m.transitions).map(function (s) { return s + ' -> ' + (m.transitions[s].length > 0 ? m.transitions[s].join(' | ') : 'final'); });
+          return { field: m.entity + '.' + m.field, states: m.states.join(', '), starts: m.initial, moves: moves.join('; ') };
+        })));
+      }
+      explorerBody.appendChild(el('h3', 'seed'));
+      explorerBody.appendChild(grid(['entity', 'rows', 'by state'], Object.keys(x.seed.rows).map(function (n) {
+        var by = Object.keys(x.seed.states).filter(function (k) { return k.indexOf(n + '.') === 0; }).map(function (k) {
+          var c = x.seed.states[k];
+          return k + ': ' + Object.keys(c).map(function (st) { return st + ' ' + c[st]; }).join(', ');
+        });
+        return { entity: n, rows: x.seed.rows[n], 'by state': by.join('; ') };
       })));
       explorerBody.appendChild(el('h3', 'routes and actions (' + x.routes.length + ')'));
       explorerBody.appendChild(grid(['method', 'path', 'kind', 'about', 'console'], x.routes.map(function (r) {
@@ -791,16 +1075,72 @@ a { margin-right: 0.5rem; }
       });
     }).catch(function (e) { consoleMeta.textContent = 'unreachable: ' + e; });
   }
+  /** Resets the served world to its seed once its name is typed (A-357). */
+  function resetWorld() {
+    var name = explorerWorld.value;
+    var confirmBox = byId('reset-confirm');
+    clear(consoleResult);
+    getJson('/api/services').then(function (body) {
+      var svc = serviceFor(name, body.services || []);
+      if (svc === null) { consoleMeta.textContent = name + ' is not running: serve it in Worlds, then reset'; return null; }
+      return post('/api/services/' + encodeURIComponent(svc.id) + '/reset', { confirm: confirmBox.value }).then(function (r) {
+        if (r.error !== undefined) { consoleResult.appendChild(el('p', r.error.code + ': ' + r.error.message)); return; }
+        confirmBox.value = '';
+        consoleResult.appendChild(el('p', r.world + ' reset to its seed at ' + r.now + ', state ' + r.hash));
+      });
+    }).catch(function (e) { consoleMeta.textContent = 'unreachable: ' + e; });
+  }
   byId('explorer-load').addEventListener('click', explore);
   byId('console-form').addEventListener('submit', function (ev) { ev.preventDefault(); send(false); });
+  byId('console-openapi').addEventListener('click', function () {
+    consoleMethod.value = 'GET';
+    consolePath.value = '/openapi.json';
+    consoleBody.value = '';
+    send(false);
+  });
+  byId('reset-send').addEventListener('click', resetWorld);
 
-  refreshWorlds();
-  fillExplorerWorlds();
+  // ---- Resume: once sign-in and the worlds lists have resolved, the hash restores its view ----------
+  function hasOption(select, name) {
+    for (var i = 0; i < select.options.length; i++) if (select.options[i].value === name) return true;
+    return false;
+  }
+  function restoreFromHash() {
+    var params = new URLSearchParams(location.hash.slice(1));
+    var name = params.get('world');
+    var view = params.get('view');
+    if (name === null || name === '' || !hasOption(explorerWorld, name)) return;
+    if (view === 'explorer') {
+      explorerWorld.value = name;
+      byId('sec-explorer').scrollIntoView();
+      explore();
+    } else if (view === 'report') {
+      openReport(name);
+      byId('sec-worlds').scrollIntoView();
+    } else if (view === 'plan') {
+      openPlan(name);
+      byId('sec-worlds').scrollIntoView();
+    } else if (view === 'play' && hasOption(playWorld, name)) {
+      playWorld.value = name;
+      loadTasks();
+      byId('sec-playground').scrollIntoView();
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('nav a'), function (a) {
+    a.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      byId(a.getAttribute('href').slice(1)).scrollIntoView();
+    });
+  });
+  var worldsReady = Promise.all([refreshWorlds(), fillExplorerWorlds(), loadPlayWorlds()]);
   refreshRuns();
   refreshEval();
-  loadPlayWorlds();
   refreshEpisodes();
-  refreshSpend();
+  Promise.all([signedIn, worldsReady]).then(function (done) {
+    if (!done[0]) return;
+    restoreFromHash();
+    window.addEventListener('hashchange', restoreFromHash);
+  });
 }());
 </script>
 </body>

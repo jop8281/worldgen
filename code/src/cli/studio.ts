@@ -3,7 +3,8 @@
  * only; the page is studio/page.ts and the routes are studio/server.ts. The children
  * (`worldplay serve`, `worldgen`, `costs`) are spawned by the server through the injected
  * spawners from sandboxes/backend.ts; this file never imports llm.ts and makes no model call.
- * Exit codes: 0 never (the listening server keeps the process alive), 1 failure, 2 bad usage.
+ * Exit codes: 0 after SIGTERM and 130 after SIGINT, once every child is gone; 143 or 130 when a second signal cuts
+ * that wait; 1 failure; 2 bad usage.
  *
  *   bun run studio [--port 8787] [--host 127.0.0.1] [--transport claude-cli|sdk] [--users <file>] [--origin <url>] [--worlds-dir <dir>] [--repo-root <dir>]
  */
@@ -12,12 +13,15 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { nodeRunner, nodeSpawn } from '../sandboxes/backend.ts';
 import { DEFAULT_TENANT } from '../studio/runstore.ts';
-import { originOf, parseUsersFile, studioServer, type StudioUser } from '../studio/server.ts';
+import { reconcileJobs } from '../studio/reconcile.ts';
+import { osProcesses } from '../studio/runstore.ts';
+import { originOf, parseUsersFile, stopOnSignals, studioServer, type StudioUser } from '../studio/server.ts';
 
 const DEFAULT_PORT = 8787;
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 
 const USAGE = `usage: bun run studio [--port ${DEFAULT_PORT}] [--host 127.0.0.1] [--transport claude-cli|sdk] [--users <file>] [--origin <url>] [--worlds-dir <dir>] [--repo-root <dir>]
+       bun run studio -- reconcile-jobs [--worlds-dir <dir>] [--repo-root <dir>] [--tenant <tenant>] [--apply]
 
 The operator web app on one port (default ${DEFAULT_PORT}, bound to 127.0.0.1): the worlds
 table, world rollout (a child worldplay serve per Serve click), generation runs (a child
@@ -27,7 +31,9 @@ episode children get the environment whole, so the operator's own env carries ev
 world's snippets (serve, the Explorer check, the proof) gets only TZ, PATH and the guard scale.
 --repo-root defaults to the repository this file lives in; --worlds-dir defaults to
 <repo-root>/prod/worlds. A served world keeps its own two ports; the studio port has no
-/_world route. Ctrl-C stops the studio; the studio SIGTERMs its tracked children.
+/_world route. SIGTERM or Ctrl-C stops the studio: it stops every served world and running check,
+waits until each is gone, then exits 0 (SIGTERM) or 130 (SIGINT); a second signal exits at once.
+Generation runs and episodes get SIGTERM, their own clean stop, and bill their call on their own.
 --host binds another interface. The studio starts worldgen runs, so it refuses to bind a
 non-loopback host unless sign-in is on: --users <file>, or WORLDGEN_STUDIO_TOKEN (one admin,
 named admin in tenant default, whose token is that value). Give only one of the two.
@@ -47,6 +53,11 @@ http://127.0.0.1:9000 for a published container port. Otherwise it answers only 
 address and the loopback names (127.0.0.1, localhost), and refuses any other Host or POST Origin.
 GET /api/health answers readiness with WORLDGEN_BUILD_SHA, the runtime, the world count and traffic (answers and
 5xx answers since start and in the last 300 s); bun run studio-watch turns it into alerts.
+reconcile-jobs lists unfinished generation runs and episodes in the registry whose lease ran out and whose process
+is gone, without starting a studio (a dry run by default). --apply stops each as a studio would on start, with an intent
+and an outcome receipt in .studio-reconcile.jsonl beside the registry; a job with a live lease or process is never touched.
+Exit codes: 0 nothing stale (or every stop held), 3 a dry run found stale jobs, 1 a stop failed or a studio's write
+undid it, 2 bad usage.
 `;
 
 class UsageError extends Error {}
@@ -100,7 +111,46 @@ function parse(argv: readonly string[]): Args | 'help' {
   return { port, host, transport, users, origin, repoRoot: repoRoot ?? path.resolve(CODE_DIR, '..'), worldsDir };
 }
 
+type ReconcileArgs = { readonly worldsDir: string; readonly tenant: string | undefined; readonly apply: boolean };
+
+function parseReconcile(argv: readonly string[]): ReconcileArgs {
+  let repoRoot = path.resolve(CODE_DIR, '..');
+  let worldsDir: string | undefined;
+  let tenant: string | undefined;
+  let apply = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i]!;
+    const value = (): string => {
+      const v = argv[++i];
+      if (v === undefined || v.trim() === '' || v.startsWith('--')) throw new UsageError(`${a} needs a value`);
+      return v;
+    };
+    if (a === '--apply' && !apply) apply = true;
+    else if (a === '--tenant' && tenant === undefined) tenant = value();
+    else if (a === '--repo-root') repoRoot = path.resolve(value());
+    else if (a === '--worlds-dir') worldsDir = path.resolve(value());
+    else throw new UsageError(`reconcile-jobs: unknown or repeated argument ${a}`);
+  }
+  return { worldsDir: worldsDir ?? path.join(repoRoot, 'prod', 'worlds'), tenant, apply };
+}
+
+async function reconcile(argv: readonly string[]): Promise<number> {
+  let args: ReconcileArgs;
+  try {
+    args = parseReconcile(argv);
+  } catch (e) {
+    if (!(e instanceof UsageError)) throw e;
+    process.stderr.write(`${e.message}\n${USAGE}`);
+    return 2;
+  }
+  const result = await reconcileJobs({ ...args, now: Date.now, processes: osProcesses });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (result.dryRun) return result.rows.some((r) => r.action === 'stop') ? 3 : 0;
+  return result.receipts.some((r) => r.action === 'stop_failed' || r.why === 'overwritten') ? 1 : 0;
+}
+
 async function main(argv: readonly string[]): Promise<number> {
+  if (argv[0] === 'reconcile-jobs' && !argv.some((a) => a === '--help' || a === '-h')) return reconcile(argv.slice(1));
   let args: Args | 'help';
   try {
     args = parse(argv);
@@ -127,6 +177,7 @@ async function main(argv: readonly string[]): Promise<number> {
       runner: nodeRunner,
     });
     process.stdout.write(`studio on ${server.url} (worlds under ${args.worldsDir ?? path.join(args.repoRoot, 'prod', 'worlds')})\n`);
+    stopOnSignals(server, process);
   } catch (e) {
     process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
@@ -134,5 +185,6 @@ async function main(argv: readonly string[]): Promise<number> {
   return 0;
 }
 
-// The listening server holds the process open, so the exit code is only reached on a failure.
+// The listening server holds the process open, so this exit code is only reached on a failure; a stop signal exits
+// through stopOnSignals.
 process.exitCode = await main(process.argv.slice(2));

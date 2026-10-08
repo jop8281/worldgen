@@ -247,7 +247,8 @@ describe('scanner self-check', () => {
   });
 });
 
-const worldDirs = readdirSync(WORLDS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+/** A dot dir, such as the studio's .uploads (YOS-188), is never a world. */
+const worldDirs = readdirSync(WORLDS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name).sort();
 
 it('covers at least the hand-built world', () => {
   assert.equal(worldDirs.includes('helpdesk'), true);
