@@ -54,6 +54,20 @@ Jobs (1):
 - Acceptance tests create their own customers with emails ending @acceptance.example and orders through the API, and never read seed rows. The job test lists only workflow actions in its actions field; the job is exercised through ctx.advance.
   - Why: The workflow stage runs tests before any seed exists, and the actions field accepts only workflow action keys.
 
+## Fields not in the input
+
+9 fields match no column or property name in the input. WorldGen invented each one, or renamed an input field.
+
+- `customer.name`
+- `customer.email`
+- `customer.vip`
+- `order.delivered_at`
+- `order.cancelled_at`
+- `order.refunded_at`
+- `order.tracking_number`
+- `order_event.order_id`
+- `order_event.kind`
+
 ## Questions asked of the input
 
 - Should the orders table be the seed source exactly, including its statuses and ids?
@@ -84,14 +98,16 @@ Jobs (1):
 
 The engine check passed: 7 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_f773d2c649bf6ff1acfa9f272edfcf2e07b21ff4bd24d103aeea46736af10368`.
+World id (WID): `wid_1c5930a8dd46e0e53a803a779af16cf46e776569a7a940a4a1401ca7218e231f`.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix | TID |
-|---|---|---|---|---|---|---|
-| pay_oldest_pending_for_customer | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | `tid_fc9f12b2ae1cd8a7d75a71e2f662bb4dd3a54fb959ed3cea78ef11c27545026c` |
-| refund_delivered_big_orders_for_customer | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | `tid_07a2ce76ee276e94c5be2160e66addc5c3289130f1cd8adf9aee9d9ab4fe5410` |
-| cancel_stale_pending_with_gift_note | medium | 1.000 | 0.000 | 0.000, 0.000, 0.500 | 0.500 | `tid_2e617478804bc3ac338cc35d69e9ab145b47c0115ac5de05a1d54a71dc502286` |
-| ship_all_paid_large_orders | hard | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.333, 0.000, 0.000 | 0.667 | `tid_c055f26624ef92d58e643e93c470eb3caa64320d24eab3b69eca4a9709c2f70d` |
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| pay_oldest_pending_for_customer | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 5/7 | `tid_5c6cd939b00e68ce032b8be0ae757ba0ee308f38f3dd7710b6fcc2cc759cb57a` |
+| refund_delivered_big_orders_for_customer | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 4/7 | `tid_5f83e34e1d29f5f1c8f386cda7351e747d97cf4a57b8ecc2bb5e1f386345f3fb` |
+| cancel_stale_pending_with_gift_note | medium | 1.000 | 0.000 | 0.000, 0.000, 0.500 | 0.500 | legacy; mutants 4/7 | `tid_08ece26a13851fde5522cd1031ea02ccd42b55f1ce7354d24f50cca51293a4e7` |
+| ship_all_paid_large_orders | hard | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.333, 0.000, 0.000 | 0.667 | legacy; mutants 5/7 | `tid_f07c12341fd5bba6e5d752e317fa3d0dd2fab48eed28ca093eccc265ba847779` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -110,6 +126,17 @@ Decoys:
 - `ship_all_paid_large_orders` 0.333: off-by-one on the item count, using more than 4 items instead of at least 4, so it misses matching orders
 - `ship_all_paid_large_orders` 0.000: ships the right orders without a tracking number
 - `ship_all_paid_large_orders` 0.000: ships the right orders and then also marks them delivered
+
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| pay_oldest_pending_for_customer | easy | 2 | none | order | none declared |
+| refund_delivered_big_orders_for_customer | medium | 2 | none | order | none declared |
+| cancel_stale_pending_with_gift_note | medium | 4 | none | order | none declared |
+| ship_all_paid_large_orders | hard | 6 | none | order | hard: met |
 
 ## Run
 

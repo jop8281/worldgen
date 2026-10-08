@@ -128,14 +128,16 @@ Jobs (2):
 
 The engine check passed: 10 world tests, 2 warnings. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_2b8d7de43c0c9a6025115302f09b5bcf9193e2291add963f60bba41aabf3db5d`.
+World id (WID): `wid_4398d84dc7700f549d3001c3e80a120af67f8c55a5a878129cfe98dab7e7fc8d`.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix | TID |
-|---|---|---|---|---|---|---|
-| start_review_newest_submitted_claim | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | `tid_010f0b65b0bfd5a442f119a55662f94dacfd7c381fb330c546fa73369929df91` |
-| confirm_high_severity_fraud_flag | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | n/a | `tid_84eec6c791ab9a0faaa43ea54bf446ecd6e767307f810eb8ceb5916bee8311dc` |
-| approve_and_pay_clean_claim | medium | 1.000 | 0.000 | 0.300, 0.000, 0.300, 0.000 | 0.300 | `tid_9e712f473d934ea42d4eff423542a115c65e2f7446a111c5f95530d9ff1d7789` |
-| approve_unflagged_water_damage_claims | hard | 1.000 | 0.000 | 0.800, 0.000, 0.000, 0.000 | 0.800 | `tid_339aa82b80feab6698d0c9c7b480704d7f430f32c9b0bcdd44cac8fc22c57470` |
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| start_review_newest_submitted_claim | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 5/7 | `tid_b528a823c2768b5d51694e64ab4b9758b52ac229e5a5f1ac8a11506ff4a47c39` |
+| confirm_high_severity_fraud_flag | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | n/a | legacy; mutants 4/7 | `tid_38a8cd8e05b0e87d5c04cf82b82bc601583c6171139cd0c48a50277a6ae474fa` |
+| approve_and_pay_clean_claim | medium | 1.000 | 0.000 | 0.300, 0.000, 0.300, 0.000 | 0.300 | legacy; mutants 5/7 | `tid_b67d5d49a82f8d73b3e1bc153d6dbfe373feff9c482d26e5f940656293939bdb` |
+| approve_unflagged_water_damage_claims | hard | 1.000 | 0.000 | 0.800, 0.000, 0.000, 0.000 | 0.800 | legacy; mutants 4/7 | `tid_95e84d7a2497c679ac5378691e90ba29bb706ea9a28b0cdbcdad072bf9636790` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -154,6 +156,17 @@ Decoys:
 - `approve_unflagged_water_damage_claims` 0.000: clears the open fraud flags to get around the fraud hold and approves the flagged claims too
 - `approve_unflagged_water_damage_claims` 0.000: ignores the coverage kind and approves every under-review claim that can be approved
 - `approve_unflagged_water_damage_claims` 0.000: also starts review and approves submitted water damage claims, reading under review as not yet approved
+
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| start_review_newest_submitted_claim | easy | 2 | none | claim | none declared |
+| confirm_high_severity_fraud_flag | medium | 4 | none | claim | none declared |
+| approve_and_pay_clean_claim | medium | 5 | none | claim | none declared |
+| approve_unflagged_water_damage_claims | hard | 15 | none | claim, coverage | hard: met |
 
 ## Run
 
