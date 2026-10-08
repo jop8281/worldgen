@@ -1295,6 +1295,7 @@ describe('studio page error states, narrow tables and focus (YOS-209)', () => {
   const MAP = `  var PROBLEM = {
     signedOut: 'You are signed out. Sign in again with your studio token.',
     forbidden: "Your role can't see this. Ask an admin for access.",
+    forbiddenAction: "Your role can't do this. Ask an admin for access.",
     sensitive: 'Hidden because this world has sensitive fields. Ask an admin to open it.',
     notFound: 'Not found. It may have been removed; refresh the list and try again.',
     server: 'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
@@ -1307,16 +1308,17 @@ describe('studio page error states, narrow tables and focus (YOS-209)', () => {
     assert.equal(script.includes(MAP), true);
   });
 
-  it('maps each failure to its line: signed out, role, sensitive world, not found, studio failure, no answer, and an explained refusal', () => {
+  it('maps each failure to its line: signed out, role for a read or an action, sensitive world, not found, studio failure, no answer, and an explained refusal', () => {
     const fn = /\n  function problemText[\s\S]*?\n  \}\n/.exec(script)![0];
-    const problemText = new Function(`${MAP}\n${fn}\nreturn problemText;`)() as (status: number, code: string, message: string) => string;
+    const problemText = new Function(`${MAP}\n${fn}\nreturn problemText;`)() as (status: number, code: string, message: string, kind?: 'read' | 'action') => string;
     assert.deepEqual([
       problemText(401, 'auth.required', 'GET /api/worlds needs sign-in'),
       problemText(401, 'auth.invalid', 'that token is not a studio user'),
-      problemText(403, 'auth.forbidden', 'POST /api/worlds/:name/serve needs operator'),
-      problemText(403, 'report.sensitive', 'helpdesk has sensitive fields, so only an admin may read its report'),
-      problemText(403, 'plan.sensitive', 'x'),
-      problemText(403, 'export.sensitive', 'x'),
+      problemText(403, 'auth.forbidden', 'GET /api/costs needs admin', 'read'),
+      problemText(403, 'auth.forbidden', 'POST /api/worlds/:name/serve needs operator', 'action'),
+      problemText(403, 'report.sensitive', 'helpdesk has sensitive fields, so only an admin may read its report', 'read'),
+      problemText(403, 'plan.sensitive', 'x', 'read'),
+      problemText(403, 'export.sensitive', 'x', 'action'),
       problemText(404, 'world.unknown', 'no world gone'),
       problemText(500, 'http.500', ''),
       problemText(503, 'job.unrecorded', 'The studio could not write .studio-runs.json, so it did not start the job'),
@@ -1328,6 +1330,7 @@ describe('studio page error states, narrow tables and focus (YOS-209)', () => {
       'You are signed out. Sign in again with your studio token.',
       'You are signed out. Sign in again with your studio token.',
       "Your role can't see this. Ask an admin for access.",
+      "Your role can't do this. Ask an admin for access.",
       'Hidden because this world has sensitive fields. Ask an admin to open it.',
       'Hidden because this world has sensitive fields. Ask an admin to open it.',
       'Hidden because this world has sensitive fields. Ask an admin to open it.',
@@ -1350,7 +1353,17 @@ describe('studio page error states, narrow tables and focus (YOS-209)', () => {
     assert.deepEqual([
       script.includes("error.code + ': '"), script.includes("'unreachable: '"), script.includes('HTTP \' + status'),
       (script.match(/\.then\(answered\)/g) ?? []).length, (script.match(/\.then\(answered, unanswered\)/g) ?? []).length,
-    ], [false, false, false, 0, 3]);
+    ], [false, false, false, 0, 0]);
+  });
+
+  it('lets each call site say whether it reads or acts, so a refused action says do and a refused read says see', () => {
+    assert.deepEqual([
+      (script.match(/\.then\(answered\('read'\), unanswered\)/g) ?? []).length,
+      (script.match(/\.then\(answered\('action'\), unanswered\)/g) ?? []).length,
+      (script.match(/answered\('read'\)\(r\)/g) ?? []).length,
+      script.includes("function getJson(path) { return fetch(path, { headers: authHeaders({}) }).then(answered('read'), unanswered); }"),
+      script.includes(".then(answered('action'), unanswered);\n  }"),
+    ], [1, 2, 1, true, true]);
   });
 
   it('scrolls every table inside its own container and rings the focused control', () => {

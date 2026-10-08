@@ -14,16 +14,16 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { World } from '#engine';
 import { assertNever } from '#lib/never';
-import { TRANSPORTS, loadConfig, transportOf, type Config } from '../worldgen/config.ts';
+import { loadConfig, transportOf, type Config } from '../worldgen/config.ts';
 import { createEmitter, describeStop } from '../worldgen/events.ts';
 import { parseFidelityReference } from '../worldgen/fidelity.ts';
 import { genDirName, parseInputArgs, type Input } from '../worldgen/input.ts';
 import type { Model } from '../worldgen/llm.ts';
 import { partialDir, runWorldGen, type Job, type RunResult } from '../worldgen/run.ts';
 import { loadExampleWorld, makeModel, mtimeOf, writeReport } from './models.ts';
+import { CONFIG_FILE, MODEL_OPTIONS, UsageError, modelOverrides, optionValue } from './options.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
-const CONFIG_FILE = path.join(CODE_DIR, 'worldgen.config.json');
 const WORLDS_DIR = path.resolve(CODE_DIR, '../prod/worlds');
 
 const USAGE = `usage:
@@ -54,7 +54,7 @@ exit codes: 0 done, 1 stopped (the reason is printed on one line), 2 bad usage, 
 `;
 
 /** Options this CLI owns, each with one value. Everything else goes to parseInputArgs. */
-const VALUE_OPTIONS = ['--out', '--world', '--model', '--transport', '--budget-usd', '--max-minutes'] as const;
+const VALUE_OPTIONS = ['--out', '--world', ...MODEL_OPTIONS] as const;
 type ValueOption = (typeof VALUE_OPTIONS)[number];
 const INPUT_FLAGS: ReadonlySet<string> = new Set(['--openapi', '--only', '--csv', '--fidelity']);
 
@@ -62,23 +62,9 @@ type Args =
   | { readonly mode: 'create'; readonly input: Input; readonly outDir: string; readonly overrides: Partial<Config> }
   | { readonly mode: 'iterate'; readonly worldDir: string; readonly request: string; readonly overrides: Partial<Config> };
 
-class UsageError extends Error {}
-
 const out = (line: string): void => void process.stdout.write(`${line}\n`);
 const err = (line: string): void => void process.stderr.write(`${line}\n`);
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
-function positive(flag: string, v: string): number {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) throw new UsageError(`${flag} needs a positive number, got ${v}`);
-  return n;
-}
-
-function oneOf<T extends string>(flag: string, v: string, allowed: readonly T[]): T {
-  const hit = allowed.find((a) => a === v);
-  if (hit === undefined) throw new UsageError(`${flag} must be one of ${allowed.join(', ')}, got ${v}`);
-  return hit;
-}
 
 function parseArgs(all: readonly string[]): Args | 'help' {
   // `--` ends the options: what follows is the description or the change request, even a word that starts with -.
@@ -92,8 +78,7 @@ function parseArgs(all: readonly string[]): Args | 'help' {
     const a = argv[i]!;
     const option = VALUE_OPTIONS.find((o) => o === a);
     if (option !== undefined) {
-      const v = argv[++i];
-      if (v === undefined || v.trim() === '' || v.startsWith('--')) throw new UsageError(`${option} needs a value`);
+      const v = optionValue(option, argv[++i]);
       if (opts.has(option)) throw new UsageError(`${option} is given twice`);
       opts.set(option, v);
     } else if (a.startsWith('-') && !INPUT_FLAGS.has(a)) {
@@ -103,15 +88,7 @@ function parseArgs(all: readonly string[]): Args | 'help' {
     }
   }
 
-  const overrides: Partial<Config> = {};
-  const model = opts.get('--model');
-  if (model !== undefined) overrides.model = model;
-  const transport = opts.get('--transport');
-  if (transport !== undefined) overrides.transport = oneOf('--transport', transport, TRANSPORTS);
-  const budget = opts.get('--budget-usd');
-  if (budget !== undefined) overrides.maxCostUsd = positive('--budget-usd', budget);
-  const minutes = opts.get('--max-minutes');
-  if (minutes !== undefined) overrides.maxMinutes = positive('--max-minutes', minutes);
+  const overrides = modelOverrides((o) => opts.get(o));
 
   const world = opts.get('--world');
   if (world !== undefined) {
