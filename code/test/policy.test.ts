@@ -74,6 +74,12 @@ const KEY_NOOP = 'task.noop_not_zero@tasks/refund: 1';
 const pu = issue('task.pressure_unmet', ['tasks', 'archive_all'], { task: 'archive_all', need: 'paging: reaches a task row past the first page' }, 'no later page');
 const KEY_PU = 'task.pressure_unmet@tasks/archive_all: no later page';
 const KEY_PU_AND_NOOP = 'task.noop_not_zero@tasks/refund: 1|task.pressure_unmet@tasks/archive_all: no later page';
+// The petstore live run run_20261008T023033Z_a45809f6 (YOS-241): workflow made name required but gave it a default.
+const nameMissing = (found: string) => issue('openapi.required_field_missing', ['input', 'openapi', 'POST /pet', 'request', 'name'], { op: 'POST /pet', field: 'name' }, found);
+const nameOptional = nameMissing('name is optional');
+const nameDefaulted = nameMissing('name has a default, so a request may leave it out');
+const KEY_NAME_OPTIONAL = 'openapi.required_field_missing@input/openapi/POST /pet/request/name: name is optional';
+const KEY_NAME_DEFAULTED = 'openapi.required_field_missing@input/openapi/POST /pet/request/name: name has a default, so a request may leave it out';
 /** The key the loop records for a seed rejection with these issues. */
 const seedKey = (...is: CheckIssue[]): string => attemptIssueSet(rejected(...is), is.map((i) => ({ issue: i, owner: 'seed' as const }))) ?? '';
 const tasksKey = (i: CheckIssue): string => attemptIssueSet(rejected(i), owned([i, 'tasks'])) ?? '';
@@ -169,6 +175,13 @@ const rows: Row[] = [
     want: { kind: 'stop', reason: { kind: 'no_progress', step: 'tasks', repeatedIssueSet: KEY_PU_AND_NOOP, lastIssues: [pu, noop] } } },
   { name: 'a different earlier set does not trigger no_progress', step: 'workflow', ledger: { attempts: { plan: 0, model: 0, workflow: 2, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: ['other', KEY_TF], seed: [], tasks: [] } },
     outcome: rejected(tf), issues: owned([tf, 'workflow']), want: { kind: 'retry' } },
+  { name: 'a spec-required field that went from optional to defaulted is progress: retry (YOS-241)', step: 'workflow',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 2, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_NAME_OPTIONAL, KEY_NAME_DEFAULTED], seed: [], tasks: [] } },
+    outcome: rejected(nameDefaulted), issues: owned([nameDefaulted, 'workflow']), want: { kind: 'retry' } },
+  { name: 'a spec-required field still defaulted on the next attempt stops no_progress (YOS-241)', step: 'workflow',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_NAME_OPTIONAL, KEY_NAME_DEFAULTED, KEY_NAME_DEFAULTED], seed: [], tasks: [] } },
+    outcome: rejected(nameDefaulted), issues: owned([nameDefaulted, 'workflow']),
+    want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_NAME_DEFAULTED, lastIssues: [nameDefaulted] } } },
   { name: 'the same set seen on another step is not a repeat', step: 'workflow', ledger: { attempts: { plan: 0, model: 2, workflow: 1, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [KEY_TF, KEY_TF], workflow: [KEY_TF], seed: [], tasks: [] } },
     outcome: rejected(tf), issues: owned([tf, 'workflow']), want: { kind: 'retry' } },
   { name: 'all blockers owned earlier backtracks', step: 'tasks', ledger: { attempts: { plan: 0, model: 0, workflow: 0, seed: 0, tasks: 1 } },

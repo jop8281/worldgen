@@ -38,8 +38,11 @@ export function underPrefix(path: string, only: readonly string[]): boolean {
   });
 }
 
-/** A field as both sides describe it: its JSON type with null removed, and its enum values as text. */
-type Prop = { readonly name: string; readonly type: string | null; readonly values: readonly string[] | null };
+/**
+ * A field as both sides describe it: its JSON type with null removed, its enum values as text, and whether its schema
+ * gives a default, which lets a request leave it out.
+ */
+type Prop = { readonly name: string; readonly type: string | null; readonly values: readonly string[] | null; readonly defaulted: boolean };
 /** One operation seen from either side. */
 type Shape = {
   readonly statuses: readonly string[];
@@ -62,6 +65,7 @@ function typeOf(t: unknown): string | null {
 const propOf = (s: Obj): Omit<Prop, 'name'> => ({
   type: typeOf(s['type']),
   values: Array.isArray(s['enum']) ? s['enum'].filter((v) => v !== null).map(String) : null,
+  defaulted: 'default' in s,
 });
 
 /** Follows `#/...` refs inside one document. Anything unresolvable is an empty schema. */
@@ -169,6 +173,17 @@ const engineShapes = (key: string, want: string, have: string): boolean =>
  */
 const exemptExtra = (key: string, path: string, alternative: boolean): boolean => (key === 'id' && !path.includes('{')) || alternative;
 
+/**
+ * Why a request may leave out a field the source requires: the body lacks it, or the world's field is optional or has
+ * a default. Each reason reads differently, so a repair that moves from one to the next is progress (YOS-241). A `now`
+ * default puts no default in the schema, so such a field reads as optional.
+ */
+function notRequired(request: ReadonlyMap<string, Prop>, key: string): string {
+  const have = request.get(key);
+  if (have !== undefined) return have.defaulted ? `${have.name} has a default, so a request may leave it out` : `${have.name} is optional`;
+  return request.size === 0 ? 'no request body' : `fields ${[...request.values()].map((p) => p.name).join(', ')}`;
+}
+
 const hasStatus = (world: readonly string[], status: string): boolean =>
   SUCCESS.test(status) ? world.some((w) => SUCCESS.test(w)) : world.includes(status) || world.includes(`${status[0] ?? ''}XX`);
 const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((v) => b.includes(v));
@@ -224,8 +239,7 @@ export function openapiFidelity(world: World, spec: unknown, only: readonly stri
       const sourceKey = fieldKey(field);
       const worldKey = !h.shape.request.has(sourceKey) && w.shape.request.get(sourceKey)?.type === 'object' && h.shape.request.has(`${sourceKey}id`) ? `${sourceKey}id` : sourceKey;
       if (!h.shape.request.has(worldKey) || !worldRequired.has(worldKey)) {
-        out.push(issue('openapi.required_field_missing', ['input', 'openapi', ...at, 'request', field], { op, field },
-          h.shape.request.size === 0 ? 'no request body' : `fields ${[...h.shape.request.values()].map((p) => p.name).join(', ')}`));
+        out.push(issue('openapi.required_field_missing', ['input', 'openapi', ...at, 'request', field], { op, field }, notRequired(h.shape.request, worldKey)));
       }
     }
     const sourceRequired = new Set(w.shape.required.map(fieldKey));
