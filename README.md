@@ -69,13 +69,13 @@ The 7 misses have three root causes, each explained in the summary.
 
 ## Studio screenshots
 
-Taken from the real app on `b2b980f9`, with no model call. [prod/screenshots/README.md](prod/screenshots/README.md) gives the command, viewport, runtime and digest of each one.
+Taken from the real app with no model call: the dashboard and the episode on `2c36e0da`, signed in as an admin, and the other four on `b2b980f9`. [prod/screenshots/README.md](prod/screenshots/README.md) gives the command, viewport, runtime and digest of each one.
 
 | | |
 |---|---|
-| ![The Worlds dashboard](prod/screenshots/01-dashboard.png) The Worlds table lists 25 worlds with kind, tasks, wid, model and cost. | ![An API call on the world port](prod/screenshots/04-console-get.png) A real GET on helpdesk's world port, answered 200. |
+| ![The Worlds dashboard](prod/screenshots/01-dashboard.png) Signed in as `ada (admin)`, the Worlds table lists 25 worlds with kind, tasks, wid, model and cost. | ![An API call on the world port](prod/screenshots/04-console-get.png) A real GET on helpdesk's world port, answered 200. |
 | ![A refused write](prod/screenshots/05-console-illegal-write.png) An illegal status move, refused whole with 422 `state.transition`. | ![A generated world's report](prod/screenshots/07-report.png) `REPORT.md` of gen-library-loans, built from two CSV files. |
-| ![The engine proof](prod/screenshots/10-proof.png) The engine proof scores each reference 1, doing nothing 0, and decoys below 1. | ![A noop agent episode](prod/screenshots/11-noop-episode.png) A free noop agent episode, scored 0 from its end state. |
+| ![The engine proof](prod/screenshots/10-proof.png) The engine proof scores each reference 1, doing nothing 0, and decoys below 1. | ![A noop agent episode](prod/screenshots/11-noop-episode.png) A free noop agent episode, scored 0 from its end state and filed under `noop (no model)`. |
 
 ## More
 
