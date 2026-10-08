@@ -57,12 +57,13 @@ import { appendFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
+import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, recoveryOf, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
 import { trafficCounter } from './watch.ts';
 
@@ -674,24 +675,26 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       void persist();
     });
   };
-  /**
-   * A job whose holder died (no lease, or one past its expiry) is resumed when its process lives and stopped when it
-   * does not. An intent is stopped, never started: its child may have started before the crash. True when it acted.
-   */
+  /** Applies the lease rules (`recoveryOf`, A-335) to a job whose holder may have died. True when it acted. */
   const recover = (job: Job, at: number): boolean => {
-    if (job.phase === 'finished' || holds(job) || (job.lease !== null && Date.parse(job.lease.expiresAt) > at)) return false;
-    const from = job.lease?.holder ?? 'legacy';
+    const decision = recoveryOf(job, at, me, processes);
     const when = new Date(at).toISOString();
-    if (job.phase === 'running' && job.pid !== null && processes.alive(job.pid)) {
-      job.lease = leaseFrom(at);
-      job.recovery = { at: when, from, outcome: 'resumed' };
-      watch(job, adoptedChild(job.pid, processes));
-    } else {
-      job.recovery = { at: when, from, outcome: 'stopped', reason: job.phase === 'intent' ? 'start_unconfirmed' : 'process_gone' };
-      job.phase = 'finished';
-      job.lease = null;
+    switch (decision.kind) {
+      case 'leave':
+        return false;
+      case 'resume':
+        job.lease = leaseFrom(at);
+        job.recovery = { at: when, from: decision.from, outcome: 'resumed' };
+        watch(job, adoptedChild(decision.pid, processes));
+        return true;
+      case 'stop':
+        job.recovery = { at: when, from: decision.from, outcome: 'stopped', reason: decision.reason };
+        job.phase = 'finished';
+        job.lease = null;
+        return true;
+      default:
+        return assertNever(decision);
     }
-    return true;
   };
   /**
    * The lease tick. Each unfinished job this studio holds gets a fresh lease, unless the file names another holder: a
