@@ -188,14 +188,40 @@ describe('reconcile-jobs', () => {
     assert.equal((await byId(dir)).get('run-dead')?.phase, 'running');
   });
 
-  it('closes an intent whose job finished by another path, or left the registry, as stop_skipped', async () => {
-    const dir = await registry('closed', [job({ runId: 'run-ended', phase: 'finished', lease: null, exitCode: 0, pid: 808 })]);
+  it('records a stop that a closing studio\'s own stop replaced as stop_skipped overwritten, not stopped (A-363)', async () => {
+    const dir = await registry('closed-over', [job({ runId: 'run-dead', pid: 303 })]);
+    const file = path.join(dir, RUN_STORE_FILE);
+    const closedByStudio = { at: '2026-10-08T03:59:59.000Z', from: EXPIRED.holder, outcome: 'stopped', reason: 'studio_closed' } as const;
+    const closedCopy = JSON.stringify((JSON.parse(readFileSync(file, 'utf8')) as StoredRun[]).map((r) => ({ ...r, phase: 'finished', lease: null, recovery: closedByStudio })));
+    let replaced = false;
+    // The studio that held the job closes right after the stop and writes its own record of it over the stop.
+    const now = (): number => {
+      const recovery = (JSON.parse(readFileSync(file, 'utf8')) as StoredRun[])[0]?.recovery;
+      if (!replaced && recovery?.outcome === 'stopped' && recovery.reason === 'process_gone') {
+        replaced = true;
+        writeFileSync(file, closedCopy);
+      }
+      return Date.parse(NOW);
+    };
+    const result = await reconcileJobs({ worldsDir: dir, apply: true, now, processes: table([]).processes });
+    const facts = { version: 1, runId: 'run-dead', kind: 'generate', tenant: 'default', reason: 'process_gone', from: EXPIRED.holder, at: NOW };
+    assert.deepEqual(result.receipts, [{ ...facts, action: 'stop_started' }, { ...facts, action: 'stop_skipped', why: 'overwritten' }]);
+    assert.deepEqual((await byId(dir)).get('run-dead')?.recovery, closedByStudio);
+  });
+
+  it('closes an intent whose job finished by another path, a studio\'s close among them, or left the registry, as stop_skipped', async () => {
+    const closedByStudio = { at: '2026-10-08T03:59:31.000Z', from: EXPIRED.holder, outcome: 'stopped', reason: 'studio_closed' } as const;
+    const dir = await registry('closed', [
+      job({ runId: 'run-ended', phase: 'finished', lease: null, exitCode: 0, pid: 808 }),
+      job({ runId: 'run-closed', phase: 'finished', lease: null, pid: 909, recovery: closedByStudio }),
+    ]);
     const journal = path.join(dir, RECONCILE_JOURNAL);
     const facts = (runId: string) => ({ version: 1, runId, kind: 'generate', tenant: 'default', reason: 'process_gone', from: EXPIRED.holder, at: '2026-10-08T03:59:30.000Z' });
-    await appendFile(journal, `${JSON.stringify({ ...facts('run-ended'), action: 'stop_started' })}\n${JSON.stringify({ ...facts('run-gone'), action: 'stop_started' })}\n`);
+    await appendFile(journal, ['run-ended', 'run-closed', 'run-gone'].map((id) => `${JSON.stringify({ ...facts(id), action: 'stop_started' })}\n`).join(''));
     const result = await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes: table([]).processes });
     assert.deepEqual(result.receipts, [
       { ...facts('run-ended'), action: 'stop_skipped', why: 'finished_elsewhere', at: NOW },
+      { ...facts('run-closed'), action: 'stop_skipped', why: 'finished_elsewhere', at: NOW },
       { ...facts('run-gone'), action: 'stop_skipped', why: 'missing', at: NOW },
     ]);
     assert.deepEqual((await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes: table([]).processes })).receipts, []);
