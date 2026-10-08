@@ -31,11 +31,13 @@ export const SECTION_OWNER = {
   fixtures: 'input',
 } as const satisfies Record<Section, StepId | 'input'>;
 
-const TEST_RUN_CODES: ReadonlySet<IssueCode> = new Set(['test.failed', 'test.seed_collision', 'layer.blocked', 'iterate.regression']);
+const TEST_RUN_CODES: ReadonlySet<IssueCode> = new Set(['test.failed', 'snippet.runtime_error', 'test.seed_collision', 'layer.blocked', 'iterate.regression']);
 
 /**
- * Whether `i` comes from running a test that fails or cannot run. The plan owns the tests, but
- * such an issue is the workflow stage's to fix, in the implementation the test checks.
+ * Whether `i` comes from running a test that fails, throws or cannot run. The plan owns the tests, but
+ * such an issue is the workflow stage's to fix, in the implementation the test checks. A test that
+ * throws before workflow has built what it calls is no fault of the plan's (A-361); one that keeps
+ * throwing goes back to the plan by the seen-twice rule (A-165).
  */
 export function isTestRun(i: CheckIssue): boolean {
   return i.path[0] === 'tests' && TEST_RUN_CODES.has(i.code);
