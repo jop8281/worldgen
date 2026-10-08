@@ -6,14 +6,14 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { BoatError, type BoatClient, type BoatInspection, type BoatInventorySandbox } from '../src/boat/client.ts';
 import { openLedger, type Ledger } from '../src/costs/ledger.ts';
-import { reconcileOrphans, recordsDir, saveRecord } from '../src/sandboxes/registry.ts';
+import { backendFor, reconcileOrphans, recordsDir, saveRecord, trackBoat } from '../src/sandboxes/registry.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const KEY = 'boat-test-key-0007';
@@ -139,7 +139,7 @@ describe('reconcile-orphans', () => {
     assert.deepEqual([listed.rows, listed.receipts], [[{ id: 'sb_tracked', state: 'running', verdict: { kind: 'orphan', evidence: 'tracked', archived: false }, action: 'needs_id' }], []]);
     const named = await reconcileOrphans(depsOf(f, boat), { apply: true, ids: ['sb_tracked'] });
     const base = { version: 1, sandboxId: 'sb_tracked', evidence: 'tracked', at: NOW, inspectionAccount: ACCOUNT, reservationId: id, costBasis: UNKNOWN };
-    assert.deepEqual([named.receipts, named.next], [[{ ...base, action: 'archive_started' }, { ...base, action: 'archived' }], [`bun run sandbox -- reconcile-usage ${id}`]]);
+    assert.deepEqual([named.receipts, named.next], [[{ ...base, action: 'archive_started' }, { ...base, action: 'archived' }], [`bun run sandbox -- discover  # Boat reports no creation time for sb_tracked, so reconcile-usage ${id} would refuse; rerun it once discover shows one, and until then its billing stays unknown`]]);
     assert.deepEqual(boat.calls, [['inventory', 'org_test'], ['inventory', 'org_test'], ['stop', 'sb_tracked'], ['waitStopped', 'sb_tracked']]);
   });
 
@@ -152,7 +152,7 @@ describe('reconcile-orphans', () => {
     assert.deepEqual(result.rows, [{ id: 'sb_gone', state: 'archived', verdict: { kind: 'orphan', evidence: 'tracked', archived: true }, action: 'close' }]);
     const base = { version: 1, sandboxId: 'sb_gone', evidence: 'tracked', at: NOW, inspectionAccount: ACCOUNT, reservationId: id, costBasis: UNKNOWN };
     const receipts = [{ ...base, action: 'close_started' }, { ...base, action: 'already_archived' }];
-    assert.deepEqual([result.receipts, result.next], [receipts, [`bun run sandbox -- reconcile-usage ${id}`]]);
+    assert.deepEqual([result.receipts, result.next], [receipts, [`bun run sandbox -- discover  # Boat reports no creation time for sb_gone, so reconcile-usage ${id} would refuse; rerun it once discover shows one, and until then its billing stays unknown`]]);
     assert.deepEqual(await lines(result.receiptsFile), receipts);
     assert.equal(observation(f.ledger, 'sb_gone')?.closedAt, NOW);
     assert.deepEqual((await reconcileOrphans(depsOf(f, boat), { apply: true })).rows[0]?.verdict, { kind: 'archived' });
@@ -169,7 +169,7 @@ describe('reconcile-orphans', () => {
     assert.deepEqual(boat.calls, [['inventory', 'org_test'], ['inventory', 'org_test'], ['stop', 'sb_expired'], ['waitStopped', 'sb_expired']]);
     const base = { version: 1, sandboxId: 'sb_expired', evidence: 'claim_expired', at: NOW, inspectionAccount: ACCOUNT, reservationId: claim.id, costBasis: UNKNOWN };
     assert.deepEqual(result.receipts, [{ ...base, action: 'archive_started' }, { ...base, action: 'archived' }]);
-    assert.deepEqual(result.next, [`bun run sandbox -- capture-usage --day 2026-10-08  # claim ${claim.id} settled at its TTL bound; the overrun is unbilled`]);
+    assert.deepEqual(result.next, [`bun run sandbox -- capture-usage --day 2026-10-08  # claim ${claim.id} settled at its TTL bound; its overrun past that bound is unknown and outside the caps, because reconcile-usage refuses an admission claim and capture-usage records evidence only`]);
     assert.deepEqual([f.ledger.read().reservations.length, f.ledger.totals().usd, f.ledger.totals().seconds], [0, 0.25, 1800]);
   });
 
@@ -310,6 +310,79 @@ describe('reconcile-orphans', () => {
     await assert.rejects(reconcileOrphans(s.deps, { apply: true, ids: ['sb_orphan', 'sb_record'] }), /--id sb_record names a VM reconcile-orphans will not archive \(kept: record\)/);
     assert.deepEqual(s.calls.filter(c => c[0] !== 'inventory'), []);
     assert.equal(observation(s.ledger, 'sb_orphan'), undefined);
+  });
+
+  it('H1: keeps a tracked VM while a live metered controller is still creating it, and --id refuses it', async () => {
+    const f = await fixture('creating');
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    let created!: () => void;
+    const createdNow = new Promise<void>((resolve) => { created = resolve; });
+    const boat = fakeBoat([]);
+    const client: BoatClient = {
+      ...boat.client,
+      async create() { boat.inventory.set('sb_ci', { id: 'sb_ci', state: 'running', access: 'owner', createdAt: null }); created(); return { sandboxId: 'sb_ci' }; },
+      async waitReady() { await gate; },
+      async exec(_id, command) { return { exitCode: 0, stdout: command.includes('node') ? 'v22.1.0\n' : '', stderr: '', timedOut: false }; },
+      async writeFile() {},
+    };
+    const env = { ...f.env, WORLDGEN_MAX_DAILY_SANDBOX_USD: '10' };
+    const up = backendFor('boat', env, undefined, { size: 'large', ttlSeconds: 7200, ledger: f.ledger, boatClient: client, flushOnExit: false }).backend
+      .up([{ path: 'repo.tgz', data: Buffer.from('x') }], { name: 'boat-ci' });
+    await createdNow;
+    const deps = { env, boatInspection: boat.inspection, backendOptions: { ledger: f.ledger, boatClient: client, flushOnExit: false } };
+    await trackBoat(deps);
+    const result = await reconcileOrphans(deps, { apply: true });
+    assert.deepEqual([result.rows, result.receipts], [[{ id: 'sb_ci', state: 'running', verdict: { kind: 'kept', owner: 'pending_create' }, action: 'none' }], []]);
+    await assert.rejects(reconcileOrphans(deps, { apply: true, ids: ['sb_ci'] }), /--id sb_ci names a VM reconcile-orphans will not archive \(kept: pending_create\)/);
+    assert.deepEqual(boat.calls.filter(c => c[0] === 'stop'), []);
+    open();
+    await up;
+  });
+
+  it('H2: a close recorded before the listing, such as a claim released by hand while its VM runs, does not make the VM settled', async () => {
+    const f = await fixture('released');
+    const earlier = f.at('2026-10-08T02:00:00.000Z');
+    const claim = earlier.reserve({ provider: 'boat', account: ACCOUNT, kind: 'sandbox', boundUsd: 0.25, sandboxPricing: PRICING, caps: { maxDailySandboxUsd: 1 } });
+    earlier.bindReservation(claim.id, 'sb_released');
+    earlier.releaseClaim(claim.id, 0.1, true);
+    const boat = fakeBoat([{ id: 'sb_released', state: 'running', access: 'owner', createdAt: '2026-10-08T02:00:01.000Z' }]);
+    const listed = await reconcileOrphans(depsOf(f, boat), { apply: true });
+    assert.deepEqual([listed.rows, listed.receipts], [[{ id: 'sb_released', state: 'running', verdict: { kind: 'orphan', evidence: 'untracked', archived: false }, action: 'needs_id' }], []]);
+    const named = await reconcileOrphans(depsOf(f, boat), { apply: true, ids: ['sb_released'] });
+    assert.deepEqual(named.receipts.map(r => r.action), ['archive_started', 'archived']);
+    assert.deepEqual(boat.calls.filter(c => c[0] === 'stop'), [['stop', 'sb_released']]);
+  });
+
+  it('H3: the rerun printed for a failed close has no --id, and that rerun closes it', async () => {
+    const f = await fixture('close-failed');
+    const id = f.ledger.observeSandbox({ account: ACCOUNT, sandboxId: 'sb_gone', caps: {} });
+    const boat = fakeBoat([{ id: 'sb_gone', state: 'archived', access: 'owner', createdAt: '2026-10-08T01:00:00.000Z' }]);
+    const flaky: Ledger = { ...f.ledger, markSandboxClosed: () => { throw new Error('disk full'); } };
+    const failed = await reconcileOrphans(depsOf({ env: f.env, ledger: flaky }, boat), { apply: true });
+    assert.deepEqual([failed.receipts.map(r => r.action), failed.next], [['close_started', 'archive_failed'], ['bun run sandbox -- reconcile-orphans --apply']]);
+    const rerun = await reconcileOrphans(depsOf(f, boat), { apply: true });
+    assert.deepEqual([rerun.receipts.map(r => r.action), rerun.next], [['close_started', 'already_archived'], [`bun run sandbox -- reconcile-usage ${id}`]]);
+    assert.equal(observation(f.ledger, 'sb_gone')?.closedAt, NOW);
+  });
+
+  it('P4: a run that crashed after the archive and before its outcome gets the outcome written on the next run, once Boat shows the VM archived', async () => {
+    const f = await fixture('recover');
+    const receiptsFile = `${f.file}.boat-orphans.jsonl`;
+    const boat = fakeBoat([{ id: 'sb_lost', state: 'running', access: 'owner', createdAt: null }]);
+    const client: BoatClient = { ...boat.client, async waitStopped(id) { await boat.client.waitStopped(id); await chmod(receiptsFile, 0o400); } };
+    const deps = { ...depsOf(f, boat), backendOptions: { ledger: f.ledger, boatClient: client } };
+    await assert.rejects(reconcileOrphans(deps, { apply: true, ids: ['sb_lost'] }), /EACCES/);
+    await chmod(receiptsFile, 0o600);
+    assert.deepEqual((await lines(receiptsFile)).map(r => (r as { action: string }).action), ['archive_started']);
+    const id = observation(f.ledger, 'sb_lost')?.id;
+    assert.ok(id);
+    const again = await reconcileOrphans(deps, { apply: true });
+    const recovered = { version: 1, sandboxId: 'sb_lost', evidence: 'untracked', at: NOW, inspectionAccount: ACCOUNT, reservationId: id, costBasis: UNKNOWN, action: 'archived', recovered: true };
+    assert.deepEqual([again.rows[0]?.verdict, again.receipts], [{ kind: 'archived' }, [recovered]]);
+    assert.deepEqual((await lines(receiptsFile)).map(r => (r as { action: string }).action), ['archive_started', 'archived']);
+    assert.deepEqual((await reconcileOrphans(deps, { apply: true })).receipts, []);
+    assert.deepEqual(boat.calls.filter(c => c[0] === 'stop'), [['stop', 'sb_lost']]);
   });
 
   it('refuses apply on a corrupt ledger before any provider call', async () => {

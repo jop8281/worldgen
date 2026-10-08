@@ -540,7 +540,10 @@ const orphanReceiptSchema = z.strictObject({
   reservationId: z.uuid(),
   costBasis: z.strictObject({ billing: z.literal('unknown'), usd: z.null() }),
   error: z.string().min(1).regex(/^[^\n]*$/).optional(),
-}).refine(r => (r.action === 'archive_failed') === (r.error !== undefined), { message: 'an error belongs to a failed archive only', path: ['error'] });
+  /** The outcome of an intent a crashed run left without one, written once Boat shows the VM archived. */
+  recovered: z.literal(true).optional(),
+}).refine(r => (r.action === 'archive_failed') === (r.error !== undefined), { message: 'an error belongs to a failed archive only', path: ['error'] })
+  .refine(r => r.recovered === undefined || r.action === 'archived' || r.action === 'already_archived', { message: 'only an archival outcome is recovered', path: ['recovered'] });
 export type BoatOrphanReceipt = z.output<typeof orphanReceiptSchema>;
 const UNKNOWN_BILLING = { billing: 'unknown', usd: null } as const;
 
@@ -553,6 +556,21 @@ async function appendOrphanReceipt(file: string, input: z.input<typeof orphanRec
   return row;
 }
 
+/** The last intent of each VM that no outcome followed, in journal order. A line that does not parse is skipped. */
+async function openIntents(file: string): Promise<Map<string, BoatOrphanReceipt>> {
+  const open = new Map<string, BoatOrphanReceipt>();
+  const text = await readFile(file, 'utf8').catch(() => '');
+  for (const line of text.split('\n')) {
+    let raw: unknown;
+    try { raw = JSON.parse(line); } catch { continue; }
+    const row = orphanReceiptSchema.safeParse(raw);
+    if (!row.success) continue;
+    if (row.data.action === 'archive_started' || row.data.action === 'close_started') open.set(row.data.sandboxId, row.data);
+    else open.delete(row.data.sandboxId);
+  }
+  return open;
+}
+
 const observationOf = (reservations: readonly Reservation[], id: string): Reservation | undefined =>
   reservations.find(r => r.origin === 'inventory' && r.provider === 'boat' && r.sandboxId === id);
 const admitted = (r: Reservation): boolean => r.origin === undefined && r.provider === 'boat' && r.kind === 'sandbox';
@@ -562,7 +580,7 @@ const claimEnd = (r: Reservation): number | undefined =>
 
 type PlanEntry = { readonly vm: BoatInventorySandbox; readonly verdict: OrphanVerdict; readonly action: OrphanAction; readonly reservationId?: string };
 
-async function planOf(vm: BoatInventorySandbox, state: { readonly events: readonly SpendEvent[]; readonly reservations: readonly Reservation[] }, now: number, dir: string, account: string, named: boolean): Promise<PlanEntry> {
+async function planOf(vm: BoatInventorySandbox, state: { readonly events: readonly SpendEvent[]; readonly reservations: readonly Reservation[] }, listedAt: number, now: number, dir: string, account: string, named: boolean): Promise<PlanEntry> {
   const entry = (verdict: OrphanVerdict, action: OrphanAction = 'none', reservationId?: string): PlanEntry => ({ vm, verdict, action, ...(reservationId === undefined ? {} : { reservationId }) });
   if (vm.access !== 'owner') return entry({ kind: 'not_owner' });
   const observed = observationOf(state.reservations, vm.id);
@@ -583,13 +601,27 @@ async function planOf(vm: BoatInventorySandbox, state: { readonly events: readon
     const own = claims.find(r => r.account === account);
     return entry({ kind: 'orphan', evidence: 'claim_expired', archived: false }, own === undefined ? 'other_key' : 'archive', own?.id);
   }
-  // Only a confirmed archival closes a lifetime; the inventory was read before its owner closed it.
-  if (state.events.some(e => e.provider === 'boat' && e.kind === 'sandbox' && e.sandboxId === vm.id && e.checkpoint !== true)) return entry({ kind: 'settled' });
+  // Its owner closed it while the inventory was read. An older close, such as a claim released by hand, proves nothing now.
+  if (state.events.some(e => e.provider === 'boat' && e.kind === 'sandbox' && e.sandboxId === vm.id && e.checkpoint !== true && Date.parse(e.t) >= listedAt)) return entry({ kind: 'settled' });
+  // A live controller may be creating this very VM: the meter binds its claim only once `up` returns, and `track` may observe it before.
+  if (state.reservations.some(r => admitted(r) && r.sandboxId === undefined && (claimEnd(r) ?? Infinity) > now)) return entry({ kind: 'kept', owner: 'pending_create' });
   const unmetered = named ? 'archive' : 'needs_id';
   if (observed !== undefined) return entry({ kind: 'orphan', evidence: 'tracked', archived: false }, unmetered, observed.id);
-  // A live controller may be creating this very VM.
-  if (state.reservations.some(r => admitted(r) && r.sandboxId === undefined && (claimEnd(r) ?? Infinity) > now)) return entry({ kind: 'kept', owner: 'pending_create' });
   return entry({ kind: 'orphan', evidence: 'untracked', archived: false }, unmetered);
+}
+
+/** The command that settles a receipt's unknown billing, or says why none can yet. */
+function followUp(vm: BoatInventorySandbox, receipt: BoatOrphanReceipt, day: string): string {
+  if (receipt.action === 'archive_failed') {
+    // A close or an expired claim is acted on without --id, and the next run refuses an --id for either.
+    const automatic = receipt.evidence === 'claim_expired' || STOPPED_STATES.has(vm.state);
+    return `bun run sandbox -- reconcile-orphans --apply${automatic ? '' : ` --id ${vm.id}`}`;
+  }
+  if (receipt.evidence === 'claim_expired') {
+    return `bun run sandbox -- capture-usage --day ${day}  # claim ${receipt.reservationId} settled at its TTL bound; its overrun past that bound is unknown and outside the caps, because reconcile-usage refuses an admission claim and capture-usage records evidence only`;
+  }
+  if (vm.createdAt === null) return `bun run sandbox -- discover  # Boat reports no creation time for ${vm.id}, so reconcile-usage ${receipt.reservationId} would refuse; rerun it once discover shows one, and until then its billing stays unknown`;
+  return `bun run sandbox -- reconcile-usage ${receipt.reservationId}`;
 }
 
 /**
@@ -616,12 +648,13 @@ export async function reconcileOrphans(deps: Deps, opts: { readonly apply: boole
   const inspection = deps.boatInspection ?? boatClientFromEnv(deps.env);
   const dir = recordsDir(deps.env);
   const ids = new Set(opts.ids ?? []);
+  const listedAt = ledger.now();
   const inventory = await inspection.inventory(org);
   // Read after the inventory: the meter reserves before it creates, so every listed VM's claim is in this snapshot.
   const state = snapshot();
   const now = ledger.now();
   const plan: PlanEntry[] = [];
-  for (const vm of inventory) plan.push(await planOf(vm, state, now, dir, account, ids.has(vm.id)));
+  for (const vm of inventory) plan.push(await planOf(vm, state, listedAt, now, dir, account, ids.has(vm.id)));
   for (const id of ids) {
     const row = plan.find(p => p.vm.id === id);
     if (row === undefined) throw new SandboxError(`--id ${id} is not in the Boat inventory of ${org ?? UNPINNED}`);
@@ -632,16 +665,28 @@ export async function reconcileOrphans(deps: Deps, opts: { readonly apply: boole
   const receipts: BoatOrphanReceipt[] = [];
   const next: string[] = [];
   const acting = opts.apply ? plan.filter(p => p.action === 'archive' || p.action === 'close') : [];
-  if (acting.length > 0) {
+  const intents = opts.apply ? await openIntents(receiptsFile) : new Map<string, BoatOrphanReceipt>();
+  const recovering = inventory.flatMap(vm => {
+    const intent = intents.get(vm.id);
+    return intent !== undefined && STOPPED_STATES.has(vm.state) ? [{ vm, intent }] : [];
+  });
+  if (acting.length > 0 || recovering.length > 0) {
     await mkdir(path.dirname(receiptsFile), { recursive: true, mode: 0o700 });
     await appendFile(receiptsFile, '', { mode: 0o600 });
+  }
+  const at = () => new Date(ledger.now()).toISOString();
+  // A run that crashed between its action and the outcome left an intent alone; Boat now shows the action done.
+  for (const { vm, intent } of recovering) {
+    const { action, at: _at, error: _error, ...kept } = intent;
+    const outcome = await appendOrphanReceipt(receiptsFile, { ...kept, action: action === 'close_started' ? 'already_archived' : 'archived', at: at(), recovered: true });
+    receipts.push(outcome);
+    next.push(followUp(vm, outcome, utcDay(now)));
   }
   const shared: Deps = { ...deps, backendOptions: { ...deps.backendOptions, ledger } };
   for (const { vm, verdict, action, reservationId: known } of acting) {
     if (verdict.kind !== 'orphan') continue;
     const reservationId = known ?? ledger.observeSandbox({ account, sandboxId: vm.id, caps });
     const base = { version: 1, sandboxId: vm.id, evidence: verdict.evidence, inspectionAccount: account, reservationId, costBasis: UNKNOWN_BILLING, ...(vm.team === undefined ? {} : { walletId: vm.team.id }) } as const;
-    const at = () => new Date(ledger.now()).toISOString();
     receipts.push(await appendOrphanReceipt(receiptsFile, { ...base, action: action === 'close' ? 'close_started' : 'archive_started', at: at() }));
     let outcome: z.input<typeof orphanReceiptSchema>;
     try {
@@ -656,10 +701,9 @@ export async function reconcileOrphans(deps: Deps, opts: { readonly apply: boole
       const message = (err instanceof Error ? err.message : String(err)).split('\n')[0]?.trim() || 'archive failed without a message';
       outcome = { ...base, action: 'archive_failed', at: at(), error: message };
     }
-    receipts.push(await appendOrphanReceipt(receiptsFile, outcome));
-    if (outcome.action === 'archive_failed') next.push(`bun run sandbox -- reconcile-orphans --apply${verdict.evidence === 'claim_expired' ? '' : ` --id ${vm.id}`}`);
-    else if (verdict.evidence === 'claim_expired') next.push(`bun run sandbox -- capture-usage --day ${utcDay(now)}  # claim ${reservationId} settled at its TTL bound; the overrun is unbilled`);
-    else next.push(`bun run sandbox -- reconcile-usage ${reservationId}`);
+    const written = await appendOrphanReceipt(receiptsFile, outcome);
+    receipts.push(written);
+    next.push(followUp(vm, written, utcDay(now)));
   }
   return { wallet: org ?? UNPINNED, dryRun: !opts.apply, ledgerCorrupt: state.corrupt, receiptsFile, rows, receipts, next };
 }
