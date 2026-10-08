@@ -761,7 +761,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
       // Keep SHARE_GRACE_MS before the run deadline so a transport kill is recorded, unless that would cut a call preflight let through: then it races the deadline as before.
       const margined = Math.min(shareMs, leftMs - SHARE_GRACE_MS);
       const timeoutMs = estimateMs <= margined ? margined : Math.max(0, Math.min(shareMs, leftMs));
-      const req: ProposeRequest = { ...asked, model: choice.model, effort: choice.effort, timeoutMs, maxCostUsd: Math.max(0, config.maxCostUsd - ledger.spentUsd), signal: cancel.signal };
+      const req: ProposeRequest = { ...asked, model: choice.model, effort: choice.effort, timeoutMs, maxCostUsd: Math.max(0, config.maxCostUsd - ledger.spentUsd), signal: cancel.signal, runId, step };
       let proposal: Proposal | null = null;
       let failure: { message: string; usage: Usage; costUsd: number | null; ms: number } | null = null;
       let partialModelUsage: SpendEvent['partialModelUsage'];
