@@ -466,6 +466,58 @@ export function tableProblems(file: string, markdown: string): string[] {
   return problems;
 }
 
+/**
+ * Rows of research/decisions.md whose id is not `A-<n>`, in file order: the forms the log used before ids came from the
+ * master (rule 14), and `-` for an early spec ambiguity with no id. A new row takes an `A-<n>` id; this list never grows.
+ */
+const LEGACY_DECISION_IDS: readonly string[] = [
+  'U-BOAT-READINESS', 'U-BOAT-PROXY-BIND', 'U-BOAT-SONNET-DATASET', '-', '-', 'A-STAGE-TIME', 'A-WORKFLOW-EFFORT', '-', 'YOS-144',
+  '-', '-', 'YOS-144 startup', 'A-BOAT-CREATE-IDENTITY', 'A-COST-2', 'A-COST-3', 'A-BOAT-UTC-USAGE', 'A-BOAT-KEY-PREFLIGHT',
+  'A-OBSERVED-EXPOSURE', 'A-BOAT-RECEIPT-CAPTURE', 'A-VERIFIED-USAGE-RECONCILIATION', 'A-MODEL-PARTIAL-FINALITY',
+  'A-TRANSPORT-STALL-COST', 'A-ITERATE-FS-SEAM', 'A-GEN-CANCEL', 'A-CANCELLATION-NATIVE-COMPOSITION', 'A-HTTP-REFUSED-COMMIT', 'YOS-149',
+];
+const DECISION_COLUMNS = ['Decision', 'Choice', 'Why', 'Date', 'Reversible'];
+const cellsOf = (row: string): string[] => row.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
+
+/**
+ * One message per row of a decision log that breaks its structure (YOS-201): a header that does not name the five
+ * columns, an id that is neither `A-<n>` nor on the `legacy` list in its place, an `A-<n>` used twice (`A-07` is `A-7`),
+ * an empty decision, choice or why, a date that is not YYYY-MM-DD, or a reversible cell that does not start with yes or no.
+ * Rows stay in append order, so nothing here asks for numeric order.
+ */
+export function decisionProblems(file: string, markdown: string, legacy: readonly string[]): string[] {
+  const lines = markdown.split('\n');
+  const problems: string[] = [];
+  const first = new Map<string, number>();
+  const others: string[] = [];
+  const isSep = (l: string | undefined): boolean => l !== undefined && /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(l);
+  lines.forEach((line, i) => {
+    if (!line.trimStart().startsWith('|') || isSep(line)) return;
+    const at = `${file}:${i + 1}`;
+    const cells = cellsOf(line);
+    if (isSep(lines[i + 1])) {
+      const named = cells.slice(1).map((c) => c.replace(/\?$/, ''));
+      if (JSON.stringify(named) !== JSON.stringify(DECISION_COLUMNS)) problems.push(`${at}: the header names ${named.join(', ')}, not ${DECISION_COLUMNS.join(', ')}`);
+      return;
+    }
+    const [id = '', decision = '', choice = '', why = '', date = '', reversible = ''] = cells;
+    const n = /^A-(\d+)$/.exec(id);
+    if (n === null) others.push(id);
+    else {
+      const key = `A-${Number(n[1])}`;
+      const seen = first.get(key);
+      if (seen !== undefined) problems.push(`${at}: ${id} is used again; line ${seen} has it`);
+      else first.set(key, i + 1);
+    }
+    if (cells.length !== 6) problems.push(`${at}: ${id} has ${cells.length - 1} columns, not the five ${DECISION_COLUMNS.join(', ')}`);
+    for (const [name, text] of [['decision', decision], ['choice', choice], ['why', why]] as const) if (text === '') problems.push(`${at}: ${id} has no ${name}`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) problems.push(`${at}: ${id} has date "${date}", not YYYY-MM-DD`);
+    if (!/^(yes|no)\b/i.test(reversible)) problems.push(`${at}: ${id} has reversible "${reversible}", which starts with neither yes nor no`);
+  });
+  if (JSON.stringify(others) !== JSON.stringify(legacy)) problems.push(`${file}: ids not of the form A-<n> are ${JSON.stringify(others)}, not the legacy list ${JSON.stringify(legacy)}`);
+  return problems;
+}
+
 describe('research/decisions.md tables', () => {
   it('a table needs a header and separator, and every row its header\'s cell count; `\\|` is not a separator', () => {
     const md = [
@@ -485,5 +537,38 @@ describe('research/decisions.md tables', () => {
   it('every table in research/decisions.md is well-formed', () => {
     const file = 'research/decisions.md';
     assert.deepEqual(tableProblems(file, readFileSync(path.join(REPO_DIR, file), 'utf8')), []);
+  });
+
+  it('a decision row needs a unique A-<n> id or a legacy one in its place, five columns, a date and a yes or no (YOS-201)', () => {
+    const md = [
+      '| # | Decision | Choice | Why | Date | Reversible? |',
+      '|---|---|---|---|---|---|',
+      '| A-1 | one | c | w | 2026-10-08 | Yes |',
+      '| A-01 | the same id, padded | c | w | 2026-10-08 | yes |',
+      '| B-7 | not an A id | c | w | 2026-10-08 | No |',
+      '| - | Spec: no id | c | w | 2026-10-08 | Yes, by a new row |',
+      '| A-2 | a column short, its choice empty |  | 2026-10-08 | Yes |',
+      '| A-3 | bad date and reversible | c | w | 8 Oct | - |',
+      '',
+      '| ID | Decision | Choice | Rationale | Date | Reversible |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| A-4 | four | c | w | 2026-10-08 | No |',
+    ].join('\n');
+    assert.deepEqual(decisionProblems('d.md', md, ['-']), [
+      'd.md:4: A-01 is used again; line 3 has it',
+      'd.md:7: A-2 has 4 columns, not the five Decision, Choice, Why, Date, Reversible',
+      'd.md:7: A-2 has no choice',
+      'd.md:7: A-2 has date "Yes", not YYYY-MM-DD',
+      'd.md:7: A-2 has reversible "", which starts with neither yes nor no',
+      'd.md:8: A-3 has date "8 Oct", not YYYY-MM-DD',
+      'd.md:8: A-3 has reversible "-", which starts with neither yes nor no',
+      'd.md:10: the header names Decision, Choice, Rationale, Date, Reversible, not Decision, Choice, Why, Date, Reversible',
+      'd.md: ids not of the form A-<n> are ["B-7","-"], not the legacy list ["-"]',
+    ]);
+  });
+
+  it('every row of research/decisions.md has a unique A-<n> id or its legacy one, five columns, a date and a yes or no', () => {
+    const file = 'research/decisions.md';
+    assert.deepEqual(decisionProblems(file, readFileSync(path.join(REPO_DIR, file), 'utf8'), LEGACY_DECISION_IDS), []);
   });
 });
