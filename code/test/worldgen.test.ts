@@ -1813,6 +1813,21 @@ describe('runWorldGen create: backtracking (YOS-44)', () => {
 describe('runWorldGen create: run capsule and content ids (YOS-83)', () => {
   const DIGEST = 'e1e715352a48477b04a8b8538b6680e889b2ebb26a22ee2c6f5203e1b4d862a4';
   const cap = (r: Ran) => capsuleSchema.parse(JSON.parse(readFileSync(join(r.outDir, CAPSULE_FILE), 'utf8')));
+  const CSV_DIGEST: InputDigest = { kind: 'csv', summary: 'orders', fixtures: {}, operations: [], observations: [], apiShape: null };
+
+  it('records CSV paths relative to the repository, and null for a file outside it (A-351)', async () => {
+    const r = await run(HAPPY, { input: { kind: 'csv', paths: ['../eval/inputs/orders.csv', join(tmpdir(), 'outside.csv')] }, digest: CSV_DIGEST });
+    assert.deepEqual(cap(r).input.source, { kind: 'csv', paths: ['eval/inputs/orders.csv', null] });
+  });
+
+  it('never lets a token in the input reach capsule.json (A-351)', async () => {
+    const token = 'sk-ant-abcDEF123456';
+    const described = await run(HAPPY, { input: { kind: 'description', text: `A helpdesk where overdue tickets escalate; our key is ${token}` } });
+    const tabled = await run(HAPPY, { input: { kind: 'csv', paths: [`../eval/inputs/${token}.csv`] }, digest: CSV_DIGEST });
+    for (const r of [described, tabled]) assert.equal(readFileSync(join(r.filesDir, CAPSULE_FILE), 'utf8').includes(token), false);
+    assert.deepEqual(cap(described).input.source, { kind: 'description' });
+    assert.deepEqual(cap(tabled).input.source, { kind: 'csv', paths: [null] });
+  });
 
   it('writes capsule.json next to REPORT.md with the input digest, world id, model, transport, attempts and costs', async () => {
     const r = await run(HAPPY);
@@ -1821,7 +1836,7 @@ describe('runWorldGen create: run capsule and content ids (YOS-83)', () => {
     const a = (step: string) => ({ step, n: 1, outcome: 'accepted', ms: 1000, costUsd: 0.125 });
     assert.deepEqual({ ...c, worldId: null, ms: 0 }, {
       capsule: 1, runId: 'run_test', mode: 'create',
-      input: { kind: 'description', digest: DIGEST },
+      input: { kind: 'description', digest: DIGEST, source: { kind: 'description' } },
       worldId: null, model: 'claude-sonnet-5-5', transport: 'claude-cli',
       attempts: [a('plan'), a('model'), a('workflow'), a('seed'), a('tasks')],
       ms: 0, costUsd: 0.625,

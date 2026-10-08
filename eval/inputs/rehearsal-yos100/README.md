@@ -12,4 +12,4 @@ Run from `code/`. Replace `<scratch>` with a directory outside the repository, a
 bun run live ../eval/inputs/rehearsal-yos100 --worlds-dir <scratch> --report ../eval/runs/<date>-yos100-rehearsal/LIVE-RUN.md --out-dir ../eval/runs/<date>-yos100-rehearsal
 ```
 
-Without `--worlds-dir` and `--report`, `bun run live` moves delivered worlds into `prod/worlds/` and writes `prod/LIVE-RUN.md`. Both are hand-in deliverables, so a rehearsal would then pass as the real live run. `--dry-run` lists the prompts without a model call. Its listing always shows `-> prod/worlds/…`, even with `--worlds-dir`. That label is a display quirk of the dry run; the real run writes to `--worlds-dir`.
+Without `--worlds-dir` and `--report`, `bun run live` moves delivered worlds into `prod/worlds/` and writes `prod/LIVE-RUN.md`. Both are hand-in deliverables, so a rehearsal would then pass as the real live run. `--dry-run` lists each prompt with the world folder it would write, and the report path when `--report` is given, without a model call.

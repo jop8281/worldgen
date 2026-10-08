@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { loadWorld } from '#engine';
-import { nodeRunner, nodeSpawn } from '../src/sandboxes/backend.ts';
+import { nodeRunner, nodeSpawn, type Runner } from '../src/sandboxes/backend.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
@@ -98,3 +98,54 @@ describe('studio agent playground (YOS-190)', () => {
     assert.equal((await json(studio.url, 'GET', '/api/worlds/nope/tasks')).status, 404);
   });
 });
+
+describe('studio agent playground with no git, as in the container image (YOS-236)', () => {
+  const BUILD = '0123456789abcdef0123456789abcdef01234567';
+  /** The image has no git binary, so the runner rejects as nodeRunner does for a missing binary. Every other command runs for real. */
+  const noGit: Runner = (argv, o) => (argv[0] === 'git' ? Promise.reject(Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' })) : nodeRunner(argv, o));
+  let repo: string;
+  const studios: StudioServer[] = [];
+  const start = async (build?: string): Promise<StudioServer> => {
+    const s = await studioServer({ port: 0, repoRoot: repo, worldsDir: WORLDS_DIR, spawner: nodeSpawn, runner: noGit, ...(build === undefined ? {} : { build }) });
+    studios.push(s);
+    return s;
+  };
+  before(async () => {
+    repo = await mkdtemp(path.join(tmpdir(), 'wg-playground-nogit-'));
+    await symlink(CODE_DIR, path.join(repo, 'code'));
+  });
+  after(async () => {
+    for (const s of studios) await s.close();
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('records the build sha as the episode engine when git cannot name the commit', async () => {
+    const studio = await start(BUILD);
+    const begun = await json(studio.url, 'POST', '/api/episodes', { world: 'helpdesk', task: 'assign_newest_acme_ticket', agent: 'noop', budgetUsd: 0.01, maxTurns: 3 });
+    assert.equal(begun.status, 200, JSON.stringify(begun.body));
+    const runId = begun.body['runId'] as string;
+    let status: Json = {};
+    for (let i = 0; i < 240; i++) {
+      status = (await json(studio.url, 'GET', `/api/episodes/${encodeURIComponent(runId)}`)).body;
+      if (status['running'] === false) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.equal(status['exitCode'], 0, JSON.stringify(status['failure'] ?? null));
+    assert.equal((status['episode'] as Json)['engine_commit'], BUILD);
+  });
+
+  it('also falls back when git runs but finds no repository', async () => {
+    const outside: Runner = (argv, o) => (argv[0] === 'git' ? Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: not a git repository' }) : nodeRunner(argv, o));
+    const studio = await studioServer({ port: 0, repoRoot: repo, worldsDir: WORLDS_DIR, spawner: nodeSpawn, runner: outside, build: BUILD });
+    studios.push(studio);
+    const r = await json(studio.url, 'POST', '/api/episodes', { world: 'helpdesk', task: 'assign_newest_acme_ticket', agent: 'noop', budgetUsd: 0.01, maxTurns: 3 });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  });
+
+  it('refuses with episode.commit when there is neither a git commit nor a build sha', async () => {
+    const studio = await start();
+    const r = await json(studio.url, 'POST', '/api/episodes', { world: 'helpdesk', task: 'assign_newest_acme_ticket', agent: 'noop', budgetUsd: 0.01, maxTurns: 3 });
+    assert.deepEqual([r.status, (r.body['error'] as Json)['code']], [500, 'episode.commit']);
+  });
+});
+

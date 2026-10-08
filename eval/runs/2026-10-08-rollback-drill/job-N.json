@@ -1,0 +1,1 @@
+{"runId":"20261008T042100Z-noop-6af049","world":"helpdesk","task":"assign_newest_acme_ticket","agent":"noop","running":false,"exitCode":1,"job":{"kind":"episode","key":"derived:2f81890d2507ec9e5f81d21786b633f6b1de317c6e74875e2373c8c24d6b188a","phase":"finished","lease":null},"episode":null,"failure":["EACCES: permission denied, mkdir '/app/eval'"]}

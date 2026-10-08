@@ -250,8 +250,8 @@ describe('boatClientFromEnv', () => {
 
   it('uses BOAT_BASE_URL when set', async () => {
     const sent: Sent[] = [];
-    await boatClientFromEnv({ BOAT_API_KEY: KEY, WORLDGEN_BOAT_ORG: 'org_test', BOAT_BASE_URL: 'https://other.test/v1' }, { fetch: seam([createdReply], sent) }).create({ ttlSeconds: 60 });
-    assert.equal(sent[0]?.url, 'https://other.test/v1/sandboxes?org=org_test');
+    await boatClientFromEnv({ BOAT_API_KEY: KEY, WORLDGEN_BOAT_ORG: 'org_test', BOAT_BASE_URL: 'https://boat.dev/api/v2' }, { fetch: seam([createdReply], sent) }).create({ ttlSeconds: 60 });
+    assert.equal(sent[0]?.url, 'https://boat.dev/api/v2/sandboxes?org=org_test');
     assert.equal(sent[0]?.auth, 'Bearer boat-test-key-0001');
   });
 
