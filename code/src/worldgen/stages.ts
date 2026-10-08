@@ -31,11 +31,13 @@ export const SECTION_OWNER = {
   fixtures: 'input',
 } as const satisfies Record<Section, StepId | 'input'>;
 
-const TEST_RUN_CODES: ReadonlySet<IssueCode> = new Set(['test.failed', 'test.seed_collision', 'layer.blocked', 'iterate.regression']);
+const TEST_RUN_CODES: ReadonlySet<IssueCode> = new Set(['test.failed', 'snippet.runtime_error', 'test.seed_collision', 'layer.blocked', 'iterate.regression']);
 
 /**
- * Whether `i` comes from running a test that fails or cannot run. The plan owns the tests, but
- * such an issue is the workflow stage's to fix, in the implementation the test checks.
+ * Whether `i` comes from running a test that fails, throws or cannot run. The plan owns the tests, but
+ * such an issue is the workflow stage's to fix, in the implementation the test checks. A test that
+ * throws before workflow has built what it calls is no fault of the plan's (A-361); one whose issue set
+ * repeats goes back to the plan by the seen-twice rule (A-165).
  */
 export function isTestRun(i: CheckIssue): boolean {
   return i.path[0] === 'tests' && TEST_RUN_CODES.has(i.code);
@@ -253,9 +255,9 @@ export function pressureIssues(report: OkReport, plan: Plan): readonly CheckIssu
 
 /**
  * seed.too_few_rows_for_paging for each entity a task's solution pages through (its list route
- * called with a page-size or cursor parameter), owned by seed so the run backtracks there. An
- * entity whose rows come from an input fixture is exempt: the input decides its size, and
- * REPORT.md says so (A-182).
+ * called for a later page; a first-page lookup with only a limit does not count), owned by seed so
+ * the run backtracks there. An entity whose rows come from an input fixture is exempt: the input
+ * decides its size, and REPORT.md says so (A-182, A-360).
  */
 export function pagingBlocking(report: OkReport): readonly CheckIssue[] {
   const paged = new Set(Object.values(report.verdicts).flatMap((v) => v.solutionPagedEntities));
@@ -340,7 +342,7 @@ export const STAGES = {
       'Each task has an instruction, a grader, a solution that uses the public API, and decoys on medium and hard tasks. ' +
       'Give each medium and hard task at least one decoy that does part of the work and scores above 0 but below 1, such as one that fixes only the first page of matches, and make each decoy script do exactly what its why says: Stripe-mode lists are newest first, so a list read right after a write (for example GET /v1/refunds?limit=1) returns the row the script just created, and a decoy that edits that row scores 1 like the solution. ' +
       'In every grader, call ctx.guardChanges with each row the task may change, its kind and its exact fields, as the example world does, and give the task an allows list taken from its instruction, not from what the solution writes (each entity, kind, exact update fields, and a where of field values that picks the target rows), so any collateral write scores 0. ' +
-      'A solution that pages through a list (a limit or cursor parameter) needs that entity seeded past one page, or the run goes back to the seed step. ' +
+      'A solution that asks a list for a later page (a cursor, starting_after or ending_before parameter) needs that entity seeded past one page, or the run goes back to the seed step; a first-page lookup with only a limit does not count. ' +
       'The engine judges this stage with the tasks layer: the solution scores 1, doing nothing scores 0, and every decoy and partial solution scores below 1.',
     covers: COVERS.tasks,
     done: tasksDone,

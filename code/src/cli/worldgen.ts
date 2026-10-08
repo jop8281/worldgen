@@ -80,7 +80,11 @@ function oneOf<T extends string>(flag: string, v: string, allowed: readonly T[])
   return hit;
 }
 
-function parseArgs(argv: readonly string[]): Args | 'help' {
+function parseArgs(all: readonly string[]): Args | 'help' {
+  // `--` ends the options: what follows is the description or the change request, even a word that starts with -.
+  const end = all.indexOf('--');
+  const argv = end < 0 ? all : all.slice(0, end);
+  const text = end < 0 ? [] : all.slice(end + 1).filter((a) => a.trim() !== '');
   if (argv.some((a) => a === '--help' || a === '-h')) return 'help';
   const opts = new Map<ValueOption, string>();
   const rest: string[] = [];
@@ -113,14 +117,14 @@ function parseArgs(argv: readonly string[]): Args | 'help' {
   if (world !== undefined) {
     if (opts.has('--out')) throw new UsageError('--out does not apply with --world: iterate changes that world in place');
     if (rest.some((a) => INPUT_FLAGS.has(a))) throw new UsageError('--world takes a change request, not --openapi, --csv or --fidelity');
-    const request = rest.join(' ').trim();
+    const request = [...rest, ...text].join(' ').trim();
     if (request === '') throw new UsageError('--world needs a change request');
     return { mode: 'iterate', worldDir: path.resolve(world), request, overrides };
   }
 
   let input: Input;
   try {
-    input = parseInputArgs(rest);
+    input = parseInputArgs(text.length === 0 ? rest : [...rest, '--', ...text]);
   } catch (e) {
     throw new UsageError(message(e));
   }

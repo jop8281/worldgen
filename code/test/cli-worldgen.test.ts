@@ -127,6 +127,19 @@ describe('worldgen CLI: model access is checked before any work', () => {
     assert.equal(existsSync(path.join(home, 'costs.jsonl')), false);
   });
 
+  it('reads a description that starts with - as text after --, and as an unknown option without it', () => {
+    const { home, env } = scratch();
+    const out = path.join(home, 'gen-pricing');
+    const noBin = { ...env, PATH: path.join(home, 'empty-bin') };
+    const text = worldgen(['--out', out, '--', '-5% price on tier 2'], noBin);
+    assert.equal(text.status, 2);
+    assert.equal(text.stderr.startsWith('the claude CLI "claude" was not found on PATH'), true, text.stderr);
+    const option = worldgen(['-5% price on tier 2', '--out', out], noBin);
+    assert.equal(option.status, 2);
+    assert.equal(option.stderr.split('\n')[0], 'unknown option -5% price on tier 2 (see --help)');
+    assert.equal(existsSync(out), false);
+  });
+
   it('the default claude-cli transport exits 2 when no claude binary is on PATH', () => {
     const { home, env } = scratch();
     const out = path.join(home, 'gen-helpdesk');
