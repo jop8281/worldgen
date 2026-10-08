@@ -95,7 +95,7 @@ I scanned all 261 files under `prod/`: 82 json, 57 yaml, 53 md, 34 jsonl, 33 png
 
 | check | finding | proposed action and owner |
 |---|---|---|
-| Credentials (`sk-ant-`, `sk-…`, `ghp_`, `AKIA…`, private-key blocks, `Bearer …`, `BOAT_API_KEY=`, `LLM_KEY=`) | None found. | None. |
+| Credentials (Anthropic, OpenAI-style, GitHub and AWS key prefixes, PEM private-key blocks, bearer tokens, and assignments to the Boat or model key variables) | None found. | None. |
 | IP addresses | None found. | None. |
 | Email addresses | All synthetic: domains under `.example` and `.test`, and subdomains of `example.com` (e.g. `uni.example`, `acmelogistics.example`, `acmecorp.example.com`). No real domain. | None. |
 | Absolute local paths | `/Users/yossieliaz` appears 31 times, all in `worldDir` fields of `prod/worlds/*/runs/*/events.jsonl` (20+ files). It names the author's local account; there is no secret in it. The same pattern is in `eval/runs/*`. | YOS-208: redact `worldDir` to a repo-relative path when events are written, and rewrite the committed logs only through a reviewed evidence migration, because they are receipts. Never edit them silently. |
