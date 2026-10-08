@@ -177,6 +177,11 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(r.code, 3, r.err.join('\n'));
     assert.equal(r.err.some((line) => line.includes('accepted 0 of 3 task(s)')), true);
     assert.equal(backend.stopped(), true);
+    // Every solver call is filed under the dataset run and the solver step (A-365, YOS-251), so `costs --by run` isolates it.
+    const ledger = readFileSync(env.WORLDGEN_COSTS_FILE, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { op?: string; runId?: string; step?: string; event?: { kind?: string; runId?: string; step?: string } });
+    assert.deepEqual(ledger.filter((l) => l.op === 'start_model').map((l) => [l.runId, l.step]), [['cli-run', 'solver'], ['cli-run', 'solver'], ['cli-run', 'solver']]);
+    assert.deepEqual(ledger.filter((l) => l.op === 'settle' && l.event?.kind === 'model_call').map((l) => [l.event?.runId, l.event?.step]),
+      [['cli-run', 'solver'], ['cli-run', 'solver'], ['cli-run', 'solver']]);
   });
 
   it('uses the SDK when explicitly requested even when the generation default is the Claude CLI', RUN_BUDGET, async (t) => {
@@ -301,6 +306,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(seen.length, 5 + 1 + 1);
     assert.equal(seen.every((q) => q.signal instanceof AbortSignal), true);
     assert.equal(seen.every((q) => q.tool.name === 'solver_turn'), true);
+    assert.deepEqual([...new Set(seen.map((q) => `${q.runId}/${q.step}`))], ['cli-run/solver']);
     const everything = seen.map((q) => `${q.system}\n${q.prompt}`).join('\n');
     for (const t of Object.values(w.tasks)) {
       assert.ok(t.grader !== undefined && t.solution !== undefined, 'the golden helpdesk is the private form');

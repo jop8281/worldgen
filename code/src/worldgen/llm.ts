@@ -29,6 +29,9 @@ export type ProposeRequest = {
   readonly maxCostUsd?: number | undefined;
   /** Cancels the pending model request. An interrupted call may still have unknown provider cost. */
   readonly signal?: AbortSignal | undefined;
+  /** The run and step this call belongs to, for its spend-ledger lines (`costs --by run`). Transports ignore them. */
+  readonly runId?: string | undefined;
+  readonly step?: string | undefined;
 };
 export type Usage = {
   readonly inputTokens: number;

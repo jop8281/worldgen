@@ -156,6 +156,7 @@ Example: `{"type":"string","maxLength":5}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `maxLength` (integer, optional)
 - `pattern` (string, optional)
 - `format` ("email" | "url" | "phone", optional)
@@ -173,6 +174,7 @@ Example: `{"type":"text"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `default` (string, optional)
 
 ### int
@@ -187,6 +189,7 @@ Example: `{"type":"int","min":1,"max":3}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `min` (integer, optional)
 - `max` (integer, optional)
 - `default` (integer, optional)
@@ -203,6 +206,7 @@ Example: `{"type":"number"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `min` (number, optional)
 - `max` (number, optional)
 - `default` (number, optional)
@@ -219,6 +223,7 @@ Example: `{"type":"money","currency":"USD","min":0}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `currency` (string matching `^[A-Z]{3}$`, required): ISO 4217, fixed for the field
 - `min` (integer, optional)
 - `default` (integer, optional)
@@ -235,6 +240,7 @@ Example: `{"type":"bool"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `default` (boolean, optional)
 
 ### datetime
@@ -249,6 +255,7 @@ Example: `{"type":"datetime"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `default` ("now", optional)
 
 ### unix_time
@@ -263,6 +270,7 @@ Example: `{"type":"unix_time"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `default` ("now" | integer, optional)
 
 ### enum
@@ -277,6 +285,7 @@ Example: `{"type":"enum","values":["low","high"]}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `values` (list of string, required)
 - `default` (string, optional)
 
@@ -292,6 +301,7 @@ Example: `{"type":"ref","entity":"customer"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `entity` (string matching `^[a-z][a-z0-9_]*$`, required): snake_case identifier
 - `onDelete` ("restrict" | "cascade" | "nullify", optional, default "restrict")
 
@@ -307,6 +317,7 @@ Example: `{"type":"state","states":["open","closed"],"initial":"open","transitio
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `states` (list of string matching `^[a-z][a-z0-9_]*$`, required)
 - `initial` (string matching `^[a-z][a-z0-9_]*$`, required): snake_case identifier
 - `transitions` (map of name to list of string matching `^[a-z][a-z0-9_]*$`, required): from-state to allowed to-states. The engine enforces it on every write.
@@ -503,7 +514,7 @@ Words in <angle brackets> stand for the details of one issue, and row counts and
 - `openapi.operation_extra` (warning, owner routes): expected only operations the source spec declares under the selected paths, not <method> <path>. Hint: An extra operation is allowed when the plan adds it on purpose. Otherwise remove it, or list it in the plan assumptions.
 - `openapi.status_missing` (error, owner routes): expected <method path> can answer <status>, as the source spec declares. Hint: Make <method path> answer <status>, for example with a route status or an action response. A 2XX or 4XX wildcard in the world covers any status of that class.
 - `openapi.required_field_extra` (error, owner routes): expected <method path> accepts requests without <field>, which the source spec does not require. Hint: Make <field> optional in the input behind <method path>. Handle missing values according to the source operation instead of adding a required field.
-- `openapi.required_field_missing` (error, owner routes): expected the <method path> request body takes <field>, which the source spec requires. Hint: Add <field> to the entity or action input behind <method path>, under the spec's name, and make it required.
+- `openapi.required_field_missing` (error, owner routes): expected the <method path> request body takes <field>, which the source spec requires. Hint: Add <field> to the entity or action input behind <method path>, under the spec's name, and make it required with no default: a field with a default may be left out of a request.
 - `openapi.field_type` (error, owner routes): expected <request or response> field <field> of <method path> has type <json type>, as in the source spec. Hint: Change <field> to a field type whose JSON type is <json type>.
 - `openapi.field_enum` (error, owner routes): expected <request or response> field <field> of <method path> allows exactly <value>, as in the source spec. Hint: Make <field> an enum or state field with the values <value>.
 - `rules.invalid` (error, owner at_path): expected rules that name only known entities, fields, inputs, path parameters, bindings and state or enum values. Hint: <problem>. Fix the rules, or drop them and keep the JavaScript.

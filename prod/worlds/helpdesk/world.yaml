@@ -50,6 +50,7 @@ entities:
         nullable: true
         unique: true
         readonly: false
+        sensitive: true
         format: email
   agent:
     description: A support agent who works tickets and takes on-call shifts. tier2 staffs on-call level 1, sre staffs level 2.
@@ -1658,6 +1659,7 @@ tasks:
             ctx.assert(ctx.api('POST', '/tickets/tkt_0004/assign', { agent_id: 'agt_0001' }).status === 200, 'assignment failed');
             ctx.assert(ctx.api('PATCH', '/tickets/tkt_0003', { subject: 'Unrelated overwritten subject' }).status === 200, 'collateral patch failed');
           }
+    alternatives: []
   escalate_breached_printer_ticket:
     difficulty: medium
     instruction: Acme Logistics says one of their label printer tickets has blown its SLA. Escalate that ticket to the on-call agent, with a reason that mentions the SLA. Do not reassign or edit the ticket yourself before the escalation.
@@ -1730,6 +1732,7 @@ tasks:
             ctx.api('POST', '/tickets/' + hit.id + '/assign', { agent_id: shift.agent_id });
             ctx.api('POST', '/tickets/' + hit.id + '/escalate', { reason: 'SLA breached on a label printer ticket' });
           }
+    alternatives: []
   escalate_breached_enterprise_tickets:
     difficulty: hard
     instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason. Change nothing else.
@@ -1860,3 +1863,4 @@ tasks:
             for (const t of targets) ctx.api('POST', '/tickets/' + t.id + '/escalate', { reason: 'SLA breached on a high-priority enterprise ticket' });
             ctx.api('PATCH', '/tickets/' + targets[0].id, { subject: targets[0].subject + ' (edited)' });
           }
+    alternatives: []

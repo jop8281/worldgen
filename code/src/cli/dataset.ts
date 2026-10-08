@@ -242,7 +242,7 @@ export async function main(argv: readonly string[], env: Env = process.env, deps
     let nextTurn = deps.nextTurn;
     let backend = deps.backend;
     try {
-      if (nextTurn === undefined) nextTurn = solverTurn(deps.proposer ?? makeModel(config, env, transport));
+      if (nextTurn === undefined) nextTurn = solverTurn(deps.proposer ?? makeModel(config, env, transport), args.runId);
       // Signals are handled above, so the registry's exit hook must not turn Ctrl-C into an exit that skips the teardown.
       if (backend === undefined) backend = backendFor('boat', env, nodeRunner, { runId: args.runId, flushOnExit: false }).backend;
     } catch (e) {

@@ -46,6 +46,8 @@ export function makeModel(config: Config, env: Env = process.env, transport: Tra
   const caps = capsFromEnv(env);
   const withBudget = (req: ProposeRequest, allowance: number): ProposeRequest => ({ ...req, maxCostUsd: Math.min(req.maxCostUsd ?? config.maxCostUsd, allowance) });
   const allowanceOf = (req: ProposeRequest): number => req.maxCostUsd ?? config.maxCostUsd;
+  // Each call names its own run and step, so one model shared by several runs (eval) files every call under its run.
+  const attribution = { runId: (req: ProposeRequest) => req.runId, step: (req: ProposeRequest) => req.step };
   switch (transport) {
     case 'claude-cli': {
       const bin = env.WORLDGEN_CLAUDE_BIN ?? config.claudeBin ?? DEFAULT_CLAUDE_BIN;
@@ -58,13 +60,13 @@ export function makeModel(config: Config, env: Env = process.env, transport: Tra
         const keyEnv = config.apiKeyEnv ?? DEFAULT_API_KEY_ENV;
         throw new Error(`the claude CLI "${bin}" could not run (${probe.error}): it is often a shell shim; set WORLDGEN_CLAUDE_BIN or claudeBin in worldgen.config.json to the real binary (try ~/.local/bin/claude), or use --transport sdk with ${keyEnv} set`);
       }
-      return meteredModel(claudeCliModel({ ...config, claudeBin: bin }), ledger, { provider: 'claude-cli', account: accountFor('claude-cli'), model: config.model, caps, withBudget, allowanceOf });
+      return meteredModel(claudeCliModel({ ...config, claudeBin: bin }), ledger, { provider: 'claude-cli', account: accountFor('claude-cli'), model: config.model, caps, withBudget, allowanceOf, ...attribution });
     }
     case 'sdk': {
       const keyEnv = config.apiKeyEnv ?? DEFAULT_API_KEY_ENV;
       const key = env[keyEnv];
       if (key === undefined || key === '') throw new Error(`--transport sdk needs ${keyEnv} set in the environment`);
-      return meteredModel(anthropicModel(config, { apiKey: key }), ledger, { provider: 'anthropic', account: accountFor('anthropic', key), model: config.model, caps, withBudget, allowanceOf });
+      return meteredModel(anthropicModel(config, { apiKey: key }), ledger, { provider: 'anthropic', account: accountFor('anthropic', key), model: config.model, caps, withBudget, allowanceOf, ...attribution });
     }
     default:
       return assertNever(transport);

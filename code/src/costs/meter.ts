@@ -37,9 +37,10 @@ export type ModelMeterOptions<R = unknown> = {
   /** The model id, recorded on each line. */
   readonly model?: string | undefined;
   readonly caps?: SpendCaps | undefined;
-  readonly runId?: string | undefined;
+  /** The run, or a getter of each request's run, so one wrapper shared by many runs (eval) files each call under its own. */
+  readonly runId?: string | ((req: R) => string | undefined) | undefined;
   /** The stage or step, or a getter read at each call so one wrapper follows a whole run. */
-  readonly step?: string | (() => string | undefined) | undefined;
+  readonly step?: string | ((req: R) => string | undefined) | undefined;
   /** Applies an admitted client-estimate allowance to the transport request. */
   readonly withBudget?: ((req: R, maxCostUsd: number) => R) | undefined;
   /** The most one request may spend. The claim reserves it, so concurrent capped calls admit while their bounds fit (A-164). */
@@ -76,14 +77,15 @@ const unknownBillingErrorSchema = z.union([
  */
 export function meteredModel<R, P extends Billed>(model: Proposer<R, P>, ledger: Ledger, opts: ModelMeterOptions<R>): Proposer<R, P> {
   const caps = opts.caps ?? {};
-  const step = (): string | undefined => (typeof opts.step === 'function' ? opts.step() : opts.step);
-  const write = (reservationId: string, callStep: string | undefined, usage: BilledUsage, costUsd: number, ms: number | undefined, failed: boolean, costBasis?: CostBasis): SpendEvent =>
+  const stepOf = (req: R): string | undefined => (typeof opts.step === 'function' ? opts.step(req) : opts.step);
+  const runOf = (req: R): string | undefined => (typeof opts.runId === 'function' ? opts.runId(req) : opts.runId);
+  const write = (reservationId: string, callRun: string | undefined, callStep: string | undefined, usage: BilledUsage, costUsd: number, ms: number | undefined, failed: boolean, costBasis?: CostBasis): SpendEvent =>
     ledger.record({
       provider: opts.provider,
       account: opts.account,
       kind: 'model_call',
       reservationId,
-      runId: opts.runId,
+      runId: callRun,
       step: callStep,
       model: opts.model,
       inputTokens: usage.inputTokens,
@@ -99,9 +101,10 @@ export function meteredModel<R, P extends Billed>(model: Proposer<R, P>, ledger:
     });
   return {
     async propose(req) {
-      const callStep = step();
+      const callStep = stepOf(req);
+      const callRun = runOf(req);
       const allowance = opts.allowanceOf?.(req);
-      const admission = ledger.startModel({ provider: opts.provider, account: opts.account, caps, ...(opts.runId === undefined ? {} : { runId: opts.runId }), ...(opts.model === undefined ? {} : { model: opts.model }), ...(callStep === undefined ? {} : { step: callStep }), ...(allowance === undefined || !(allowance > 0) ? {} : { allowanceUsd: allowance }) });
+      const admission = ledger.startModel({ provider: opts.provider, account: opts.account, caps, ...(callRun === undefined ? {} : { runId: callRun }), ...(opts.model === undefined ? {} : { model: opts.model }), ...(callStep === undefined ? {} : { step: callStep }), ...(allowance === undefined || !(allowance > 0) ? {} : { allowanceUsd: allowance }) });
       const reservationId = admission.id;
       let admitted = req;
       try {
@@ -119,19 +122,19 @@ export function meteredModel<R, P extends Billed>(model: Proposer<R, P>, ledger:
         const partial = partialErrorSchema.safeParse(err);
         if (notStartedErrorSchema.safeParse(err).success) ledger.releaseReservation(reservationId);
         else if (unknownBillingErrorSchema.safeParse(err).success) ledger.record({
-          provider: opts.provider, account: opts.account, kind: 'model_call', reservationId, runId: opts.runId, step: callStep, model: opts.model,
+          provider: opts.provider, account: opts.account, kind: 'model_call', reservationId, runId: callRun, step: callStep, model: opts.model,
           usd: null, estimated: 'unpriced', failed: true, note: 'final model billing is unknown; observed partial usage is a lower bound',
           ...(partial.success ? { partialModelUsage: partial.data.partialModelUsage } : billed.success ? { partialModelUsage: { ...billed.data.usage, observedCostUsd: billed.data.costUsd, ...(billed.data.costBasis === undefined ? {} : { costBasis: billed.data.costBasis }) } } : {}),
         });
-        else if (billed.success) write(reservationId, callStep, billed.data.usage, billed.data.costUsd, billed.data.ms, true, billed.data.costBasis);
+        else if (billed.success) write(reservationId, callRun, callStep, billed.data.usage, billed.data.costUsd, billed.data.ms, true, billed.data.costBasis);
         else ledger.record({
-          provider: opts.provider, account: opts.account, kind: 'model_call', runId: opts.runId,
+          provider: opts.provider, account: opts.account, kind: 'model_call', runId: callRun,
           reservationId, step: callStep, model: opts.model, seconds: Math.max(0, ledger.now() - started) / 1000,
           usd: null, estimated: 'unpriced', failed: true, note: 'model call failed without confirmed billing',
         });
         throw err;
       }
-      write(reservationId, callStep, res.usage, res.costUsd, res.ms, false, res.costBasis);
+      write(reservationId, callRun, callStep, res.usage, res.costUsd, res.ms, false, res.costBasis);
       return res;
     },
   };
