@@ -1,6 +1,6 @@
 # OpenAPI conformance profile — YOS-160
 
-Implementation owner: ChatGPT, acting for Yos Zozo. Tracking: [YOS-160](https://linear.app/yossi-zozo123/issue/YOS-160/expose-the-openapi-conformance-profile-and-reject-unsupported-fidelity). Integration: [PR #436](https://github.com/jop8281/zozo123-genworld/pull/436).
+Implementation owner: ChatGPT, acting for Yos Zozo. Tracking: [YOS-160](https://linear.app/yossi-zozo123/issue/YOS-160/expose-the-openapi-conformance-profile-and-reject-unsupported-fidelity). Integration: PR #436 (old repo).
 
 ## Contract
 

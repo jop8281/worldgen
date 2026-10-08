@@ -90,25 +90,25 @@ The full historical GitHub issue bodies and comments were preserved in a Linear 
 
 ## Open pull requests at the alignment snapshot
 
-This list records existing work, not approval to merge it. The master owns the stabilization order. Older live-run PRs using Claude CLI are historical evidence; new acceptance runs must use the current Sonnet SDK/Boat contract. PRs targeting e2e/integration need the master to resolve their landing path under YOS-92/YOS-98.
+This list records existing work, not approval to merge it. The PR numbers are from the earlier repository, jop8281/zozo123-genworld (old repo), which no longer exists. The master owns the stabilization order. Older live-run PRs using Claude CLI are historical evidence; new acceptance runs must use the current Sonnet SDK/Boat contract. PRs targeting e2e/integration need the master to resolve their landing path under YOS-92/YOS-98.
 
 | PR | Base | Scope |
 | --- | --- | --- |
-| [#80](https://github.com/jop8281/zozo123-genworld/pull/80) | stabilize/main | Correct earliest layer for snippet.memory in the red-team catalog |
-| [#79](https://github.com/jop8281/zozo123-genworld/pull/79) | main | Use Bun for WorldGen tooling, CI, and sandbox commands (YOS-106) |
-| [#76](https://github.com/jop8281/zozo123-genworld/pull/76) | stabilize/main | engine-lints: stabilize #52 and add the gap lints (YOS-94) |
-| [#74](https://github.com/jop8281/zozo123-genworld/pull/74) | stabilize/main | stab/runtime: runtime, graders and http suites |
-| [#70](https://github.com/jop8281/zozo123-genworld/pull/70) | main | YOS-69: path params scope operations, ref inputs, tick job failures |
-| [#66](https://github.com/jop8281/zozo123-genworld/pull/66) | main | bun-e2e: Bun 1.4.2 end to end, Node kept as a second gate (YOS-88) |
-| [#60](https://github.com/jop8281/zozo123-genworld/pull/60) | e2e/integration | [WIP] wg-repair-full: backtracking, every stop reason, REPORT.md on every exit (YOS-44) |
-| [#57](https://github.com/jop8281/zozo123-genworld/pull/57) | e2e/integration | [WIP] trace-grading: graders see the call trace; goals, guards and history guards (YOS-82) |
-| [#55](https://github.com/jop8281/zozo123-genworld/pull/55) | e2e/integration | [WIP] live-gen-clinic: live WorldGen run on a clinic appointments prompt (YOS-36, YOS-55) |
-| [#54](https://github.com/jop8281/zozo123-genworld/pull/54) | e2e/integration | [WIP] live-gen-library: live WorldGen run on a public library prompt (YOS-36, YOS-55) |
-| [#51](https://github.com/jop8281/zozo123-genworld/pull/51) | e2e/integration | [WIP] engine-evidence: dump hash and world, per-call writes in the log, YAML lines on check issues (YOS-78, YOS-77) |
-| [#50](https://github.com/jop8281/zozo123-genworld/pull/50) | main | [WIP] engine-clock-explicit: explicit time by default, per-action durations, determinism test (YOS-81) |
-| [#48](https://github.com/jop8281/zozo123-genworld/pull/48) | e2e/integration | [WIP] cost-ledger-fixes: caps on by default, early account checks, per-call boat size, costs script (YOS-87) |
-| [#46](https://github.com/jop8281/zozo123-genworld/pull/46) | main | [WIP] boat-sdk: boat.dev via @boatdev/sdk, boat CLI, architecture rule (YOS-75) |
-| [#39](https://github.com/jop8281/zozo123-genworld/pull/39) | main | engine-followups: shared errorBody, reserved paths, reference and decoy 5xx codes |
+| #80 | stabilize/main | Correct earliest layer for snippet.memory in the red-team catalog |
+| #79 | main | Use Bun for WorldGen tooling, CI, and sandbox commands (YOS-106) |
+| #76 | stabilize/main | engine-lints: stabilize #52 and add the gap lints (YOS-94) |
+| #74 | stabilize/main | stab/runtime: runtime, graders and http suites |
+| #70 | main | YOS-69: path params scope operations, ref inputs, tick job failures |
+| #66 | main | bun-e2e: Bun 1.4.2 end to end, Node kept as a second gate (YOS-88) |
+| #60 | e2e/integration | [WIP] wg-repair-full: backtracking, every stop reason, REPORT.md on every exit (YOS-44) |
+| #57 | e2e/integration | [WIP] trace-grading: graders see the call trace; goals, guards and history guards (YOS-82) |
+| #55 | e2e/integration | [WIP] live-gen-clinic: live WorldGen run on a clinic appointments prompt (YOS-36, YOS-55) |
+| #54 | e2e/integration | [WIP] live-gen-library: live WorldGen run on a public library prompt (YOS-36, YOS-55) |
+| #51 | e2e/integration | [WIP] engine-evidence: dump hash and world, per-call writes in the log, YAML lines on check issues (YOS-78, YOS-77) |
+| #50 | main | [WIP] engine-clock-explicit: explicit time by default, per-action durations, determinism test (YOS-81) |
+| #48 | e2e/integration | [WIP] cost-ledger-fixes: caps on by default, early account checks, per-call boat size, costs script (YOS-87) |
+| #46 | main | [WIP] boat-sdk: boat.dev via @boatdev/sdk, boat CLI, architecture rule (YOS-75) |
+| #39 | main | engine-followups: shared errorBody, reserved paths, reference and decoy 5xx codes |
 
 ## Sources
 

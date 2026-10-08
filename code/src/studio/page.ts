@@ -631,7 +631,7 @@ a { margin-right: 0.5rem; }
     var e = body.episode;
     if (!e) { episodeView.appendChild(el('p', body.running ? 'running: the export appears when the episode is graded' : 'no exported episode')); return; }
     episodeView.appendChild(grid(['task', 'agent model', 'stop reason', 'engine score', 'score scope', 'cost usd', 'final reply'], [{
-      task: e.task_id, 'agent model': e.model, 'stop reason': e.stop_reason,
+      task: e.task_id, 'agent model': e.model === null ? 'noop (no model)' : e.model, 'stop reason': e.stop_reason,
       'engine score': e.score === null ? 'none' : e.score, 'score scope': e.score_scope,
       'cost usd': usd(e.usage ? e.usage.cost_usd : 0), 'final reply': e.final_reply === null ? '' : e.final_reply
     }]));

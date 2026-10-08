@@ -338,7 +338,7 @@ export const STAGES = {
     brief:
       'Write the tasks section with every task in the plan, at least three covering easy, medium and hard. ' +
       'Each task has an instruction, a grader, a solution that uses the public API, and decoys on medium and hard tasks. ' +
-      'Give each medium and hard task at least one decoy that does part of the work and scores above 0 but below 1, such as one that fixes only the first page of matches. ' +
+      'Give each medium and hard task at least one decoy that does part of the work and scores above 0 but below 1, such as one that fixes only the first page of matches, and make each decoy script do exactly what its why says: Stripe-mode lists are newest first, so a list read right after a write (for example GET /v1/refunds?limit=1) returns the row the script just created, and a decoy that edits that row scores 1 like the solution. ' +
       'In every grader, call ctx.guardChanges with each row the task may change, its kind and its exact fields, as the example world does, and give the task an allows list taken from its instruction, not from what the solution writes (each entity, kind, exact update fields, and a where of field values that picks the target rows), so any collateral write scores 0. ' +
       'A solution that pages through a list (a limit or cursor parameter) needs that entity seeded past one page, or the run goes back to the seed step. ' +
       'The engine judges this stage with the tasks layer: the solution scores 1, doing nothing scores 0, and every decoy and partial solution scores below 1.',

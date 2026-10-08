@@ -31,8 +31,8 @@ describe('createEmitter', () => {
       emit({ at, runId: 'r1', t: 'run_finished', ms: 902000, costUsd: 0.25, unknownCostCalls: 1,
         worldWritten: false, result: { kind: 'stopped', reason: { kind: 'time_exhausted', minutes: 15 } } });
       assert.deepEqual(log.mock.calls.map((c) => c.arguments[0]), [
-        '[r1] plan call cancelled at run deadline: 900000ms, $0.2500',
-        '[r1] plan call cancelled at run deadline: 902000ms, cost unknown',
+        '[r1] plan call cancelled: 900000ms, $0.2500',
+        '[r1] plan call cancelled: 902000ms, cost unknown',
         '[r1] run finished: stopped (time_exhausted), 902000ms, $0.2500 known; 1 call(s) have unknown cost',
       ]);
     } finally {

@@ -1,7 +1,8 @@
 # WorldGen Studio, the operator web app, on pinned Bun. Build from the repo root:
 #   docker build -f Dockerfile.studio --build-arg WORLDGEN_BUILD_SHA=$(git rev-parse HEAD) -t worldgen-studio .
-#   docker run -d -p 127.0.0.1:8787:8787 worldgen-studio
-# The studio has no login and starts worldgen runs, so publish it on the host's loopback only.
+#   docker run -d -p 127.0.0.1:8787:8787 -e WORLDGEN_STUDIO_TOKEN worldgen-studio   # or scripts/studio-deploy.sh up
+# The container binds 0.0.0.0, so the studio refuses to start without sign-in (YOS-187): pass WORLDGEN_STUDIO_TOKEN
+# from the host's environment at run time, never in the image. It starts worldgen runs, so publish it on loopback.
 # The base is pinned by digest: the same Dockerfile builds the same runtime (YOS-192, A-277).
 FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61
 WORKDIR /app/code
