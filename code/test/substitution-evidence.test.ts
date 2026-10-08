@@ -78,8 +78,8 @@ function startServe(dir: string): {
   output: () => string;
 } {
   const child = spawn(
-    'node',
-    ['--import', 'tsx', 'src/cli/worldplay.ts', 'serve', dir, '--port', '0'],
+    process.execPath,
+    ['src/cli/worldplay.ts', 'serve', dir, '--port', '0'],
     { cwd: CODE_DIR, env: { ...process.env, WORLDPLAY_HOST: undefined, WORLDPLAY_ADMIN_HOST: undefined }, stdio: ['ignore', 'pipe', 'pipe'] },
   );
   let out = '';

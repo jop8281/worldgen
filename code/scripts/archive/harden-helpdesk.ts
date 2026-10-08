@@ -2,7 +2,7 @@
  * Pins the escalate_breached_enterprise_tickets grader to exact fields with ctx.guardChanges and adds a
  * correct-fix-then-collateral decoy, then saves through checkWorld and saveWorld.
  * Rerunning is safe: the grader is replaced and the decoy is matched by its `why`.
- * Usage: npx tsx scripts/archive/harden-helpdesk.ts [worldDir] [--decoys-only]
+ * Usage: bun scripts/archive/harden-helpdesk.ts [worldDir] [--decoys-only]
  * --decoys-only adds the decoy to the old grader and prints the check verdict without saving.
  */
 import path from 'node:path';

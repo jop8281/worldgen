@@ -3,7 +3,7 @@
  * For every task of every world it replays the reference solution on a fresh runtime, picks a row the
  * solution wrote, makes ONE extra edit through the public update route to a writable field the solution
  * did not write, and grades the final state. hole=yes means the grader still gave 1.
- * Never saves a world. Usage: npx tsx scripts/archive/probe-collateral.ts [worldDir ...] [--json]
+ * Never saves a world. Usage: bun scripts/archive/probe-collateral.ts [worldDir ...] [--json]
  * Default: every directory under ../prod/worlds.
  */
 import { readdirSync } from 'node:fs';

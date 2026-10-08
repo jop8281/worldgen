@@ -19,7 +19,7 @@ async function heldWriter(mode = 'wait') {
   const record = path.join(out, 'record.json');
   const release = path.join(out, 'release');
   writeFileSync(record, JSON.stringify(next));
-  const child = spawn(process.execPath, ['--import', 'tsx', 'test/helpers/episode-writer.ts', out, record, release, mode], {
+  const child = spawn(process.execPath, ['test/helpers/episode-writer.ts', out, record, release, mode], {
     cwd: CODE, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';

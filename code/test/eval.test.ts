@@ -44,7 +44,7 @@ function suite(): Suite {
 }
 
 function cli(args: readonly string[], env: NodeJS.ProcessEnv = process.env): { status: number | null; stdout: string; stderr: string } {
-  const r = spawnSync('node', ['--import', 'tsx', CLI, ...args], { cwd: CODE_DIR, encoding: 'utf8', env });
+  const r = spawnSync(process.execPath, [CLI, ...args], { cwd: CODE_DIR, encoding: 'utf8', env });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 

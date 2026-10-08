@@ -109,7 +109,7 @@ describe('BOAT_BASE_URL', () => {
   it('makes the sandbox CLI exit 1 before any request when BOAT_BASE_URL is off boat.dev', { timeout: 20000 }, async () => {
     const boat = await fakeBoat();
     try {
-      const entry = [process.execPath, ...(process.versions.bun === undefined ? ['--import', 'tsx'] : []), 'src/cli/sandbox.ts', 'reconcile-orphans', '--apply'];
+      const entry = [process.execPath, 'src/cli/sandbox.ts', 'reconcile-orphans', '--apply'];
       const r = await run(entry, CODE_DIR, { BOAT_API_KEY: KEY, WORLDGEN_BOAT_ORG: 'org_test', WORLDGEN_COSTS_FILE: path.join(tmp, 'cli-costs.jsonl'), BOAT_BASE_URL: boat.url });
       assert.deepEqual([r.code, r.stderr.trim(), boat.hits, `${r.stdout}${r.stderr}`.includes(KEY)], [1, `${REFUSAL} ${new URL(boat.url).protocol}//${new URL(boat.url).host}`, [], false]);
     } finally {
@@ -157,12 +157,9 @@ describe('the Boat key never comes from a .env file', () => {
     assert.equal(r.stdout.trim(), 'BOAT_API_KEY is not set: create a key at https://boat.dev/dashboard?tab=api-keys and export it');
   });
 
-  it('a process started with --env-file refuses to read the key, under Bun in code/ and under Node', { timeout: 20000 }, async () => {
+  it('a process started with --env-file refuses to read the key, under Bun in code/', { timeout: 20000 }, async () => {
     const dir = await dotenvDir('explicit', false);
     const refusal = 'BOAT_API_KEY is never read from an env file, and this process was started with --env-file; export the key in the environment instead';
-    const node = await run(['node', '--import', 'tsx', `--env-file=${path.join(dir, '.env')}`, path.join(dir, 'probe.ts')], CODE_DIR, {});
-    assert.deepEqual([node.stdout.trim(), `${node.stdout}${node.stderr}`.includes(canary)], [refusal, false]);
-    if (process.versions.bun === undefined) return;
     for (const flags of [[`--env-file=${path.join(dir, '.env')}`], ['--env-file', path.join(dir, '.env')]]) {
       const bun = await run([process.execPath, ...flags, path.join(dir, 'probe.ts')], CODE_DIR, {});
       assert.deepEqual([bun.stdout.trim(), `${bun.stdout}${bun.stderr}`.includes(canary)], [refusal, false]);

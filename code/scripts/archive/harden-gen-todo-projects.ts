@@ -2,7 +2,7 @@
  * Rewrites two gen-todo-projects graders with exact-field ctx.guardChanges allowances and adds one
  * correct-fix-then-collateral decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: graders are replaced and decoys are matched by their `why`.
- * Usage: npx tsx scripts/archive/harden-gen-todo-projects.ts [worldDir]
+ * Usage: bun scripts/archive/harden-gen-todo-projects.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';

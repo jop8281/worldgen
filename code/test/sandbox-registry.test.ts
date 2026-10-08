@@ -605,7 +605,7 @@ describe('Boat credential preflight', () => {
 describe('npm run sandbox', () => {
   const run = (args: readonly string[], env: Record<string, string>): Promise<{ code: number; stdout: string; stderr: string }> =>
     new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [...(process.versions.bun === undefined ? ['--import', 'tsx'] : []), 'src/cli/sandbox.ts', ...args], { cwd: CODE_DIR, env: { PATH: process.env['PATH'] ?? '', ...env } });
+      const child = spawn(process.execPath, ['src/cli/sandbox.ts', ...args], { cwd: CODE_DIR, env: { PATH: process.env['PATH'] ?? '', ...env } });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (d: Buffer) => (stdout += String(d)));

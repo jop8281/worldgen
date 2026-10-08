@@ -3,7 +3,7 @@
  * correct-fix-then-collateral decoy to each (the correct solution, then a product rename), then saves
  * through checkWorld and saveWorld. Rerunning is safe: the guard is replaced only when still the old
  * loop, and decoys are matched by their `why`.
- * Usage: npx tsx scripts/archive/harden-gen-bakery-vague.ts [worldDir]
+ * Usage: bun scripts/archive/harden-gen-bakery-vague.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';

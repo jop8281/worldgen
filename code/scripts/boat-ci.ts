@@ -19,11 +19,9 @@ if (archive === undefined) {
 }
 
 const BUN_DIR = '/tmp/worldgen-bun';
-/** The Node major scripts/factory-check.sh needs, and a guard scale for suites sharing 8 CPUs, so failures map onto CI's. */
-const NODE_MAJOR = '22';
+/** A guard scale for suites sharing 8 CPUs, so failures map onto CI's. */
 const GUARD_SCALE = '2';
-const NODE_DIR = '/tmp/worldgen-node22';
-const PATHS = `export PATH=${BUN_DIR}/node_modules/.bin:${NODE_DIR}/bin:$PATH WORLDGEN_GUARD_SCALE=${GUARD_SCALE}; cd /tmp/worldgen/repo/code`;
+const PATHS = `export PATH=${BUN_DIR}/node_modules/.bin:$PATH WORLDGEN_GUARD_SCALE=${GUARD_SCALE}; cd /tmp/worldgen/repo/code`;
 const RUNS: Record<string, string> = {
   bun: 'bun run check',
 };
@@ -62,9 +60,8 @@ try {
   };
   await sh('mkdir -p repo && tar -xzf repo.tgz -C repo');
   await sh(`npm install --silent --no-audit --no-fund --prefix ${BUN_DIR} bun@${SANDBOX_BUN_VERSION}`);
-  await sh(`. ~/.nvm/nvm.sh && nvm install ${NODE_MAJOR} >/tmp/nvm.log 2>&1 && ln -sfn "$(dirname "$(dirname "$(nvm which ${NODE_MAJOR})")")" ${NODE_DIR}`);
   await sh(`${PATHS} && bun --version && bun install --frozen-lockfile >/tmp/install.log 2>&1`);
-  log(`installed bun ${SANDBOX_BUN_VERSION}, node ${(await sh(`${PATHS} && node -v`)).trim()}, ${(await sh('nproc')).trim()} cpus, WORLDGEN_GUARD_SCALE=${GUARD_SCALE}`);
+  log(`installed bun ${SANDBOX_BUN_VERSION}, ${(await sh('nproc')).trim()} cpus, WORLDGEN_GUARD_SCALE=${GUARD_SCALE}`);
   if ((await sh('test -f repo/scripts/factory-check.sh && echo yes || true')).trim() === 'yes') RUNS['factory'] = 'cd .. && bash scripts/factory-check.sh';
   for (const [name, cmd] of Object.entries(RUNS)) {
     await b.start(sb.id, ['bash', '-c', `${PATHS} && { ${cmd}; echo $? > /tmp/${name}.exit; }`], { workdir: sb.workdir, log: `/tmp/${name}.log` });
@@ -76,9 +73,7 @@ try {
   }
   for (const name of Object.keys(RUNS)) {
     const exit = (await sh(`cat /tmp/${name}.exit`)).trim();
-    const summary = name === 'factory'
-      ? await sh(`grep -E '^(# |ℹ )(tests|pass|fail|skipped|todo|cancelled) |^not ok |^✖ ' /tmp/factory.log | head -60 || true`)
-      : await sh(`grep -E '^ *[0-9]+ (pass|fail|skip|todo)$|^Ran [0-9]+ tests|^\\(fail\\)' /tmp/bun.log | sort -u | head -60 || true`);
+    const summary = await sh(`grep -E '^ *[0-9]+ (pass|fail|skip|todo)$|^Ran [0-9]+ tests|^\\(fail\\)' /tmp/${name}.log | sort -u | head -60 || true`);
     const tc = await sh(`grep -E 'error TS' /tmp/${name}.log | head -10 || true`);
     process.stdout.write(`\n== ${name} (${RUNS[name]}) exit ${exit}\n${tc}${summary}`);
     if (name === 'factory' && junitOut !== undefined) {

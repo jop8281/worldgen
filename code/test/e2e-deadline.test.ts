@@ -5,13 +5,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-// Keep the full acceptance subprocess on the retained Node compatibility path:
-// Bun's runner uses process.execPath and would bypass a PATH-only command shim.
-const NODE = process.versions['bun'] === undefined ? process.execPath : 'node';
-
 describe('acceptance deadline reporting and cleanup', () => {
   it('R4 clears timers after successful and malformed responses so the client exits naturally', { timeout: 8_000 }, () => {
-    const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import assert from 'node:assert/strict';
       import { createServer } from 'node:http';
       import { json } from './scripts/e2e-http.ts';
@@ -38,9 +34,10 @@ describe('acceptance deadline reporting and cleanup', () => {
       const bin = path.join(dir, 'bin');
       const stopped = path.join(dir, 'stopped.json');
       await mkdir(bin);
-      // Only this acceptance child sees the shim. All commands are local fake responses;
+      // Only this acceptance child sees the stand-in runner (E2E_RUNNER). All commands are local fake responses;
       // the real acceptance script still owns HTTP calls, reporting and process cleanup.
-      await writeFile(path.join(bin, 'npm'), `#!/usr/bin/env node
+      const runner = path.join(bin, 'fake-runner.cjs');
+      await writeFile(runner, `#!/usr/bin/env bun
 const { createServer } = require('node:http');
 const { writeFileSync } = require('node:fs');
 const args = process.argv.slice(2);
@@ -69,9 +66,9 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 `, { mode: 0o755 });
-      const result = spawnSync(NODE, ['--import', 'tsx', 'scripts/e2e.ts'], {
+      const result = spawnSync(process.execPath, ['scripts/e2e.ts'], {
         cwd: path.resolve(import.meta.dirname, '..'),
-        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env['PATH'] ?? ''}` },
+        env: { ...process.env, E2E_RUNNER: runner },
         encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024,
       });
       assert.equal(result.error, undefined);

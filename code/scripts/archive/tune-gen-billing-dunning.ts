@@ -6,7 +6,7 @@
  *   ctx.time.minutesBetween only for a non-canonical value, so the result is unchanged.
  * - billing_cycle scans invoices for the next number only when a renewal is due.
  * Rerunning is safe: each rewrite applies only to the original text.
- * Usage: npx tsx scripts/archive/tune-gen-billing-dunning.ts [worldDir]
+ * Usage: bun scripts/archive/tune-gen-billing-dunning.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';

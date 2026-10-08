@@ -13,7 +13,7 @@ const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const WORLD_FORMAT = path.resolve(CODE_DIR, '../prod/world-format.md');
 
 function docs(...args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const r = spawnSync('node', ['--import', 'tsx', 'src/cli/worldplay.ts', 'docs', ...args], { cwd: CODE_DIR, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['src/cli/worldplay.ts', 'docs', ...args], { cwd: CODE_DIR, encoding: 'utf8' });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -122,7 +122,7 @@ const PACKAGE = z.object({ scripts: z.record(z.string(), z.string()) }).parse(JS
 const NOT_CLI = new Set(['typecheck', 'test', 'check', 'e2e']);
 
 function helpOf(file: string, ...args: string[]): { status: number | null; stdout: string } {
-  const r = spawnSync('node', ['--import', 'tsx', file, ...args, '--help'], { cwd: CODE_DIR, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [file, ...args, '--help'], { cwd: CODE_DIR, encoding: 'utf8' });
   return { status: r.status, stdout: r.stdout };
 }
 
@@ -255,11 +255,6 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
     }
   });
 
-  it('test:node runs node:test under Node, never bun', () => {
-    // More --import loaders may follow tsx, such as the active-handles report (A-223); the runner stays node --test.
-    assert.match(PACKAGE.scripts['test:node'] ?? '', /^node --import tsx( --import \S+)* --test /);
-  });
-
   it('R17 a costs script runs cli/costs.ts and README.md documents it in one block', () => {
     assert.equal(PACKAGE.scripts.costs, 'bun src/cli/costs.ts');
     const readme = readmeDocs();
@@ -332,7 +327,7 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
       what = file;
       run = () => (file.endsWith('.sh')
         ? spawnSync('bash', [file, '--help'], { cwd: REPO_DIR, encoding: 'utf8' })
-        : spawnSync('node', ['--import', 'tsx', path.relative(CODE_DIR, path.join(REPO_DIR, file)), '--help'], { cwd: CODE_DIR, encoding: 'utf8' }));
+        : spawnSync(process.execPath, [path.relative(CODE_DIR, path.join(REPO_DIR, file)), '--help'], { cwd: CODE_DIR, encoding: 'utf8' }));
     } else {
       const script = c.head.split(' ')[2]!;
       const m = NOT_CLI.has(script) ? null : /^(?:bun|tsx) (\S+\.ts)(?: (\w+))?$/.exec(PACKAGE.scripts[script] ?? '');
@@ -341,7 +336,7 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
       const first = c.args[0] === '--' ? c.args[1] : c.args[0];
       const sub = fixed ?? (script === 'worldplay' && /^[a-z]+$/.test(first ?? '') ? first : undefined);
       what = `${entry} ${sub ?? ''}`.trim();
-      run = () => spawnSync('node', ['--import', 'tsx', entry!, ...(sub === undefined ? [] : [sub]), '--help'], { cwd: CODE_DIR, encoding: 'utf8' });
+      run = () => spawnSync(process.execPath, [entry!, ...(sub === undefined ? [] : [sub]), '--help'], { cwd: CODE_DIR, encoding: 'utf8' });
     }
     if (!helps.has(what)) {
       const r = run();
@@ -415,13 +410,13 @@ describe('Docker', () => {
     assert.ok(run[1]!.endsWith(` worldplay ${jsonArray('CMD').join(' ')}`));
   });
 
-  it('R18 the Dockerfile exposes only the world port, copies the world, runs as node and keeps admin on loopback', () => {
+  it('R18 the Dockerfile exposes only the world port, copies the world, runs as bun on Bun and keeps admin on loopback', () => {
     assert.ok(dockerfile.split('\n').includes('EXPOSE 4000'));
     assert.ok(dockerfile.split('\n').includes('COPY prod/worlds/ /worlds/'));
-    assert.ok(dockerfile.split('\n').includes('USER node'));
+    assert.ok(dockerfile.split('\n').includes('USER bun'));
     assert.ok(dockerfile.split('\n').includes('ENV WORLDPLAY_HOST=0.0.0.0'));
     assert.ok(dockerfile.split('\n').includes('ENV WORLDPLAY_ADMIN_HOST=127.0.0.1'));
-    assert.ok(dockerfile.split('\n').includes('FROM node:22-slim'));
+    assert.ok(dockerfile.split('\n').some((l) => l.startsWith('FROM oven/bun:1.4.2-slim@sha256:')));
     assert.ok(existsSync(path.join(REPO_DIR, 'prod/worlds/helpdesk/world.yaml')));
   });
 

@@ -1,6 +1,6 @@
 /**
- * Red-team: the `worldplay` CLI (G-56 to G-58). Each test spawns `tsx src/cli/worldplay.ts` the way
- * `npm run worldplay -- <args>` does. Expected output fragments are literals: issue codes, the
+ * Red-team: the `worldplay` CLI (G-56 to G-58). Each test spawns `bun src/cli/worldplay.ts` the way
+ * `bun run worldplay <args>` does. Expected output fragments are literals: issue codes, the
  * path segments of the mutated item, the found value, and the fixed parts of the
  * expected and hint texts in ISSUES.
  *

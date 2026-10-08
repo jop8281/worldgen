@@ -3,7 +3,7 @@
  * allowances (technician_id and status on the target tickets) and adds one correct-fix-then-edit-the-target decoy
  * to each, then saves through checkWorld and saveWorld. The decoy wraps the task's own reference solution.
  * Rerunning is safe: the guard block is replaced in place and decoys are matched by their `why`.
- * Usage: npx tsx scripts/archive/harden-gen-repair-desk.ts [worldDir]
+ * Usage: bun scripts/archive/harden-gen-repair-desk.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';

@@ -21,7 +21,7 @@ All commands run from `~/worldgen/code` unless they say otherwise.
 | P1 | On the release commit | `git fetch && git switch main && git pull --ff-only && git rev-parse HEAD` | The SHA equals the release tag (`git rev-parse live-ready^{}`). Write the SHA in the session log |
 | P2 | Release tag exists | `git ls-remote --tags origin live-ready` | The tag is printed. It does not exist yet on a new clone: tag the last green main **before** the session (`git tag -a live-ready -m "live run" <sha> && git push origin live-ready`). Rollback (§8) depends on this tag |
 | P3 | Clean tree | `git status --porcelain` | No output |
-| P4 | Install | `bun install --frozen-lockfile` | exit 0. Without Bun, `npm ci` |
+| P4 | Install | `bun install --frozen-lockfile` | exit 0. Bun is the only runtime (A-381) |
 | P5 | Repo green | `bun run check` | Exits 0. The gate typechecks and runs every test under Bun (A-134, A-379). It includes `worlds.test.ts`, which checks and verifies every world already in `prod/worlds` (A-42) |
 | P6 | The real `claude` binary | `export WORLDGEN_CLAUDE_BIN="$HOME/.local/bin/claude" && "$WORLDGEN_CLAUDE_BIN" --version` | Prints a version. `WORLDGEN_CLAUDE_BIN` must be the absolute path of the real binary, not the cmux shim: with the shim `claude -p` exits 127 inside WorldGen ([claude-cli-transport.md](claude-cli-transport.md) §5) |
 | P7 | Logged in | `claude auth status` | exit 0, and `authMethod` is `claude.ai` or `oauth_token`. Never set `ANTHROPIC_API_KEY` or `LLM_KEY` for the default transport (A-56) |
@@ -152,7 +152,7 @@ Never paraphrase REPORT.md content in a way that makes it stronger than the repo
 2. **Pin to the release tag** in a separate worktree, so main's history is not rewritten:
    ```sh
    git -C ~/worldgen worktree add ~/worldgen-live live-ready
-   cd ~/worldgen-live/code && npm ci && bun run check
+   cd ~/worldgen-live/code && bun install --frozen-lockfile && bun run check
    ```
 3. **Carry the artifacts across:** copy `prod/prompts/` and every `prod/worlds/gen-*` and `eval/runs/<date>-live/` already committed this session into `~/worldgen-live`. Rerun §4 on each world against the pinned engine, because a world must verify under the engine that ships.
 4. **Continue** the remaining prompts from `~/worldgen-live/code`, from P6 onwards.

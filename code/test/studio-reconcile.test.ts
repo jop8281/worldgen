@@ -274,7 +274,7 @@ describe('reconcile-jobs', () => {
 describe('bun run studio -- reconcile-jobs', () => {
   const run = (args: readonly string[]): Promise<{ code: number; stdout: string; stderr: string }> =>
     new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [...(process.versions.bun === undefined ? ['--import', 'tsx'] : []), 'src/cli/studio.ts', 'reconcile-jobs', ...args], { cwd: CODE_DIR, env: { PATH: process.env['PATH'] ?? '' } });
+      const child = spawn(process.execPath, ['src/cli/studio.ts', 'reconcile-jobs', ...args], { cwd: CODE_DIR, env: { PATH: process.env['PATH'] ?? '' } });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (d: Buffer) => (stdout += String(d)));
