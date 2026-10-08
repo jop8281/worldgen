@@ -4,7 +4,7 @@ import { issue, type CheckIssue } from '#engine';
 import { configSchema, type Config } from '../src/worldgen/config.ts';
 import type { AttemptOutcome } from '../src/worldgen/events.ts';
 import type { StepId } from '../src/worldgen/stages.ts';
-import { attemptIssueSet, decide, issueSetKey, estimateCallMs, NO_CALLS, preflight, stepShareMs, ownerOf, record, recordBacktrack, recordStallRetry, type Decision, type Ledger, type OwnedIssue } from '../src/worldgen/policy.ts';
+import { attemptIssueSet, decide, issueSetKey, estimateCallMs, nextIsRepair, NO_CALLS, preflight, stepShareMs, ownerOf, record, recordBacktrack, recordStallRetry, type Decision, type Ledger, type OwnedIssue } from '../src/worldgen/policy.ts';
 
 const budget = { maxAttempts: 4 };
 const config: Config = {
@@ -574,6 +574,19 @@ describe('ownerOf a seed collision (A-128)', () => {
     const i = issue('test.seed_collision', ['tests', 'create_acme', 'script'], { entity: 'customer', field: 'name', value: 'Acme', rowId: 'cus_0001' }, 'customer.name "Acme"');
     assert.equal(ownerOf(i), 'workflow');
   });
+});
+
+describe('nextIsRepair: one rule for the preflight and the reserve (A-349)', () => {
+  const first = (ms: number) => ({ ms, repair: false });
+  const repair = (ms: number) => ({ ms, repair: true });
+  const cases = [
+    { name: 'a step with no call and no feedback makes a first call', history: [], feedback: false, want: false },
+    { name: 'feedback makes a repair, even before any call (an iterate probe that failed)', history: [], feedback: true, want: true },
+    { name: 'a step that made a first call reruns as a repair with no feedback (a rerun after a backtrack)', history: [first(214_214)], feedback: false, want: true },
+    { name: 'a retry with feedback is a repair', history: [first(214_214)], feedback: true, want: true },
+    { name: 'repairs alone, with no first call on record, leave the next call a first call', history: [repair(46_000)], feedback: false, want: false },
+  ] as const;
+  for (const c of cases) it(c.name, () => assert.equal(nextIsRepair(c.history, c.feedback), c.want));
 });
 
 describe('estimateCallMs', () => {
