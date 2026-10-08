@@ -75,29 +75,29 @@ The last full run is stress-2, on 2026-10-07. It ran the whole 29-case `stress` 
 
 ## Status
 
-Everything below is built and merged into the trunk. Each row links the PRs that built it. This repository starts from a one-commit snapshot of `stabilize/main` at c2528607 in the earlier repository, jop8281/zozo123-genworld, so the PR links are a historical record from that repository, not PRs of this one.
+Everything below is built and merged into the trunk. Each row names the PRs that built it. This repository starts from a one-commit snapshot of `stabilize/main` at c2528607 in the earlier repository, jop8281/zozo123-genworld, which no longer exists. So the PR numbers below are a historical record from that repository, kept as plain text. They are not PRs of this one.
 
 | What | Where | PRs |
 |---|---|---|
-| Engine check in seven layers, from schema to lints | `code/src/engine/check.ts` | [#15](https://github.com/jop8281/zozo123-genworld/pull/15), [#18](https://github.com/jop8281/zozo123-genworld/pull/18), [#26](https://github.com/jop8281/zozo123-genworld/pull/26), [#52](https://github.com/jop8281/zozo123-genworld/pull/52), [#76](https://github.com/jop8281/zozo123-genworld/pull/76) |
-| Engine serve with the admin port, verify, grade and docs | `code/src/engine/http.ts`, `code/src/cli/worldplay.ts` | [#25](https://github.com/jop8281/zozo123-genworld/pull/25), [#26](https://github.com/jop8281/zozo123-genworld/pull/26), [#111](https://github.com/jop8281/zozo123-genworld/pull/111) |
-| OpenAPI document of a world, and the fidelity check `worldplay openapi` | `code/src/engine/openapi.ts`, `code/src/engine/openapi-fidelity.ts` | [#29](https://github.com/jop8281/zozo123-genworld/pull/29), [#184](https://github.com/jop8281/zozo123-genworld/pull/184) |
-| Docker image with a health check | `Dockerfile` | [#101](https://github.com/jop8281/zozo123-genworld/pull/101), [#134](https://github.com/jop8281/zozo123-genworld/pull/134), [#142](https://github.com/jop8281/zozo123-genworld/pull/142) |
-| Hand-built worlds | `prod/worlds/helpdesk/`, `prod/worlds/retail-tau2/` | [#17](https://github.com/jop8281/zozo123-genworld/pull/17), [#32](https://github.com/jop8281/zozo123-genworld/pull/32), [#177](https://github.com/jop8281/zozo123-genworld/pull/177), [#215](https://github.com/jop8281/zozo123-genworld/pull/215) |
-| WorldGen run loop, judge, repair policy and `REPORT.md` | `code/src/worldgen/run.ts` | [#31](https://github.com/jop8281/zozo123-genworld/pull/31), [#33](https://github.com/jop8281/zozo123-genworld/pull/33), [#230](https://github.com/jop8281/zozo123-genworld/pull/230) |
-| The `worldgen` CLI | `code/src/cli/worldgen.ts` | [#67](https://github.com/jop8281/zozo123-genworld/pull/67), [#71](https://github.com/jop8281/zozo123-genworld/pull/71), [#345](https://github.com/jop8281/zozo123-genworld/pull/345) |
-| Description, OpenAPI and CSV inputs, with input coverage checks | `code/src/worldgen/input.ts`, `code/src/worldgen/input-coverage.ts` | [#21](https://github.com/jop8281/zozo123-genworld/pull/21), [#72](https://github.com/jop8281/zozo123-genworld/pull/72), [#261](https://github.com/jop8281/zozo123-genworld/pull/261), [#346](https://github.com/jop8281/zozo123-genworld/pull/346) |
-| Iterate with `--world`, behind the preservation gate | `code/src/worldgen/iterate.ts` | [#27](https://github.com/jop8281/zozo123-genworld/pull/27), [#205](https://github.com/jop8281/zozo123-genworld/pull/205), [#264](https://github.com/jop8281/zozo123-genworld/pull/264), [#298](https://github.com/jop8281/zozo123-genworld/pull/298) |
-| Rehearsal suite and `bun run eval` | `eval/suite.yaml`, `code/src/cli/eval.ts` | [#30](https://github.com/jop8281/zozo123-genworld/pull/30) |
-| Spend ledger, separate LLM and sandbox meters, `bun run costs` | `code/src/costs/` | [#34](https://github.com/jop8281/zozo123-genworld/pull/34), [#138](https://github.com/jop8281/zozo123-genworld/pull/138) |
-| Sandbox backends: OpenShell, sbx and Boat | `code/src/sandboxes/` | [#35](https://github.com/jop8281/zozo123-genworld/pull/35), [#94](https://github.com/jop8281/zozo123-genworld/pull/94), [#97](https://github.com/jop8281/zozo123-genworld/pull/97), [#110](https://github.com/jop8281/zozo123-genworld/pull/110) |
-| Bun as the default runtime, Node 22 as the second gate | `code/bun.lock`, `scripts/runner.sh` | [#164](https://github.com/jop8281/zozo123-genworld/pull/164), [#237](https://github.com/jop8281/zozo123-genworld/pull/237), [#359](https://github.com/jop8281/zozo123-genworld/pull/359) |
-| Live runner | `code/src/cli/live.ts`, `scripts/live.sh` | [#107](https://github.com/jop8281/zozo123-genworld/pull/107), [#182](https://github.com/jop8281/zozo123-genworld/pull/182) |
-| `qualify-main.sh`, the gate on a fresh clone | `scripts/qualify-main.sh` | [#324](https://github.com/jop8281/zozo123-genworld/pull/324), [#362](https://github.com/jop8281/zozo123-genworld/pull/362) |
-| Engine demo and solve demo | `scripts/demo.sh`, `scripts/solve-demo.sh` | [#38](https://github.com/jop8281/zozo123-genworld/pull/38), [#149](https://github.com/jop8281/zozo123-genworld/pull/149), [#328](https://github.com/jop8281/zozo123-genworld/pull/328) |
-| Graded dataset export on Boat | `code/src/cli/dataset.ts` | [#151](https://github.com/jop8281/zozo123-genworld/pull/151) |
-| Design doc | `prod/design.md` | [#42](https://github.com/jop8281/zozo123-genworld/pull/42), [#135](https://github.com/jop8281/zozo123-genworld/pull/135), [#266](https://github.com/jop8281/zozo123-genworld/pull/266) |
-| Factory target contract: `factory.toml`, `factory-check.sh`, `REVIEW.md`, JUnit evidence and the `factory/integration` CI trigger (A-186) | `factory.toml`, `scripts/factory-check.sh`, `REVIEW.md` | [#419](https://github.com/jop8281/zozo123-genworld/pull/419), [#434](https://github.com/jop8281/zozo123-genworld/pull/434) |
+| Engine check in seven layers, from schema to lints | `code/src/engine/check.ts` | #15, #18, #26, #52, #76 |
+| Engine serve with the admin port, verify, grade and docs | `code/src/engine/http.ts`, `code/src/cli/worldplay.ts` | #25, #26, #111 |
+| OpenAPI document of a world, and the fidelity check `worldplay openapi` | `code/src/engine/openapi.ts`, `code/src/engine/openapi-fidelity.ts` | #29, #184 |
+| Docker image with a health check | `Dockerfile` | #101, #134, #142 |
+| Hand-built worlds | `prod/worlds/helpdesk/`, `prod/worlds/retail-tau2/` | #17, #32, #177, #215 |
+| WorldGen run loop, judge, repair policy and `REPORT.md` | `code/src/worldgen/run.ts` | #31, #33, #230 |
+| The `worldgen` CLI | `code/src/cli/worldgen.ts` | #67, #71, #345 |
+| Description, OpenAPI and CSV inputs, with input coverage checks | `code/src/worldgen/input.ts`, `code/src/worldgen/input-coverage.ts` | #21, #72, #261, #346 |
+| Iterate with `--world`, behind the preservation gate | `code/src/worldgen/iterate.ts` | #27, #205, #264, #298 |
+| Rehearsal suite and `bun run eval` | `eval/suite.yaml`, `code/src/cli/eval.ts` | #30 |
+| Spend ledger, separate LLM and sandbox meters, `bun run costs` | `code/src/costs/` | #34, #138 |
+| Sandbox backends: OpenShell, sbx and Boat | `code/src/sandboxes/` | #35, #94, #97, #110 |
+| Bun as the default runtime, Node 22 as the second gate | `code/bun.lock`, `scripts/runner.sh` | #164, #237, #359 |
+| Live runner | `code/src/cli/live.ts`, `scripts/live.sh` | #107, #182 |
+| `qualify-main.sh`, the gate on a fresh clone | `scripts/qualify-main.sh` | #324, #362 |
+| Engine demo and solve demo | `scripts/demo.sh`, `scripts/solve-demo.sh` | #38, #149, #328 |
+| Graded dataset export on Boat | `code/src/cli/dataset.ts` | #151 |
+| Design doc | `prod/design.md` | #42, #135, #266 |
+| Factory target contract: `factory.toml`, `factory-check.sh`, `REVIEW.md`, JUnit evidence and the `factory/integration` CI trigger (A-186) | `factory.toml`, `scripts/factory-check.sh`, `REVIEW.md` | #419, #434 |
 | Generated worlds | `prod/worlds/gen-*` | one per world, in [All worlds](#all-worlds) |
 
 ## Setup
@@ -234,31 +234,31 @@ Every directory in `prod/worlds/`. `test/worlds.test.ts` checks and verifies eac
 
 | World | Input | Tasks | PR |
 |---|---|---|---|
-| [helpdesk](prod/worlds/helpdesk/) | hand-built | 3 | [#17](https://github.com/jop8281/zozo123-genworld/pull/17), [#32](https://github.com/jop8281/zozo123-genworld/pull/32) |
-| [retail-tau2](prod/worlds/retail-tau2/) | hand-built from τ²-bench retail | 8 | [#177](https://github.com/jop8281/zozo123-genworld/pull/177), [#215](https://github.com/jop8281/zozo123-genworld/pull/215) |
-| [gen-bakery-vague](prod/worlds/gen-bakery-vague/) | description | 3 | [#206](https://github.com/jop8281/zozo123-genworld/pull/206) |
-| [gen-billing-dunning](prod/worlds/gen-billing-dunning/) | description | 3 | [#312](https://github.com/jop8281/zozo123-genworld/pull/312) |
-| [gen-bookmarks](prod/worlds/gen-bookmarks/) | description | 4 | [#311](https://github.com/jop8281/zozo123-genworld/pull/311) |
-| [gen-clinic-appointments](prod/worlds/gen-clinic-appointments/) | description | 4 | [#159](https://github.com/jop8281/zozo123-genworld/pull/159) |
-| [gen-course-enrollments](prod/worlds/gen-course-enrollments/) | CSV | 3 | [#276](https://github.com/jop8281/zozo123-genworld/pull/276) |
-| [gen-helpdesk](prod/worlds/gen-helpdesk/) | description | 4 | [#196](https://github.com/jop8281/zozo123-genworld/pull/196) |
-| [gen-hotel-booking](prod/worlds/gen-hotel-booking/) | description | 4 | [#191](https://github.com/jop8281/zozo123-genworld/pull/191) |
-| [gen-insurance-claims](prod/worlds/gen-insurance-claims/) | description | 4 | [#331](https://github.com/jop8281/zozo123-genworld/pull/331) |
-| [gen-library-loans](prod/worlds/gen-library-loans/) | CSV | 3 | [#366](https://github.com/jop8281/zozo123-genworld/pull/366) |
-| [gen-linear-backlog](prod/worlds/gen-linear-backlog/) | CSV | 4 | [#272](https://github.com/jop8281/zozo123-genworld/pull/272) |
-| [gen-orders](prod/worlds/gen-orders/) | CSV | 4 | [#386](https://github.com/jop8281/zozo123-genworld/pull/386) |
-| [gen-orders-customers](prod/worlds/gen-orders-customers/) | CSV | 3 | [#139](https://github.com/jop8281/zozo123-genworld/pull/139) |
-| [gen-petstore](prod/worlds/gen-petstore/) | OpenAPI | 3 | [#117](https://github.com/jop8281/zozo123-genworld/pull/117), [#433](https://github.com/jop8281/zozo123-genworld/pull/433) |
-| [gen-petstore-refunds](prod/worlds/gen-petstore-refunds/) | iterate on `gen-petstore` | 6 | [#264](https://github.com/jop8281/zozo123-genworld/pull/264), [#440](https://github.com/jop8281/zozo123-genworld/pull/440) |
-| [gen-refunds](prod/worlds/gen-refunds/) | OpenAPI | 4 | [#157](https://github.com/jop8281/zozo123-genworld/pull/157) |
-| [gen-rental-fleet](prod/worlds/gen-rental-fleet/) | description | 4 | [#241](https://github.com/jop8281/zozo123-genworld/pull/241) |
-| [gen-repair-desk](prod/worlds/gen-repair-desk/) | iterate | 3 | [#270](https://github.com/jop8281/zozo123-genworld/pull/270) |
-| [gen-retail-tau2-known](prod/worlds/gen-retail-tau2-known/) | description | 4 | [#238](https://github.com/jop8281/zozo123-genworld/pull/238) |
-| [gen-shipments](prod/worlds/gen-shipments/) | CSV | 3 | [#243](https://github.com/jop8281/zozo123-genworld/pull/243) |
-| [gen-stripe-charges](prod/worlds/gen-stripe-charges/) | OpenAPI | 4 | [#242](https://github.com/jop8281/zozo123-genworld/pull/242) |
-| [gen-stripe-customers](prod/worlds/gen-stripe-customers/) | OpenAPI | 3 | [#356](https://github.com/jop8281/zozo123-genworld/pull/356) |
-| [gen-todo-projects](prod/worlds/gen-todo-projects/) | description | 3 | [#154](https://github.com/jop8281/zozo123-genworld/pull/154) |
-| [gen-warehouse-inventory](prod/worlds/gen-warehouse-inventory/) | description | 4 | [#304](https://github.com/jop8281/zozo123-genworld/pull/304) |
+| [helpdesk](prod/worlds/helpdesk/) | hand-built | 3 | #17, #32 |
+| [retail-tau2](prod/worlds/retail-tau2/) | hand-built from τ²-bench retail | 8 | #177, #215 |
+| [gen-bakery-vague](prod/worlds/gen-bakery-vague/) | description | 3 | #206 |
+| [gen-billing-dunning](prod/worlds/gen-billing-dunning/) | description | 3 | #312 |
+| [gen-bookmarks](prod/worlds/gen-bookmarks/) | description | 4 | #311 |
+| [gen-clinic-appointments](prod/worlds/gen-clinic-appointments/) | description | 4 | #159 |
+| [gen-course-enrollments](prod/worlds/gen-course-enrollments/) | CSV | 3 | #276 |
+| [gen-helpdesk](prod/worlds/gen-helpdesk/) | description | 4 | #196 |
+| [gen-hotel-booking](prod/worlds/gen-hotel-booking/) | description | 4 | #191 |
+| [gen-insurance-claims](prod/worlds/gen-insurance-claims/) | description | 4 | #331 |
+| [gen-library-loans](prod/worlds/gen-library-loans/) | CSV | 3 | #366 |
+| [gen-linear-backlog](prod/worlds/gen-linear-backlog/) | CSV | 4 | #272 |
+| [gen-orders](prod/worlds/gen-orders/) | CSV | 4 | #386 |
+| [gen-orders-customers](prod/worlds/gen-orders-customers/) | CSV | 3 | #139 |
+| [gen-petstore](prod/worlds/gen-petstore/) | OpenAPI | 3 | #117, #433 |
+| [gen-petstore-refunds](prod/worlds/gen-petstore-refunds/) | iterate on `gen-petstore` | 6 | #264, #440 |
+| [gen-refunds](prod/worlds/gen-refunds/) | OpenAPI | 4 | #157 |
+| [gen-rental-fleet](prod/worlds/gen-rental-fleet/) | description | 4 | #241 |
+| [gen-repair-desk](prod/worlds/gen-repair-desk/) | iterate | 3 | #270 |
+| [gen-retail-tau2-known](prod/worlds/gen-retail-tau2-known/) | description | 4 | #238 |
+| [gen-shipments](prod/worlds/gen-shipments/) | CSV | 3 | #243 |
+| [gen-stripe-charges](prod/worlds/gen-stripe-charges/) | OpenAPI | 4 | #242 |
+| [gen-stripe-customers](prod/worlds/gen-stripe-customers/) | OpenAPI | 3 | #356 |
+| [gen-todo-projects](prod/worlds/gen-todo-projects/) | description | 3 | #154 |
+| [gen-warehouse-inventory](prod/worlds/gen-warehouse-inventory/) | description | 4 | #304 |
 
 ### Task scores
 
