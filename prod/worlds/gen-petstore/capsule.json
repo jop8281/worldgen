@@ -4,7 +4,12 @@
   "mode": "create",
   "input": {
     "kind": "openapi",
-    "digest": "d83424f34836e289077d03d2a9ccf1f52dfcc233c5732814c83c2f6ed02d8fc0"
+    "digest": "d83424f34836e289077d03d2a9ccf1f52dfcc233c5732814c83c2f6ed02d8fc0",
+    "source": {
+      "kind": "openapi",
+      "path": "eval/inputs/petstore.openapi.yaml",
+      "only": []
+    }
   },
   "worldId": "wid_f119814c616eb24dae058f683feadaede880f80030d9d624601058c97d9e07fd",
   "model": "claude-sonnet-5-5",
