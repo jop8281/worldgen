@@ -517,7 +517,10 @@ describe('studio-deploy.sh rollback and STUDIO_IMAGE (YOS-236)', () => {
     assert.equal(r.calls[0], 'image inspect worldgen-studio:abc1234');
     const run = r.calls.filter((l) => l.startsWith('run -d'));
     assert.equal(run.length, 1);
-    assert.equal(run[0]!.endsWith('-v worldgen-studio-worlds:/app/prod/worlds -v worldgen-studio-ledger:/home/bun/.worldgen worldgen-studio:abc1234'), true);
+    assert.equal(run[0]!.endsWith('-v worldgen-studio-worlds:/app/prod/worlds -v worldgen-studio-ledger:/home/bun/.worldgen -v worldgen-studio-episodes:/app/eval/episodes worldgen-studio:abc1234'), true);
+    const chown = r.calls.filter((l) => l.includes('--entrypoint chown'));
+    assert.equal(chown.length, 1);
+    assert.equal(chown[0]!.endsWith('worldgen-studio:abc1234 -R bun:bun /app/prod/worlds /home/bun/.worldgen /app/eval/episodes'), true);
     assert.equal(r.calls.some((l) => l.includes('drill-token-1')), false);
   });
 
@@ -533,6 +536,31 @@ describe('studio-deploy.sh rollback and STUDIO_IMAGE (YOS-236)', () => {
     assert.equal(r.status, 1);
     assert.equal(r.stderr.includes('set WORLDGEN_STUDIO_TOKEN, or put WORLDGEN_STUDIO_TOKEN=<token> in STUDIO_ENV_FILE'), true);
     assert.deepEqual(r.calls, []);
+  });
+
+  it('up mounts the episodes volume beside worlds and the ledger', async () => {
+    const r = await deploy(['up'], TOKEN);
+    assert.equal(r.status, 0);
+    assert.match(r.calls.filter((l) => l.startsWith('run -d'))[0]!, / -v worldgen-studio-worlds:\/app\/prod\/worlds -v worldgen-studio-ledger:\/home\/bun\/\.worldgen -v worldgen-studio-episodes:\/app\/eval\/episodes worldgen-studio:[0-9a-f]{40}$/);
+  });
+
+  it('backup archives the three volumes, episode exports included', async () => {
+    const r = await deploy(['backup', path.join(dir, 'drill.tgz')], { STUDIO_VOLUME_PREFIX: 'drill' });
+    assert.equal(r.status, 0);
+    assert.deepEqual(r.calls, [
+      `run --rm --user root --entrypoint tar -v drill-worlds:/backup/worlds:ro -v drill-ledger:/backup/ledger:ro -v drill-episodes:/backup/episodes:ro -v ${dir}:/out worldgen-studio:latest czf /out/drill.tgz -C /backup worlds ledger episodes`,
+    ]);
+  });
+
+  it('restore empties and refills the three volumes, episode exports included', async () => {
+    const file = path.join(dir, 'restore.tgz');
+    await writeFile(file, 'not a real archive: the fake docker never reads it');
+    const r = await deploy(['restore', file], { STUDIO_VOLUME_PREFIX: 'drill' });
+    assert.equal(r.status, 0);
+    const run = r.calls.filter((l) => l.startsWith('run --rm'));
+    assert.deepEqual(run, [
+      `run --rm --user root --entrypoint sh -v drill-worlds:/backup/worlds -v drill-ledger:/backup/ledger -v drill-episodes:/backup/episodes -v ${dir}:/in:ro worldgen-studio:latest -c find /backup/worlds /backup/ledger /backup/episodes -mindepth 1 -delete && tar xzpf /in/restore.tgz -C /backup`,
+    ]);
   });
 
   it('STUDIO_IMAGE names the repository up builds and runs, so a drill never moves worldgen-studio:latest', async () => {

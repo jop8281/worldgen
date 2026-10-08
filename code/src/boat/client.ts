@@ -3,8 +3,11 @@
  *
  * Everything else talks to boat.dev through the narrow `BoatClient` interface, so tests pass
  * a fake and `npm test` never reaches the network. The key comes from `BOAT_API_KEY` only and
- * is scrubbed from every error this module raises.
+ * is scrubbed from every error this module raises. It is sent only to https on boat.dev, and read
+ * only where Bun cannot have loaded it from a .env file (A-350).
  */
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import { BoatApi, Configuration, FetchError, ResponseError, SandboxAccessEnum, SandboxStateEnum, SandboxTypeEnum } from '@boatdev/sdk';
 import { z } from 'zod';
 
@@ -118,6 +121,12 @@ export const DEFAULT_BASE_URL = 'https://boat.dev/api/v1';
 export const ORG_ENV = 'WORLDGEN_BOAT_ORG';
 export const MISSING_ORG = `${ORG_ENV} is not set: Boat provisioning needs the one organization (wallet) this machine bills to, such as the id in https://boat.dev/dashboard (A-247)`;
 const ORG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/** Lets BOAT_BASE_URL name plain http on a loopback address, for a fake boat.dev in tests. Nothing else sets it. */
+export const LOOPBACK_ENV = 'WORLDGEN_BOAT_LOOPBACK';
+const BOAT_HOST = 'boat.dev';
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]']);
+/** The package directory, whose bunfig.toml turns off Bun's .env loading. */
+const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 
 /** The HTTP transport seam. Defaults to the global fetch. */
 export type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -145,7 +154,6 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => set
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-/** `BOAT_API_KEY` from the process environment, never from a file. Throws `BoatError(MISSING_KEY)` without one. */
 /** `WORLDGEN_BOAT_ORG`, or undefined when unset. Throws a BoatError naming the variable when it is malformed. */
 export function boatOrg(env: Env): string | undefined {
   const org = env[ORG_ENV]?.trim() ?? '';
@@ -154,18 +162,65 @@ export function boatOrg(env: Env): string | undefined {
   return org;
 }
 
+const real = (dir: string): string => {
+  try { return realpathSync(dir); } catch { return path.resolve(dir); }
+};
+
+/**
+ * Bun loads .env from its working directory unless told not to. code/bunfig.toml turns that off for every Bun process
+ * started in code/, and --no-env-file does anywhere; any other Bun process may hold a key that came from a .env file.
+ * Bun and Node both load a file named by --env-file, so a process started with one never reads the key.
+ */
+function assertNoDotenv(): void {
+  if (process.execArgv.some((a) => a.startsWith('--env-file'))) {
+    throw new BoatError('BOAT_API_KEY is never read from an env file, and this process was started with --env-file; export the key in the environment instead');
+  }
+  // Another bunfig, named by --config, can turn .env loading back on in code/.
+  if (process.versions.bun !== undefined && process.execArgv.some((a) => a === '-c' || a.startsWith('-c=') || a.startsWith('--config'))) {
+    throw new BoatError(`BOAT_API_KEY is read only under ${CODE_DIR}/bunfig.toml, which stops .env loading, and this process was started with --config`);
+  }
+  if (process.versions.bun === undefined || process.execArgv.includes('--no-env-file') || real(process.cwd()) === real(CODE_DIR)) return;
+  throw new BoatError(`BOAT_API_KEY is read only by Bun started in ${CODE_DIR}, whose bunfig.toml stops .env loading, or with --no-env-file; this process started in ${process.cwd()}, where Bun may have loaded a .env file`);
+}
+
+/** `BOAT_API_KEY` from the process environment, never from a file. Throws `BoatError(MISSING_KEY)` without one. */
 export function boatKey(env: Env): string {
+  assertNoDotenv();
   const apiKey = env['BOAT_API_KEY']?.trim() ?? '';
   if (apiKey === '') throw new BoatError(MISSING_KEY);
   return apiKey;
 }
 
-/** Reads `BOAT_API_KEY` and optional `BOAT_BASE_URL`. Throws `BoatError(MISSING_KEY)` without a key. */
+/**
+ * `BOAT_BASE_URL`, or the default when unset. Every request carries the key, so only https on boat.dev itself is
+ * accepted, or plain http on a loopback address when WORLDGEN_BOAT_LOOPBACK=1. A subdomain is refused because a Boat
+ * sandbox's exposed port may live under one. Credentials, a query or a fragment are refused, and the URL comes back as
+ * its parsed origin and path, so the SDK, which appends paths to it, sees exactly what was checked. The error names
+ * the scheme and host, never a path, credentials or the key.
+ */
+export function boatBaseUrl(env: Env): string {
+  const raw = env['BOAT_BASE_URL']?.trim() ?? '';
+  if (raw === '') return DEFAULT_BASE_URL;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new BoatError(`BOAT_BASE_URL is not a URL; unset it to use ${DEFAULT_BASE_URL}`);
+  }
+  const boat = url.protocol === 'https:' && url.hostname === BOAT_HOST;
+  const loopback = url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname) && env[LOOPBACK_ENV] === '1';
+  if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '' || !(boat || loopback)) {
+    throw new BoatError(`BOAT_BASE_URL must be https on ${BOAT_HOST} with no credentials, query or fragment, or http on a loopback address with ${LOOPBACK_ENV}=1, because every request carries the key; got ${url.protocol}//${url.host}`);
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
+/** Reads `BOAT_API_KEY` and optional `BOAT_BASE_URL`. Throws `BoatError(MISSING_KEY)` without a key, and refuses a base URL off boat.dev before any request. */
 export function boatClientFromEnv(env: Env = process.env, seams: Omit<BoatClientOptions, 'apiKey' | 'basePath'> = {}): BoatClient & BoatInspection {
   const apiKey = boatKey(env);
-  const base = env['BOAT_BASE_URL']?.trim() ?? '';
+  const basePath = boatBaseUrl(env);
   const org = boatOrg(env);
-  return boatClient({ ...seams, apiKey, basePath: base === '' ? DEFAULT_BASE_URL : base, ...(org === undefined ? {} : { org }) });
+  return boatClient({ ...seams, apiKey, basePath, ...(org === undefined ? {} : { org }) });
 }
 
 export function boatClient(opts: BoatClientOptions): BoatClient & BoatInspection {
