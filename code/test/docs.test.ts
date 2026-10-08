@@ -356,7 +356,7 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
   it('finds the documented commands in each file, fenced and inline', () => {
     const heads = (file: string): string[] => [...new Set(commands.filter((c) => c.file === file).map((c) => c.head))].sort();
     assert.deepEqual(heads('README.md'), ['bun run check', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'npm run check:node', 'scripts/demo-all.sh']);
-    assert.deepEqual(heads('prod/README.md'), ['../scripts/live.sh', 'bun run docs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay']);
+    assert.deepEqual(heads('prod/README.md'), ['../scripts/live.sh', 'bun run docs', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay']);
     assert.deepEqual(heads('prod/prompts/README.md'), ['bun run live', 'bun run worldgen']);
     assert.deepEqual(heads('research/live-run-runbook.md'), [
       'bun run check', 'bun run costs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'npm run check:node',

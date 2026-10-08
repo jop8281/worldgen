@@ -26,13 +26,13 @@ Each row names where the spec item lives and the command that shows it. Commands
 | Serve from a fresh copy of the seed | `code/src/engine/http.ts` | `bun run worldplay serve ../prod/worlds/helpdesk --port 4000` |
 | Enforce: no write breaks the model, no partial change | `transact()` in `code/src/engine/store.ts` | `code/test/runtime.test.ts` and `actions.test.ts` assert the state dump is unchanged after a failed call |
 | Deterministic, engine-controlled time | `code/src/engine/clock.ts`, `sandbox.ts` | `POST /_world/clock` on the admin port; verify replays every solution |
-| Inspect and reset | admin port | `GET /_world/state`, `POST /_world/reset`, `GET /_world/log` |
+| Inspect and reset | admin port | `GET /_world/state`, `POST /_world/reset`, `GET /_world/log`; in the Studio, a reset only after the world's name is typed ([#70](https://github.com/jop8281/worldgen/pull/70), [#81](https://github.com/jop8281/worldgen/pull/81)) |
 | Grade: reference 1, doing nothing 0 | `code/src/engine/tasks.ts` | `bun run worldplay verify ../prod/worlds/helpdesk` |
-| WorldGen from a description, an OpenAPI spec (optionally `--only`) or CSV | `code/src/worldgen/input.ts` | `bun run worldgen "<description>"`, `--openapi <spec> --only <prefix>`, `--csv <files>` |
+| WorldGen from a description, an OpenAPI spec (optionally `--only`) or CSV | `code/src/worldgen/input.ts`, `input-coverage.ts` | `bun run worldgen "<description>"`, `--openapi <spec> --only <prefix>`, `--csv <files>`, or an upload in the Studio's World Builder ([#79](https://github.com/jop8281/worldgen/pull/79)). `--only /store` on main `e034036c` ended done in 248 s for $0.82 ([#45](https://github.com/jop8281/worldgen/pull/45)) |
 | Six stages, plan first, plan saved for a human | `code/src/worldgen/stages.ts`, `plan.ts` | `plan.yaml` in every `worlds/gen-*/`; runs now also write `plan.md` beside it |
 | Self-repair within a budget, knows when to stop | `code/src/worldgen/policy.ts`, `run.ts` | a stopped run leaves `world.yaml` untouched and writes `REPORT.md` with the reason |
 | Engine is the only judge | `code/test/architecture.test.ts` | WorldGen imports only `#engine` and never grades with a model |
-| Iterates | `code/src/worldgen/iterate.ts` | `bun run worldgen "add refunds" --world ../prod/worlds/gen-<slug>` |
+| Iterates | `code/src/worldgen/iterate.ts` | `bun run worldgen "add refunds" --world ../prod/worlds/gen-<slug>`, or in the Studio on the tenant's copy, published only when done ([#77](https://github.com/jop8281/worldgen/pull/77)) |
 | Observable: stages, repairs, time, cost | `code/src/worldgen/events.ts` | `REPORT.md` in every `worlds/gen-*/`, and `runs/<runId>/events.jsonl` in 22 of the 23 |
 | Configurable: model and budget | `code/worldgen.config.json` | `--model`, `--budget-usd`, `--max-minutes` |
 | Deliverable: repository, one command each | this repository | `bun run worldplay …`, `bun run worldgen …` |
@@ -40,5 +40,6 @@ Each row names where the spec item lives and the command that shows it. Commands
 | Deliverable: one world built by hand | `worlds/helpdesk/` | checked and verified by `test/worlds.test.ts` |
 | Deliverable: worlds from the prompts the team sends | `prompts/`, then `worlds/gen-<slug>/` | open until the prompts arrive; `bun run live ../prod/prompts` runs them one at a time |
 | Live run on unseen prompts | `code/src/cli/live.ts`, `../scripts/live.sh` | `bun run live <dir>`; `--dry-run` lists the prompts without a model call |
+| Beyond the spec: the Studio, an operator web app with sign-in and tenants | `code/src/studio/` | `bun run studio`; [screenshots/README.md](screenshots/README.md) records its browser E2E under three roles ([#80](https://github.com/jop8281/worldgen/pull/80)) |
 
 The 23 `worlds/gen-*/` directories are worlds WorldGen generated during the trial, and each carries its plan and report. CI (`.github/workflows/check.yml`) runs on every push to `main` and `stabilize/main`. It typechecks, runs the full suite under Bun and again under Node 22, and runs the e2e acceptance.
