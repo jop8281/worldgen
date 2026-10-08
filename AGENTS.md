@@ -85,7 +85,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `worldgen/fidelity.ts` | Fidelity to a frozen reference of the real software: the reference schema, `fidelityScore()`, and `fidelityGate()`, the last step's 0.80 floor for a description that names a reference (A-258). Pure. |
 | `worldgen/eval-outcomes.ts` | Offline eval analysis against an explicit expected case set, each case classed by `outcomeOf()` in `eval.ts`. No model, no file IO. |
 | `worldgen/eval.ts` | The rehearsal suite schema, case sequencing, the `summary.md` scorecard and `fidelityScore()` against `eval/fidelity/*.yaml`. `outcomeOf()` is the one classifier of a case into the five outcome classes, for `summary.md` and `eval-outcomes.ts` alike (A-340), and the pass rate counts every expected case (A-341). No model, no file IO. |
-| `worldgen/live.ts` | The live run: plans cases from the files in `prod/prompts/`, and renders the `prod/LIVE-RUN.md` table. No model, no file IO. |
+| `worldgen/live.ts` | The live run: plans cases from the files in `prod/prompts/`, and renders the live-run table that `bun run live` writes as prod/LIVE-RUN.md, a file that exists only after the first live run. No model, no file IO. |
 | `worldgen/config.ts` | Settings and defaults, parsed strictly. |
 | `costs/basis.ts` | The schema for model cost estimate sources, shared by transports and ledger entries. |
 | `costs/boat-receipts.ts` | Separate append-only Boat usage evidence, canonical snapshots by VM and requested UTC day, with inspection provenance and explicit list-price units. It never settles spend. |

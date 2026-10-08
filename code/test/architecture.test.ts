@@ -8,7 +8,7 @@
  * The symbol, brand and switch rules are part B.
  */
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isBuiltin } from 'node:module';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -796,5 +796,29 @@ describe('module map covers src', () => {
     const files = ['engine/api.ts', 'cli/dataset.ts', 'dataset/store.ts'];
     assert.deepEqual(missingFromAgents(files, '`engine/api.ts` `dataset/*.ts`'), ['cli/dataset.ts']);
     assert.deepEqual(missingFromTree(files, 'src/engine/ api  src/cli/ worldgen\n src/dataset/ store'), ['cli/dataset.ts']);
+  });
+
+  /** Where a backticked path in AGENTS.md may start: a top-level dir, a code/ dir, or a src/ module dir. */
+  const PATH_ROOTS = ['code/', 'research/', 'eval/', 'prod/', 'scripts/', '.github/', 'test/', 'src/', 'engine/', 'worldgen/', 'cli/', 'studio/', 'dataset/', 'sandboxes/', 'costs/', 'boat/', 'lib/'];
+  /**
+   * Every backticked repo path in `text` that resolves under none of the repo root, code/ and code/src/: a token with a
+   * slash that starts at a PATH_ROOTS dir. A glob, a placeholder (`<slug>`), a `$VAR`, a `~` path or a bare file name
+   * is not a path to check. A leading `../` (a command run from code/) is dropped (YOS-256).
+   */
+  const missingNamedPaths = (text: string, exists: (p: string) => boolean): string[] =>
+    [...new Set([...text.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]!.trim()))]
+      .filter((x) => !/[\s*<>{}$|~?]/.test(x))
+      .map((x) => x.replace(/^\.\.\//, '').replace(/\/$/, ''))
+      .filter((x) => x.includes('/') && PATH_ROOTS.some((r) => x.startsWith(r)))
+      .filter((x) => !['', 'code', 'code/src'].some((base) => exists(path.join(REPO, base, x))))
+      .sort();
+
+  it('every path AGENTS.md names in backticks exists (YOS-256)', () => {
+    assert.deepEqual(missingNamedPaths(readFileSync(path.join(REPO, 'AGENTS.md'), 'utf8'), existsSync), []);
+  });
+
+  it('fires on a dangling path in a fixture, and skips placeholders, globs and bare names', () => {
+    const text = '`engine/api.ts` `code/missing.ts` `../prod/worlds/helpdesk` `prod/worlds/gen-<slug>` `dataset/*.ts` `world.yaml` `research/none.md`';
+    assert.deepEqual(missingNamedPaths(text, existsSync), ['code/missing.ts', 'research/none.md']);
   });
 });
