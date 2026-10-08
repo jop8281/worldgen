@@ -1,4 +1,4 @@
-# zozo123-genworld
+# WorldGen
 
 Two tools for building **worlds**. A world is a stateful, deterministic replica of real software, such as a helpdesk or a payments API, that an agent can be tested against.
 
@@ -36,7 +36,7 @@ Depth: [research/architecture.md](research/architecture.md) for the reasoning, [
 
 ## Status
 
-Everything below is built and merged into the trunk. Each row links the PRs that built it.
+Everything below is built and merged into the trunk. Each row links the PRs that built it. This repository starts from a one-commit snapshot of `stabilize/main` at c2528607 in the earlier repository, jop8281/zozo123-genworld, so the PR links are a historical record from that repository, not PRs of this one.
 
 | What | Where | PRs |
 |---|---|---|
@@ -63,7 +63,7 @@ Everything below is built and merged into the trunk. Each row links the PRs that
 
 ## Setup
 
-You need Bun 1.4 or later (`npm i -g bun@1.4.2`). `bun run check` is the default gate. Node 22 runs the second gate, `npm ci && npm run check:node`, which is the only one that enforces the snippet heap bound (A-87); the scripts in `scripts/` fall back to Node when Bun is missing (A-134). WorldGen also needs the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) (`claude`), logged in. Every command below runs from `code/` unless it says otherwise.
+You need Bun 1.4.2 (`npm i -g bun@1.4.2`). The scripts in `scripts/` refuse to run without it and never fall back to Node; `WORLDGEN_RUNTIME=node` opts into Node explicitly. `bun run check` is the default gate. Node 22 runs the second gate, `npm ci && npm run check:node`, which is the only one that enforces the snippet heap bound (A-87). WorldGen also needs the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) (`claude`), logged in. Every command below runs from `code/` unless it says otherwise.
 
 ```sh
 cd code
@@ -291,7 +291,7 @@ The admitted CLI estimate allowance uses the tightest applicable daily, total or
 | `code/` | One npm package: the engine (`src/engine/`), WorldGen (`src/worldgen/`), the CLIs (`src/cli/`) and the tests. |
 | `eval/` | The rehearsal suite, its inputs, and run output. |
 | `prod/` | The deliverables: `design.md`, `world-format.md`, the hand-built worlds and the generated worlds. |
-| `scripts/` | `demo-all.sh`, the whole-system demo ([runbook](research/demo-runbook.md)). `demo.sh` and `solve-demo.sh`, the engine demos. `live.sh`, the live run. `qualify-main.sh`, the gate on a fresh clone. `runner.sh`, which picks Bun or Node for the others. |
+| `scripts/` | `demo-all.sh`, the whole-system demo ([runbook](research/demo-runbook.md)). `demo.sh` and `solve-demo.sh`, the engine demos. `live.sh`, the live run. `qualify-main.sh`, the gate on a fresh clone. `runner.sh`, which runs the others on Bun 1.4.2, or on Node only when `WORLDGEN_RUNTIME=node` asks for it. |
 
 Rules for agents working in this repo are in [AGENTS.md](AGENTS.md).
 
