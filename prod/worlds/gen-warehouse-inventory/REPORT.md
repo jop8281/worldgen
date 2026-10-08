@@ -52,6 +52,10 @@ Jobs (1):
 
 - `overdue_purchase_orders`: every 6h
 
+## Changes
+
+No changes.
+
 ## Assumed and why
 
 - Clock starts 2026-10-06T09:00:00.000Z with tick 0s. Time moves only on explicit advance (the overdue job test advances it).
@@ -117,12 +121,16 @@ Jobs (1):
 
 The engine check passed: 7 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix |
-|---|---|---|---|---|---|
-| cycle_count_adjustment | easy | 1.000 | 0.000 | 0.400, 0.000, 0.400 | n/a |
-| receive_rest_of_harbor_po | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | 0.000 |
-| cancel_unstarted_northgate_pos | medium | 1.000 | 0.000 | 0.000, 0.000, 0.333 | 0.667 |
-| restock_pick_bins | hard | 1.000 | 0.000 | 0.000, 0.000, 0.154 | 0.923 |
+World id (WID): `wid_b08be9165ac58f426bf48279f9de0a5f9405a35b5906fdf9736cc017573c3ef8`.
+
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| cycle_count_adjustment | easy | 1.000 | 0.000 | 0.400, 0.000, 0.400 | n/a | legacy; mutants 2/7 | `tid_dfcbb4e3fc67af25ad4c2658e2fac4c0efbf94e86efed8b9e89d30b1aa14897f` |
+| receive_rest_of_harbor_po | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | 0.000 | legacy; mutants 2/7 | `tid_e748acd50e735392740bb76c72d246c2597e07f1386c5db2ad3fdc0ab28ea9db` |
+| cancel_unstarted_northgate_pos | medium | 1.000 | 0.000 | 0.000, 0.000, 0.333 | 0.667 | legacy; mutants 4/7 | `tid_718f557b55a1ce09167ae74b294565c5cdc0d9762ed223d92f94acb6523ccc96` |
+| restock_pick_bins | hard | 1.000 | 0.000 | 0.000, 0.000, 0.154 | 0.923 | legacy; mutants 2/7 | `tid_efbb892a077d82c649c6688e516acb7d853cfc8eecd9e5960c8f1affa87d5c00` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -139,17 +147,31 @@ Decoys:
 - `restock_pick_bins` 0.000: does not skip inactive SKUs, so it also restocks a discontinued SKU that must be left alone
 - `restock_pick_bins` 0.154: only restocks pick bins that are completely empty and ignores bins that are low but not empty
 
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| cycle_count_adjustment | easy | 2 | none | none | none declared |
+| receive_rest_of_harbor_po | medium | 7 | none | none | none declared |
+| cancel_unstarted_northgate_pos | medium | 3 | none | none | none declared |
+| restock_pick_bins | hard | 52 | stock_level | none | hard: met |
+
 ## Run
 
-Mode: create from description. Model: claude-sonnet-5-5. Budget: $5.00.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $2.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 2.68 | 0.4430 |
-| model | 1 | 0.71 | 0.3952 |
-| workflow | 1 | 0.60 | 0.3896 |
-| seed | 1 | 3.60 | 0.6116 |
-| tasks | 1 | 4.10 | 0.7178 |
-| Total | 5 | 11.69 | 2.5572 |
+| plan | 1 | 0.10 | 0.0976 |
+| Total | 1 | 0.10 | 0.0976 |
 
-Run total: 11.74 minutes, $2.5572.
+Skipped:
+
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures; it keeps 2 issue(s) the world had before this iterate: plan.seed_rows_short
+- `tasks`: no planned change reaches tasks, entities, routes, actions, jobs, seed
+
+Run total: 0.23 minutes, $0.0976.
