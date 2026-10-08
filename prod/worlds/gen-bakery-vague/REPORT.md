@@ -52,6 +52,10 @@ Jobs (2):
 - `expire_uncollected_orders`: every 1h
 - `flag_low_stock`: every 1h
 
+## Changes
+
+No changes.
+
 ## Assumed and why
 
 - One shop, one currency (USD), no multi-location inventory.
@@ -72,6 +76,8 @@ Jobs (2):
   - Why: The engine default for deterministic worlds.
 - Allergen info is a simple text or enum field on product and is not enforced in workflows.
   - Why: Informational only, since compliance logic is out of scope.
+- The ingredient_stock workflow declares a descriptive lifecycle, because ok and low are derived from the low_stock flag and not held in a state field. Nothing in the world changes and all seed counts stay as they are.
+  - Why: The change request asks for a plan-only revision.
 
 ## Questions asked of the input
 
@@ -107,11 +113,15 @@ Jobs (2):
 
 The engine check passed: 8 world tests, 0 warnings. Each row is one engine TaskVerdict.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix |
-|---|---|---|---|---|---|
-| mark_marias_order_ready | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a |
-| bake_croissants_after_restock | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | 0.000 |
-| cancel_tomorrows_orders_for_discontinued_product | hard | 1.000 | 0.000 | 0.750, 0.000, 0.000, 0.000, 0.500, 0.000 | 0.750 |
+World id (WID): `wid_32dd36aa840229272114b3fc280e3c8b3c468b37032083b2f932c595a63f206e`.
+
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| mark_marias_order_ready | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 4/7 | `tid_8f391aed306efd541dc0e32c21ce2014cb876f85890f7b19246d84129f5e1337` |
+| bake_croissants_after_restock | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | 0.000 | legacy; mutants 4/7 | `tid_04b34f37c5200ffb5ff5f502c0d45472ed077e4dbdb2286c6831a0014503a9d2` |
+| cancel_tomorrows_orders_for_discontinued_product | hard | 1.000 | 0.000 | 0.750, 0.000, 0.000, 0.000, 0.500, 0.000 | 0.750 | legacy; mutants 4/7 | `tid_d3222690524ffb86a3b2f1c2de0db242624a5641d207e0eb3032dbf14596a4f8` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -128,25 +138,30 @@ Decoys:
 - `cancel_tomorrows_orders_for_discontinued_product` 0.500: checks only the first line of each order, so it misses orders where the discontinued product is a later line
 - `cancel_tomorrows_orders_for_discontinued_product` 0.000: cancels the right orders correctly, then also renames the Baguette product
 
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| mark_marias_order_ready | easy | 1 | none | none | none declared |
+| bake_croissants_after_restock | medium | 7 | none | none | none declared |
+| cancel_tomorrows_orders_for_discontinued_product | hard | 10 | bakery_order | bakery_order | hard: met |
+
 ## Run
 
-Mode: create from description. Model: claude-sonnet-5-5 over the claude -p transport. Budget: $3.50.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $1.50.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 0.64 | 0.0669 |
-| model | 1 | 0.67 | 0.1323 |
-| workflow | 2 | 3.47 | 0.5475 |
-| seed | 3 | 4.63 | 0.7668 |
-| tasks | 1 | 2.86 | 0.3984 |
-| Total | 8 | 12.27 | 1.9119 |
+| plan | 1 | 0.45 | 0.2748 |
+| Total | 1 | 0.45 | 0.2748 |
 
-Backtracks:
+Skipped:
 
-- `seed` to `workflow`: 3 issues
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures; it keeps 1 issue(s) the world had before this iterate: plan.seed_rows_short
+- `tasks`: no planned change reaches tasks, entities, routes, actions, jobs, seed
 
-Run total: 12.32 minutes, $1.9119.
-
-## Post-generation plan schema correction
-
-The saved plan now explicitly records the existing world clock, 2026-01-05T09:00:00.000Z with tick 0s. This adds the clock required by the current typed plan schema. It does not regenerate the world or change seed data, tasks, original generation attempts, costs or timing. It establishes schema validity and plan/world clock agreement; it does not independently establish seed chronology or domain fidelity.
+Run total: 0.53 minutes, $0.2748.
