@@ -6,7 +6,7 @@
  * Two graders, one protocol. `engineGrader` verifies in this process, through #engine: the test
  * seam and the offline path. `childGrader` runs `cli/verifier.ts` as a separate host process per
  * submission, with the private world by path, no listener, and a clean environment that carries
- * no controller credential (only TZ and PATH); that is the one `bun run dataset` wires in, per
+ * no controller credential (isolatedEnv: TZ, PATH and the guard scale); that is the one `bun run dataset` wires in, per
  * research/architecture.md: the verifier is a separate process, not a route on the world server.
  *
  * Both send the same request: the run's identities, the trace and its hash chain, and the final
@@ -17,24 +17,21 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  chainOf, verifySubmission, VERIFIER_PROTOCOL, VERIFIER_STOPS,
+  chainOf, checkWorld, loadWorld, verifySubmission, VERIFIER_PROTOCOL, VERIFIER_STOPS,
   type CheckedWorld, type TraceCall, type VerifierVerdict, type Wid,
 } from '#engine';
-import { lastLines, nodeRunner, type Runner, type RunResult } from '../sandboxes/backend.ts';
+import { isolatedEnv, lastLines, nodeRunner, type Runner, type RunResult } from '../sandboxes/backend.ts';
 import type { EpisodeGrader, EpisodeSubmission, GradeResult } from './episode.ts';
 
-/** What the pipeline hands a grader factory: the frozen private world and the run's identities. */
-export type GraderWorld = {
-  readonly world: CheckedWorld;
+/** What a grader factory receives: the run's identities and the frozen private world's directory. No CheckedWorld, so a controller that never loaded the world can grade. */
+export type HeldWorld = {
   readonly wid: Wid;
   readonly worldVersion: string;
   /** The trusted directory holding the frozen private world.yaml. */
   readonly frozenDir: string;
   readonly engine: string;
 };
-/** What the verifier request and the child grader need of a world: no CheckedWorld, so a caller that never loaded the world can grade. */
-export type HeldWorld = Omit<GraderWorld, 'world'>;
-export type GraderFactory = (held: GraderWorld) => EpisodeGrader;
+export type GraderFactory = (held: HeldWorld) => EpisodeGrader;
 
 /** The protocol request the controller sends; the engine's verifierRequestSchema validates it on the verifier side. */
 export type VerifierRequestMessage = {
@@ -76,11 +73,21 @@ const reasonOf = (stop: Exclude<VerifierVerdict['stop'], 'graded'>): string => `
  * pipeline holds. One instance is one verifier session: a submission graded once cannot be
  * graded again through it.
  */
-export function engineGrader(held: GraderWorld): EpisodeGrader {
+export function engineGrader(held: HeldWorld): EpisodeGrader {
   const seen = new Set<string>();
+  let world: Promise<CheckedWorld | null> | undefined;
+  const loadFrozen = async (): Promise<CheckedWorld | null> => {
+    const loaded = await loadWorld(held.frozenDir);
+    if (!loaded.ok) return null;
+    const report = checkWorld(loaded.value);
+    return report.ok ? report.world : null;
+  };
   return async (sub) => {
+    world ??= loadFrozen();
+    const checked = await world;
+    if (checked === null) return { ok: false, reason: 'the frozen private world does not check' };
     const { verdict, ledger } = verifySubmission(
-      held.world,
+      checked,
       { wid: held.wid, worldVersion: held.worldVersion, engine: held.engine },
       JSON.stringify(verifierRequestOf(held, sub)),
       seen,
@@ -94,11 +101,6 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
 
 /** How long the verifier child may run before it is killed: it loads and checks the private world. */
 const CHILD_TIMEOUT_MS = 300_000;
-
-/** The child's whole environment: no controller credential reaches the verifier process. */
-function childEnv(): Record<string, string | undefined> {
-  return { TZ: 'UTC', PATH: process.env.PATH ?? '' };
-}
 
 /**
  * The child's answer on stdout as a grade result, or null when it is not a verdict. Only the
@@ -132,6 +134,8 @@ export type ChildGraderOptions = {
   readonly timeoutMs?: number;
   /** The command that runs a TypeScript file. Default tsx under codeDir; the Studio image has only bun. */
   readonly launcher?: readonly string[];
+  /** The source the child's allowlisted environment is built from. Default process.env. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 };
 
 /**
@@ -154,7 +158,7 @@ export function childGrader(o: ChildGraderOptions): (held: HeldWorld) => Episode
     try {
       run = await runner(
         [...launcher, 'src/cli/verifier.ts', held.frozenDir, file, held.engine, ledger],
-        { cwd: o.codeDir, timeoutMs: o.timeoutMs ?? CHILD_TIMEOUT_MS, env: childEnv() },
+        { cwd: o.codeDir, timeoutMs: o.timeoutMs ?? CHILD_TIMEOUT_MS, env: isolatedEnv(o.env ?? process.env) },
       );
     } catch (e) {
       return { ok: false, reason: `the verifier process could not start: ${messageOf(e)}` };
