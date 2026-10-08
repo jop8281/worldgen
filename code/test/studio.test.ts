@@ -1134,8 +1134,11 @@ describe('studio runs across a restart (YOS-191, A-329)', () => {
     const stored = JSON.parse(await readFile(path.join(worldsDir, '.studio-runs.json'), 'utf8')) as { runId: string; pid: number; phase: string }[];
     assert.deepEqual(stored.map((r) => [r.runId, r.pid, r.phase]), [[runId, 7777, 'running']]);
 
-    // The studio dies without its children ending; a new one starts on the same data once its lease has run out (A-335).
+    // The studio dies without its children ending. A close records the run as stopped (A-363), so the file is put back as
+    // a dying studio leaves it, and a new one starts on the same data once its lease has run out (A-335).
+    const left = await readFile(path.join(worldsDir, '.studio-runs.json'), 'utf8');
     await a.close();
+    await writeFile(path.join(worldsDir, '.studio-runs.json'), left);
     const second = fakeSpawner(() => ({}));
     const b = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: second.spawner, runner, processes, runStopWaitMs: 50, now: () => Date.now() + 60_000 });
     try {

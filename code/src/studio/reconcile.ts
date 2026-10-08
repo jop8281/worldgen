@@ -50,6 +50,9 @@ export type ReconcileJobsOptions = {
   readonly processes: Processes;
 };
 
+/** Whether the lease rules stopped this job, here or in a studio. A studio's close stopping its own job is not that (A-363). */
+const leaseStopped = (run: StoredRun | undefined): boolean => run?.recovery?.outcome === 'stopped' && run.recovery.reason !== 'studio_closed';
+
 async function append(file: string, input: z.input<typeof receiptSchema>): Promise<JobReceipt> {
   const row = receiptSchema.parse(input);
   const text = await readFile(file, 'utf8').catch(() => '');
@@ -91,7 +94,7 @@ export async function reconcileJobs(opts: ReconcileJobsOptions) {
 
   const intents = await openIntents(journal);
   const current = new Map((await loadRuns(opts.worldsDir)).map((r) => [r.runId, r]));
-  // An intent left open closes once its job finished: as stopped when a stop finished it, as skipped otherwise.
+  // An intent left open closes once its job finished: as stopped when the lease rules stopped it, as skipped otherwise.
   const closing = [...intents.values()].filter((i) => mine(i) && !stale.some((s) => s.row.runId === i.runId) && (current.get(i.runId)?.phase ?? 'finished') === 'finished');
   if (closing.length === 0 && stale.length === 0) return result();
   await mkdir(opts.worldsDir, { recursive: true });
@@ -100,7 +103,7 @@ export async function reconcileJobs(opts: ReconcileJobsOptions) {
   for (const intent of closing) {
     const { action: _action, at: _at, error: _error, why: _why, ...kept } = intent;
     const run = current.get(intent.runId);
-    receipts.push(await append(journal, run?.recovery?.outcome === 'stopped'
+    receipts.push(await append(journal, leaseStopped(run)
       ? { ...kept, action: 'stopped', at: at(), recovered: true }
       : { ...kept, action: 'stop_skipped', why: run === undefined ? 'missing' : 'finished_elsewhere', at: at() }));
   }
@@ -125,7 +128,7 @@ export async function reconcileJobs(opts: ReconcileJobsOptions) {
         await saveRuns(opts.worldsDir, fresh.map((r) => (r.runId === row.runId ? stoppedRun(r, decision, at0) : r)));
         const doneAt = at();
         const after = (await loadRuns(opts.worldsDir)).find((r) => r.runId === row.runId);
-        const held = after?.phase === 'finished' && after.recovery?.outcome === 'stopped';
+        const held = after?.phase === 'finished' && leaseStopped(after);
         outcome = held
           ? { ...facts, reason: decision.reason, from: decision.from, action: 'stopped', at: doneAt }
           : { ...facts, action: 'stop_skipped', why: 'overwritten', at: doneAt };
