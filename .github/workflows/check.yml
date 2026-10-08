@@ -31,6 +31,7 @@ jobs:
       - run: bun test --timeout 480000 ./test
 
   # The same tests under node:test on Node 22. It also gates the snippet heap bound, which Bun ignores (A-87).
+  # Bun is installed too: the studio playground test spawns the product CLIs, which run only on Bun.
   node:
     runs-on: ubuntu-latest
     env:
@@ -48,6 +49,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: code/package-lock.json
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
       - run: npm ci
       - run: npm run check:node
 
