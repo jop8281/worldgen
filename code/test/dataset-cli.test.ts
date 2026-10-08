@@ -9,12 +9,10 @@ import { configSchema } from '../src/worldgen/config.ts';
 import { PROMPT_VERSION } from '../src/dataset/schema.ts';
 import { engineGrader } from '../src/dataset/verifier.ts';
 import type { SolverProposer } from '../src/dataset/solver.ts';
-import { COMMIT, EASY_REPLY, HELPDESK_DIR, easyOnly, fakeBackend, helpdesk, randomPort, solveAll, tmp } from './dataset-kit.ts';
+import { COMMIT, EASY_REPLY, HELPDESK_DIR, RUN_BUDGET, easyOnly, fakeBackend, helpdesk, randomPort, solveAll, tmp } from './dataset-kit.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const KEYS = { LLM_KEY: 'sk-ant-api03-CLI-ANTHROPIC-SECRET', BOAT_API_KEY: 'boat_live_CLI-BOAT-SECRET-0001' };
-/** Every test runs the CLI and takes seconds on a loaded machine, so each gets the budget `bun run test` gives, not bare `bun test`'s 5 s default. */
-const CLI_BUDGET = { timeout: 120_000 };
 
 type Ran = { code: number; stdout: string; stderr: string };
 /** Runs the real CLI in a child process with exactly this environment. No key unless the test gives one. */
@@ -32,14 +30,14 @@ const required = (out: string, over: Record<string, string> = {}): string[] =>
   Object.entries({ world: HELPDESK_DIR, out, 'run-id': 'cli-run', 'engine-commit': COMMIT, 'max-turns': '40', 'budget-usd': '2', 'max-minutes': '5', ...over }).flatMap(([k, v]) => [`--${k}`, v]);
 
 describe('the dataset CLI as a program', () => {
-  it('prints usage and exits 0 for --help, naming both keys and the grading limit', CLI_BUDGET, async () => {
+  it('prints usage and exits 0 for --help, naming both keys and the grading limit', RUN_BUDGET, async () => {
     const r = await spawnCli(['--help']);
     assert.equal(r.code, 0);
     assert.equal(r.stdout.startsWith('usage: dataset --world <dir> --out <dir> --run-id <id> --engine-commit <sha> --max-turns <n> --budget-usd <n> --max-minutes <n>'), true);
     for (const needle of ['claude-sonnet-5-5', 'LLM_KEY', 'BOAT_API_KEY', 'does not independently certify that the final reply is factually correct']) assert.equal(r.stdout.includes(needle), true, needle);
   });
 
-  it('releases the claim of a crashed run with release-claim, and refuses one whose process is alive', CLI_BUDGET, async () => {
+  it('releases the claim of a crashed run with release-claim, and refuses one whose process is alive', RUN_BUDGET, async () => {
     const out = tmp('release');
     mkdirSync(path.join(out, 'logs'));
     writeFileSync(path.join(out, 'logs/r1.episodes.jsonl'), '');
@@ -57,7 +55,7 @@ describe('the dataset CLI as a program', () => {
     assert.deepEqual([usage.code, usage.stderr.includes('usage: dataset release-claim')], [2, true]);
   });
 
-  it('exits 2 with a usage message for a missing, unknown or malformed option', CLI_BUDGET, async () => {
+  it('exits 2 with a usage message for a missing, unknown or malformed option', RUN_BUDGET, async () => {
     const cases: [string[], string][] = [
       [[], '--world is required'],
       [required(tmp('o')).filter((a) => a !== '--run-id' && a !== 'cli-run'), '--run-id is required'],
@@ -76,7 +74,7 @@ describe('the dataset CLI as a program', () => {
     }
   });
 
-  it('refuses a world that does not check before it needs a key, and creates nothing', CLI_BUDGET, async () => {
+  it('refuses a world that does not check before it needs a key, and creates nothing', RUN_BUDGET, async () => {
     const out = path.join(tmp('pre'), 'out');
     const r = await spawnCli(required(out, { world: path.join(tmp('nowhere'), 'w') }));
     assert.equal(r.code, 1);
@@ -84,7 +82,7 @@ describe('the dataset CLI as a program', () => {
     assert.equal(existsSync(out), false);
   });
 
-  it('redacts known controller keys from invalid-world preflight errors', CLI_BUDGET, async () => {
+  it('redacts known controller keys from invalid-world preflight errors', RUN_BUDGET, async () => {
     const world = tmp('invalid-secret-world');
     writeFileSync(path.join(world, 'world.yaml'), readFileSync(path.join(HELPDESK_DIR, 'world.yaml'), 'utf8').replace('format: 1', `format: ${KEYS.LLM_KEY}`));
     const out = path.join(tmp('invalid-secret-out'), 'out');
@@ -97,7 +95,7 @@ describe('the dataset CLI as a program', () => {
     assert.equal(existsSync(out), false);
   });
 
-  it('redacts a configured SDK key before invalid-world errors without requiring keys', CLI_BUDGET, async () => {
+  it('redacts a configured SDK key before invalid-world errors without requiring keys', RUN_BUDGET, async () => {
     const secret = 'custom-controller-secret-90214';
     const world = tmp('invalid-custom-world');
     writeFileSync(path.join(world, 'world.yaml'), readFileSync(path.join(HELPDESK_DIR, 'world.yaml'), 'utf8').replace('format: 1', `format: ${secret}`));
@@ -115,7 +113,7 @@ describe('the dataset CLI as a program', () => {
     assert.equal(existsSync(out), false);
   });
 
-  it('defaults to the logged-in CLI without requiring LLM_KEY', CLI_BUDGET, async () => {
+  it('defaults to the logged-in CLI without requiring LLM_KEY', RUN_BUDGET, async () => {
     const out = path.join(tmp('cli-default'), 'out');
     const result = await spawnCli(required(out), { BOAT_API_KEY: KEYS.BOAT_API_KEY, WORLDGEN_BOAT_ORG: 'org_test', WORLDGEN_CLAUDE_BIN: '/missing/claude' });
     assert.equal(result.code, 1);
@@ -123,7 +121,7 @@ describe('the dataset CLI as a program', () => {
     assert.equal(existsSync(out), false);
   });
 
-  it('names every missing key, exits 1, and creates nothing: no network, no sandbox', CLI_BUDGET, async () => {
+  it('names every missing key, exits 1, and creates nothing: no network, no sandbox', RUN_BUDGET, async () => {
     const out = path.join(tmp('nokey'), 'out');
     const none = await spawnCli(required(out, { transport: 'sdk' }));
     assert.equal(none.code, 1);
@@ -156,7 +154,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     return { code, out, err };
   };
 
-  it('defaults to Claude CLI without requiring an SDK key', CLI_BUDGET, async (t) => {
+  it('defaults to Claude CLI without requiring an SDK key', RUN_BUDGET, async (t) => {
     const bin = path.join(tmp('claude-bin'), 'claude');
     writeFileSync(bin, `#!${process.execPath}\nprocess.stdin.resume(); process.stdin.on('end', () => process.stdout.write(JSON.stringify({ subtype: 'success', is_error: false, structured_output: { action: 'finish', final_reply: 'No changes made.' }, total_cost_usd: 0.0001, usage: { input_tokens: 100, output_tokens: 20 } })));\n`);
     chmodSync(bin, 0o755);
@@ -176,7 +174,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(backend.stopped(), true);
   });
 
-  it('uses the SDK when explicitly requested even when the generation default is the Claude CLI', CLI_BUDGET, async (t) => {
+  it('uses the SDK when explicitly requested even when the generation default is the Claude CLI', RUN_BUDGET, async (t) => {
     const originalFetch = globalThis.fetch;
     const requests: string[] = [];
     t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
@@ -205,7 +203,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(backend.stopped(), true);
   });
 
-  it('exits 0 and says where everything is when every task has an accepted episode', CLI_BUDGET, async () => {
+  it('exits 0 and says where everything is when every task has an accepted episode', RUN_BUDGET, async () => {
     const outDir = tmp('cli-ok');
     const port = randomPort();
     const backend = fakeBackend(await helpdesk(), { port });
@@ -220,7 +218,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(backend.events.at(-1), 'down');
   });
 
-  it('exits 3 and names the missing episodes when the pipeline is sound but a task was not solved', CLI_BUDGET, async () => {
+  it('exits 3 and names the missing episodes when the pipeline is sound but a task was not solved', RUN_BUDGET, async () => {
     const port = randomPort();
     const r = await run(required(tmp('cli-partial')), { backend: fakeBackend(await helpdesk(), { port }), nextTurn: easyOnly, port });
     assert.equal(r.code, 3);
@@ -229,7 +227,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(r.out.some((l) => l.startsWith('dataset run')), false);
   });
 
-  it('records a --model override on the manifest and every episode, and the default model without one (A-283)', CLI_BUDGET, async () => {
+  it('records a --model override on the manifest and every episode, and the default model without one (A-283)', RUN_BUDGET, async () => {
     const lines = (dir: string, file: string): unknown[] => readFileSync(path.join(dir, file), 'utf8').split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { model: unknown }).model);
     for (const [flag, model] of [[[], 'claude-sonnet-5-5'], [['--model', 'claude-opus-5-5'], 'claude-opus-5-5']] as const) {
       const outDir = tmp('cli-model');
@@ -241,7 +239,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     }
   });
 
-  it('refuses a --model with no known price before it touches the sandbox, and creates nothing', CLI_BUDGET, async () => {
+  it('refuses a --model with no known price before it touches the sandbox, and creates nothing', RUN_BUDGET, async () => {
     const outDir = path.join(tmp('cli-unpriced'), 'out');
     const port = randomPort();
     const backend = fakeBackend(await helpdesk(), { port });
@@ -252,7 +250,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(existsSync(outDir), false);
   });
 
-  it('exits 1 with the problem named when the sandbox stop is not confirmed', CLI_BUDGET, async () => {
+  it('exits 1 with the problem named when the sandbox stop is not confirmed', RUN_BUDGET, async () => {
     const port = randomPort();
     const r = await run(required(tmp('cli-down')), { backend: fakeBackend(await helpdesk(), { port, failDown: true }), nextTurn: solveAll, port });
     assert.equal(r.code, 1);
@@ -261,7 +259,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(r.err.includes('  problem: teardown of sandbox fake-sandbox-1 failed and it may still be running: boat stop never confirmed'), true);
   });
 
-  it('exits 1 for a reused run id, without touching the sandbox', CLI_BUDGET, async () => {
+  it('exits 1 for a reused run id, without touching the sandbox', RUN_BUDGET, async () => {
     const outDir = tmp('cli-reuse');
     const port = randomPort();
     const first = await run(required(outDir), { backend: fakeBackend(await helpdesk(), { port }), nextTurn: easyOnly, port });
@@ -273,7 +271,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.deepEqual(backend.events, []);
   });
 
-  it('solves through the proposer with an abort signal and a prompt that holds only public text', CLI_BUDGET, async () => {
+  it('solves through the proposer with an abort signal and a prompt that holds only public text', RUN_BUDGET, async () => {
     const w = await helpdesk();
     const seen: Parameters<SolverProposer['propose']>[0][] = [];
     const easy = [

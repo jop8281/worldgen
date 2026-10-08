@@ -18,6 +18,8 @@ import { WAIT_FOR_PORT, type ExecOpts, type ExecResult, type SandboxBackend, typ
 export const HELPDESK_DIR = path.resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
 export const EASY = 'assign_newest_acme_ticket';
 export const COMMIT = 'a0ca1351234567';
+/** A test that runs the dataset CLI or pipeline takes seconds on a loaded machine: give it the budget `bun run test` gives, not bare `bun test`'s 5 s default. */
+export const RUN_BUDGET = { timeout: 120_000 };
 export const tmp = (name: string): string => mkdtempSync(path.join(tmpdir(), `dataset-${name}-`));
 
 let cached: CheckedWorld | undefined;
