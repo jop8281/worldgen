@@ -455,26 +455,27 @@ const STOP_IS_VERDICT: Record<StopReason['kind'], boolean> = {
   cost_unenforceable: false,
   time_exhausted: true,
   stage_time_exhausted: true,
-  model_error: false,
+  model_error: false, // a 529 overload is not the product's verdict (A-340)
   judge_error: false,
   infra_unavailable: false,
   transport_stalled: false,
   cancelled: false,
 };
-const MACHINERY_STOPS = new Set<string>(Object.entries(STOP_IS_VERDICT).flatMap(([kind, verdict]) => (verdict ? [] : [kind])));
+const VERDICT_STOPS = new Set<string>(Object.entries(STOP_IS_VERDICT).flatMap(([kind, verdict]) => (verdict ? [kind] : [])));
 
 /**
  * What a suite case's end says (A-336), in the order summary.md counts them. A success or an expected refusal is a
- * pass. A product failure is the wrong verdict on the prompt. An infra failure is a crash, a machinery stop, a done
- * world the harness never verified, or an unreadable case.json, and is never a pass. Not run is a suite case with
- * no case output.
+ * pass. A product failure is the wrong verdict on the prompt. An infra failure is a crash, a machinery stop, a stop
+ * whose reason was never logged (A-340), a done world the harness never verified, or an unreadable case.json, and is
+ * never a pass. Not run is a suite case with no case output.
  */
 export const OUTCOMES = ['success', 'expected refusal', 'product failure', 'infra failure', 'not run'] as const;
 export type Outcome = (typeof OUTCOMES)[number];
-type RunOutcome = Exclude<Outcome, 'not run'>;
+export type RunOutcome = Exclude<Outcome, 'not run'>;
 
-function outcomeOf(expect: Expect, status: PhaseStatus, stopKind: string | null, verify: VerifyResult): RunOutcome {
-  if (status === 'crashed' || (status === 'stopped' && stopKind !== null && MACHINERY_STOPS.has(stopKind))) return 'infra failure';
+/** The one classifier of a case that left a readable record: summary.md and eval-outcomes.ts both call it (A-340). */
+export function outcomeOf(expect: Expect, status: PhaseStatus, stopKind: string | null, verify: VerifyResult): RunOutcome {
+  if (status === 'crashed' || (status === 'stopped' && (stopKind === null || !VERDICT_STOPS.has(stopKind)))) return 'infra failure';
   if (expect === 'stopped') return status === 'stopped' ? 'expected refusal' : 'product failure';
   if (status === 'stopped') return 'product failure';
   if (verify.kind === 'not_run') return 'infra failure';
