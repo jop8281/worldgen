@@ -67,7 +67,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
-import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, sensitiveOf, type Sensitivity } from './explorer.ts';
+import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, RUN_TEXT_WITHHELD, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { parsePlanYaml } from '../worldgen/plan.ts';
 import { renderPlanMd } from '../worldgen/plan-md.ts';
@@ -188,9 +188,14 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
 };
 
+/** One route the studio answers, as its router holds it: what the route-policy test checks every route against. */
+export type StudioRoute = { readonly method: 'GET' | 'POST'; readonly path: string; readonly need: StudioRole | 'public' };
+
 export interface StudioServer {
   readonly url: string;
   readonly port: number;
+  /** Every route the router answers, in its order: `/api/worlds/:name/report` and the role it needs. */
+  readonly routes: readonly StudioRoute[];
   /**
    * Drops the port and open connections, stops every served world (SIGTERM, then SIGKILL) and every running check, and
    * resolves once each is gone. A generation run or an episode gets SIGTERM, its own clean stop, and finishes billing
@@ -756,7 +761,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     for (const line of filter === null ? lines.slice(-AUDIT_TAIL) : lines) {
       try {
         const entry: unknown = JSON.parse(line);
-        if (filter === null || (isObject(entry) && entry['tenant'] === filter)) entries.push(entry);
+        // A tenant's lines include the work an admin did for it with ?tenant= (A-367).
+        if (filter === null || (isObject(entry) && (entry['tenant'] === filter || entry['forTenant'] === filter))) entries.push(entry);
       } catch {
         // a damaged line is skipped, not fatal
       }
@@ -969,7 +975,19 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   async function worldReport(p: Params, who: User, filter: string | null): Promise<Reply> {
     const w = await worldDirOf(p['name'] ?? '', who, filter);
-    return w.ok ? reportOf(p['name'] ?? '', w.dir) : w.reply;
+    if (!w.ok) return w.reply;
+    return await sensitiveRefusal(who, w.dir, p['name'] ?? '', 'report') ?? reportOf(p['name'] ?? '', w.dir);
+  }
+
+  /**
+   * A 403 for a role below admin when the world at `dir` has a sensitive field or cannot be read: its REPORT.md and plan
+   * quote issue hints and run text that can hold seed values, as its export holds the seed (A-356, A-367). Null otherwise.
+   */
+  async function sensitiveRefusal(who: User, dir: string, name: string, what: 'report' | 'plan'): Promise<Reply | null> {
+    if (who.role === 'admin') return null;
+    const sensitive = await sensitivityOf(dir);
+    if (sensitive !== null && sensitive.size === 0) return null;
+    return fail(403, `${what}.sensitive`, `${name} ${sensitive === null ? 'cannot be read to find its sensitive fields' : 'has sensitive fields'}, so only an admin may read its ${what}`);
   }
 
   /** REPORT.md and capsule.json of a resolved world dir, refused when the report embeds private task source. */
@@ -995,6 +1013,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const name = p['name'] ?? '';
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
+    const refused = await sensitiveRefusal(who, w.dir, name, 'plan');
+    if (refused !== null) return refused;
     const yaml = await readFile(path.join(w.dir, 'plan.yaml'), 'utf8').catch(() => null);
     if (yaml === null) return fail(404, 'plan.missing', `${name} has no plan.yaml; only a generated world has a plan`);
     const plan = parsePlanYaml(yaml);
@@ -1717,13 +1737,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (run === undefined) return fail(404, 'run.unknown', `No run ${p['runId'] ?? ''}`);
     const events = await readEvents(run);
     const running = run.phase !== 'finished';
+    const tail = events.slice(-EVENT_TAIL);
+    // Issue text, error messages and the child's own output can quote seed values or model output, so below admin they
+    // show only for a run whose saved world has no sensitive field. The out dir holds a world only once the run is done,
+    // so a run with none fails closed (A-367).
+    const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await sensitivityOf(run.outDir);
+    const output = run.child?.output() ?? '';
+    const said = (sensitive !== null && sensitive.size === 0) || output.trim() === '' ? output : RUN_TEXT_WITHHELD;
     return {
       status: 200,
       body: {
         running,
-        ...stateOf(running, run.exitCode, events, run.child?.output() ?? '', run.recovery),
+        ...stateOf(running, run.exitCode, events, said, run.recovery),
         ...(running ? {} : { exitCode: run.exitCode }),
-        events: events.slice(-EVENT_TAIL),
+        events: runEventsBelowAdmin(tail, sensitive),
         totals: totalsOf(events),
         job: jobView(run),
         ...(run.iterate === undefined ? {} : { iterate: { ...run.iterate, published: !running && await file(path.join(run.outDir, 'world.yaml')) } }),
@@ -1971,8 +1998,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (run === undefined && !await isDir(out)) return unknown;
     const exported = await exportedEpisode(out, runId);
     // Tool results hold the world's answers, so a role below admin sees them masked like the console's (A-356).
-    const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, await episodeSensitivity(exported, out));
-    const output = run?.child?.output() ?? '';
+    const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await episodeSensitivity(exported, out);
+    const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, sensitive);
+    // The child's last lines can quote a world answer, so they are withheld below admin like a run's (A-367).
+    const raw = run?.child?.output() ?? '';
+    const output = (sensitive !== null && sensitive.size === 0) || raw.trim() === '' ? raw : RUN_TEXT_WITHHELD;
     const running = run !== undefined && run.phase !== 'finished';
     return {
       status: 200,
@@ -2067,8 +2097,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId', 'events'], run: (p, _b, who, ctx) => runStatus(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'generate', ':runId', 'stop'], run: (p, _b, who, ctx) => stopRun(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'runs'], run: (_p, _b, who, ctx) => listRuns(who, ctx.filter) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'eval'], run: () => listEval() },
-    { method: 'GET', need: 'viewer', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
+    // An eval run is the operator's rehearsal of the repo, no tenant's: its summary quotes crash lines and issue hints,
+    // which can hold an eval world's seed values, so only an admin reads it (A-370).
+    { method: 'GET', need: 'admin', parts: ['api', 'eval'], run: () => listEval() },
+    { method: 'GET', need: 'admin', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
     { method: 'GET', need: 'admin', parts: ['api', 'costs'], run: () => costs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'tasks'], run: (p, _b, who, ctx) => worldTasks(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p, _b, who, ctx) => worldProof(p, who, ctx) },
@@ -2165,12 +2197,18 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     // An admin's ?tenant=, read only after sign-in and the throttle, so a malformed one cannot tell a guesser that a token
     // is an admin's. No other role narrows.
-    const at = (req.url ?? '').indexOf('?');
-    const filter = who.role === 'admin' ? new URLSearchParams(at < 0 ? '' : (req.url ?? '').slice(at + 1)).get('tenant') : null;
+    const filter = adminFilterOf(req, who);
     if (filter !== null && !TENANT.test(filter)) return fail(400, 'tenant.invalid', `?tenant=${filter} is refused: ${TENANT_RULE}`);
     const body = route.method === 'POST' ? await readBody(req, route.maxBody ?? MAX_BODY_BYTES) : { ok: true as const, value: undefined };
     if (!body.ok) return fail(body.status, body.code, body.message);
     return route.run(hit.params, body.value, who, { key: req.headers['idempotency-key'], filter });
+  };
+
+  /** The `?tenant=` of an admin's request, or null for any other caller or none given. */
+  const adminFilterOf = (req: IncomingMessage, who: Caller): string | null => {
+    if (who.kind !== 'user' || who.role !== 'admin') return null;
+    const at = (req.url ?? '').indexOf('?');
+    return new URLSearchParams(at < 0 ? '' : (req.url ?? '').slice(at + 1)).get('tenant');
   };
 
   const answer = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -2190,11 +2228,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!(req.method === 'GET' && segments.length === 2 && segments[0] === 'api' && segments[1] === 'health')) traffic.record(now(), reply.status);
     if (req.method === 'POST') {
       const error = isObject(reply.body) && isObject(reply.body['error']) ? reply.body['error']['code'] : undefined;
+      // The tenant an admin acted for with ?tenant=, beside the admin's own, so the audit names whose work it was.
+      const actedFor = adminFilterOf(req, who);
       await audit({
         at: new Date().toISOString(),
         user: who.kind === 'user' ? who.name : null,
         role: who.kind === 'user' ? who.role : null,
         tenant: who.kind === 'user' ? who.tenant : null,
+        ...(actedFor !== null && TENANT.test(actedFor) ? { forTenant: actedFor } : {}),
         method: 'POST',
         path: (req.url ?? '/').split('?')[0],
         status: reply.status,
@@ -2242,6 +2283,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   return {
     url: `http://${host.includes(':') ? `[${host}]` : host}:${port}`,
     port,
+    routes: routes.map((r) => ({ method: r.method, path: `/${r.parts.join('/')}`, need: r.need })),
     close() {
       closing ??= (async () => {
         // Each job this studio holds is stopped by the close, so it is recorded as stopped in the last write, its lease
