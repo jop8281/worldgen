@@ -65,7 +65,7 @@ const TABLE: readonly Row[] = [
   { route: 'GET /api/worlds', need: 'viewer', tenant: 'listing', carries: 'nothing', path: () => '/api/worlds', status: [401, 200, 200, 200, 200], foreignHides: () => 'helpdesk' },
   { route: 'GET /api/worlds/:name/report', need: 'viewer', tenant: "acme's", foreign: 404, carries: '403 *.sensitive', path: () => '/api/worlds/helpdesk/report', status: [401, 403, 404, 403, 200], adminSees: true },
   { route: 'GET /api/worlds/:name/plan', need: 'viewer', tenant: "acme's", foreign: 404, carries: '403 *.sensitive', path: () => '/api/worlds/helpdesk/plan', status: [401, 403, 404, 403, 404] },
-  { route: 'GET /api/worlds/:name/export', need: 'viewer', tenant: "acme's", foreign: 404, carries: '403 *.sensitive', path: () => '/api/worlds/helpdesk/export', status: [401, 403, 404, 403, 200] },
+  { route: 'GET /api/worlds/:name/export', need: 'admin', tenant: "acme's", carries: 'admin only', path: () => '/api/worlds/helpdesk/export', status: [401, 403, 403, 403, 200] },
   { route: 'GET /api/worlds/:name/explorer', need: 'viewer', tenant: "acme's", foreign: 404, carries: 'nothing', path: () => '/api/worlds/helpdesk/explorer', status: [401, 200, 404, 200, 200] },
   { route: 'GET /api/worlds/:name/tasks', need: 'viewer', tenant: "acme's", foreign: 404, carries: 'nothing', path: () => '/api/worlds/helpdesk/tasks', status: [401, 200, 404, 200, 200] },
   { route: 'POST /api/worlds/:name/serve', need: 'operator', tenant: "acme's", foreign: 404, carries: 'nothing', path: () => '/api/worlds/helpdesk/serve', body: {}, status: [401, 403, 404, 409, 409] },

@@ -224,9 +224,9 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
     assert.equal(JSON.stringify(r.body).includes('enterprise'), false);
   });
 
-  it('exports a world with a sensitive field only to an admin', async () => {
+  it('exports a world with a sensitive field only to an admin, as every export is (A-374)', async () => {
     const refused = await get(studio.url, '/api/worlds/helpdesk/export', OPERATOR);
-    assert.deepEqual([refused.status, (refused.body?.['error'] as { code?: string } | undefined)?.code], [403, 'export.sensitive']);
+    assert.deepEqual([refused.status, (refused.body?.['error'] as { code?: string } | undefined)?.code], [403, 'auth.forbidden']);
     assert.equal((await get(studio.url, '/api/worlds/helpdesk/export', VIEWER)).status, 403);
     assert.equal((await get(studio.url, '/api/worlds/helpdesk/export', ADMIN)).status, 200);
   });
