@@ -15,15 +15,15 @@ function tmpConfig(obj: unknown): string {
 }
 
 describe('loadConfig', () => {
-  it('parses the shipped config with the A-48 budget of $5 and 15 minutes', async () => {
+  it('parses the shipped config with the A-366 budget of $3 and the A-48 15 minutes', async () => {
     const c = await loadConfig(REAL, {});
     assert.equal(c.model, 'claude-sonnet-5-5');
-    assert.equal(c.maxCostUsd, 5);
+    assert.equal(c.maxCostUsd, 3);
     assert.equal(c.maxMinutes, 15);
     assert.equal(c.maxBacktracks, 2);
     assert.equal(c.maxOutputTokens, 16000);
     assert.equal(c.steps.plan.maxAttempts, 3);
-    assert.equal(c.steps.workflow.maxAttempts, 5);
+    assert.equal(c.steps.workflow.maxAttempts, 4);
   });
 
   it('rejects an unknown step key and names it', async () => {
@@ -41,7 +41,7 @@ describe('loadConfig', () => {
     assert.equal(c.model, 'claude-sonnet-5-5');
     assert.equal(c.maxCostUsd, 1.5);
     assert.equal(c.maxMinutes, 7);
-    assert.equal(c.steps.tasks.maxAttempts, 5);
+    assert.equal(c.steps.tasks.maxAttempts, 4);
   });
 
   it('ignores undefined overrides', async () => {

@@ -116,10 +116,10 @@ describe('redteam config: strictness', () => {
   it('WG-C07 the shipped config parses to the documented values', async () => {
     const c = await loadConfig(join(import.meta.dirname, '../worldgen.config.json'), {});
     assert.equal(c.model, 'claude-sonnet-5-5');
-    assert.equal(c.maxCostUsd, 5);
+    assert.equal(c.maxCostUsd, 3);
     assert.equal(c.maxMinutes, 15);
     assert.equal(c.maxBacktracks, 2);
-    assert.deepEqual(c.steps, { plan: { maxAttempts: 3, minShareSeconds: 330 }, model: { maxAttempts: 4 }, workflow: { maxAttempts: 5 }, seed: { maxAttempts: 4 }, tasks: { maxAttempts: 5 } });
+    assert.deepEqual(c.steps, { plan: { maxAttempts: 3, minShareSeconds: 330 }, model: { maxAttempts: 4 }, workflow: { maxAttempts: 4 }, seed: { maxAttempts: 4 }, tasks: { maxAttempts: 4 } });
   });
 });
 
