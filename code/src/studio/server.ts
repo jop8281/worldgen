@@ -18,8 +18,12 @@
  *   studio's own sign-in token; a child that runs a world's snippets (check, proof, serve) gets only an
  *   allowlist (A-338, A-343). The studio stores and logs no key.
  * - No private task material. The worlds route counts tasks, it never returns task source. The
- *   report route serves REPORT.md and capsule.json and refuses a report that embeds any
- *   grader, solution or decoy source. test/studio.test.ts proves both with canaries.
+ *   report route serves REPORT.md and capsule.json, and the plan route plan.yaml's assumptions and plan.md, and each
+ *   refuses an answer that embeds any grader, solution or decoy source. test/studio.test.ts and
+ *   test/studio-builder.test.ts prove it with canaries.
+ * - Uploads (YOS-188). An OpenAPI spec or CSV table an operator uploads is stored in its tenant's own
+ *   <shelf root>/.uploads (uploads.ts), and an upload id resolves only there, so no tenant reads or generates from
+ *   another's. Every walker of the worlds dir skips dot dirs, so .uploads is never a world, a run source or a shelf.
  * - Sign-in (YOS-187). With users configured, every route but GET / and GET /api/health needs a bearer token whose
  *   sha256 matches a user; GETs need the viewer role, POSTs the operator role, GET /api/audit the admin role. The
  *   credential is a bearer header, never a cookie: a cookie ignores ports and would reach every served world on the
@@ -55,18 +59,21 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import type { Dirent } from 'node:fs';
-import { appendFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
+import { parsePlanYaml } from '../worldgen/plan.ts';
+import { renderPlanMd } from '../worldgen/plan-md.ts';
 import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
 import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, recoveryOf, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
+import { MAX_UPLOAD_BYTES, MAX_UPLOADS, openapiPaths, parseUpload, uploadFileOf, uploadIdOf, uploadPartsOf, UPLOADS_DIR, type Upload, type UploadKind } from './uploads.ts';
 import { trafficCounter } from './watch.ts';
 
 /** Ordered: each role can do everything the roles before it can. */
@@ -183,7 +190,7 @@ export interface StudioServer {
   /**
    * Drops the port and open connections, stops every served world (SIGTERM, then SIGKILL) and every running check, and
    * resolves once each is gone. A generation run or an episode gets SIGTERM, its own clean stop, and finishes billing
-   * on its own (A-279).
+   * on its own (A-279); its record says the close stopped it (A-363).
    */
   close(): Promise<void>;
 }
@@ -233,6 +240,8 @@ const PARTIAL_SUFFIX = '.partial';
 const MAX_CSV_FILES = 8;
 /** Largest request body read. A larger one is 413 and never parsed. */
 const MAX_BODY_BYTES = 1_048_576;
+/** Largest POST /api/uploads body: JSON spells one control character in six bytes, so any content of MAX_UPLOAD_BYTES fits. */
+const MAX_UPLOAD_BODY_BYTES = 6 * MAX_UPLOAD_BYTES + 4_096;
 /** How long a stop waits after a signal before it escalates, or answers not-stopped. */
 const SIGNAL_WAIT_MS = 1_000;
 /** How long a generation run gets after SIGINT to cancel its call, bill it and write REPORT.md before SIGTERM (A-279). */
@@ -289,6 +298,7 @@ const fingerprintOf = (kind: string, request: readonly string[]): string => crea
 const STOPPED_REASON: Record<Extract<Recovery, { outcome: 'stopped' }>['reason'], string> = {
   process_gone: 'the studio restarted while this run was running and its process is gone; its evidence stays in the <out>.partial directory',
   start_unconfirmed: 'the studio stopped before it confirmed this run started, so it is never started again: its process may have started, and a paid run must not run twice',
+  studio_closed: 'the studio closed before this run finished and sent its process SIGTERM, its clean stop; the run is never started again',
 };
 
 /** One directory level of a request target: not empty, no separators, no dot segments. */
@@ -311,14 +321,14 @@ class ConnectionClosed extends Error {}
 
 type Body = { ok: true; value: unknown } | { ok: false; status: 400 | 413; code: string; message: string };
 
-/** Reads the whole body. Empty is undefined; anything else must be JSON. */
-function readBody(req: IncomingMessage): Promise<Body> {
+/** Reads the whole body, at most `limit` bytes. Empty is undefined; anything else must be JSON. */
+function readBody(req: IncomingMessage, limit: number): Promise<Body> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size <= MAX_BODY_BYTES) chunks.push(chunk);
+      if (size <= limit) chunks.push(chunk);
     });
     req.on('error', reject);
     req.on('end', () => setImmediate(() => {
@@ -326,8 +336,8 @@ function readBody(req: IncomingMessage): Promise<Body> {
         reject(new ConnectionClosed());
         return;
       }
-      if (size > MAX_BODY_BYTES) {
-        resolve({ ok: false, status: 413, code: 'body.too_large', message: `Request body is ${size} bytes; the most is ${MAX_BODY_BYTES}` });
+      if (size > limit) {
+        resolve({ ok: false, status: 413, code: 'body.too_large', message: `Request body is ${size} bytes; the most is ${limit}` });
         return;
       }
       const text = Buffer.concat(chunks).toString('utf8');
@@ -446,10 +456,11 @@ type Handler = (params: Params, body: unknown, who: User, ctx: Ctx) => Promise<R
 /**
  * `need` is the least role that may call the route. A public route needs no sign-in and is handed no caller, so its
  * answer cannot depend on the bearer: a public answer that did would tell an unthrottled guesser which tokens are valid.
+ * `maxBody` is the largest body a POST reads, MAX_BODY_BYTES when absent.
  */
 type Route =
   | { readonly method: 'GET'; readonly need: 'public'; readonly parts: readonly string[]; readonly run: () => Promise<Reply> | Reply }
-  | { readonly method: 'GET' | 'POST'; readonly need: StudioRole; readonly parts: readonly string[]; readonly run: Handler };
+  | { readonly method: 'GET' | 'POST'; readonly need: StudioRole; readonly parts: readonly string[]; readonly run: Handler; readonly maxBody?: number };
 
 /** The capsule.json of one world dir, parsed, or null when absent or foreign. */
 async function readCapsule(dir: string): Promise<RunCapsule | null> {
@@ -565,11 +576,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   type Shelf = { readonly tenant: string | null; readonly root: string };
   const LIBRARY: Shelf = { tenant: null, root: worldsDir };
   const shelfOf = (tenant: string): Shelf => ({ tenant, root: path.join(worldsDir, tenant) });
+  /** Where `tenant` writes: its own dir, and for `default` the worlds dir itself, the old layout. */
+  const writeRootOf = (tenant: string): string => (tenant === DEFAULT_TENANT ? worldsDir : shelfOf(tenant).root);
   /** What `who` reads: the library, then each tenant dir it sees, in name order. */
   const shelvesOf = (who: User, filter: string | null): Shelf[] => [LIBRARY, ...[...tenants].filter((t) => visible(t, who, filter)).map(shelfOf)];
-  /** The dirs on a shelf. A tenant's own dir is never a dir of the library. */
+  /** The dirs on a shelf. A dot dir (.uploads) is never a world, and a tenant's own dir is never a dir of the library. */
   const dirsOn = async (shelf: Shelf): Promise<string[]> => {
-    const names = (await dirsOf(shelf.root)).filter((name) => shelf.tenant !== null || !tenants.has(name));
+    const names = (await dirsOf(shelf.root)).filter((name) => !name.startsWith('.') && (shelf.tenant !== null || !tenants.has(name)));
     if (shelf.tenant !== null) return names;
     const kept: string[] = [];
     for (const name of names) if (!await isTenantShelf(path.join(shelf.root, name))) kept.push(name);
@@ -579,6 +592,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const isTenantShelf = async (dir: string): Promise<boolean> => {
     if (await file(path.join(dir, 'world.yaml')) || await file(path.join(dir, 'plan.yaml'))) return false;
     for (const child of await dirsOf(dir)) {
+      if (child.startsWith('.')) continue;
       if (await file(path.join(dir, child, 'world.yaml')) || await file(path.join(dir, child, 'plan.yaml'))) return true;
     }
     return false;
@@ -609,6 +623,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   };
 
   const services = new Map<string, { record: ServiceRecord; dir: string; child: SpawnedChild }>();
+  /** Ids of the services a reset is running on, so a second reset of one waits for the first. */
+  const resetting = new Set<string>();
   /** `<tenant> <world dir>` of each `worldplay serve` that has not reported its ports yet. */
   const starting = new Set<string>();
   /** Ports an admin pinned for a `worldplay serve` that has not reported yet: the world port and its admin port. */
@@ -839,7 +855,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const own = who.role === 'admin' && filter !== null ? filter : who.tenant;
     for (const shelf of [...(tenants.has(own) ? [shelfOf(own)] : []), LIBRARY]) {
       const dir = path.join(shelf.root, name);
-      if ((shelf.tenant !== null || !tenants.has(name)) && await isDir(dir) && (shelf.tenant !== null || !await isTenantShelf(dir))) return { ok: true, dir };
+      if (!name.startsWith('.') && (shelf.tenant !== null || !tenants.has(name)) && await isDir(dir) && (shelf.tenant !== null || !await isTenantShelf(dir))) return { ok: true, dir };
     }
     return { ok: false, reply: fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`) };
   }
@@ -911,6 +927,35 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
     }
     return { status: 200, body: { name, report, ...(capsule === null ? {} : { capsule }) } };
+  }
+
+  /**
+   * The plan of a generated world (YOS-188): plan.yaml's assumptions, open questions and out-of-scope items, and plan.md,
+   * or plan.md rendered from plan.yaml when the run wrote none. Refused like the report when any of it embeds task source.
+   */
+  async function worldPlan(p: Params, who: User, filter: string | null): Promise<Reply> {
+    const name = p['name'] ?? '';
+    const w = await worldDirOf(name, who, filter);
+    if (!w.ok) return w.reply;
+    const yaml = await readFile(path.join(w.dir, 'plan.yaml'), 'utf8').catch(() => null);
+    if (yaml === null) return fail(404, 'plan.missing', `${name} has no plan.yaml; only a generated world has a plan`);
+    const plan = parsePlanYaml(yaml);
+    if (plan === null) return fail(422, 'plan.invalid', `${name}/plan.yaml does not parse as a WorldGen plan`);
+    const written = await readFile(path.join(w.dir, 'plan.md'), 'utf8').catch(() => null);
+    const body = {
+      name,
+      assumptions: plan.assumptions.map((a) => ({ decision: a.decision, why: a.why })),
+      openQuestions: (plan.open_questions ?? []).map((q) => ({ question: q.question, default_answer: q.default_answer })),
+      outOfScope: plan.outOfScope.map((o) => ({ what: o.what, why: o.why })),
+      planMd: written ?? renderPlanMd(plan),
+    };
+    const shown = [body.planMd, ...body.assumptions.flatMap((a) => [a.decision, a.why]), ...body.openQuestions.flatMap((q) => [q.question, q.default_answer]), ...body.outOfScope.flatMap((o) => [o.what, o.why])];
+    const loaded = await loadWorld(w.dir);
+    const sources = privateSources(loaded.ok ? loaded.value : null).filter((source) => source !== '');
+    if (shown.some((text) => sources.some((source) => text.includes(source)))) {
+      return fail(403, 'plan.private_source', `${name}'s plan contains private task source; the studio refuses to serve it`);
+    }
+    return { status: 200, body };
   }
 
   async function explorer(p: Params, who: User, filter: string | null): Promise<Reply> {
@@ -1100,23 +1145,31 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const hit = serviceOf(p['id'] ?? '', who, filter);
     if (hit === undefined) return fail(404, 'service.unknown', `No service ${p['id'] ?? ''}`);
     const name = hit.record.name;
+    // Typing the name guards against a mis-click on the page. It is no barrier to a client, since the refusal says what to send.
     if (!isObject(body) || body['confirm'] !== name) {
       return fail(400, 'reset.confirm', `a reset throws away every change to ${name}'s state; send {"confirm": "${name}"} to go ahead`);
     }
+    if (resetting.has(hit.record.id)) return fail(409, 'reset.busy', `a reset of ${name} is already running; wait for its answer`);
+    resetting.add(hit.record.id);
     const admin = `http://127.0.0.1:${hit.record.adminPort}`;
     const signal = (): AbortSignal => AbortSignal.timeout(CALL_TIMEOUT_MS);
     try {
       const reset = await fetch(`${admin}/_world/reset`, { method: 'POST', redirect: 'manual', signal: signal() });
       if (!reset.ok) return fail(502, 'reset.failed', `the admin port of ${name} answered ${reset.status} to the reset`);
-      const done: unknown = await reset.json();
+      // An answer that is not JSON is a failed reset, not an unreachable port.
+      const done: unknown = await reset.json().catch(() => null);
+      // The hash comes from a second call after the reset, so it is not atomic with it: a write through the world port in
+      // between shows in the hash.
       const state = await fetch(`${admin}/_world/state`, { redirect: 'manual', signal: signal() });
-      const dump: unknown = state.ok ? await state.json() : null;
+      const dump: unknown = state.ok ? await state.json().catch(() => null) : null;
       const now = isObject(done) && typeof done['now'] === 'string' ? done['now'] : null;
       const hash = isObject(dump) && typeof dump['hash'] === 'string' ? dump['hash'] : null;
       if (now === null || hash === null) return fail(502, 'reset.failed', `the admin port of ${name} gave no time or state hash after the reset`);
       return { status: 200, body: { service: hit.record.id, world: name, now, hash } };
     } catch (e) {
       return fail(502, 'reset.unreachable', `the admin port of ${name} did not answer the reset: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      resetting.delete(hit.record.id);
     }
   }
 
@@ -1177,6 +1230,85 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return found.ok ? { status: 200, body: { spec: p['spec'], paths: found.paths } } : fail(400, 'generate.spec', found.why);
   }
 
+  // ---- uploads (YOS-188) --------------------------------------------------------------------
+
+  type StoredUpload = { readonly id: string; readonly kind: UploadKind; readonly name: string; readonly bytes: number; readonly file: string };
+  const uploadView = (u: StoredUpload): { id: string; kind: UploadKind; name: string; bytes: number } => ({ id: u.id, kind: u.kind, name: u.name, bytes: u.bytes });
+
+  /** One of `tenant`'s uploads by id, or null: any other id, another tenant's included, is unknown. */
+  async function uploadOf(tenant: string, id: string): Promise<StoredUpload | null> {
+    const parts = uploadPartsOf(id);
+    if (parts === null) return null;
+    const at = uploadFileOf(writeRootOf(tenant), parts.sha12, parts.name);
+    const s = await lstat(at).catch(() => null);
+    return s !== null && s.isFile() ? { id, kind: parts.kind, name: parts.name, bytes: s.size, file: at } : null;
+  }
+
+  /** `tenant`'s uploads, by name, then id. */
+  async function uploadsOf(tenant: string): Promise<StoredUpload[]> {
+    const root = path.join(writeRootOf(tenant), UPLOADS_DIR);
+    const out: StoredUpload[] = [];
+    for (const sha12 of await dirsOf(root)) {
+      for (const name of await readdir(path.join(root, sha12)).catch((): string[] => [])) {
+        const one = await uploadOf(tenant, `${sha12}-${name}`);
+        if (one !== null) out.push(one);
+      }
+    }
+    const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    return out.sort((a, b) => order(a.name, b.name) || order(a.id, b.id));
+  }
+
+  /** The OpenAPI paths of a stored upload, read again from its file. */
+  async function specOfUpload(u: StoredUpload): Promise<{ ok: true; abs: string; paths: string[] } | { ok: false; why: string }> {
+    const text = await readFile(u.file, 'utf8').catch(() => null);
+    if (text === null) return { ok: false, why: `upload ${u.id} cannot be read` };
+    const spec = openapiPaths(text);
+    return spec.ok ? { ok: true, abs: u.file, paths: spec.paths } : { ok: false, why: `upload ${u.id}: ${spec.why}` };
+  }
+
+  // One upload at a time, so two at once cannot both pass the cap.
+  let uploading: Promise<unknown> = Promise.resolve();
+
+  async function upload(body: unknown, who: User): Promise<Reply> {
+    const parsed = parseUpload(body);
+    if (!parsed.ok) return fail(400, parsed.code, parsed.message);
+    const stored = uploading.then(() => storeUpload(parsed.upload, who.tenant));
+    uploading = stored.catch(() => undefined);
+    return stored;
+  }
+
+  /** Writes a new upload through a temp file and a rename, 0600 in 0700 dirs; an upload stored before answers 200 untouched. */
+  async function storeUpload(u: Upload, tenant: string): Promise<Reply> {
+    const { sha12, id } = uploadIdOf(u);
+    const answer = (status: 200 | 201, bytes: number): Reply => ({
+      status, body: { upload: { id, kind: u.kind, name: u.name, bytes, ...(u.paths === undefined ? {} : { paths: u.paths }) } },
+    });
+    const known = await uploadOf(tenant, id);
+    if (known !== null) return answer(200, known.bytes);
+    if ((await uploadsOf(tenant)).length >= MAX_UPLOADS) return fail(409, 'upload.full', `this tenant already stores ${MAX_UPLOADS} uploads, the most the studio keeps for one tenant`);
+    const root = writeRootOf(tenant);
+    await mkdir(root, { recursive: true });
+    const target = uploadFileOf(root, sha12, u.name);
+    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    const temp = path.join(path.dirname(target), `.${u.name}.${randomBytes(4).toString('hex')}.tmp`);
+    try {
+      await writeFile(temp, u.content, { mode: 0o600, flag: 'wx' });
+      await rename(temp, target);
+    } finally {
+      await rm(temp, { force: true });
+    }
+    return answer(201, Buffer.byteLength(u.content, 'utf8'));
+  }
+
+  async function uploadPaths(p: Params, who: User): Promise<Reply> {
+    const id = p['id'] ?? '';
+    const found = await uploadOf(who.tenant, id);
+    if (found === null) return fail(404, 'upload.unknown', `No upload ${id}`);
+    if (found.kind !== 'openapi') return fail(400, 'upload.kind', `upload ${id} is a csv table; only an OpenAPI upload has paths`);
+    const spec = await specOfUpload(found);
+    return spec.ok ? { status: 200, body: { upload: id, paths: spec.paths } } : fail(422, 'upload.openapi', spec.why);
+  }
+
   /** What a job start asks for. `request` is what two retries share: the child's argv without the run id each job mints or the transport. */
   type JobStart = {
     readonly kind: JobKind;
@@ -1203,9 +1335,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     kind: job.kind, key: job.key, phase: job.phase, lease: job.lease, ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
   });
 
+  /** A running job another studio holds whose process is gone: recovery stops it once that lease runs out. */
+  const ownerGone = (job: Job): boolean => !holds(job) && job.phase === 'running' && job.pid !== null && !processes.alive(job.pid);
+
   /**
    * Starts a job once per key (A-335). A client key names one job forever; a derived key matches only an unfinished
-   * job, so the same request after the first one finished is a deliberate rerun. The intent is on disk before the spawn.
+   * job, so the same request after the first one finished is a deliberate rerun. A derived key also passes over a job
+   * whose owner is gone, which would only hand this request a run that already ended (A-363). The intent is on disk
+   * before the spawn.
    */
   async function startJob(start: JobStart): Promise<Reply> {
     const clientKey = idempotencyKeyOf(start.rawKey);
@@ -1214,7 +1351,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const key = clientKey.key ?? `derived:${fingerprint}`;
     // No await from this lookup to the insert below, so two requests with one key cannot both miss. Another tenant's job
     // never matches: its key is unused here, since a replay or a refusal would tell this caller that the key exists.
-    const prior = [...jobs.values()].find((j) => j.tenant === start.tenant && j.key === key && (clientKey.key !== undefined || j.phase !== 'finished'));
+    const prior = [...jobs.values()].find((j) => j.tenant === start.tenant && j.key === key
+      && (clientKey.key !== undefined || (j.phase !== 'finished' && !ownerGone(j))));
     if (prior !== undefined) {
       if (prior.fingerprint === fingerprint) return startAnswer(prior, true);
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (job ${prior.runId})`);
@@ -1284,13 +1422,26 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     const flags = [...(budget === undefined ? [] : ['--budget-usd', String(budget)]), ...(minutes === undefined ? [] : ['--max-minutes', String(minutes)])];
     // `default` keeps the old layout, so open mode and the token admin write where they always did.
-    const outDir = path.join(who.tenant === DEFAULT_TENANT ? worldsDir : shelfOf(who.tenant).root, `gen-${slug}`);
+    const outDir = path.join(writeRootOf(who.tenant), `gen-${slug}`);
     let args: string[];
     if (kind === 'description') {
       if (text.trim() === '') return fail(400, 'generate.text', 'a description needs text');
       args = [text, '--out', outDir, ...flags];
     } else if (kind === 'openapi') {
-      const spec = await pathsOfSpec(typeof body['spec'] === 'string' ? body['spec'] : text);
+      const chosen = body['upload'];
+      if (chosen !== undefined && (body['spec'] !== undefined || rawText !== undefined)) {
+        return fail(400, 'generate.spec', 'give either an upload or a spec under eval/inputs, not both');
+      }
+      let spec: Awaited<ReturnType<typeof pathsOfSpec>>;
+      if (chosen === undefined) {
+        spec = await pathsOfSpec(typeof body['spec'] === 'string' ? body['spec'] : text);
+      } else {
+        if (typeof chosen !== 'string') return fail(400, 'generate.upload', 'upload must be an upload id, such as the id POST /api/uploads answered');
+        const found = await uploadOf(who.tenant, chosen);
+        if (found === null) return fail(400, 'generate.upload', `No upload ${chosen}`);
+        if (found.kind !== 'openapi') return fail(400, 'generate.upload', `upload ${chosen} is a csv table, not an OpenAPI spec`);
+        spec = await specOfUpload(found);
+      }
       if (!spec.ok) return fail(400, 'generate.spec', spec.why);
       const only = body['only'] ?? [];
       if (!Array.isArray(only) || !only.every((o): o is string => typeof o === 'string' && o.startsWith('/'))) {
@@ -1302,8 +1453,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     } else {
       const files = body['files'];
       const parts = Array.isArray(files) ? files.filter((f): f is string => typeof f === 'string') : text.split(/[\s,]+/).filter((s) => s !== '');
-      if (parts.length < 1 || parts.length > MAX_CSV_FILES || (Array.isArray(files) && parts.length !== files.length)) {
-        return fail(400, 'generate.files', `csv needs 1 to ${MAX_CSV_FILES} CSV files under eval/inputs`);
+      const chosen = body['uploads'] ?? [];
+      if (!Array.isArray(chosen) || !chosen.every((c): c is string => typeof c === 'string')) {
+        return fail(400, 'generate.upload', 'uploads must be a list of upload ids, such as the ids POST /api/uploads answered');
+      }
+      const total = parts.length + chosen.length;
+      if (total < 1 || total > MAX_CSV_FILES || (Array.isArray(files) && parts.length !== files.length)) {
+        return fail(400, 'generate.files', `csv needs 1 to ${MAX_CSV_FILES} CSV files, under eval/inputs or uploaded`);
       }
       const csv: string[] = [];
       for (const part of parts) {
@@ -1311,6 +1467,12 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         if (!one.ok) return fail(400, 'generate.files', one.why);
         if (!/\.csv$/i.test(one.path)) return fail(400, 'generate.files', `${part} is not a .csv file`);
         csv.push(one.path);
+      }
+      for (const id of chosen) {
+        const found = await uploadOf(who.tenant, id);
+        if (found === null) return fail(400, 'generate.upload', `No upload ${id}`);
+        if (found.kind !== 'csv') return fail(400, 'generate.upload', `upload ${id} is an OpenAPI spec, not a csv table`);
+        csv.push(found.file);
       }
       args = ['--csv', ...csv, '--out', outDir, ...flags];
     }
@@ -1725,6 +1887,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'public', parts: ['api', 'health'], run: () => health() },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds'], run: (_p, _b, who, ctx) => worlds(who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'report'], run: (p, _b, who, ctx) => worldReport(p, who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'plan'], run: (p, _b, who, ctx) => worldPlan(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'export'], run: (p, _b, who, ctx) => worldExport(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'explorer'], run: (p, _b, who, ctx) => explorer(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b, who, ctx) => serveWorld(p, b, who, ctx.filter) },
@@ -1734,6 +1897,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'reset'], run: (p, b, who, ctx) => resetService(p, b, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'inputs'], run: () => inputs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'inputs', ':spec', 'paths'], run: (p) => specPaths(p) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'uploads'], run: async (_p, _b, who) => ({ status: 200, body: { uploads: (await uploadsOf(who.tenant)).map(uploadView) } }) },
+    { method: 'POST', need: 'operator', parts: ['api', 'uploads'], run: (_p, b, who) => upload(b, who), maxBody: MAX_UPLOAD_BODY_BYTES },
+    { method: 'GET', need: 'viewer', parts: ['api', 'uploads', ':id', 'paths'], run: (p, _b, who) => uploadPaths(p, who) },
     { method: 'POST', need: 'operator', parts: ['api', 'generate'], run: (_p, b, who, ctx) => generate(b, who, ctx.key) },
     { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId'], run: (p, _b, who, ctx) => runStatus(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId', 'events'], run: (p, _b, who, ctx) => runStatus(p, who, ctx.filter) },
@@ -1840,7 +2006,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const at = (req.url ?? '').indexOf('?');
     const filter = who.role === 'admin' ? new URLSearchParams(at < 0 ? '' : (req.url ?? '').slice(at + 1)).get('tenant') : null;
     if (filter !== null && !TENANT.test(filter)) return fail(400, 'tenant.invalid', `?tenant=${filter} is refused: ${TENANT_RULE}`);
-    const body = route.method === 'POST' ? await readBody(req) : { ok: true as const, value: undefined };
+    const body = route.method === 'POST' ? await readBody(req, route.maxBody ?? MAX_BODY_BYTES) : { ok: true as const, value: undefined };
     if (!body.ok) return fail(body.status, body.code, body.message);
     return route.run(hit.params, body.value, who, { key: req.headers['idempotency-key'], filter });
   };
@@ -1916,6 +2082,16 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     port,
     close() {
       closing ??= (async () => {
+        // Each job this studio holds is stopped by the close, so it is recorded as stopped in the last write, its lease
+        // released. The record says the studio stopped it, not how its process exited, since close does not wait (A-363).
+        const unfinished = [...jobs.values()].filter((job) => job.phase !== 'finished');
+        const at = new Date(now()).toISOString();
+        for (const job of unfinished.filter(holds)) {
+          job.phase = 'finished';
+          job.lease = null;
+          job.recovery = { at, from: me, outcome: 'stopped', reason: 'studio_closed' };
+        }
+        void persist();
         closed = true;
         clearInterval(renewal);
         const unbound = server.listening ? new Promise<void>((resolve) => server.close(() => resolve())) : Promise.resolve();
@@ -1923,7 +2099,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         stopping.abort();
         // A generation run or an episode takes SIGTERM as its clean stop and bills its call on its own (A-279), so close
         // does not wait for it or SIGKILL it.
-        for (const job of jobs.values()) if (job.phase !== 'finished') job.child?.kill('SIGTERM');
+        for (const job of unfinished) job.child?.kill('SIGTERM');
         await Promise.all([
           unbound,
           ...[...services.values()].map(({ child }) => child).concat([...startingChildren]).map((child) => signalAndWait(child, ['SIGTERM', 'SIGKILL'])),
