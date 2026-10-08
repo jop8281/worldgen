@@ -118,6 +118,10 @@ export type StudioOptions = {
   readonly users?: readonly StudioUser[] | undefined;
   /** The one public origin the studio is also reached at, such as http://127.0.0.1:9000 for a published container port or https://studio.example.com behind a proxy. */
   readonly origin?: string | undefined;
+  /** The environment the isolated check and proof children are built from; defaults to process.env. */
+  readonly env?: Readonly<Record<string, string | undefined>> | undefined;
+  /** How long an isolated check or proof child may run. Default 300000 (the verifier's CHILD_TIMEOUT_MS). */
+  readonly checkTimeoutMs?: number | undefined;
 };
 
 export interface StudioServer {
