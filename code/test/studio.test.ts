@@ -1135,13 +1135,14 @@ describe('studio page accessibility (YOS-187)', () => {
 
   it('names every input, select and textarea', () => {
     const controls = [...tags('input'), ...tags('select'), ...tags('textarea')];
-    assert.equal(controls.length, 18);
+    assert.equal(controls.length, 19);
     const unnamed = controls.filter((c) => {
       const id = /\bid="([^"]+)"/.exec(c.tag)?.[1];
       return !c.tag.includes('aria-label=') && !(id !== undefined && labelledFor.has(id)) && !insideLabel(c.at);
     });
     assert.deepEqual(unnamed.map((c) => c.tag), []);
     assert.equal(html.includes('<input id="worlds-filter" type="search"'), true);
+    assert.equal(html.includes('<label>change for <span id="iterate-world"></span> <textarea id="iterate-change" rows="3"></textarea></label>'), true);
   });
 
   it('has one header, one main, a nav, and an h2 in every section', () => {

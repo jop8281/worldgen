@@ -29,7 +29,9 @@
  *   unknown one, and an idempotency key is looked up within the caller's tenant, so no answer tells a tenant that
  *   another's record or key exists. The world library, the top-level dirs of worldsDir, is shared and read-only. A
  *   generation writes into its tenant's dir, <worldsDir>/<tenant>/gen-<slug>, and `default` keeps the old layout,
- *   <worldsDir>/gen-<slug>. Every `:name` route resolves its world through worldDirOf.
+ *   <worldsDir>/gen-<slug>. An iterate never changes its source: it copies the world to <name>-<n>.partial in the same
+ *   dir a generation of its tenant writes, and renames the copy to <name>-<n> only once its run logged done (YOS-188).
+ *   Every `:name` route resolves its world through worldDirOf.
  * - The studio answers only to its own names. Every request's Host must be the bound address, a loopback name when
  *   bound to loopback or a wildcard, or the configured `origin`; a POST that carries an Origin needs one of the same.
  *   Open mode makes every request the local admin, so without this any page the operator visits could POST
@@ -52,8 +54,8 @@
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { crc32 } from 'node:zlib';
-import type { Dirent } from 'node:fs';
-import { appendFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { constants, type Dirent } from 'node:fs';
+import { appendFile, copyFile, mkdir, readdir, readFile, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
@@ -191,6 +193,8 @@ const AUTH_CHALLENGE = { 'www-authenticate': 'Bearer realm="studio"' };
 const PARTIAL_SUFFIX = '.partial';
 /** Most CSV tables one generation reads. */
 const MAX_CSV_FILES = 8;
+/** Longest change request an iterate takes, in characters. */
+const MAX_CHANGE_CHARS = 4_000;
 /** Largest request body read. A larger one is 413 and never parsed. */
 const MAX_BODY_BYTES = 1_048_576;
 /** How long a stop waits after a signal before it escalates, or answers not-stopped. */
@@ -560,6 +564,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     readonly knownRuns: ReadonlySet<string>;
     readonly startedAt: string;
     readonly episode: EpisodeRequest | undefined;
+    readonly iterate: StoredRun['iterate'];
     phase: StoredRun['phase'];
     lease: Lease | null;
     recovery: Recovery | undefined;
@@ -574,6 +579,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   /** Ports an admin pinned for a `worldplay serve` that has not reported yet: the world port and its admin port. */
   const pinning = new Set<number>();
   const jobs = new Map<string, Job>();
+  /** The final dir of each iterate copy whose run has not ended, so two iterates of one world never pick one name. */
+  const claimedCopies = new Set<string>();
+  const unclaim = (job: Job): void => {
+    if (job.iterate !== undefined) claimedCopies.delete(job.outDir);
+  };
   /** A generation run `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
   const runOf = (runId: string, who: User, filter: string | null): Job | undefined => {
     const job = jobs.get(runId);
@@ -624,10 +634,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
     outDir: job.outDir, pid: job.pid, knownRuns: [...job.knownRuns], startedAt: job.startedAt, exitCode: job.exitCode,
     ...(job.episode === undefined ? {} : { episode: job.episode }),
+    ...(job.iterate === undefined ? {} : { iterate: job.iterate }),
   });
   const jobOf = (stored: StoredRun): Job => ({
     runId: stored.runId, kind: stored.kind, tenant: stored.tenant, key: stored.key, fingerprint: stored.fingerprint, outDir: stored.outDir,
-    knownRuns: new Set(stored.knownRuns), startedAt: stored.startedAt, episode: stored.episode, phase: stored.phase,
+    knownRuns: new Set(stored.knownRuns), startedAt: stored.startedAt, episode: stored.episode, iterate: stored.iterate, phase: stored.phase,
     lease: stored.lease, recovery: stored.recovery, pid: stored.pid, exitCode: stored.exitCode, child: null,
   });
   // One write at a time, in order, so the file on disk is always the latest whole registry. True when it was written.
@@ -664,11 +675,30 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     return { status: 200, body: { entries: entries.slice(-AUDIT_TAIL), unwritten } };
   }
-  /** Watches a job's process. Its end finishes the job, unless another studio took the lease and so records the end. */
+  /**
+   * An iterate's copy becomes a world only when its run logged done: `<final>.partial` is renamed to `<final>`, never over
+   * an existing entry. Any other end leaves the .partial dir as evidence. Either way the name's claim is released.
+   */
+  const publish = async (job: Job, code: number | null): Promise<void> => {
+    try {
+      if (stateOf(false, code, await readEvents(job)).state === 'done' && await stat(job.outDir).catch(() => null) === null) {
+        await rename(`${job.outDir}${PARTIAL_SUFFIX}`, job.outDir);
+      }
+    } catch {
+      // A failed rename leaves the run where it ran, like any stopped run; its status then says it is not published.
+    } finally {
+      unclaim(job);
+    }
+  };
+  /**
+   * Watches a job's process. Its end finishes the job, unless another studio took the lease and so records the end. An
+   * iterate publishes first, so a status that says finished already lists the published copy.
+   */
   const watch = (job: Job, child: SpawnedChild): void => {
     job.child = child;
-    void child.exited.then((code) => {
+    void child.exited.then(async (code) => {
       if (job.child !== child) return;
+      if (job.iterate !== undefined) await publish(job, code);
       job.phase = 'finished';
       job.lease = null;
       job.exitCode = code;
@@ -1100,8 +1130,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     readonly label: string;
     readonly knownRuns: ReadonlySet<string>;
     readonly episode: EpisodeRequest | undefined;
-    /** The out dir and the child's argv, once the run id is fixed. */
-    readonly launch: (runId: string) => { readonly outDir: string; readonly argv: readonly string[] };
+    /** The out dir and the child's argv, once the run id is fixed, and for an iterate the copy it claimed. Synchronous, so a claim it makes holds before any other request runs. */
+    readonly launch: (runId: string) => { readonly outDir: string; readonly argv: readonly string[]; readonly iterate?: StoredRun['iterate'] };
+    /**
+     * Work between the intent on disk and the spawn, such as an iterate's copy. A throw finishes the job unstarted, as a
+     * spawn that threw does, and answers 500 with `code` and the error's message.
+     */
+    readonly prepare?: { readonly code: string; readonly run: (job: Job) => Promise<void> } | undefined;
   };
 
   /** The answer to a start, the same for the first request and each replay of it. */
@@ -1142,10 +1177,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     // A random suffix, so an id never counts another tenant's starts.
     let runId = `${stamp}-${start.label}-${randomBytes(3).toString('hex')}`;
     while (jobs.has(runId)) runId = `${stamp}-${start.label}-${randomBytes(3).toString('hex')}`;
-    const { outDir, argv } = start.launch(runId);
+    const { outDir, argv, iterate } = start.launch(runId);
     const job: Job = {
       runId, kind: start.kind, tenant: start.tenant, key, fingerprint, outDir, knownRuns: start.knownRuns, startedAt: new Date().toISOString(),
-      episode: start.episode, phase: 'intent', lease: leaseFrom(now()), recovery: undefined, pid: null, exitCode: null, child: null,
+      episode: start.episode, iterate, phase: 'intent', lease: leaseFrom(now()), recovery: undefined, pid: null, exitCode: null, child: null,
     };
     jobs.set(runId, job);
     const recorded = await persist();
@@ -1153,7 +1188,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (closed) return fail(503, 'studio.closing', `The studio is closing, so it did not start job ${runId}`);
     if (!recorded) {
       jobs.delete(runId);
+      unclaim(job);
       return fail(503, 'job.unrecorded', `The studio could not write ${RUN_STORE_FILE}, so it did not start the job: a job it cannot record could run twice`);
+    }
+    if (start.prepare !== undefined) {
+      try {
+        await start.prepare.run(job);
+      } catch (e) {
+        job.phase = 'finished';
+        job.lease = null;
+        unclaim(job);
+        await persist();
+        return fail(500, start.prepare.code, e instanceof Error ? e.message : String(e));
+      }
+      if (closed) return fail(503, 'studio.closing', `The studio is closing, so it did not start job ${runId}`);
     }
     let child: SpawnedChild;
     try {
@@ -1162,6 +1210,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       // A start that never happened is finished, so its derived key cannot answer every later retry with a dead intent.
       job.phase = 'finished';
       job.lease = null;
+      unclaim(job);
       await persist();
       throw e;
     }
@@ -1235,6 +1284,62 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const transport = opts.transport === undefined ? [] : ['--transport', opts.transport];
     const request = ['bun', 'src/cli/worldgen.ts', ...args];
     return startJob({ kind: 'generate', tenant: who.tenant, rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...request, ...transport] }) });
+  }
+
+  /**
+   * Iterates a world on a copy (YOS-188): the world's own files are copied to `<name>-<n>.partial` on the caller's shelf,
+   * `worldgen --world` changes the copy, and the copy is published as `<name>-<n>` only once its run logged done. The
+   * source, a library or shared world included, is only ever read. An admin's `?tenant=` names the shelf and the job's tenant.
+   */
+  async function iterateWorld(p: Params, body: unknown, who: User, ctx: Ctx): Promise<Reply> {
+    const raw = isObject(body) ? body['change'] : undefined;
+    const change = typeof raw === 'string' ? raw.trim() : '';
+    if (change === '' || change.length > MAX_CHANGE_CHARS) {
+      return fail(400, 'iterate.change', `the body must be {"change": "<what to change>"}, a non-empty string of at most ${MAX_CHANGE_CHARS} characters`);
+    }
+    const name = p['name'] ?? '';
+    const w = await worldDirOf(name, who, ctx.filter);
+    if (!w.ok) return w.reply;
+    if (!await file(path.join(w.dir, 'world.yaml'))) return fail(422, 'iterate.no_world', `${name} has no world.yaml to iterate`);
+    const owner = ctx.filter ?? who.tenant;
+    // The default tenant's shelf is the library root, as for generate: a <worldsDir>/default dir would read as a removed tenant's.
+    const root = owner === DEFAULT_TENANT ? worldsDir : shelfOf(owner).root;
+    await mkdir(root, { recursive: true });
+    const taken = new Set(await readdir(root).catch((): string[] => []));
+    const transport = opts.transport === undefined ? [] : ['--transport', opts.transport];
+    return startJob({
+      kind: 'generate',
+      tenant: owner,
+      rawKey: ctx.key,
+      // The logical request, never the claimed copy, so a double submit is one job.
+      request: ['iterate', w.dir, change],
+      label: 'iterate',
+      knownRuns: new Set(),
+      episode: undefined,
+      launch: () => {
+        // A library dir named like a tenant is that tenant's shelf, so a copy by that name would never list.
+        const free = (world: string): boolean => !taken.has(world) && !taken.has(`${world}${PARTIAL_SUFFIX}`)
+          && !claimedCopies.has(path.join(root, world)) && !(root === worldsDir && tenants.has(world));
+        let n = 2;
+        while (!free(`${name}-${n}`)) n += 1;
+        const world = `${name}-${n}`;
+        const outDir = path.join(root, world);
+        claimedCopies.add(outDir);
+        return { outDir, argv: ['bun', 'src/cli/worldgen.ts', change, '--world', `${outDir}${PARTIAL_SUFFIX}`, ...transport], iterate: { source: name, world } };
+      },
+      prepare: {
+        code: 'iterate.copy_failed',
+        run: async (job) => {
+          const partial = `${job.outDir}${PARTIAL_SUFFIX}`;
+          // Not recursive, so a name another writer took since the dir was read fails here instead of being shared.
+          await mkdir(partial);
+          if (await stat(job.outDir).catch(() => null) !== null) throw new Error(`${job.outDir} appeared after its name was picked; iterate again`);
+          for (const f of EXPORT_FILES) {
+            if (await file(path.join(w.dir, f))) await copyFile(path.join(w.dir, f), path.join(partial, f), constants.COPYFILE_EXCL);
+          }
+        },
+      },
+    });
   }
 
   /**
@@ -1322,6 +1427,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         events: events.slice(-EVENT_TAIL),
         totals: totalsOf(events),
         job: jobView(run),
+        ...(run.iterate === undefined ? {} : { iterate: { ...run.iterate, published: !running && await file(path.join(run.outDir, 'world.yaml')) } }),
       },
     };
   }
@@ -1640,6 +1746,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'export'], run: (p, _b, who, ctx) => worldExport(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'explorer'], run: (p, _b, who, ctx) => explorer(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b, who, ctx) => serveWorld(p, b, who, ctx.filter) },
+    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'iterate'], run: (p, b, who, ctx) => iterateWorld(p, b, who, ctx) },
     { method: 'GET', need: 'viewer', parts: ['api', 'services'], run: (_p, _b, who, ctx) => ({ status: 200, body: { services: [...services.values()].filter((s) => visible(s.record.tenant, who, ctx.filter)).map((s) => s.record) } }) },
     { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'stop'], run: (p, _b, who, ctx) => stopService(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'call'], run: (p, b, who, ctx) => callService(p, b, who, ctx.filter) },

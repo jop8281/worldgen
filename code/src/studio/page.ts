@@ -83,6 +83,11 @@ a { margin-right: 0.5rem; }
 <h2>Worlds<span id="worlds-meta" class="meta"></span></h2>
 <p><button id="worlds-refresh" type="button">refresh</button> <label>filter <input id="worlds-filter" type="search" autocomplete="off" placeholder="world name"></label></p>
 <div id="worlds-table"></div>
+<form id="iterate-form" hidden>
+<p><label>change for <span id="iterate-world"></span> <textarea id="iterate-change" rows="3"></textarea></label></p>
+<p><button type="submit">iterate</button> <button id="iterate-cancel" type="button">cancel</button></p>
+</form>
+<div id="iterate-status" aria-live="polite"></div>
 <pre id="world-report" hidden></pre>
 </section>
 <section id="sec-explorer">
@@ -369,6 +374,11 @@ a { margin-right: 0.5rem; }
         exportBtn.textContent = 'export';
         exportBtn.addEventListener('click', function () { downloadZip('/api/worlds/' + encodeURIComponent(w.name) + '/export', w.name + '.zip'); });
         actions.appendChild(exportBtn);
+        var iterateBtn = document.createElement('button');
+        iterateBtn.type = 'button';
+        iterateBtn.textContent = 'iterate';
+        iterateBtn.addEventListener('click', function () { openIterate(w.name); });
+        actions.appendChild(iterateBtn);
         return {
           name: w.name,
           kind: w.generated ? 'generated' : 'hand-built',
@@ -385,6 +395,110 @@ a { margin-right: 0.5rem; }
     }, function (e) { worldsMeta.textContent = 'unreachable: ' + e; });
   }
   byId('worlds-refresh').addEventListener('click', refreshWorlds);
+
+  // ---- Iterate: a change request run on a copy of the world, polled until its run ends ---------------
+  var iterateForm = byId('iterate-form');
+  var iterateWorld = byId('iterate-world');
+  var iterateChange = byId('iterate-change');
+  var iterateStatus = byId('iterate-status');
+  var iterateName = null;
+  var iterateKey = null;
+  var iterateRun = null;
+  var iterateTimer = null;
+  /** One Idempotency-Key per open of the form, so a double submit is one job. randomUUID needs a secure context, which a plain http origin off loopback is not. */
+  function mintKey() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    var hex = '';
+    for (var i = 0; i < 32; i++) hex += Math.floor(Math.random() * 16).toString(16);
+    return hex;
+  }
+  function iterateNote(text) {
+    clear(iterateStatus);
+    iterateStatus.appendChild(el('p', text));
+  }
+  function openIterate(name) {
+    iterateName = name;
+    iterateKey = mintKey();
+    iterateWorld.textContent = name;
+    iterateChange.value = '';
+    iterateForm.hidden = false;
+    iterateChange.focus();
+  }
+  function closeIterate() {
+    iterateForm.hidden = true;
+    iterateName = null;
+    iterateKey = null;
+  }
+  /** The text of a report's ## Changes section, from that heading to the next ## heading; null when it has none. */
+  function changesOf(report) {
+    var lines = report.split('\\n');
+    var at = lines.indexOf('## Changes');
+    if (at === -1) return null;
+    var end = at + 1;
+    while (end < lines.length && lines[end].indexOf('## ') !== 0) end++;
+    return lines.slice(at, end).join('\\n').trim();
+  }
+  function showStages(events) {
+    var lines = events.filter(function (e) { return e.t === 'attempt'; }).map(function (e) {
+      return e.step + ' attempt ' + e.n + ': ' + (e.outcome === undefined ? 'unknown' : e.outcome.kind);
+    });
+    if (lines.length === 0) { iterateNote('loading…'); return; }
+    clear(iterateStatus);
+    iterateStatus.appendChild(el('pre', lines.join('\\n')));
+  }
+  function finishIterate(body, name) {
+    var copy = body.iterate === undefined ? null : body.iterate;
+    if (body.state === 'done' && copy !== null && copy.published) {
+      iterateNote('done: ' + copy.world + ' is the changed copy of ' + name + '; loading its changes…');
+      refreshWorlds();
+      getJson('/api/worlds/' + encodeURIComponent(copy.world) + '/report').then(function (r) {
+        var changes = r.error !== undefined ? r.error.code + ': ' + r.error.message : (r.report === null ? null : changesOf(r.report));
+        iterateNote('done: ' + copy.world + ' is the changed copy of ' + name);
+        iterateStatus.appendChild(el('pre', changes === null ? 'its REPORT.md has no ## Changes section' : changes));
+      }, function (e) { iterateNote('unreachable: ' + e); });
+      return;
+    }
+    var why = body.state === 'done'
+      ? 'done, but ' + (copy === null ? 'the copy' : copy.world) + ' was not published'
+      : body.state + ': ' + (body.reason === undefined ? 'unknown reason' : body.reason);
+    iterateNote(why + '; the source world ' + name + ' is unchanged');
+  }
+  function stopIteratePoll() {
+    if (iterateTimer !== null) window.clearInterval(iterateTimer);
+    iterateTimer = null;
+    iterateRun = null;
+  }
+  function pollIterate(runId, name) {
+    stopIteratePoll();
+    iterateRun = runId;
+    iterateNote('loading…');
+    function once() {
+      getJson('/api/generate/' + encodeURIComponent(runId) + '/events').then(function (body) {
+        if (iterateRun !== runId) return;
+        if (body.error !== undefined) { stopIteratePoll(); iterateNote(body.error.code + ': ' + body.error.message); return; }
+        if (body.running) { showStages(body.events || []); return; }
+        stopIteratePoll();
+        finishIterate(body, name);
+      }, function (e) { if (iterateRun === runId) iterateNote('unreachable: ' + e); });
+    }
+    once();
+    iterateTimer = window.setInterval(once, 2000);
+  }
+  iterateForm.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var name = iterateName;
+    if (name === null) return;
+    fetch('/api/worlds/' + encodeURIComponent(name) + '/iterate', {
+      method: 'POST',
+      headers: authHeaders({ 'content-type': 'application/json', 'idempotency-key': iterateKey }),
+      body: JSON.stringify({ change: iterateChange.value })
+    }).then(answered).then(function (r) {
+      if (r.error !== undefined) { iterateNote(r.error.code + ': ' + r.error.message); return; }
+      closeIterate();
+      pollIterate(r.runId, name);
+    }, function (e) { iterateNote('unreachable: ' + e); });
+  });
+  byId('iterate-cancel').addEventListener('click', closeIterate);
 
   // ---- Generation runs: the form, the live panel, and the past runs ------------------
   var runLive = byId('run-live');
