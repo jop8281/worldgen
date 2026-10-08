@@ -47,6 +47,8 @@ export type StoredRun = {
   readonly exitCode: number | null;
   /** Episodes only. */
   readonly episode?: { readonly world: string; readonly task: string; readonly agent: string } | undefined;
+  /** Iterate runs only (YOS-188): the world name copied from, and the copy `<source>-<n>` the run changes and publishes once done. */
+  readonly iterate?: { readonly source: string; readonly world: string } | undefined;
 };
 
 const sharedFields = {
@@ -71,6 +73,7 @@ const storedRunSchema = z.object({
     z.object({ at: z.string(), from: z.string(), outcome: z.literal('stopped'), reason: z.enum(['process_gone', 'start_unconfirmed', 'studio_closed']) }),
   ]).optional(),
   episode: z.object({ world: z.string(), task: z.string(), agent: z.string() }).optional(),
+  iterate: z.object({ source: z.string(), world: z.string() }).optional(),
 });
 
 /** The A-329 record: a generation run with a finished flag and no lease. */

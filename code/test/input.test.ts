@@ -112,6 +112,7 @@ describe('digestInput failures', () => {
 describe('parseInputArgs', () => {
   it('R7 positional string is a description', () => {
     assert.deepEqual(parseInputArgs(['A helpdesk with SLA tiers']), { kind: 'description', text: 'A helpdesk with SLA tiers' });
+    assert.deepEqual(parseInputArgs(['--', '-5% price', '--on', 'tier 2']), { kind: 'description', text: '-5% price --on tier 2' });
     assert.deepEqual(parseInputArgs(['An issue tracker like Linear', '--fidelity', 'ref.yaml']), { kind: 'description', text: 'An issue tracker like Linear', fidelity: 'ref.yaml' });
     assert.throws(() => parseInputArgs(['--openapi', 'spec.yaml', '--fidelity', 'ref.yaml']), /--fidelity needs a description/);
     assert.throws(() => parseInputArgs(['A tracker', '--fidelity']), /--fidelity needs a reference file/);
