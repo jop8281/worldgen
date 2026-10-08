@@ -98,6 +98,7 @@ const spread = issue('tasks.difficulty_not_spread', ['tasks'], { have: ['easy'] 
 const solutionBad = issue('task.solution_not_full_marks', ['tasks', 'solve_vip'], { score: 0.5 }, '0.5');
 const noopBad = issue('task.noop_not_zero', ['tasks', 'rebalance'], { score: 1 }, '1');
 const testFailed = issue('test.failed', ['tests', 't1'], { message: 'boom' }, 'boom');
+const testThrew = issue('snippet.runtime_error', ['tests', 't1', 'script'], { message: 'inv is undefined' }, 'inv is undefined');
 const tooFewTasks = issue('world.too_few_tasks', ['tasks'], { have: 0 }, '0 tasks');
 const unknownRef = issue('ref.unknown', ['routes', 'list_tickets', 'entity'], { kind: 'entity', name: 'x', known: [] }, 'x');
 const nonDeterministic = issue('task.nondeterministic', ['tasks', 'solve_vip'], { first: 'a', second: 'b' }, 'a vs b');
@@ -108,6 +109,7 @@ const rows: readonly Row[] = [
   { name: 'model stage keeps its own errors and defers later sections', stage: 'model', report: failReport([schemaBad('entities'), schemaBad('actions'), schemaBad('tasks')]), plan, codes: ['schema.invalid'], deferred: ['schema.invalid', 'schema.invalid'] },
   { name: 'workflow stage keeps model and workflow errors, defers seed and tasks', stage: 'workflow', report: failReport([schemaBad('entities'), schemaBad('tests'), schemaBad('seed'), solutionBad]), plan, codes: ['schema.invalid', 'schema.invalid'], deferred: ['schema.invalid', 'task.solution_not_full_marks'] },
   { name: 'tasks stage keeps errors from every section', stage: 'tasks', report: failReport([unknownRef, testFailed, schemaBad('seed'), solutionBad]), plan, codes: ['ref.unknown', 'test.failed', 'schema.invalid', 'task.solution_not_full_marks'] },
+  { name: 'model stage defers a frozen test that throws to workflow, which builds what the test calls (A-361)', stage: 'model', report: failReport([testThrew]), plan, codes: [], deferred: ['snippet.runtime_error'] },
   { name: 'meta errors block even the first stage', stage: 'model', report: failReport([metaBad, schemaBad('seed')]), plan, codes: ['schema.invalid'], deferred: ['schema.invalid'] },
   { name: 'seed warnings on a failed report block the seed stage alongside engine errors', stage: 'seed', report: failReport([schemaBad('seed')], [paging, spread, skew]), plan, codes: ['schema.invalid', 'seed.state_mix_skewed'] },
   { name: 'seed warnings on a failed report do not block other stages', stage: 'tasks', report: failReport([schemaBad('seed')], [paging, skew]), plan, codes: ['schema.invalid'] },
