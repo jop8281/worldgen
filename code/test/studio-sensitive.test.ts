@@ -13,7 +13,7 @@ import { checkWorld, saveWorld, serve, worldSchema, type World, type WorldServer
 import type { Runner, SpawnedChild, Spawner } from '../src/sandboxes/backend.ts';
 import { runLocalEpisode } from '../src/dataset/local.ts';
 import { redactor } from '../src/dataset/schema.ts';
-import { SENSITIVE_MASK, SENSITIVE_WITHHELD, SENSITIVITY_UNREAD, episodeBelowAdmin, maskSensitive, maskSensitiveText, runEventsBelowAdmin, sensitiveOf } from '../src/studio/explorer.ts';
+import { SENSITIVE_MASK, SENSITIVE_WITHHELD, SENSITIVITY_UNREAD, TASK_TEXT_WITHHELD, episodeBelowAdmin, maskSensitive, maskSensitiveText, runEventsBelowAdmin, sensitiveOf } from '../src/studio/explorer.ts';
 import { AUDIT_FILE, studioServer, type StudioServer, type StudioUser } from '../src/studio/server.ts';
 import { scripted } from './dataset-kit.ts';
 import { minimalWorld } from './helpers/world.ts';
@@ -224,9 +224,9 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
     assert.equal(JSON.stringify(r.body).includes('enterprise'), false);
   });
 
-  it('exports a world with a sensitive field only to an admin', async () => {
+  it('exports a world with a sensitive field only to an admin, as every export is (A-374)', async () => {
     const refused = await get(studio.url, '/api/worlds/helpdesk/export', OPERATOR);
-    assert.deepEqual([refused.status, (refused.body?.['error'] as { code?: string } | undefined)?.code], [403, 'export.sensitive']);
+    assert.deepEqual([refused.status, (refused.body?.['error'] as { code?: string } | undefined)?.code], [403, 'auth.forbidden']);
     assert.equal((await get(studio.url, '/api/worlds/helpdesk/export', VIEWER)).status, 403);
     assert.equal((await get(studio.url, '/api/worlds/helpdesk/export', ADMIN)).status, 200);
   });
@@ -299,6 +299,38 @@ const RUN_EVENTS_WITHHELD = [
   { t: 'backtracked', from: 'seed', to: 'model', because: [TIER_WITHHELD] },
   { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'no_progress', step: 'seed', repeatedIssueSet: RUN_WITHHELD, lastIssues: [TIER_WITHHELD] } } },
 ];
+
+describe('task source in run events stays with an admin, pure (YOS-208, A-374)', () => {
+  const CANARY = 'RUN_GRADER_CANARY_9b2d';
+  const TASK_ISSUE = { code: 'snippet.compile_error', severity: 'error', path: ['tasks', 'refund_order', 'grader'], expected: 'a function', found: `(ctx) => { /* ${CANARY} */`, hint: `check ${CANARY}` };
+  const TASK_WITHHELD = { ...TASK_ISSUE, found: TASK_TEXT_WITHHELD, hint: TASK_TEXT_WITHHELD };
+  const EVENTS = [
+    { t: 'attempt', step: 'tasks', n: 1, outcome: { kind: 'rejected', issues: [TASK_ISSUE] } },
+    { t: 'advice', step: 'tasks', text: `the grader checks ${CANARY}` },
+    { t: 'attempt', step: 'tasks', n: 2, outcome: { kind: 'model_error', message: `bad JSON near ${CANARY}` } },
+    { t: 'attempt', step: 'seed', n: 1, outcome: { kind: 'rejected', issues: [TASK_ISSUE] } },
+    { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'no_progress', step: 'tasks', repeatedIssueSet: `snippet.compile_error@tasks/refund_order/grader: ${CANARY}`, lastIssues: [TASK_ISSUE] } } },
+  ];
+
+  it('withholds every text that can quote task source below admin, even when the world has no sensitive field', () => {
+    const shown = runEventsBelowAdmin([...EVENTS, ...RUN_EVENTS], sensitiveOf(minimalWorld()));
+    assert.equal(JSON.stringify(shown).includes(CANARY), false);
+    assert.deepEqual(shown, [
+      { t: 'attempt', step: 'tasks', n: 1, outcome: { kind: 'rejected', issues: [TASK_WITHHELD] } },
+      { t: 'advice', step: 'tasks', text: TASK_TEXT_WITHHELD },
+      { t: 'attempt', step: 'tasks', n: 2, outcome: { kind: 'model_error', message: TASK_TEXT_WITHHELD } },
+      { t: 'attempt', step: 'seed', n: 1, outcome: { kind: 'rejected', issues: [TASK_WITHHELD] } },
+      { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'no_progress', step: 'tasks', repeatedIssueSet: TASK_TEXT_WITHHELD, lastIssues: [TASK_WITHHELD] } } },
+      ...RUN_EVENTS,
+    ]);
+  });
+
+  it('withholds it the same way when the world is sensitive, and the seed texts as A-367 does', () => {
+    const shown = runEventsBelowAdmin([...EVENTS, ...RUN_EVENTS], sensitiveOf(sensitiveWorld()));
+    assert.equal(JSON.stringify(shown).includes(CANARY), false);
+    assert.deepEqual(shown.slice(EVENTS.length), RUN_EVENTS_WITHHELD);
+  });
+});
 
 describe('sensitive fields: refusals and run events, pure (YOS-252, A-367)', () => {
   const status = sensitiveOf(statusSensitiveWorld());

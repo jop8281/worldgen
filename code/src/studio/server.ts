@@ -981,19 +981,12 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const checkTimeoutMs = opts.checkTimeoutMs ?? 300_000;
   const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
 
-  /** <name>.zip of the world's own files (EXPORT_FILES that exist), refused like the report when REPORT.md leaks task source. */
+  /** <name>.zip of the world's own files (EXPORT_FILES that exist), private world.yaml included, so the route is admin-only (A-374); refused like the report when REPORT.md leaks task source. */
   async function worldExport(p: Params, who: User, filter: string | null): Promise<Reply> {
     const name = p['name'] ?? '';
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
     if (!await file(path.join(w.dir, 'world.yaml'))) return fail(404, 'export.no_world', `${name} has no world.yaml to export`);
-    // The seed holds a sensitive field's values, so only an admin exports such a world, or one that cannot be read (A-356).
-    if (who.role !== 'admin') {
-      const sensitive = await sensitivityOf(w.dir);
-      if (sensitive === null || sensitive.size > 0) {
-        return fail(403, 'export.sensitive', `${name} ${sensitive === null ? 'cannot be read to find its sensitive fields' : 'has sensitive fields'}, so only an admin may export it`);
-      }
-    }
     const checked = await reportOf(name, w.dir);
     if (checked.status !== 200) return checked;
     const entries: { name: string; data: Buffer }[] = [];
@@ -2113,7 +2106,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds'], run: (_p, _b, who, ctx) => worlds(who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'report'], run: (p, _b, who, ctx) => worldReport(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'plan'], run: (p, _b, who, ctx) => worldPlan(p, who, ctx.filter) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'export'], run: (p, _b, who, ctx) => worldExport(p, who, ctx.filter) },
+    // The export zips the private world.yaml, every grader, solution, decoy and alternative included (A-374).
+    { method: 'GET', need: 'admin', parts: ['api', 'worlds', ':name', 'export'], run: (p, _b, who, ctx) => worldExport(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'explorer'], run: (p, _b, who, ctx) => explorer(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b, who, ctx) => serveWorld(p, b, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'iterate'], run: (p, b, who, ctx) => iterateWorld(p, b, who, ctx) },
