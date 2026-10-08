@@ -422,8 +422,8 @@ async function exportClaimed(o: ExportOptions): Promise<ExportResult> {
   if (filtered && chosen.length === 0) throw new DatasetError('the run, task and episode filters match no saved episode');
   const accepted = chosen.filter(isCompleteSuccess);
   const failed = chosen.filter((e) => !isCompleteSuccess(e));
-  // The manifest names one model (A-283). An empty export keeps the default, as before.
-  const models = sorted(chosen.map((e) => e.model));
+  // The manifest names one model (A-283): the one the episodes called. A noop episode called none, and an export with no model call keeps the default.
+  const models = sorted(chosen.flatMap((e) => (e.model === null ? [] : [e.model])));
   if (models.length > 1) throw new DatasetError(`an export holds one model, and these episodes ran ${models.join(' and ')}: filter by run id`);
 
   const worlds = new Map<string, { world_id: string; world_version: string }>();

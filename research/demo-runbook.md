@@ -175,9 +175,9 @@ Each case ran through `bun run eval --suite ../eval/live-segment.yaml --only <id
 
 L1, L2 and L3 have each passed on `12e10fe` or later. Each passing world served on its own ports: `/openapi.json` answered, a list route returned 200, an untouched task graded 0, and `GET /_world/state` on the world port returned 404.
 
-L2 needed two fixes. [#398](https://github.com/jop8281/zozo123-genworld/pull/398) gives the plan step the engine's error codes, so its tests expect `row.not_found` for an unknown id. [#408](https://github.com/jop8281/zozo123-genworld/pull/408) makes a list under a parent, such as `GET /v1/gift_cards/{gift_card}/activities`, declare the 404 the engine already answers, so the OpenAPI fidelity check finds it.
+L2 needed two fixes. #398 (old repo) gives the plan step the engine's error codes, so its tests expect `row.not_found` for an unknown id. #408 makes a list under a parent, such as `GET /v1/gift_cards/{gift_card}/activities`, declare the 404 the engine already answers, so the OpenAPI fidelity check finds it.
 
-In a repeat run on `3ff2c3a`, L3 stopped once: `no_progress` at workflow after 3.5 minutes and $0.85. The plan froze a test that contradicts itself. After one clock advance it asserts a member's no-show count is 1, then 2, with no call in between, while the job correctly marks both bookings at once. The workflow step cannot edit tests. [#405](https://github.com/jop8281/zozo123-genworld/pull/405) sends this shape back to the plan step, which then has to write a consistent test. It is not a guaranteed fix.
+In a repeat run on `3ff2c3a`, L3 stopped once: `no_progress` at workflow after 3.5 minutes and $0.85. The plan froze a test that contradicts itself. After one clock advance it asserts a member's no-show count is 1, then 2, with no call in between, while the job correctly marks both bookings at once. The workflow step cannot edit tests. #405 sends this shape back to the plan step, which then has to write a consistent test. It is not a guaranteed fix.
 
 ### If a run stops
 
