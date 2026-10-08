@@ -78,13 +78,12 @@ describe('offline eval evidence reader', () => {
     try {
       await mkdir(path.join(root, 'alpha'));
       await writeFile(path.join(root, 'alpha/case.json'), JSON.stringify({ id: 'alpha', expect: 'stopped', phases: [{ phase: 'create', result: 'stopped', error: null }], verify: { kind: 'not_run' } }));
-      // The current producer's complete preflight-rejection event shape, with no model call.
+      // The current producer's input rejection before any step, with no model call: the only stop that passes an
+      // expect: stopped case (A-384).
       const at = { runId: 'offline', at: '2026-10-07T00:00:00Z' };
-      const reason: StopReason = { kind: 'budget_exhausted', spentUsd: 0, limitUsd: 0 };
+      const reason: StopReason = { kind: 'input_rejected', why: 'The input could not be read: empty description' };
       const events: RunEvent[] = [
         { ...at, t: 'run_started', mode: 'create', input: 'description', model: 'offline-fixture', budgetUsd: 0, transport: 'claude-cli' },
-        { ...at, t: 'step_started', step: 'plan', reason: 'planned' },
-        { ...at, t: 'call_refused', step: 'plan', reason, estimateUsd: 1, estimateMs: 100, remainingMs: 100 },
         { ...at, t: 'run_finished', ms: 0, costUsd: 0, worldWritten: false, result: { kind: 'stopped', reason } },
       ];
       await writeFile(path.join(root, 'alpha/events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n'));
