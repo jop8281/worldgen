@@ -5,18 +5,18 @@
  * spawners from sandboxes/backend.ts; this file never imports llm.ts and makes no model call.
  * Exit codes: 0 never (the listening server keeps the process alive), 1 failure, 2 bad usage.
  *
- *   bun run studio [--port 8787] [--host 127.0.0.1] [--transport claude-cli|sdk] [--users <file>] [--worlds-dir <dir>] [--repo-root <dir>]
+ *   bun run studio [--port 8787] [--host 127.0.0.1] [--transport claude-cli|sdk] [--users <file>] [--origin <url>] [--worlds-dir <dir>] [--repo-root <dir>]
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { nodeRunner, nodeSpawn } from '../sandboxes/backend.ts';
-import { parseUsersFile, studioServer, type StudioUser } from '../studio/server.ts';
+import { originOf, parseUsersFile, studioServer, type StudioUser } from '../studio/server.ts';
 
 const DEFAULT_PORT = 8787;
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 
-const USAGE = `usage: bun run studio [--port ${DEFAULT_PORT}] [--host 127.0.0.1] [--transport claude-cli|sdk] [--users <file>] [--worlds-dir <dir>] [--repo-root <dir>]
+const USAGE = `usage: bun run studio [--port ${DEFAULT_PORT}] [--host 127.0.0.1] [--transport claude-cli|sdk] [--users <file>] [--origin <url>] [--worlds-dir <dir>] [--repo-root <dir>]
 
 The operator web app on one port (default ${DEFAULT_PORT}, bound to 127.0.0.1): the worlds
 table, world rollout (a child worldplay serve per Serve click), generation runs (a child
@@ -38,12 +38,15 @@ GET /api/health need no token. Without users the studio is open: every request i
 Make a hash with: printf %s "$TOKEN" | shasum -a 256
 --transport (or WORLDGEN_TRANSPORT) is passed to every worldgen run; sdk reads LLM_KEY from the
 studio's own environment, which a container gets at run time (docker run -e LLM_KEY), never from the image.
+--origin (or WORLDGEN_STUDIO_ORIGIN) is the one public origin the studio is also reached at, such as
+http://127.0.0.1:9000 for a published container port. Otherwise it answers only to its bound
+address and the loopback names (127.0.0.1, localhost), and refuses any other Host or POST Origin.
 GET /api/health answers readiness with WORLDGEN_BUILD_SHA, the runtime and the world count.
 `;
 
 class UsageError extends Error {}
 
-type Args = { readonly port: number; readonly host: string | undefined; readonly transport: 'claude-cli' | 'sdk' | undefined; readonly users: readonly StudioUser[]; readonly repoRoot: string; readonly worldsDir: string | undefined };
+type Args = { readonly port: number; readonly host: string | undefined; readonly transport: 'claude-cli' | 'sdk' | undefined; readonly users: readonly StudioUser[]; readonly origin: string | undefined; readonly repoRoot: string; readonly worldsDir: string | undefined };
 
 function parse(argv: readonly string[]): Args | 'help' {
   if (argv.some((a) => a === '--help' || a === '-h')) return 'help';
@@ -54,6 +57,7 @@ function parse(argv: readonly string[]): Args | 'help' {
   let users: readonly StudioUser[] = [];
   let usersFile: string | undefined;
   let transport: string | undefined = process.env['WORLDGEN_TRANSPORT'] === '' ? undefined : process.env['WORLDGEN_TRANSPORT'];
+  let origin: string | undefined = process.env['WORLDGEN_STUDIO_ORIGIN'] === '' ? undefined : process.env['WORLDGEN_STUDIO_ORIGIN'];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]!;
     const value = (): string => {
@@ -67,6 +71,7 @@ function parse(argv: readonly string[]): Args | 'help' {
       port = n;
     } else if (a === '--host') host = value();
     else if (a === '--transport') transport = value();
+    else if (a === '--origin') origin = value();
     else if (a === '--users') {
       usersFile = value();
       try {
@@ -79,6 +84,7 @@ function parse(argv: readonly string[]): Args | 'help' {
     else throw new UsageError(`unknown argument ${a}`);
   }
   if (transport !== undefined && transport !== 'claude-cli' && transport !== 'sdk') throw new UsageError(`--transport must be claude-cli or sdk, got ${transport}`);
+  if (origin !== undefined && originOf(origin) === null) throw new UsageError(`--origin must be an http(s) origin such as http://127.0.0.1:8787, got ${origin}`);
   const token = process.env['WORLDGEN_STUDIO_TOKEN'];
   if (token !== undefined && token !== '') {
     if (usersFile !== undefined) throw new UsageError('give --users or WORLDGEN_STUDIO_TOKEN, not both');
@@ -86,7 +92,7 @@ function parse(argv: readonly string[]): Args | 'help' {
   }
   // Children inherit this environment; none of them needs the studio's own credential.
   delete process.env['WORLDGEN_STUDIO_TOKEN'];
-  return { port, host, transport, users, repoRoot: repoRoot ?? path.resolve(CODE_DIR, '..'), worldsDir };
+  return { port, host, transport, users, origin, repoRoot: repoRoot ?? path.resolve(CODE_DIR, '..'), worldsDir };
 }
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -108,6 +114,7 @@ async function main(argv: readonly string[]): Promise<number> {
       ...(args.host === undefined ? {} : { host: args.host }),
       ...(args.transport === undefined ? {} : { transport: args.transport }),
       users: args.users,
+      ...(args.origin === undefined ? {} : { origin: args.origin }),
       ...(process.env['WORLDGEN_BUILD_SHA'] === undefined ? {} : { build: process.env['WORLDGEN_BUILD_SHA'] }),
       repoRoot: args.repoRoot,
       ...(args.worldsDir === undefined ? {} : { worldsDir: args.worldsDir }),

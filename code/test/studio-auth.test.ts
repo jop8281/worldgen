@@ -4,7 +4,8 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -204,5 +205,277 @@ describe('studio users file and CLI', () => {
     const r = spawnSync('bun', ['src/cli/studio.ts', '--host', '0.0.0.0', '--port', '0'], { cwd: path.resolve(import.meta.dirname, '..'), env, encoding: 'utf8', timeout: 60_000 });
     assert.equal(r.status, 1);
     assert.equal(r.stderr.includes('studio refuses to bind 0.0.0.0 with no sign-in'), true);
+  });
+});
+
+type Raw = { status: number; body: unknown };
+
+/** fetch cannot set Host, so the own-names tests speak raw HTTP. */
+function raw(port: number, method: string, p: string, headers: Record<string, string>): Promise<Raw> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port, method, path: p, headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let body: unknown = text;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // an HTML page
+        }
+        resolve({ status: res.statusCode ?? 0, body });
+      });
+    });
+    req.on('error', reject);
+    if (method === 'POST') req.write(JSON.stringify(GENERATE));
+    req.end();
+  });
+}
+
+const errOf = (r: Raw): unknown => (r.body as { error: unknown }).error;
+const stripAt = (entries: Record<string, unknown>[]): unknown[] => entries.map(({ at, ...rest }) => (typeof at === 'string' ? rest : { at }));
+
+describe('studio answers only to its own names', () => {
+  let root = '';
+  let worldsDir = '';
+  let server: StudioServer;
+  const f = fakes();
+
+  before(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'studio-names-'));
+    worldsDir = path.join(root, 'worlds');
+    await mkdir(worldsDir, { recursive: true });
+    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: f.spawner, runner: f.runner });
+  });
+
+  after(async () => {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const json = { 'content-type': 'application/json' };
+
+  it('refuses a forged Origin on a POST and spawns nothing', async () => {
+    const r = await raw(server.port, 'POST', '/api/generate', { host: `127.0.0.1:${server.port}`, origin: 'https://evil.example', ...json });
+    assert.equal(r.status, 403);
+    assert.deepEqual(errOf(r), {
+      code: 'origin.forbidden',
+      message: `POST from https://evil.example is refused: a POST must come from the studio page (http://127.0.0.1:${server.port}, http://localhost:${server.port}) or from a client that sends no Origin`,
+    });
+    const nul = await raw(server.port, 'POST', '/api/generate', { host: `127.0.0.1:${server.port}`, origin: 'null', ...json });
+    assert.equal((errOf(nul) as { code: string }).code, 'origin.forbidden');
+    assert.equal(f.spawned.length, 0);
+  });
+
+  it('refuses a rebinding Host on a POST and on a GET', async () => {
+    const r = await raw(server.port, 'POST', '/api/generate', { host: `evil.example:${server.port}`, ...json });
+    assert.equal(r.status, 403);
+    assert.deepEqual(errOf(r), {
+      code: 'host.forbidden',
+      message: `Host evil.example:${server.port} is not this studio, which answers to 127.0.0.1:${server.port}, localhost:${server.port}. To reach it by another name, start it with --origin <url>`,
+    });
+    const g = await raw(server.port, 'GET', '/api/worlds', { host: `evil.example:${server.port}` });
+    assert.equal(g.status, 403);
+    assert.equal((errOf(g) as { code: string }).code, 'host.forbidden');
+    assert.equal(f.spawned.length, 0);
+  });
+
+  it('lets a client with no Origin and the studio page through', async () => {
+    const none = await raw(server.port, 'POST', '/api/generate', { host: `127.0.0.1:${server.port}`, ...json });
+    assert.equal(none.status, 200);
+    assert.equal(f.spawned.length, 1);
+    const page = await raw(server.port, 'POST', '/api/generate', { host: `127.0.0.1:${server.port}`, origin: `http://127.0.0.1:${server.port}`, ...json });
+    assert.equal(page.status, 200);
+    const named = await raw(server.port, 'POST', '/api/generate', { host: `localhost:${server.port}`, origin: `http://localhost:${server.port}`, ...json });
+    assert.equal(named.status, 200);
+    assert.equal(f.spawned.length, 3);
+  });
+
+  it('audits the refused POSTs with their codes', async () => {
+    const r = await raw(server.port, 'GET', '/api/audit', { host: `127.0.0.1:${server.port}` });
+    const { entries } = r.body as { entries: Record<string, unknown>[] };
+    const local = { user: 'local', role: 'admin', method: 'POST', path: '/api/generate' };
+    assert.deepEqual(stripAt(entries), [
+      { ...local, status: 403, code: 'origin.forbidden' },
+      { ...local, status: 403, code: 'origin.forbidden' },
+      { ...local, status: 403, code: 'host.forbidden' },
+      { ...local, status: 200 },
+      { ...local, status: 200 },
+      { ...local, status: 200 },
+    ]);
+  });
+});
+
+describe('studio configured origin and wildcard bind', () => {
+  it('accepts the configured origin', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'studio-origin-'));
+    const f = fakes();
+    const server = await studioServer({ port: 0, repoRoot: root, worldsDir: path.join(root, 'worlds'), spawner: f.spawner, runner: f.runner, origin: 'http://127.0.0.1:9000' });
+    try {
+      const r = await raw(server.port, 'POST', '/api/generate', { host: '127.0.0.1:9000', origin: 'http://127.0.0.1:9000', 'content-type': 'application/json' });
+      assert.equal(r.status, 200);
+      assert.equal(f.spawned.length, 1);
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('checks Host before the bearer on a wildcard bind', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'studio-wild-'));
+    const f = fakes();
+    const server = await studioServer({ port: 0, host: '0.0.0.0', repoRoot: root, worldsDir: path.join(root, 'worlds'), spawner: f.spawner, runner: f.runner, users: USERS });
+    try {
+      const ok = await raw(server.port, 'GET', '/api/me', { host: `127.0.0.1:${server.port}`, authorization: `Bearer ${ADMIN}` });
+      assert.equal(ok.status, 200);
+      assert.deepEqual(ok.body, { name: 'ada', role: 'admin', signIn: true });
+      const bad = await raw(server.port, 'GET', '/api/me', { host: `evil.example:${server.port}` });
+      assert.equal(bad.status, 403);
+      assert.equal((errOf(bad) as { code: string }).code, 'host.forbidden');
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('answers to its bracketed name on an IPv6 loopback bind', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'studio-v6-'));
+    const f = fakes();
+    const server = await studioServer({ port: 0, host: '::1', repoRoot: root, worldsDir: path.join(root, 'worlds'), spawner: f.spawner, runner: f.runner });
+    try {
+      assert.equal(server.url, `http://[::1]:${server.port}`);
+      const res = await fetch(`${server.url}/api/me`);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { name: 'local', role: 'admin', signIn: false });
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an origin with a path at startup', async () => {
+    const o = fakes();
+    await assert.rejects(
+      studioServer({ port: 0, repoRoot: tmpdir(), spawner: o.spawner, runner: o.runner, origin: 'http://127.0.0.1:9000/path' }),
+      { message: 'studio origin must be an http(s) origin such as http://127.0.0.1:8787, got http://127.0.0.1:9000/path' },
+    );
+  });
+});
+
+describe('studio under sign-in lists no routes', () => {
+  it('answers a bare 404 to an unmatched path', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'studio-404-'));
+    const f = fakes();
+    const server = await studioServer({ port: 0, repoRoot: root, worldsDir: path.join(root, 'worlds'), spawner: f.spawner, runner: f.runner, users: USERS });
+    try {
+      const r = await call(server.url, 'GET', '/api/nope', { token: VIEWER });
+      assert.equal(r.status, 404);
+      assert.deepEqual(errorOf(r), { code: 'route.not_found', message: 'No studio route GET /api/nope' });
+      assert.equal(r.text.includes('/api/generate'), false);
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('studio empty users and --origin on the CLI', () => {
+  const cwd = path.resolve(import.meta.dirname, '..');
+  const cliEnv = (): NodeJS.ProcessEnv => {
+    const env = { ...process.env };
+    delete env['WORLDGEN_STUDIO_TOKEN'];
+    delete env['WORLDGEN_STUDIO_ORIGIN'];
+    return env;
+  };
+  const message = 'users: list at least one user: an empty list would turn sign-in off';
+
+  it('refuses an empty users list', () => {
+    assert.throws(() => parseUsersFile(JSON.stringify({ users: [] })), { message });
+  });
+
+  it('exits 2 on an empty --users file', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'studio-empty-'));
+    try {
+      const file = path.join(dir, 'users.json');
+      await writeFile(file, JSON.stringify({ users: [] }));
+      const r = spawnSync('bun', ['src/cli/studio.ts', '--users', file], { cwd, env: cliEnv(), encoding: 'utf8', timeout: 60_000 });
+      assert.equal(r.status, 2);
+      assert.equal(r.stderr.includes(`--users ${file}: ${message}`), true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('exits 2 on an --origin that is not an origin', () => {
+    const r = spawnSync('bun', ['src/cli/studio.ts', '--origin', 'not-a-url'], { cwd, env: cliEnv(), encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr.includes('--origin must be an http(s) origin such as http://127.0.0.1:8787, got not-a-url'), true);
+  });
+});
+
+describe('studio-deploy.sh up guard', () => {
+  const cwd = path.resolve(import.meta.dirname, '..');
+  const script = path.resolve(cwd, '..', 'scripts', 'studio-deploy.sh');
+  let dir = '';
+  let log = '';
+
+  before(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'studio-deploy-'));
+    log = path.join(dir, 'docker.log');
+    await mkdir(path.join(dir, 'bin'));
+    const docker = path.join(dir, 'bin', 'docker');
+    await writeFile(docker, `#!/bin/sh\necho "$@" >> '${log}'\n[ "$1" = inspect ] && echo healthy\nexit 0\n`);
+    await chmod(docker, 0o755);
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const up = async (extra: Record<string, string>): Promise<{ status: number | null; stderr: string; calls: string[] }> => {
+    await rm(log, { force: true });
+    const env = { PATH: `${path.join(dir, 'bin')}:${process.env['PATH']}`, HOME: process.env['HOME'] ?? '', ...extra };
+    const r = spawnSync('bash', [script, 'up'], { cwd, env, encoding: 'utf8', timeout: 60_000 });
+    const calls = await readFile(log, 'utf8').then((t) => t.split('\n').filter((l) => l !== ''), () => []);
+    return { status: r.status, stderr: r.stderr, calls };
+  };
+  const guard = 'set WORLDGEN_STUDIO_TOKEN, or put WORLDGEN_STUDIO_TOKEN=<token> in STUDIO_ENV_FILE';
+
+  it('refuses with no token anywhere', async () => {
+    const r = await up({});
+    assert.equal(r.status, 1);
+    assert.equal(r.stderr.includes(guard), true);
+    assert.deepEqual(r.calls, []);
+  });
+
+  it('refuses an env file with no token line', async () => {
+    const file = path.join(dir, 'no-token.env');
+    await writeFile(file, 'LLM_KEY=abc\n# WORLDGEN_STUDIO_TOKEN=commented\nWORLDGEN_STUDIO_TOKEN=\n');
+    const r = await up({ STUDIO_ENV_FILE: file });
+    assert.equal(r.status, 1);
+    assert.equal(r.stderr.includes(guard), true);
+    assert.deepEqual(r.calls, []);
+  });
+
+  it('accepts a token line in the env file and never logs it', async () => {
+    const file = path.join(dir, 'token.env');
+    await writeFile(file, 'LLM_KEY=abc\nWORLDGEN_STUDIO_TOKEN=deploy-token-1\n');
+    const r = await up({ STUDIO_ENV_FILE: file });
+    assert.equal(r.status, 0);
+    const run = r.calls.filter((l) => l.startsWith('run -d'));
+    assert.equal(run.length, 1);
+    assert.equal(run[0]!.includes(`--env-file ${file}`), true);
+    assert.equal(run[0]!.includes('WORLDGEN_STUDIO_ORIGIN=http://127.0.0.1:8787'), true);
+    assert.equal(r.calls.some((l) => l.includes('deploy-token-1')), false);
+  });
+
+  it('accepts a token in the environment and forwards it by name', async () => {
+    const r = await up({ WORLDGEN_STUDIO_TOKEN: 'env-token-2' });
+    assert.equal(r.status, 0);
+    const run = r.calls.filter((l) => l.startsWith('run -d'));
+    assert.equal(run.length, 1);
+    assert.equal(run[0]!.includes('-e WORLDGEN_STUDIO_TOKEN '), true);
+    assert.equal(r.calls.some((l) => l.includes('env-token-2')), false);
   });
 });
