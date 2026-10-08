@@ -208,7 +208,7 @@ function shLines(file: string): DocLine[] {
   return out;
 }
 
-const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md', 'prod/system.md'];
+const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md', 'prod/system.md', 'eval/README.md'];
 
 describe('documented worldplay subcommands, worldgen flags and runner', () => {
   const lines = DOC_FILES.flatMap(shLines);

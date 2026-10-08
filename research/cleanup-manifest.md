@@ -27,7 +27,7 @@ Every candidate below is a proposal. Its owner child (YOS-201 to YOS-212) carrie
 | `code/package.json` | `81c815a97805c52daa64c9b5257a807b67609d86f6f9b1b3ac4bc60edfa446db` |
 | `code/worldgen.config.json` | `8347f4e175ec86fe2ba308748fb74361273cf36ef6e0b499219be09b7f2b993a` |
 
-The runtimes are Bun 1.4.2, the default gate, and Node 22 through `node --import tsx --test`, the second gate (A-87). The model policy is `claude-sonnet-5-5` by default, with priced overrides and no fallback (A-66 and YOS-197). Engine grading stays deterministic.
+The runtimes at this baseline were Bun 1.4.2, the default gate, and Node 22 through `node --import tsx --test`, the second gate (A-87). Since A-379 and A-381, Bun is the only runtime. The model policy is `claude-sonnet-5-5` by default, with priced overrides and no fallback (A-66 and YOS-197). Engine grading stays deterministic.
 
 ## 2. Digests
 

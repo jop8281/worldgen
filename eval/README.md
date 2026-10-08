@@ -22,10 +22,10 @@ The unseen bank in `research/rehearsal-prompts.md` stays out of `suite.yaml` so 
 From `code/`:
 
 ```sh
-npm run eval -- --dry-run                       # validate the suite and every input file; no model call, nothing written
-npm run eval -- --only helpdesk-sla,orders-csv,linear-backlog-csv  # run some cases
-npm run eval -- --tag cheap                     # run every case with that tag (--tag a,b takes either)
-npm run eval                                    # run every case
+bun run eval --dry-run                          # validate the suite and every input file; no model call, nothing written
+bun run eval --only helpdesk-sla,orders-csv,linear-backlog-csv  # run some cases
+bun run eval --tag cheap                        # run every case with that tag (--tag a,b takes either)
+bun run eval                                    # run every case
 ```
 
 Other flags: `--suite <file>`, `--model <id>`, `--budget-usd <n>` and `--max-minutes <n>` (per run, over `worldgen.config.json`), `--out-dir <dir>`, and `--transport claude-cli|sdk` (`claude-cli` is the default; `sdk` reads `LLM_KEY` from the environment). `--backend local|boat` and `--parallel <n>` are parsed and checked, but only `local` with `--parallel 1` runs today. Boat fan-out lands with the sandbox backends.
@@ -70,4 +70,4 @@ The target is 0.80 on each referenced case by stress run 2 (YOS-54). See `resear
 
 When a case fails, fix the generic cause (prompts, hints, issue texts), never the one prompt. Move a world to `prod/` only when it is a deliverable.
 
-`eval/` holds no code. The runner is `code/src/cli/eval.ts`, and its logic is in `code/src/worldgen/eval.ts`. Engine acceptance lives in `code/test` (node:test, run through npm from `code/`), so the engine and WorldGen are each runnable with one command, through npm only. Decision A-45 in `research/decisions.md` records why the Python acceptance harness was retired.
+`eval/` holds no code. The runner is `code/src/cli/eval.ts`, and its logic is in `code/src/worldgen/eval.ts`. Engine acceptance lives in `code/test` (node:test files that `bun run test` runs from `code/`), so the engine and WorldGen are each runnable with one command, through Bun only (A-381). Decision A-45 in `research/decisions.md` records why the Python acceptance harness was retired.

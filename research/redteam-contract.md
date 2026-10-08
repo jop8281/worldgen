@@ -108,9 +108,9 @@ The suite runs blind. Expected values are literals (see `FACTS` in `code/test/re
 
 | Id | Guarantee | Source |
 |---|---|---|
-| G-56 | `npm run worldplay -- check <dir>` exits 0 on an ok world, and exits non-zero on a broken one, printing each issue's code, path, expected, found and hint. | AGENTS.md "Commands" |
-| G-57 | `npm run worldplay -- verify <dir>` exits 0 and prints solution 1, noop 0 and decoys below 1 for each task, and exits non-zero when a task fails. | AGENTS.md "Commands" |
-| G-58 | `npm run worldplay -- grade <dir> <task> --state end.json` prints the score of a dumped state. | AGENTS.md "Commands" |
+| G-56 | `bun run worldplay check <dir>` exits 0 on an ok world, and exits non-zero on a broken one, printing each issue's code, path, expected, found and hint. | AGENTS.md "Commands" |
+| G-57 | `bun run worldplay verify <dir>` exits 0 and prints solution 1, noop 0 and decoys below 1 for each task, and exits non-zero when a task fails. | AGENTS.md "Commands" |
+| G-58 | `bun run worldplay grade <dir> <task> --state end.json` prints the score of a dumped state. | AGENTS.md "Commands" |
 
 ## Ambiguities
 

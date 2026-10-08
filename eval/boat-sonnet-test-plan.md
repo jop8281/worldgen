@@ -8,15 +8,15 @@ Test the agreed KISS path: description -> checked world -> proven tasks -> fresh
 
 ## Procedure and gates
 
-1. Pin the commit and use an isolated checkout. Record Node/npm/Bun versions. Never reuse another task's uncommitted state.
+1. Pin the commit and use an isolated checkout. Record the Bun version. Never reuse another task's uncommitted state.
 2. Install the current lockfile dependencies and run local checks without provider keys:
-   - npm ci --ignore-scripts --no-audit --no-fund
-   - npm run typecheck
-   - node --import tsx --test --test-concurrency=1 test/config.test.ts test/llm.test.ts test/policy.test.ts
-   - node --import tsx --test --test-concurrency=1 test/worldgen.test.ts
-   - npm run worldplay -- check ../prod/worlds/helpdesk
-   - npm run worldplay -- verify ../prod/worlds/helpdesk
-   - npm run eval -- --dry-run
+   - bun install --frozen-lockfile
+   - bun run typecheck
+   - bun test --timeout 120000 test/config.test.ts test/llm.test.ts test/policy.test.ts
+   - bun test --timeout 120000 test/worldgen.test.ts
+   - bun run worldplay check ../prod/worlds/helpdesk
+   - bun run worldplay verify ../prod/worlds/helpdesk
+   - bun run eval --dry-run
    Record command, exit code, timeout and raw log. Local engine checks may run on the host; product generation and solver environments use Boat. Run the complete repository check/e2e gates after the stabilization work, before declaring the product ready.
 3. Verify provider configuration before paid work. A logged-in `claude` CLI (or `LLM_KEY` for the opt-in SDK), pinned Sonnet availability, BOAT_API_KEY authentication, SDK request compatibility, finite model and sandbox budgets. Print status and redacted errors only.
 4. After YOS-107 and YOS-75 land, create one Boat sandbox with a finite TTL. Upload only the code and world inputs. Keep provider credentials in the trusted controller and keep the verifier/admin port private.
@@ -45,7 +45,6 @@ From `code/`, with dependencies already installed, run:
 
 ```sh
 bun test --timeout 120000 --test-name-pattern 'the hard run deadline' test/worldgen.test.ts
-node --import tsx --test --test-name-pattern 'the hard run deadline' test/worldgen.test.ts
 ```
 
 These local tests advance a synthetic clock through the 15-minute limit. They make no provider calls or Boat sandboxes. Require cancellation, a bounded two-second settlement window, inclusion of a priced reply or failure receipt, a confirmed zero only for a call that never started, and explicit unknown billing for an unpriced or non-settling call. A late proposal must not write the world or plan or append generation events. Normal completion must leave no timers.
