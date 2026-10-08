@@ -34,6 +34,10 @@
  *   lease ran out is resumed when its process lives and stopped when it does not. An intent is stopped, never started,
  *   because its child may have started before the crash. So a retried POST, a double click or a crash never starts a
  *   second paid run.
+ * - Web hardening (YOS-234). Every answer carries SECURITY_HEADERS (frame, sniffing, referrer and a CSP the offline page
+ *   meets). Each POST route has one token bucket per client address, and a failed bearer draws from one bucket per
+ *   client that slows token guessing; both read the injected clock. Unfinished runs and episodes are capped, counted
+ *   after the idempotency lookup so a replay never gets 429. CSRF is the own-names guard's job (#12), not a check here.
  * - Stops never leave zombies: SIGTERM, a short wait, SIGKILL, and the answer says which signal
  *   ended the child. A child that dies on its own removes its own record.
  */
@@ -129,6 +133,29 @@ export type StudioOptions = {
   readonly leaseMs?: number | undefined;
   /** The clock leases are read and written by. Default Date.now. Injected so tests can expire a lease without waiting. */
   readonly now?: (() => number) | undefined;
+  /** The burst and refill of each client's bucket on each POST route. Default 60 and 1 per second. */
+  readonly rateLimit?: RateLimit | undefined;
+  /** The burst and refill of each client's failed-sign-in bucket. Default 10 and 1 per 6 s. */
+  readonly authThrottle?: RateLimit | undefined;
+  /** Most unfinished generation runs at once. Default 4. */
+  readonly maxConcurrentRuns?: number | undefined;
+  /** Most unfinished agent episodes at once. Default 4. */
+  readonly maxConcurrentEpisodes?: number | undefined;
+};
+
+export type RateLimit = { readonly capacity: number; readonly refillPerSecond: number };
+
+const DEFAULT_RATE_LIMIT: RateLimit = { capacity: 60, refillPerSecond: 1 };
+const DEFAULT_AUTH_THROTTLE: RateLimit = { capacity: 10, refillPerSecond: 1 / 6 };
+const DEFAULT_MAX_JOBS = 4;
+const MAX_BUCKETS = 1024;
+
+/** Sent on every answer. The page is one offline document with inline script and style and relative fetches only. */
+const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  'x-frame-options': 'DENY',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
 };
 
 export interface StudioServer {
@@ -320,6 +347,7 @@ const sha256 = (text: string): Buffer => createHash('sha256').update(text).diges
 function write(res: ServerResponse, reply: Reply): void {
   if (reply.type !== undefined) {
     res.writeHead(reply.status, {
+      ...SECURITY_HEADERS,
       'content-type': reply.type,
       'content-length': typeof reply.body === 'string' ? Buffer.byteLength(reply.body) : reply.body.length,
       ...(reply.type === 'application/zip' ? { 'content-disposition': `attachment; filename="${reply.filename}"` } : {}),
@@ -328,7 +356,7 @@ function write(res: ServerResponse, reply: Reply): void {
     return;
   }
   const text = JSON.stringify(reply.body ?? null);
-  res.writeHead(reply.status, { ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
+  res.writeHead(reply.status, { ...SECURITY_HEADERS, ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
   res.end(text);
 }
 
@@ -506,8 +534,39 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const processes = opts.processes ?? osProcesses;
   const leaseMs = opts.leaseMs ?? LEASE_MS;
   const now = opts.now ?? Date.now;
+  /** Token buckets by key, oldest inserted dropped beyond MAX_BUCKETS. Time is the injected clock. */
+  const bucketsOf = (limit: RateLimit) => {
+    const buckets = new Map<string, { tokens: number; at: number }>();
+    const refilled = (key: string): { tokens: number; at: number } => {
+      const t = now();
+      const b = buckets.get(key) ?? { tokens: limit.capacity, at: t };
+      b.tokens = Math.min(limit.capacity, b.tokens + Math.max(0, t - b.at) / 1000 * limit.refillPerSecond);
+      b.at = t;
+      if (!buckets.has(key)) {
+        buckets.set(key, b);
+        if (buckets.size > MAX_BUCKETS) buckets.delete(buckets.keys().next().value!);
+      }
+      return b;
+    };
+    return {
+      /** Whole seconds until one token is there (at least 1), or 0 when there is one. */
+      wait(key: string): number {
+        const b = refilled(key);
+        return b.tokens >= 1 ? 0 : Math.max(1, Math.ceil((1 - b.tokens) / limit.refillPerSecond));
+      },
+      draw(key: string): void {
+        const b = refilled(key);
+        b.tokens = Math.max(0, b.tokens - 1);
+      },
+    };
+  };
   const me = `studio-${process.pid}-${randomBytes(4).toString('hex')}`;
   const leaseFrom = (at: number): Lease => ({ holder: me, expiresAt: new Date(at + leaseMs).toISOString() });
+  const rateLimit = opts.rateLimit ?? DEFAULT_RATE_LIMIT;
+  const postBuckets = bucketsOf(rateLimit);
+  const authLimit = opts.authThrottle ?? DEFAULT_AUTH_THROTTLE;
+  const failedSignIns = bucketsOf(authLimit);
+  const maxJobs = { generate: opts.maxConcurrentRuns ?? DEFAULT_MAX_JOBS, episode: opts.maxConcurrentEpisodes ?? DEFAULT_MAX_JOBS };
   const holds = (job: Job): boolean => job.lease?.holder === me;
   /** Set by close(): from then on the registry is never written. */
   let closed = false;
@@ -916,6 +975,12 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (prior !== undefined) {
       if (prior.fingerprint === fingerprint) return startAnswer(prior, true);
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (job ${prior.runId})`);
+    }
+    // Counted after the lookup, so a replay answers first. Intents and jobs another studio leases count. Still no await.
+    const active = [...jobs.values()].filter((j) => j.kind === start.kind && j.phase !== 'finished').length;
+    if (active >= maxJobs[start.kind]) {
+      const what = start.kind === 'generate' ? 'generation runs' : 'agent episodes';
+      return fail(429, start.kind === 'generate' ? 'generate.concurrent_limit' : 'episode.concurrent_limit', `${active} ${what} are already active; the studio runs at most ${maxJobs[start.kind]} at once, so stop one first`);
     }
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
     let runId = `${stamp}-${start.label}`;
@@ -1479,17 +1544,34 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       return fail(404, 'route.not_found', signIn ? missing : `${missing}. Studio routes: ${ROUTE_LIST}`);
     }
     const need = hit.route.need;
+    const client = req.socket.remoteAddress ?? 'unknown';
     if (need !== 'public') {
       const what = `${method} /${segments.join('/')}`;
+      // A throttled client is refused whether its token is right or wrong, so a guesser learns nothing.
+      // The cost is that a valid user on the same address waits too.
+      if (who.kind !== 'anonymous') {
+        const seconds = failedSignIns.wait(client);
+        if (seconds > 0) return fail(429, 'auth.throttled', `Too many failed sign-ins from ${client}: wait ${seconds} s before the next bearer token is checked`, { 'retry-after': String(seconds) });
+      }
       if (who.kind === 'anonymous') {
         return fail(401, 'auth.required', `${what} needs sign-in: send Authorization: Bearer <token>, or sign in on the page`, AUTH_CHALLENGE);
       }
       if (who.kind === 'rejected') {
+        failedSignIns.draw(client);
         return fail(401, 'auth.invalid', `${what}: the bearer token matches no studio user; check it, or sign in again on the page`, AUTH_CHALLENGE);
       }
       if (roleRank(who.role) < roleRank(need)) {
         return fail(403, 'auth.forbidden', `${what} needs the ${need} role; ${who.name} is ${who.role === 'viewer' ? 'a' : 'an'} ${who.role}`);
       }
+    }
+    if (method === 'POST') {
+      const route = hit.route.parts.join('/');
+      const key = `POST ${route} ${client}`;
+      const seconds = postBuckets.wait(key);
+      if (seconds > 0) {
+        return fail(429, 'studio.rate_limited', `Too many POST /${route} requests from ${client}: the studio allows a burst of ${rateLimit.capacity}, refilled ${rateLimit.refillPerSecond} per second`, { 'retry-after': String(seconds) });
+      }
+      postBuckets.draw(key);
     }
     const body = hit.route.method === 'POST' ? await readBody(req) : { ok: true as const, value: undefined };
     if (!body.ok) return fail(body.status, body.code, body.message);
