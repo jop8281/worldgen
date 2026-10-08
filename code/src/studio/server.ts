@@ -88,6 +88,8 @@ export type StudioUser = { readonly name: string; readonly role: StudioRole; rea
 
 /** The audit log of POST requests, in the worlds dir. */
 export const AUDIT_FILE = '.studio-audit.jsonl';
+/** The audit file before the last rotation (A-375). */
+export const AUDIT_ROTATED_FILE = '.studio-audit.1.jsonl';
 
 /** A tenant name becomes a directory under the worlds dir, so it is one plain lowercase segment, never a `gen-<slug>` dir of the default tenant. */
 const TENANT = /^(?!gen-)[a-z0-9][a-z0-9-]{0,62}$/;
@@ -171,6 +173,15 @@ export type StudioOptions = {
   readonly maxConcurrentRuns?: number | undefined;
   /** Most unfinished agent episodes at once. Default 4. */
   readonly maxConcurrentEpisodes?: number | undefined;
+  /** Most worlds served at once in all, and per tenant. Defaults 32 and 8 (A-375). */
+  readonly maxServices?: number | undefined;
+  readonly maxServicesPerTenant?: number | undefined;
+  /** Check and proof children: at most `size` at once, `queue` more waiting, each at most `waitMs`. Default 4, 16, 30 s (A-375). */
+  readonly childSlots?: { readonly size: number; readonly queue: number; readonly waitMs: number } | undefined;
+  /** How long the API console and a reset wait for a world. Default CALL_TIMEOUT_MS. */
+  readonly callTimeoutMs?: number | undefined;
+  /** The audit file size that rotates it to .studio-audit.1.jsonl. Default 64 MiB (A-375). */
+  readonly auditMaxBytes?: number | undefined;
 };
 
 export type RateLimit = { readonly capacity: number; readonly refillPerSecond: number };
@@ -179,6 +190,44 @@ const DEFAULT_RATE_LIMIT: RateLimit = { capacity: 60, refillPerSecond: 1 };
 const DEFAULT_AUTH_THROTTLE: RateLimit = { capacity: 10, refillPerSecond: 1 / 6 };
 const DEFAULT_MAX_JOBS = 4;
 const MAX_BUCKETS = 1024;
+/** Most worlds served at once, in all and per tenant (A-375). */
+const DEFAULT_MAX_SERVICES = 32;
+const DEFAULT_MAX_SERVICES_PER_TENANT = 8;
+/** Check and proof children: at most 4 at once, 16 more waiting, each waiting at most 30 s (A-375). */
+const DEFAULT_CHILD_SLOTS = { size: 4, queue: 16, waitMs: 30_000 } as const;
+/** How long a request may take to arrive in full, and its headers. The runtimes' defaults are 300 s and 60 s (A-375). */
+const REQUEST_TIMEOUT_MS = 30_000;
+const HEADERS_TIMEOUT_MS = 10_000;
+/** Longest request path an audit line records, and the audit file size that rotates it (A-375). */
+const MAX_AUDIT_PATH_CHARS = 256;
+const DEFAULT_AUDIT_MAX_BYTES = 67_108_864;
+
+/** Token buckets by key, oldest inserted dropped beyond MAX_BUCKETS, on the clock `now`. */
+export function bucketsOf(limit: RateLimit, now: () => number) {
+  const buckets = new Map<string, { tokens: number; at: number }>();
+  const refilled = (key: string): { tokens: number; at: number } => {
+    const t = now();
+    const b = buckets.get(key) ?? { tokens: limit.capacity, at: t };
+    b.tokens = Math.min(limit.capacity, b.tokens + Math.max(0, t - b.at) / 1000 * limit.refillPerSecond);
+    b.at = t;
+    if (!buckets.has(key)) {
+      buckets.set(key, b);
+      if (buckets.size > MAX_BUCKETS) buckets.delete(buckets.keys().next().value!);
+    }
+    return b;
+  };
+  return {
+    /** Whole seconds until one token is there (at least 1), or 0 when there is one. */
+    wait(key: string): number {
+      const b = refilled(key);
+      return b.tokens >= 1 ? 0 : Math.max(1, Math.ceil((1 - b.tokens) / limit.refillPerSecond));
+    },
+    draw(key: string): void {
+      const b = refilled(key);
+      b.tokens = Math.max(0, b.tokens - 1);
+    },
+  };
+}
 
 /** Sent on every answer. The page is one offline document with inline script and style and relative fetches only. */
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
@@ -274,6 +323,13 @@ const EVENT_TAIL = 100;
 /** How far into a summary.md the pass-rate line may sit before the list shows a preview instead. */
 const SUMMARY_SCAN_LINES = 200;
 const KEBAB = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+/** Longest generate outSlug and episode task id, in characters (A-375). */
+const MAX_NAME_CHARS = 64;
+/** Largest budget and run time a generate may ask for (A-375); worldgen.config.json's defaults are $5 and 15 min. */
+const MAX_GENERATE_BUDGET_USD = 20;
+const MAX_GENERATE_MINUTES = 60;
+/** Largest turns, budget and run time an episode may ask for (A-375); the episode CLI's defaults are 12, $0.5 and 5 min. */
+const MAX_EPISODE_LIMITS = { maxTurns: 200, budgetUsd: 10, maxMinutes: 60 } as const;
 /** Methods the API console may send to a world port. */
 const CALL_METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 /** How long the API console waits for a world port to answer. */
@@ -335,20 +391,29 @@ type Body = { ok: true; value: unknown } | { ok: false; status: 400 | 413; code:
 /** Reads the whole body, at most `limit` bytes. Empty is undefined; anything else must be JSON. */
 function readBody(req: IncomingMessage, limit: number): Promise<Body> {
   return new Promise((resolve, reject) => {
+    // A body past the limit is answered at once and never drained: it could be endless (A-375).
+    const declared = Number(req.headers['content-length']);
+    const tooLarge = (size: string): Body => ({ ok: false, status: 413, code: 'body.too_large', message: `Request body is ${size} bytes; the most is ${limit}` });
+    if (Number.isFinite(declared) && declared > limit) {
+      resolve(tooLarge(String(declared)));
+      return;
+    }
     const chunks: Buffer[] = [];
     let size = 0;
+    let over = false;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size <= limit) chunks.push(chunk);
+      else if (!over) {
+        over = true;
+        resolve(tooLarge(`over ${limit}`));
+      }
     });
     req.on('error', reject);
     req.on('end', () => setImmediate(() => {
+      if (over) return;
       if (req.socket.destroyed || !req.socket.writable) {
         reject(new ConnectionClosed());
-        return;
-      }
-      if (size > limit) {
-        resolve({ ok: false, status: 413, code: 'body.too_large', message: `Request body is ${size} bytes; the most is ${limit}` });
         return;
       }
       const text = Buffer.concat(chunks).toString('utf8');
@@ -709,39 +774,45 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const processes = opts.processes ?? osProcesses;
   const leaseMs = opts.leaseMs ?? LEASE_MS;
   const now = opts.now ?? Date.now;
-  /** Token buckets by key, oldest inserted dropped beyond MAX_BUCKETS. Time is the injected clock. */
-  const bucketsOf = (limit: RateLimit) => {
-    const buckets = new Map<string, { tokens: number; at: number }>();
-    const refilled = (key: string): { tokens: number; at: number } => {
-      const t = now();
-      const b = buckets.get(key) ?? { tokens: limit.capacity, at: t };
-      b.tokens = Math.min(limit.capacity, b.tokens + Math.max(0, t - b.at) / 1000 * limit.refillPerSecond);
-      b.at = t;
-      if (!buckets.has(key)) {
-        buckets.set(key, b);
-        if (buckets.size > MAX_BUCKETS) buckets.delete(buckets.keys().next().value!);
-      }
-      return b;
-    };
-    return {
-      /** Whole seconds until one token is there (at least 1), or 0 when there is one. */
-      wait(key: string): number {
-        const b = refilled(key);
-        return b.tokens >= 1 ? 0 : Math.max(1, Math.ceil((1 - b.tokens) / limit.refillPerSecond));
-      },
-      draw(key: string): void {
-        const b = refilled(key);
-        b.tokens = Math.max(0, b.tokens - 1);
-      },
-    };
-  };
   const me = `studio-${process.pid}-${randomBytes(4).toString('hex')}`;
   const leaseFrom = (at: number): Lease => ({ holder: me, expiresAt: new Date(at + leaseMs).toISOString() });
   const rateLimit = opts.rateLimit ?? DEFAULT_RATE_LIMIT;
-  const postBuckets = bucketsOf(rateLimit);
+  const postBuckets = bucketsOf(rateLimit, now);
   const authLimit = opts.authThrottle ?? DEFAULT_AUTH_THROTTLE;
-  const failedSignIns = bucketsOf(authLimit);
+  const failedSignIns = bucketsOf(authLimit, now);
   const maxJobs = { generate: opts.maxConcurrentRuns ?? DEFAULT_MAX_JOBS, episode: opts.maxConcurrentEpisodes ?? DEFAULT_MAX_JOBS };
+  const maxServices = opts.maxServices ?? DEFAULT_MAX_SERVICES;
+  const maxServicesPerTenant = opts.maxServicesPerTenant ?? DEFAULT_MAX_SERVICES_PER_TENANT;
+  const callTimeoutMs = opts.callTimeoutMs ?? CALL_TIMEOUT_MS;
+  const slots = opts.childSlots ?? DEFAULT_CHILD_SLOTS;
+  /** Check and proof children running, and the requests waiting for one of their slots, oldest first (A-375). */
+  let slotsTaken = 0;
+  const slotQueue: { readonly wake: (got: boolean) => void }[] = [];
+  /** Runs `job` in a check-and-proof slot, waiting up to slots.waitMs in a queue of slots.queue; null when there is no room. */
+  async function inSlot<T>(job: () => Promise<T>): Promise<T | null> {
+    if (slotsTaken < slots.size) slotsTaken += 1;
+    else {
+      if (slotQueue.length >= slots.queue) return null;
+      const got = await new Promise<boolean>((resolve) => {
+        const entry = { wake: (handed: boolean): void => { clearTimeout(timer); resolve(handed); } };
+        const timer = setTimeout(() => {
+          slotQueue.splice(slotQueue.indexOf(entry), 1);
+          resolve(false);
+        }, slots.waitMs);
+        slotQueue.push(entry);
+      });
+      if (!got) return null;
+    }
+    try {
+      return await job();
+    } finally {
+      // A freed slot passes straight to the oldest waiter, so slotsTaken never goes past slots.size.
+      const next = slotQueue.shift();
+      if (next !== undefined) next.wake(true);
+      else slotsTaken -= 1;
+    }
+  }
+  const busy = (): Reply => fail(429, 'studio.busy', `The studio runs at most ${slots.size} world checks and proofs at once, and ${slots.queue} more may wait ${slots.waitMs / 1000} s; try again shortly`, { 'retry-after': '5' });
   const holds = (job: Job): boolean => job.lease?.holder === me;
   /** Set by close(): from then on the registry is never written. */
   let closed = false;
@@ -769,8 +840,22 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const auditPath = path.join(worldsDir, AUDIT_FILE);
   let auditing: Promise<void> = Promise.resolve();
   let unwritten = 0;
+  const auditMaxBytes = opts.auditMaxBytes ?? DEFAULT_AUDIT_MAX_BYTES;
+  /** The audit file's size as this studio last knew it; read once, then counted. */
+  let auditBytes: number | null = null;
   const audit = (entry: Record<string, unknown>): Promise<void> => {
-    auditing = auditing.then(() => appendFile(auditPath, `${JSON.stringify(entry)}\n`)).catch(() => {
+    auditing = auditing.then(async () => {
+      const line = `${JSON.stringify(entry)}\n`;
+      const bytes = Buffer.byteLength(line);
+      auditBytes ??= await stat(auditPath).then((s) => s.size, () => 0);
+      // Past the cap the file becomes .studio-audit.1.jsonl, replacing the one before, so the log keeps at most two files (A-375).
+      if (auditBytes > 0 && auditBytes + bytes > auditMaxBytes) {
+        await rename(auditPath, path.join(worldsDir, AUDIT_ROTATED_FILE));
+        auditBytes = 0;
+      }
+      await appendFile(auditPath, line);
+      auditBytes += bytes;
+    }).catch(() => {
       unwritten += 1;
     });
     return auditing;
@@ -959,7 +1044,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { worlds: list } };
   }
 
-  const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly body: Record<string, unknown> }>();
+  /** Each explored world's answer, valid or invalid, until its world.yaml changes, so revisiting it spawns nothing (A-375). */
+  const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly reply: Reply }>();
   /** Checks in flight, by world dir and world.yaml version: a repeated request joins the running child instead of starting another. */
   const checking = new Map<string, Promise<Reply>>();
 
@@ -1067,13 +1153,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     // The check verifies every task, about 9 s on a big world, so an explored world is kept until its world.yaml changes.
     const yaml = await stat(path.join(dir, 'world.yaml')).catch(() => null);
     const cached = checkedWorlds.get(dir);
-    if (yaml !== null && cached !== undefined && cached.mtimeMs === yaml.mtimeMs && cached.size === yaml.size) {
-      return { status: 200, body: cached.body };
-    }
+    if (yaml !== null && cached !== undefined && cached.mtimeMs === yaml.mtimeMs && cached.size === yaml.size) return cached.reply;
     const key = `${dir}\n${yaml?.mtimeMs}\n${yaml?.size}`;
     const running = checking.get(key);
     if (running !== undefined) return running;
-    const reply = checkInChild(dir, name, yaml).finally(() => checking.delete(key));
+    const reply = inSlot(() => checkInChild(dir, name, yaml)).then((r) => r ?? busy()).finally(() => checking.delete(key));
     checking.set(key, reply);
     return reply;
   }
@@ -1085,7 +1169,12 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     } catch {
       return fail(502, 'check.failed', 'the check process could not start');
     }
-    if (res.code === 3) return fail(422, 'world.invalid', lastLine(res.stderr).slice(0, 300));
+    if (res.code === 3) {
+      // An invalid world is invalid until its world.yaml changes, so its answer is kept like a valid one's.
+      const invalid = fail(422, 'world.invalid', lastLine(res.stderr).slice(0, 300));
+      if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, reply: invalid });
+      return invalid;
+    }
     if (res.code !== 0) return fail(502, 'check.failed', `the check process failed (exit ${res.code}): ${lastLine(res.stderr).slice(0, 200) || 'no output'}`);
     let body: unknown;
     try {
@@ -1094,8 +1183,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       body = null;
     }
     if (!isObject(body)) return fail(502, 'check.unreadable', 'the check process answered something that is not a JSON object');
-    if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, body });
-    return { status: 200, body };
+    const checked: Reply = { status: 200, body };
+    if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, reply: checked });
+    return checked;
   }
 
   /** The API console: one request to the world port of a service this studio started, and the world's real answer. */
@@ -1131,7 +1221,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     try {
       // A service is recorded only once its world reported it listens (A-348), so a refused call is the world's real answer.
       res = await fetch(url, {
-        method, redirect: 'manual', signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        method, redirect: 'manual', signal: AbortSignal.timeout(callTimeoutMs),
         ...(payload === undefined ? {} : { body: JSON.stringify(payload), headers: { 'content-type': 'application/json' } }),
       });
     } catch (e) {
@@ -1190,6 +1280,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     for (const s of services.values()) {
       if (s.dir === dir && visible(s.record.tenant, who, filter)) return fail(409, 'world.already_serving', `${name} is already served on port ${s.record.worldPort}; stop it first`);
     }
+    // Every served world is a bun process with two ports, so their count is capped in all and per tenant (A-375).
+    if (services.size + starting.size >= maxServices) return fail(429, 'serve.concurrent_limit', `the studio serves at most ${maxServices} worlds at once; stop one first`);
+    const servedBy = [...services.values()].filter((s) => s.record.tenant === owner).length + [...starting].filter((k) => k.startsWith(`${owner} `)).length;
+    if (servedBy >= maxServicesPerTenant) return fail(429, 'serve.concurrent_limit', `a tenant serves at most ${maxServicesPerTenant} worlds at once; stop one first`);
     const wanted = isObject(body) ? body['port'] : undefined;
     let port = 0;
     if (wanted !== undefined && who.role === 'admin') {
@@ -1258,7 +1352,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (resetting.has(hit.record.id)) return fail(409, 'reset.busy', `a reset of ${name} is already running; wait for its answer`);
     resetting.add(hit.record.id);
     const admin = `http://127.0.0.1:${hit.record.adminPort}`;
-    const signal = (): AbortSignal => AbortSignal.timeout(CALL_TIMEOUT_MS);
+    const signal = (): AbortSignal => AbortSignal.timeout(callTimeoutMs);
     try {
       const reset = await fetch(`${admin}/_world/reset`, { method: 'POST', redirect: 'manual', signal: signal() });
       if (!reset.ok) return fail(502, 'reset.failed', `the admin port of ${name} answered ${reset.status} to the reset`);
@@ -1531,20 +1625,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       return fail(400, 'generate.kind', 'kind must be one of description, openapi or csv');
     }
     const slug = body['outSlug'];
-    if (typeof slug !== 'string' || !KEBAB.test(slug)) {
-      return fail(400, 'generate.slug', 'outSlug must be kebab-case: lowercase letters, digits and dashes, such as orders-demo');
+    if (typeof slug !== 'string' || !KEBAB.test(slug) || slug.length > MAX_NAME_CHARS) {
+      return fail(400, 'generate.slug', `outSlug must be kebab-case of at most ${MAX_NAME_CHARS} characters: lowercase letters, digits and dashes, such as orders-demo`);
     }
     const rawText = body['text'];
     if (rawText !== undefined && typeof rawText !== 'string') return fail(400, 'generate.text', 'text must be a string: the description, or the spec or csv path(s)');
     if (kind === 'description' && typeof rawText !== 'string') return fail(400, 'generate.text', 'a description needs text');
     const text = rawText ?? '';
     const budget = body['budgetUsd'];
-    if (budget !== undefined && (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0)) {
-      return fail(400, 'generate.budget', 'budgetUsd must be a positive number');
+    if (budget !== undefined && (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0 || budget > MAX_GENERATE_BUDGET_USD)) {
+      return fail(400, 'generate.budget', `budgetUsd must be a positive number of at most ${MAX_GENERATE_BUDGET_USD}`);
     }
     const minutes = body['maxMinutes'];
-    if (minutes !== undefined && (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes <= 0)) {
-      return fail(400, 'generate.minutes', 'maxMinutes must be a positive integer');
+    if (minutes !== undefined && (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes <= 0 || minutes > MAX_GENERATE_MINUTES)) {
+      return fail(400, 'generate.minutes', `maxMinutes must be a positive integer of at most ${MAX_GENERATE_MINUTES}`);
     }
     const flags = [...(budget === undefined ? [] : ['--budget-usd', String(budget)]), ...(minutes === undefined ? [] : ['--max-minutes', String(minutes)])];
     // `default` keeps the old layout, so open mode and the token admin write where they always did.
@@ -1916,7 +2010,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       if (known.fingerprint === fingerprint) return known.reply;
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (the proof of another world)`);
     }
-    const reply = proveWorld(w.dir, p['name'] ?? '');
+    const reply = inSlot(() => proveWorld(w.dir, p['name'] ?? '')).then((r) => r ?? busy());
     proofsRunning.set(slot, { fingerprint, reply });
     try {
       const done = await reply;
@@ -1961,14 +2055,17 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const w = await worldDirOf(world, who, ctx.filter);
     if (!w.ok) return w.reply;
     const task = body['task'];
-    if (typeof task !== 'string' || !KEBAB.test(task.replace(/_/g, '-'))) return fail(400, 'episode.task', 'task must be a task id of the world');
+    if (typeof task !== 'string' || !KEBAB.test(task.replace(/_/g, '-')) || task.length > MAX_NAME_CHARS) return fail(400, 'episode.task', 'task must be a task id of the world');
     const agent = body['agent'] ?? 'noop';
     if (agent !== 'noop' && agent !== 'sonnet') return fail(400, 'episode.agent', 'agent must be noop or sonnet');
     const flags: string[] = [];
     for (const [key, flag] of [['maxTurns', '--max-turns'], ['budgetUsd', '--budget-usd'], ['maxMinutes', '--max-minutes']] as const) {
       const v = body[key];
       if (v === undefined) continue;
-      if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return fail(400, 'episode.limits', `${key} must be a positive number`);
+      const most = MAX_EPISODE_LIMITS[key];
+      if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > most || (key === 'maxTurns' && !Number.isInteger(v))) {
+        return fail(400, 'episode.limits', `${key} must be a positive ${key === 'maxTurns' ? 'integer' : 'number'} of at most ${most}`);
+      }
       flags.push(flag, String(v));
     }
     const sha = await engineCommit();
@@ -2224,7 +2321,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const filter = adminFilterOf(req, who);
     if (filter !== null && !TENANT.test(filter)) return fail(400, 'tenant.invalid', `?tenant=${filter} is refused: ${TENANT_RULE}`);
     const body = route.method === 'POST' ? await readBody(req, route.maxBody ?? MAX_BODY_BYTES) : { ok: true as const, value: undefined };
-    if (!body.ok) return fail(body.status, body.code, body.message);
+    // A 413 closes its connection, so the rest of a body past the limit is never read (A-375).
+    if (!body.ok) return fail(body.status, body.code, body.message, body.status === 413 ? { connection: 'close' } : undefined);
     return route.run(hit.params, body.value, who, { key: req.headers['idempotency-key'], filter });
   };
 
@@ -2261,12 +2359,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         tenant: who.kind === 'user' ? who.tenant : null,
         ...(actedFor !== null && TENANT.test(actedFor) ? { forTenant: actedFor } : {}),
         method: 'POST',
-        path: (req.url ?? '/').split('?')[0],
+        path: ((req.url ?? '/').split('?')[0] ?? '/').slice(0, MAX_AUDIT_PATH_CHARS),
         status: reply.status,
         ...(typeof error === 'string' ? { code: error } : {}),
       });
     }
     try {
+      if (reply.status === 413) res.once('finish', () => req.destroy());
       write(res, reply);
     } catch {
       res.destroy();
@@ -2276,6 +2375,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const server: Server = createHttpServer((req, res) => {
     void answer(req, res);
   });
+  // A slow or endless request holds a socket for the runtimes' default 300 s; the studio cuts it at 30 s (A-375).
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
 
   const port = await new Promise<number>((resolve, reject) => {
     server.once('error', reject);
