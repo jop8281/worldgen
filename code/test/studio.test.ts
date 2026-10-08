@@ -1189,6 +1189,7 @@ describe('studio runs across a restart (YOS-191, A-329)', () => {
   const signals: [number, string][] = [];
   const processes = {
     alive: (pid: number) => live.has(pid),
+    startOf: (pid: number) => (live.has(pid) ? `start-${pid}` : null),
     kill: (pid: number, signal: NodeJS.Signals) => {
       signals.push([pid, signal]);
       return live.has(pid);

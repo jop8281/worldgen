@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { appendFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -35,11 +35,15 @@ const JOBS: readonly StoredRun[] = [
   job({ runId: 'run-done', phase: 'finished', lease: null, exitCode: 0, pid: 404 }),
 ];
 
-/** A process table where only `live` pids exist; every lookup is recorded, and nothing may be signalled. */
-function table(live: readonly number[], onAlive: (pid: number) => void = () => undefined) {
+/**
+ * A process table where only `live` pids exist, each started as `starts` says (the OS says nothing for one it omits);
+ * every liveness lookup is recorded, and nothing may be signalled.
+ */
+function table(live: readonly number[], onAlive: (pid: number) => void = () => undefined, starts: Readonly<Record<number, string>> = {}) {
   const looked: number[] = [];
   const processes: Processes = {
     alive(pid) { looked.push(pid); onAlive(pid); return live.includes(pid); },
+    startOf: (pid) => (live.includes(pid) ? starts[pid] ?? null : null),
     kill() { throw new Error('reconcile-jobs never signals a process'); },
   };
   return { looked, processes };
@@ -225,6 +229,39 @@ describe('reconcile-jobs', () => {
       { ...facts('run-gone'), action: 'stop_skipped', why: 'missing', at: NOW },
     ]);
     assert.deepEqual((await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes: table([]).processes })).receipts, []);
+  });
+
+  it('counts a job whose pid the OS gave to another process as stale and stops it, and one still started as recorded as live (A-373)', async () => {
+    const dir = await registry('reused', [
+      job({ runId: 'run-reused', pid: 505, processStart: 'Thu Oct  8 03:00:00 2026' }),
+      job({ runId: 'run-same', pid: 606, processStart: 'Thu Oct  8 03:00:00 2026' }),
+    ]);
+    const { processes } = table([505, 606], undefined, { 505: 'Thu Oct  8 03:59:00 2026', 606: 'Thu Oct  8 03:00:00 2026' });
+    const dry = await reconcileJobs({ worldsDir: dir, apply: false, now: clock, processes });
+    assert.deepEqual(dry.rows, [
+      { runId: 'run-reused', kind: 'generate', tenant: 'default', phase: 'running', verdict: 'stale', action: 'stop' },
+      { runId: 'run-same', kind: 'generate', tenant: 'default', phase: 'running', verdict: 'process_live', action: 'none' },
+    ]);
+    const applied = await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes });
+    assert.deepEqual(applied.receipts, pair('run-reused', 'generate', 'default', 'process_gone', 'studio-11-dead'));
+    const after = await byId(dir);
+    assert.deepEqual([after.get('run-reused')?.phase, after.get('run-same')?.phase], ['finished', 'running']);
+  });
+
+  it('keeps a registry with an unreadable record aside before apply writes, and leaves it untouched on a dry run (A-373)', async () => {
+    const dir = await registry('damaged', [job({ runId: 'run-dead', pid: 303 })]);
+    const file = path.join(dir, RUN_STORE_FILE);
+    const text = JSON.stringify([...(JSON.parse(await readFile(file, 'utf8')) as unknown[]), { runId: 'run-bad' }]);
+    await writeFile(file, text);
+    const lines: string[] = [];
+    const { processes } = table([]);
+    const dry = await reconcileJobs({ worldsDir: dir, apply: false, now: clock, processes, log: (l) => lines.push(l) });
+    assert.deepEqual([dry.rows.map((r) => r.runId), await readFile(file, 'utf8'), await readdir(dir), lines], [['run-dead'], text, [RUN_STORE_FILE], []]);
+    const applied = await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes, log: (l) => lines.push(l) });
+    assert.deepEqual(applied.receipts, pair('run-dead', 'generate', 'default', 'process_gone', 'studio-11-dead'));
+    assert.equal(await readFile(path.join(dir, '.studio-runs.json.corrupt-20261008T040000000Z'), 'utf8'), text);
+    assert.deepEqual(lines, ['.studio-runs.json holds 1 unreadable record: kept as .studio-runs.json.corrupt-20261008T040000000Z, 1 readable job loaded']);
+    assert.deepEqual([...(await byId(dir)).keys()], ['run-dead']);
   });
 
   it('writes nothing when no registry exists', async () => {

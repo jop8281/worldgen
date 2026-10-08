@@ -101,7 +101,11 @@ after(async () => {
   for (const r of roots) await rm(r, { recursive: true, force: true });
 });
 
-type Fixture = { root: string; worldsDir: string; live: Set<number>; processes: Processes };
+/**
+ * `live` pids exist; `starts` is what the OS says each one started as (none: the OS says nothing). `killed` records
+ * every signal the studio sends, which reaches no real process.
+ */
+type Fixture = { root: string; worldsDir: string; live: Set<number>; starts: Map<number, string>; killed: [number, string][]; processes: Processes };
 
 async function fixture(): Promise<Fixture> {
   const root = await mkdtemp(path.join(tmpdir(), 'studio-jobs-'));
@@ -111,7 +115,17 @@ async function fixture(): Promise<Fixture> {
   await mkdir(path.join(worldsDir, 'w1'), { recursive: true });
   await mkdir(path.join(worldsDir, 'w2'), { recursive: true });
   const live = new Set<number>();
-  return { root, worldsDir, live, processes: { alive: (pid) => live.has(pid), kill: (pid) => live.has(pid) } };
+  const starts = new Map<number, string>();
+  const killed: [number, string][] = [];
+  const processes: Processes = {
+    alive: (pid) => live.has(pid),
+    startOf: (pid) => (live.has(pid) ? starts.get(pid) ?? null : null),
+    kill: (pid, signal) => {
+      killed.push([pid, signal]);
+      return live.has(pid);
+    },
+  };
+  return { root, worldsDir, live, starts, killed, processes };
 }
 
 async function open(f: Fixture, opts: Partial<StudioOptions> = {}): Promise<StudioServer> {
@@ -335,6 +349,59 @@ describe('studio jobs: leases and recovery (A-335)', () => {
     assert.equal(s.spawned.length, 0);
   });
 
+  // A-373: a pid is the job's process only while it still started as the job recorded; pids get reused.
+  it('stops, and never adopts or signals, a job whose pid the OS gave to another process since it was recorded', async () => {
+    const f = await fixture();
+    await writeRegistry(f, [orphan(f, { processStart: 'Wed Oct  7 11:00:00 2026' })]);
+    f.live.add(7001);
+    f.starts.set(7001, 'Wed Oct  7 11:59:58 2026');
+    const studio = await open(f, { now: () => T0 });
+    const r = await json(studio.url, 'GET', '/api/generate/20261007T110000Z-orphan');
+    assert.deepEqual([r.body['running'], r.body['state'], r.body['job']], [false, 'interrupted', {
+      kind: 'generate', key: 'k-orphan', phase: 'finished', lease: null,
+      recovery: { at: '2026-10-07T12:00:00.000Z', from: 'studio-dead', outcome: 'stopped', reason: 'process_gone' },
+    }]);
+    await studio.close();
+    assert.deepEqual(f.killed, []);
+  });
+
+  it('resumes a job whose pid still started as recorded, keeps that start, and signals it on close as before', async () => {
+    const f = await fixture();
+    await writeRegistry(f, [orphan(f, { processStart: 'Wed Oct  7 11:00:00 2026' })]);
+    f.live.add(7001);
+    f.starts.set(7001, 'Wed Oct  7 11:00:00 2026');
+    const studio = await open(f, { now: () => T0 });
+    const r = await json(studio.url, 'GET', '/api/generate/20261007T110000Z-orphan');
+    assert.deepEqual([r.body['running'], (r.body['job'] as Json)['recovery']], [true, { at: '2026-10-07T12:00:00.000Z', from: 'studio-dead', outcome: 'resumed' }]);
+    const [record] = await stored(f);
+    assert.deepEqual([record?.['pid'], record?.['processStart']], [7001, 'Wed Oct  7 11:00:00 2026']);
+    await studio.close();
+    assert.deepEqual(f.killed, [[7001, 'SIGTERM']]);
+  });
+
+  it('never signals an adopted job once its pid was reused, even on close', async () => {
+    const f = await fixture();
+    await writeRegistry(f, [orphan(f, { processStart: 'Wed Oct  7 11:00:00 2026' })]);
+    f.live.add(7001);
+    f.starts.set(7001, 'Wed Oct  7 11:00:00 2026');
+    const studio = await open(f, { now: () => T0 });
+    assert.equal((await json(studio.url, 'GET', '/api/generate/20261007T110000Z-orphan')).body['running'], true);
+    f.starts.set(7001, 'Wed Oct  7 12:00:01 2026');
+    await studio.close();
+    assert.deepEqual(f.killed, []);
+  });
+
+  it('records what the OS says a child it spawns started as', async () => {
+    const f = await fixture();
+    f.live.add(43210);
+    f.starts.set(43210, 'Wed Oct  7 12:00:00 2026');
+    const studio = await open(f, { now: () => T0 });
+    const r = await json(studio.url, 'POST', '/api/generate', { kind: 'description', text: 'A small helpdesk', outSlug: 'gen-start' });
+    assert.equal(r.status, 200);
+    const [record] = await stored(f);
+    assert.deepEqual([record?.['pid'], record?.['processStart']], [43210, 'Wed Oct  7 12:00:00 2026']);
+  });
+
   it('stops an intent whose start was never confirmed, and never starts it', async () => {
     const f = await fixture();
     await writeRegistry(f, [orphan(f, { phase: 'intent', pid: null })]);
@@ -521,5 +588,31 @@ describe('studio jobs: the registry file (A-329, A-335)', () => {
     const good = await json(studio.url, 'GET', '/api/generate/r-good');
     assert.deepEqual([good.status, good.body['exitCode'], good.body['job']], [200, 0, { kind: 'generate', key: 'k-orphan', phase: 'finished', lease: null }]);
     assert.equal((await json(studio.url, 'GET', '/api/generate/r-half')).status, 404);
+  });
+
+  // A-373: a registry the studio cannot read whole is kept, never overwritten by the next save.
+  it('keeps a registry that is not valid JSON as .studio-runs.json.corrupt-<stamp>, says so in one line, and starts empty', async () => {
+    const f = await fixture();
+    const damaged = '[{"runId": "r-half", "ki';
+    await writeFile(registry(f), damaged);
+    const lines: string[] = [];
+    const studio = await open(f, { now: () => T0, log: (line) => lines.push(line) });
+    assert.equal(await readFile(path.join(f.worldsDir, '.studio-runs.json.corrupt-20261007T120000000Z'), 'utf8'), damaged);
+    assert.deepEqual(lines, ['.studio-runs.json is not valid JSON: kept as .studio-runs.json.corrupt-20261007T120000000Z, 0 readable jobs loaded']);
+    assert.deepEqual(await stored(f), []);
+    assert.equal((await json(studio.url, 'GET', '/api/generate/r-half')).status, 404);
+  });
+
+  it('keeps a registry with an unreadable record aside too, and loads the records it can read', async () => {
+    const f = await fixture();
+    const text = JSON.stringify([orphan(f, { runId: 'r-good', phase: 'finished', lease: null, exitCode: 0 }), { runId: 'r-bad', phase: 'sideways' }]);
+    await writeFile(registry(f), text);
+    const lines: string[] = [];
+    const studio = await open(f, { now: () => T0, log: (line) => lines.push(line) });
+    assert.equal(await readFile(path.join(f.worldsDir, '.studio-runs.json.corrupt-20261007T120000000Z'), 'utf8'), text);
+    assert.deepEqual(lines, ['.studio-runs.json holds 1 unreadable record: kept as .studio-runs.json.corrupt-20261007T120000000Z, 1 readable job loaded']);
+    assert.deepEqual((await stored(f)).map((r) => r['runId']), ['r-good']);
+    const r = await json(studio.url, 'GET', '/api/generate/r-good');
+    assert.deepEqual([r.status, r.body['exitCode']], [200, 0]);
   });
 });

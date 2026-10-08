@@ -75,7 +75,7 @@ import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedC
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { worldArtifactPath } from '../dataset/store.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, recoveryOf, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
+import { adoptedChild, DEFAULT_TENANT, loadRunsToWrite, osProcesses, recoveryOf, RUN_STORE_FILE, sameProcess, saveRuns, stderrLine, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
 import { MAX_UPLOAD_BYTES, MAX_UPLOADS, openapiPaths, parseUpload, uploadFileOf, uploadIdOf, uploadPartsOf, UPLOADS_DIR, type Upload, type UploadKind } from './uploads.ts';
 import { trafficCounter } from './watch.ts';
@@ -149,8 +149,10 @@ export type StudioOptions = {
   readonly runStopWaitMs?: number | undefined;
   /** The model transport every worldgen it starts uses (`--transport`); the CLI default when absent. A container has no claude CLI, so it uses sdk (A-326). */
   readonly transport?: 'claude-cli' | 'sdk' | undefined;
-  /** Looks at and signals runs a previous studio started. Defaults to the OS (process.kill). */
+  /** Looks at and signals runs a previous studio started. Defaults to the OS (process.kill, and /proc or ps for a pid's start). */
   readonly processes?: Processes | undefined;
+  /** Where the studio writes a one-line notice, such as a damaged job registry it kept aside (A-373). Defaults to stderr. */
+  readonly log?: ((line: string) => void) | undefined;
   /** Who may sign in. Empty or absent is open mode: everyone is the admin `local`, and the host must be loopback. */
   readonly users?: readonly StudioUser[] | undefined;
   /** The one public origin the studio is also reached at, such as http://127.0.0.1:9000 for a published container port or https://studio.example.com behind a proxy. */
@@ -368,6 +370,29 @@ function readBody(req: IncomingMessage, limit: number): Promise<Body> {
 
 /** The files a world export carries. Never runs/: its events and dumps are provenance for this machine, not the world (A-280). */
 const EXPORT_FILES = ['world.yaml', 'plan.yaml', 'REPORT.md', 'capsule.json'] as const;
+
+/**
+ * The variables a generate or iterate child gets from the studio's environment (A-372): what `worldgen` reads (the
+ * claude bin in cli/models.ts, the costs file and caps in costs/ledger.ts, the guard scale in engine/sandbox.ts) and
+ * what the claude CLI it spawns needs to find its login and config. The model credential joins by transport
+ * (`generationEnv`). Never BOAT_*, which worldgen never uses, and never ANTHROPIC_*: the child runs candidate-world
+ * snippets beside its environment.
+ */
+export const GENERATION_ENV = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME',
+  'WORLDGEN_CLAUDE_BIN', 'WORLDGEN_COSTS_FILE', 'WORLDGEN_MAX_DAILY_USD', 'WORLDGEN_MAX_TOTAL_USD', 'WORLDGEN_MAX_DAILY_LLM_USD',
+  'WORLDGEN_MAX_DAILY_SANDBOX_USD', 'WORLDGEN_GUARD_SCALE',
+] as const;
+
+/** A generate or iterate child's environment: GENERATION_ENV, TZ UTC, and its transport's credential, LLM_KEY for sdk or the claude CLI's OAuth token. */
+export function generationEnv(env: Readonly<Record<string, string | undefined>>, transport: 'claude-cli' | 'sdk' | undefined): Record<string, string> {
+  const out: Record<string, string> = { TZ: 'UTC' };
+  for (const key of [...GENERATION_ENV, transport === 'sdk' ? 'LLM_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN']) {
+    const value = env[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
 
 /** A zip of stored (uncompressed) entries: one local header per file, then the central directory and its end record. */
 function zipOf(entries: readonly { readonly name: string; readonly data: Buffer }[]): Buffer {
@@ -646,6 +671,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     lease: Lease | null;
     recovery: Recovery | undefined;
     pid: number | null;
+    processStart: string | null | undefined;
     exitCode: number | null;
     child: SpawnedChild | null;
   };
@@ -686,6 +712,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const processes = opts.processes ?? osProcesses;
   const leaseMs = opts.leaseMs ?? LEASE_MS;
   const now = opts.now ?? Date.now;
+  const keepDamaged = { now, log: opts.log ?? stderrLine };
   /** Token buckets by key, oldest inserted dropped beyond MAX_BUCKETS. Time is the injected clock. */
   const bucketsOf = (limit: RateLimit) => {
     const buckets = new Map<string, { tokens: number; at: number }>();
@@ -725,14 +752,15 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const storedOf = (job: Job): StoredRun => ({
     runId: job.runId, kind: job.kind, tenant: job.tenant, key: job.key, fingerprint: job.fingerprint, phase: job.phase, lease: job.lease,
     ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
-    outDir: job.outDir, pid: job.pid, knownRuns: [...job.knownRuns], startedAt: job.startedAt, exitCode: job.exitCode,
+    outDir: job.outDir, pid: job.pid, ...(job.processStart === undefined ? {} : { processStart: job.processStart }),
+    knownRuns: [...job.knownRuns], startedAt: job.startedAt, exitCode: job.exitCode,
     ...(job.episode === undefined ? {} : { episode: job.episode }),
     ...(job.iterate === undefined ? {} : { iterate: job.iterate }),
   });
   const jobOf = (stored: StoredRun): Job => ({
     runId: stored.runId, kind: stored.kind, tenant: stored.tenant, key: stored.key, fingerprint: stored.fingerprint, outDir: stored.outDir,
     knownRuns: new Set(stored.knownRuns), startedAt: stored.startedAt, episode: stored.episode, iterate: stored.iterate, phase: stored.phase,
-    lease: stored.lease, recovery: stored.recovery, pid: stored.pid, exitCode: stored.exitCode, child: null,
+    lease: stored.lease, recovery: stored.recovery, pid: stored.pid, processStart: stored.processStart, exitCode: stored.exitCode, child: null,
   });
   // One write at a time, in order, so the file on disk is always the latest whole registry. True when it was written.
   let persisting: Promise<boolean> = Promise.resolve(true);
@@ -809,7 +837,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       case 'resume':
         job.lease = leaseFrom(at);
         job.recovery = { at: when, from: decision.from, outcome: 'resumed' };
-        watch(job, adoptedChild(decision.pid, processes));
+        watch(job, adoptedChild(decision.pid, job.processStart, processes));
         return true;
       case 'stop':
         job.recovery = { at: when, from: decision.from, outcome: 'stopped', reason: decision.reason };
@@ -831,8 +859,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     renewing = true;
     try {
       await persisting;
-      const onDisk = new Map((await loadRuns(worldsDir)).map((stored) => [stored.runId, stored]));
-      if (closed) return;
+      // A damaged file that cannot be kept aside skips the tick; it must not reject a timer callback.
+      const read = await loadRunsToWrite(worldsDir, keepDamaged).catch(() => null);
+      if (read === null || closed) return;
+      const onDisk = new Map(read.map((stored) => [stored.runId, stored]));
       const at = now();
       let changed = false;
       for (const job of jobs.values()) {
@@ -846,6 +876,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
           job.lease = disk.lease;
           job.recovery = disk.recovery;
           job.pid = disk.pid;
+          job.processStart = disk.processStart;
           job.exitCode = disk.exitCode;
           job.child = null;
         }
@@ -858,7 +889,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   };
   // Jobs a previous studio left (A-329, A-335) are recovered by the lease rules; none is started again. A finished
   // one is listed as it was, and a dead run keeps its <out>.partial evidence and REPORT (A-293).
-  for (const stored of await loadRuns(worldsDir)) jobs.set(stored.runId, jobOf(stored));
+  for (const stored of await loadRunsToWrite(worldsDir, keepDamaged)) jobs.set(stored.runId, jobOf(stored));
   const loadedAt = now();
   for (const job of jobs.values()) recover(job, loadedAt);
   await persist();
@@ -942,7 +973,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   /** The check, proof and serve children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338, A-343). */
   const childEnv = (): Record<string, string> => isolatedEnv(opts.env ?? process.env);
-  /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
+  /** An episode is the model caller and runs its world in allowlisted children (A-347), so it gets the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
   const modelEnv = (): Record<string, string | undefined> => {
     const { WORLDGEN_STUDIO_TOKEN: _token, ...rest } = opts.env ?? process.env;
     return rest;
@@ -1417,7 +1448,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   });
 
   /** A running job another studio holds whose process is gone: recovery stops it once that lease runs out. */
-  const ownerGone = (job: Job): boolean => !holds(job) && job.phase === 'running' && job.pid !== null && !processes.alive(job.pid);
+  const ownerGone = (job: Job): boolean => !holds(job) && job.phase === 'running' && job.pid !== null && !sameProcess(processes, job.pid, job.processStart);
 
   /**
    * Starts a job once per key (A-335). A client key names one job forever; a derived key matches only an unfinished
@@ -1452,7 +1483,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const { outDir, argv, iterate } = start.launch(runId);
     const job: Job = {
       runId, kind: start.kind, tenant: start.tenant, key, fingerprint, outDir, knownRuns: start.knownRuns, startedAt: new Date().toISOString(),
-      episode: start.episode, iterate, phase: 'intent', lease: leaseFrom(now()), recovery: undefined, pid: null, exitCode: null, child: null,
+      episode: start.episode, iterate, phase: 'intent', lease: leaseFrom(now()), recovery: undefined, pid: null, processStart: undefined, exitCode: null, child: null,
     };
     jobs.set(runId, job);
     const recorded = await persist();
@@ -1477,7 +1508,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     let child: SpawnedChild;
     try {
-      child = opts.spawner(argv, { cwd: codeDir, env: modelEnv() });
+      // A generate or iterate child runs candidate-world snippets, so it gets only GENERATION_ENV (A-372).
+      child = opts.spawner(argv, { cwd: codeDir, env: start.kind === 'generate' ? generationEnv(opts.env ?? process.env, opts.transport) : modelEnv() });
     } catch (e) {
       // A start that never happened is finished, so its derived key cannot answer every later retry with a dead intent.
       job.phase = 'finished';
@@ -1488,6 +1520,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     job.phase = 'running';
     job.pid = child.pid ?? null;
+    // What the OS says this pid started as, so a later studio adopts or signals it only while it is still this child (A-373).
+    job.processStart = job.pid === null ? null : processes.startOf(job.pid);
     watch(job, child);
     await persist();
     return startAnswer(job, false);
