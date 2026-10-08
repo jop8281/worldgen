@@ -112,14 +112,30 @@ export function sensitiveOf(world: unknown): ReadonlyMap<string, ReadonlySet<str
   return out;
 }
 
-/** `value` with every sensitive field of every row it holds replaced by SENSITIVE_MASK. A row is an object whose `id` is `<idPrefix>_…`. */
+/** What a role below admin sees in place of text outside any row that names a sensitive field, such as a refusal (A-367). */
+export const SENSITIVE_MESSAGE = '[withheld: the message names a sensitive field]';
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Whether `text` names `field` as a word: `status` in `tkt_0002 status cannot move`, not in `statuses`. */
+const namesField = (text: string, field: string): boolean => new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(field)}($|[^A-Za-z0-9_])`).test(text);
+
+/**
+ * `value` with every sensitive field of every row it holds replaced by SENSITIVE_MASK. A row is an object whose `id` is
+ * `<idPrefix>_…`. Text outside every row that names a sensitive field, such as a `state.transition` refusal naming the
+ * stored state, becomes SENSITIVE_MESSAGE (YOS-252, A-367).
+ */
 export function maskSensitive(value: unknown, sensitive: ReadonlyMap<string, ReadonlySet<string>>): unknown {
-  if (Array.isArray(value)) return value.map((v) => maskSensitive(v, sensitive));
-  if (!obj(value)) return value;
-  const id = value['id'];
-  const cut = typeof id === 'string' ? id.indexOf('_') : -1;
-  const fields = cut > 0 ? sensitive.get((id as string).slice(0, cut)) : undefined;
-  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fields?.has(k) === true ? SENSITIVE_MASK : maskSensitive(v, sensitive)]));
+  const names = [...new Set([...sensitive.values()].flatMap((fields) => [...fields]))];
+  const walk = (v: unknown, inRow: boolean): unknown => {
+    if (Array.isArray(v)) return v.map((x) => walk(x, inRow));
+    if (typeof v === 'string') return !inRow && names.some((n) => namesField(v, n)) ? SENSITIVE_MESSAGE : v;
+    if (!obj(v)) return v;
+    const id = v['id'];
+    const cut = typeof id === 'string' ? id.indexOf('_') : -1;
+    const fields = cut > 0 ? sensitive.get((id as string).slice(0, cut)) : undefined;
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fields?.has(k) === true ? SENSITIVE_MASK : walk(x, cut > 0)]));
+  };
+  return walk(value, false);
 }
 
 /** A world response body with its sensitive values masked, or SENSITIVE_WITHHELD when it is not JSON (a body cut at the size limit). */
@@ -149,6 +165,28 @@ export function mergeSensitivity(all: readonly Sensitivity[]): Sensitivity {
   const out = new Map<string, Set<string>>();
   for (const s of all) for (const [prefix, fields] of s ?? []) out.set(prefix, new Set([...(out.get(prefix) ?? []), ...fields]));
   return out;
+}
+
+/** What a role below admin sees in place of an issue's found and hint, and of a repeated issue set, in a run's events. */
+export const RUN_TEXT_WITHHELD = "[withheld: it can quote seed values, and the run's world has a sensitive field or saved none to tell]";
+
+const isIssue = (v: Readonly<Record<string, unknown>>): boolean =>
+  typeof v['code'] === 'string' && typeof v['severity'] === 'string' && Array.isArray(v['path']) && typeof v['found'] === 'string';
+
+/**
+ * A generation run's events as a role below admin sees them (A-367). An issue's found and hint can quote a seed value
+ * or a test's message, and a no_progress stop's repeated issue set holds the found texts, so all three are withheld
+ * unless the run's saved world has no sensitive field. A run that saved no world, or whose world is unread, fails closed.
+ */
+export function runEventsBelowAdmin(events: readonly unknown[], sensitive: Sensitivity): unknown[] {
+  if (sensitive !== null && sensitive.size === 0) return [...events];
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (!obj(v)) return v;
+    if (isIssue(v)) return { ...v, found: RUN_TEXT_WITHHELD, ...(typeof v['hint'] === 'string' ? { hint: RUN_TEXT_WITHHELD } : {}) };
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'repeatedIssueSet' && typeof x === 'string' ? RUN_TEXT_WITHHELD : walk(x)]));
+  };
+  return events.map(walk);
 }
 
 /**

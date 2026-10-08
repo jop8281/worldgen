@@ -67,7 +67,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
-import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, sensitiveOf, type Sensitivity } from './explorer.ts';
+import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { parsePlanYaml } from '../worldgen/plan.ts';
 import { renderPlanMd } from '../worldgen/plan-md.ts';
@@ -756,7 +756,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     for (const line of filter === null ? lines.slice(-AUDIT_TAIL) : lines) {
       try {
         const entry: unknown = JSON.parse(line);
-        if (filter === null || (isObject(entry) && entry['tenant'] === filter)) entries.push(entry);
+        // A tenant's lines include the work an admin did for it with ?tenant= (A-367).
+        if (filter === null || (isObject(entry) && (entry['tenant'] === filter || entry['forTenant'] === filter))) entries.push(entry);
       } catch {
         // a damaged line is skipped, not fatal
       }
@@ -1717,13 +1718,16 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (run === undefined) return fail(404, 'run.unknown', `No run ${p['runId'] ?? ''}`);
     const events = await readEvents(run);
     const running = run.phase !== 'finished';
+    const tail = events.slice(-EVENT_TAIL);
     return {
       status: 200,
       body: {
         running,
         ...stateOf(running, run.exitCode, events, run.child?.output() ?? '', run.recovery),
         ...(running ? {} : { exitCode: run.exitCode }),
-        events: events.slice(-EVENT_TAIL),
+        // Issue text can quote seed values, so below admin it shows only for a run whose saved world has no sensitive
+        // field. The out dir holds a world only once the run is done, so a run with none fails closed (A-367).
+        events: who.role === 'admin' ? tail : runEventsBelowAdmin(tail, await sensitivityOf(run.outDir)),
         totals: totalsOf(events),
         job: jobView(run),
         ...(run.iterate === undefined ? {} : { iterate: { ...run.iterate, published: !running && await file(path.join(run.outDir, 'world.yaml')) } }),
@@ -2165,12 +2169,18 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     // An admin's ?tenant=, read only after sign-in and the throttle, so a malformed one cannot tell a guesser that a token
     // is an admin's. No other role narrows.
-    const at = (req.url ?? '').indexOf('?');
-    const filter = who.role === 'admin' ? new URLSearchParams(at < 0 ? '' : (req.url ?? '').slice(at + 1)).get('tenant') : null;
+    const filter = adminFilterOf(req, who);
     if (filter !== null && !TENANT.test(filter)) return fail(400, 'tenant.invalid', `?tenant=${filter} is refused: ${TENANT_RULE}`);
     const body = route.method === 'POST' ? await readBody(req, route.maxBody ?? MAX_BODY_BYTES) : { ok: true as const, value: undefined };
     if (!body.ok) return fail(body.status, body.code, body.message);
     return route.run(hit.params, body.value, who, { key: req.headers['idempotency-key'], filter });
+  };
+
+  /** The `?tenant=` of an admin's request, or null for any other caller or none given. */
+  const adminFilterOf = (req: IncomingMessage, who: Caller): string | null => {
+    if (who.kind !== 'user' || who.role !== 'admin') return null;
+    const at = (req.url ?? '').indexOf('?');
+    return new URLSearchParams(at < 0 ? '' : (req.url ?? '').slice(at + 1)).get('tenant');
   };
 
   const answer = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -2190,11 +2200,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!(req.method === 'GET' && segments.length === 2 && segments[0] === 'api' && segments[1] === 'health')) traffic.record(now(), reply.status);
     if (req.method === 'POST') {
       const error = isObject(reply.body) && isObject(reply.body['error']) ? reply.body['error']['code'] : undefined;
+      // The tenant an admin acted for with ?tenant=, beside the admin's own, so the audit names whose work it was.
+      const actedFor = adminFilterOf(req, who);
       await audit({
         at: new Date().toISOString(),
         user: who.kind === 'user' ? who.name : null,
         role: who.kind === 'user' ? who.role : null,
         tenant: who.kind === 'user' ? who.tenant : null,
+        ...(actedFor !== null && TENANT.test(actedFor) ? { forTenant: actedFor } : {}),
         method: 'POST',
         path: (req.url ?? '/').split('?')[0],
         status: reply.status,
