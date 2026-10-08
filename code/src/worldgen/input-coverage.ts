@@ -125,6 +125,21 @@ export function inputCoverage(digest: InputDigest, world: World, report?: CheckR
 }
 
 /**
+ * Each input operation the plan's routes do not name by method and path (YOS-244). Coverage of an operation is owned by
+ * the model step unless a plan route with its method and path shares a workflow action's id, so an operation the plan
+ * leaves out lands on the model step even when the workflow builds it as an action, and that route then collides with
+ * the action (route.duplicate_path) in a section the workflow step cannot edit. The plan step names each one instead.
+ */
+export function operationPlanIssues(plan: Plan, digest: InputDigest): CheckIssue[] {
+  if (digest.kind !== 'openapi' || plan.verdict.kind !== 'proceed') return [];
+  const planned = new Set(plan.routes.map((r) => routeKey(r.method, r.path)));
+  return digest.operations
+    .filter((o) => !planned.has(routeKey(o.method, o.path)))
+    .map((o) => issue('plan.not_covered', ['plan', 'routes', `${o.method} ${o.path}`], { item: `input operation ${o.method} ${o.path}` },
+      'no plan route with this method and path; list it in routes, and give it the workflow action\'s name as its id when an action builds it'));
+}
+
+/**
  * Where a plan changes an imported CSV table that the seed must keep exactly: more rows planned for
  * its entity than the table holds, or a workflow on that entity whose states leave out values of the
  * table's state column. Every seed attempt would then fail fixture fidelity, so the plan step gets
