@@ -13,7 +13,7 @@ import { checkWorld, saveWorld, serve, worldSchema, type World, type WorldServer
 import type { Runner, SpawnedChild, Spawner } from '../src/sandboxes/backend.ts';
 import { runLocalEpisode } from '../src/dataset/local.ts';
 import { redactor } from '../src/dataset/schema.ts';
-import { SENSITIVE_MASK, SENSITIVE_WITHHELD, SENSITIVITY_UNREAD, episodeBelowAdmin, maskSensitive, maskSensitiveText, sensitiveOf } from '../src/studio/explorer.ts';
+import { SENSITIVE_MASK, SENSITIVE_WITHHELD, SENSITIVITY_UNREAD, episodeBelowAdmin, maskSensitive, maskSensitiveText, runEventsBelowAdmin, sensitiveOf } from '../src/studio/explorer.ts';
 import { AUDIT_FILE, studioServer, type StudioServer, type StudioUser } from '../src/studio/server.ts';
 import { scripted } from './dataset-kit.ts';
 import { minimalWorld } from './helpers/world.ts';
@@ -231,6 +231,19 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
     assert.equal((await get(studio.url, '/api/worlds/helpdesk/export', ADMIN)).status, 200);
   });
 
+  it('serves a world\'s report and plan only to an admin when it has a sensitive field or cannot be read (A-367)', async () => {
+    const answer = async (p: string, token: string): Promise<unknown[]> => {
+      const r = await get(studio.url, p, token);
+      return [r.status, r.body?.['error'] ?? null];
+    };
+    assert.deepEqual(await answer('/api/worlds/helpdesk/report', VIEWER), [403, { code: 'report.sensitive', message: 'helpdesk has sensitive fields, so only an admin may read its report' }]);
+    assert.deepEqual(await answer('/api/worlds/helpdesk/plan', OPERATOR), [403, { code: 'plan.sensitive', message: 'helpdesk has sensitive fields, so only an admin may read its plan' }]);
+    assert.deepEqual(await answer('/api/worlds/broken/report', VIEWER), [403, { code: 'report.sensitive', message: 'broken cannot be read to find its sensitive fields, so only an admin may read its report' }]);
+    assert.deepEqual(await answer('/api/worlds/helpdesk/report', ADMIN), [200, null]);
+    assert.deepEqual(await answer('/api/worlds/helpdesk/plan', ADMIN), [404, { code: 'plan.missing', message: 'helpdesk has no plan.yaml; only a generated world has a plan' }]);
+    assert.deepEqual(await answer('/api/worlds/plain/report', VIEWER), [200, null]);
+  });
+
   it('fails closed on a world whose definition cannot be read: withheld for an operator, in full for an admin, no export below admin', async () => {
     const call = async (token: string): Promise<string> => {
       const r = await post(studio.url, `/api/services/${broken}/call`, token, { method: 'GET', path: '/customers/cus_0001' });
@@ -260,5 +273,207 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
     assert.ok(marked.ok);
     await saveWorld(path.join(worldsDir, 'plain'), marked.world);
     assert.equal(await tier(), SENSITIVE_MASK);
+  });
+});
+
+/** The minimal helpdesk with ticket.status, a state field, marked sensitive (YOS-252). */
+function statusSensitiveWorld(): World {
+  const w = minimalWorld() as unknown as { entities: { ticket: { fields: { status: Record<string, unknown> } } } };
+  w.entities.ticket.fields.status = { ...w.entities.ticket.fields.status, sensitive: true };
+  return worldSchema.parse(w);
+}
+
+const REFUSAL = 'ticket tkt_0002 status cannot move from pending to open';
+const MESSAGE_WITHHELD = '[withheld: the message names a sensitive field]';
+const RUN_WITHHELD = "[withheld: it can quote seed values, and the run's world has a sensitive field or saved none to tell]";
+/** A seed rejection that quotes a customer's tier, as a run's events hold it. */
+const TIER_ISSUE = { code: 'constraint.violation', severity: 'error', path: ['seed', 'customer'], expected: 'customer.tier to satisfy enum', found: 'row 0, field tier: "platinum"', hint: 'The engine refused this write. Fix the value or the field definition.' };
+const RUN_EVENTS = [
+  { t: 'attempt', step: 'seed', n: 1, outcome: { kind: 'rejected', issues: [TIER_ISSUE] } },
+  { t: 'backtracked', from: 'seed', to: 'model', because: [TIER_ISSUE] },
+  { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'no_progress', step: 'seed', repeatedIssueSet: 'constraint.violation@seed/customer: row 0, field tier: "*"', lastIssues: [TIER_ISSUE] } } },
+];
+const TIER_WITHHELD = { ...TIER_ISSUE, found: RUN_WITHHELD, hint: RUN_WITHHELD };
+const RUN_EVENTS_WITHHELD = [
+  { t: 'attempt', step: 'seed', n: 1, outcome: { kind: 'rejected', issues: [TIER_WITHHELD] } },
+  { t: 'backtracked', from: 'seed', to: 'model', because: [TIER_WITHHELD] },
+  { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'no_progress', step: 'seed', repeatedIssueSet: RUN_WITHHELD, lastIssues: [TIER_WITHHELD] } } },
+];
+
+describe('sensitive fields: refusals and run events, pure (YOS-252, A-367)', () => {
+  const status = sensitiveOf(statusSensitiveWorld());
+
+  it('withholds text outside any row that names a sensitive field, such as a state.transition refusal, and leaves a row\'s own text', () => {
+    assert.deepEqual(maskSensitive({ error: { code: 'state.transition', message: REFUSAL } }, status), { error: { code: 'state.transition', message: MESSAGE_WITHHELD } });
+    assert.deepEqual(maskSensitive({ code: 422, type: 'state.transition', message: REFUSAL }, status), { code: 422, type: 'state.transition', message: MESSAGE_WITHHELD });
+    assert.deepEqual(maskSensitive({ id: 'tkt_0002', subject: 'status page is down', status: 'pending' }, status), { id: 'tkt_0002', subject: 'status page is down', status: '[sensitive]' });
+    assert.deepEqual(maskSensitive({ error: { code: 'row.not_found', message: 'No ticket tkt_0099; statuses are elsewhere' } }, status),
+      { error: { code: 'row.not_found', message: 'No ticket tkt_0099; statuses are elsewhere' } });
+    const email = sensitiveOf({ entities: { customer: { idPrefix: 'cus', fields: { email: { type: 'string', sensitive: true } } } } });
+    assert.deepEqual(maskSensitive({ error: { code: 'field.unique', message: 'customer.email "ann@example.com" is already used by cus_0003' } }, email),
+      { error: { code: 'field.unique', message: MESSAGE_WITHHELD } });
+  });
+
+  it('withholds an issue\'s found and hint and a repeated issue set, unless the run\'s world is known to have no sensitive field', () => {
+    assert.deepEqual(runEventsBelowAdmin(RUN_EVENTS, sensitiveOf(sensitiveWorld())), RUN_EVENTS_WITHHELD);
+    assert.deepEqual(runEventsBelowAdmin(RUN_EVENTS, null), RUN_EVENTS_WITHHELD);
+    assert.deepEqual(runEventsBelowAdmin(RUN_EVENTS, sensitiveOf(minimalWorld())), RUN_EVENTS);
+  });
+
+  it('withholds a model error, a judge error and a crash message, which can quote model output', () => {
+    const messages = [
+      { t: 'attempt', step: 'plan', n: 1, outcome: { kind: 'model_error', message: 'the model wrote tier "platinum"' } },
+      { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'judge_error', step: 'seed', message: 'the judge read tier "platinum"' } } },
+      { t: 'run_finished', result: { kind: 'crashed', message: 'TypeError near tier "platinum"' } },
+    ];
+    assert.deepEqual(runEventsBelowAdmin(messages, null), [
+      { t: 'attempt', step: 'plan', n: 1, outcome: { kind: 'model_error', message: RUN_WITHHELD } },
+      { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'judge_error', step: 'seed', message: RUN_WITHHELD } } },
+      { t: 'run_finished', result: { kind: 'crashed', message: RUN_WITHHELD } },
+    ]);
+    assert.deepEqual(runEventsBelowAdmin(messages, sensitiveOf(minimalWorld())), messages);
+  });
+
+  it('matches a field name in any case and with _, - or a space between its parts, as a whole word only', () => {
+    const probes: [string, string, boolean][] = [
+      ['ssn', 'SSN 123-45-6789 is already used', true],
+      ['ssn', 'customer.ssn "123-45-6789" is already used by cus_0003', true],
+      ['ssn', 'lessons learned', false],
+      ['api_key', 'API-KEY rotated', true],
+      ['api_key', 'the api key is wrong', true],
+      ['api_key', 'apikey missing', true],
+      ['api_key', 'api keys rotated', false],
+      ['photoUrls', 'photo urls must be set', true],
+      ['photoUrls', 'PHOTO_URLS must be set', true],
+      ['status', 'statuses are fine', false],
+    ];
+    const seen = probes.map(([field, text]): [string, string, boolean] => {
+      const one = sensitiveOf({ entities: { x: { idPrefix: 'x', fields: { [field]: { type: 'string', sensitive: true } } } } });
+      return [field, text, (maskSensitive({ message: text }, one) as { message: string }).message === MESSAGE_WITHHELD];
+    });
+    assert.deepEqual(seen, probes);
+  });
+});
+
+describe('sensitive fields: a refusal through the API console relay (YOS-252)', () => {
+  let root: string;
+  let world: WorldServer;
+  let studio: StudioServer;
+  let svc = '';
+
+  before(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'studio-sensitive-refusal-'));
+    const worldsDir = path.join(root, 'worlds');
+    const report = checkWorld(statusSensitiveWorld());
+    assert.ok(report.ok);
+    await saveWorld(path.join(worldsDir, 'stately'), report.world);
+    world = await serve(report.world, { port: 0 });
+    const spawner: Spawner = () => {
+      let gone: (code: number | null) => void = () => {};
+      const exited = new Promise<number | null>((resolve) => (gone = resolve));
+      const child: SpawnedChild = { pid: 4345, exited, kill: () => (gone(null), true), output: () => `{"listening":{"world":${world.port},"admin":${world.adminPort}}}\n` };
+      return child;
+    };
+    const runner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    studio = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, users: USERS });
+    const served = await post(studio.url, '/api/worlds/stately/serve', ADMIN, {});
+    assert.equal(served.status, 200, JSON.stringify(served.body));
+    svc = String(served.body['id']);
+  });
+  after(async () => {
+    await studio.close();
+    await world.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('withholds a refusal that names the stored state of a sensitive state field from an operator, and shows it to an admin', async () => {
+    const patch = (token: string) => post(studio.url, `/api/services/${svc}/call`, token, { method: 'PATCH', path: '/tickets/tkt_0002', body: { status: 'open' } });
+    const asOperator = await patch(OPERATOR);
+    assert.deepEqual([asOperator.status, asOperator.body['status'], asOperator.body['body']], [200, 422, `{"error":{"code":"state.transition","message":"${MESSAGE_WITHHELD}"}}`]);
+    const asAdmin = await patch(ADMIN);
+    assert.deepEqual([asAdmin.status, asAdmin.body['status'], asAdmin.body['body']], [200, 422, `{"error":{"code":"state.transition","message":"${REFUSAL}"}}`]);
+  });
+});
+
+describe('sensitive fields: a generation run\'s events (A-367)', () => {
+  let root: string;
+  let worldsDir: string;
+  let studio: StudioServer;
+
+  /** Each child the studio spawned: what it printed, and how to end it. */
+  const kids: { said: string; exit: (code: number | null) => void }[] = [];
+
+  before(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'studio-sensitive-run-'));
+    worldsDir = path.join(root, 'worlds');
+    const spawner: Spawner = () => {
+      let exit: (code: number | null) => void = () => {};
+      const exited = new Promise<number | null>((resolve) => (exit = resolve));
+      const kid = { said: '', exit: (code: number | null) => exit(code) };
+      kids.push(kid);
+      return { pid: 4346 + kids.length, exited, kill: () => (exit(null), true), output: () => kid.said };
+    };
+    const runner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    studio = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, users: USERS, build: 'abcdef1' });
+  });
+
+  /** Ends the last child with `code` after it printed `said`, then waits until `p` reports it finished. */
+  async function endLast(said: string, code: number, p: string): Promise<void> {
+    const kid = kids[kids.length - 1]!;
+    kid.said = said;
+    kid.exit(code);
+    for (let i = 0; i < 200 && (await get(studio.url, p, ADMIN)).body?.['running'] !== false; i++) await new Promise((r) => setTimeout(r, 10));
+  }
+  after(async () => {
+    await studio.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('withholds issue text from a viewer until the run saves a world with no sensitive field, and shows it to an admin', async () => {
+    const begun = await post(studio.url, '/api/generate', OPERATOR, { kind: 'description', text: 'A tiny helpdesk', outSlug: 'secrets' });
+    assert.equal(begun.status, 200, JSON.stringify(begun.body));
+    const runId = String(begun.body['runId']);
+    const outDir = String(begun.body['outDir']);
+    const writeEvents = async (dir: string): Promise<void> => {
+      await mkdir(path.join(dir, 'runs', runId), { recursive: true });
+      await writeFile(path.join(dir, 'runs', runId, 'events.jsonl'), `${RUN_EVENTS.map((e) => JSON.stringify(e)).join('\n')}\n`);
+    };
+    const events = async (token: string): Promise<unknown> => (await get(studio.url, `/api/generate/${runId}`, token)).body?.['events'];
+    // Still building in <out>.partial: no saved world says whether a field is sensitive.
+    await writeEvents(`${outDir}.partial`);
+    assert.deepEqual(await events(VIEWER), RUN_EVENTS_WITHHELD);
+    assert.deepEqual(await events(OPERATOR), RUN_EVENTS_WITHHELD);
+    assert.deepEqual(await events(ADMIN), RUN_EVENTS);
+    const save = async (w: World): Promise<void> => {
+      const report = checkWorld(w);
+      assert.ok(report.ok);
+      await saveWorld(outDir, report.world);
+    };
+    await save(sensitiveWorld());
+    await writeEvents(outDir);
+    assert.deepEqual(await events(VIEWER), RUN_EVENTS_WITHHELD);
+    await save(minimalWorld());
+    assert.deepEqual(await events(VIEWER), RUN_EVENTS);
+  });
+
+  it('withholds a failed run\'s last output line from a viewer, and shows it to an admin', async () => {
+    const begun = await post(studio.url, '/api/generate', OPERATOR, { kind: 'description', text: 'A tiny helpdesk', outSlug: 'crashy' });
+    assert.equal(begun.status, 200, JSON.stringify(begun.body));
+    const p = `/api/generate/${String(begun.body['runId'])}`;
+    await endLast('worldgen: error: seed row 0 tier "platinum" broke\n', 1, p);
+    const reason = async (token: string): Promise<unknown> => (await get(studio.url, p, token)).body?.['reason'];
+    assert.equal(await reason(ADMIN), 'the worldgen process exited 1 before it logged run_finished: worldgen: error: seed row 0 tier "platinum" broke');
+    assert.equal(await reason(VIEWER), `the worldgen process exited 1 before it logged run_finished: ${RUN_WITHHELD}`);
+  });
+
+  it('withholds a failed episode\'s last output lines from a viewer when it exported nothing to judge by, and shows them to an admin', async () => {
+    await mkdir(path.join(worldsDir, 'tiny'), { recursive: true });
+    const begun = await post(studio.url, '/api/episodes', OPERATOR, { world: 'tiny', task: 't1', agent: 'noop' });
+    assert.equal(begun.status, 200, JSON.stringify(begun.body));
+    const p = `/api/episodes/${String(begun.body['runId'])}`;
+    await endLast('episode: GET /customers answered {"tier":"platinum"}\n', 1, p);
+    const failure = async (token: string): Promise<unknown> => (await get(studio.url, p, token)).body?.['failure'];
+    assert.deepEqual(await failure(ADMIN), ['episode: GET /customers answered {"tier":"platinum"}']);
+    assert.deepEqual(await failure(VIEWER), [RUN_WITHHELD]);
   });
 });
