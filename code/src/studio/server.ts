@@ -22,6 +22,11 @@
  *   credential is a bearer header, never a cookie: a cookie ignores ports and would reach every served world on the
  *   host, whose call log records request headers. With no users the studio is open and must stay on loopback. Every
  *   POST is appended to <worldsDir>/.studio-audit.jsonl: who, what and the status, never a token or a body.
+ * - The studio answers only to its own names. Every request's Host must be the bound address, a loopback name when
+ *   bound to loopback or a wildcard, or the configured `origin`; a POST that carries an Origin needs one of the same.
+ *   Open mode makes every request the local admin, so without this any page the operator visits could POST
+ *   /api/generate (cross-site), and a DNS-rebinding page would reach the studio as same-origin. A request with no
+ *   Origin (curl, scripts) passes the Origin check.
  * - Stops never leave zombies: SIGTERM, a short wait, SIGKILL, and the answer says which signal
  *   ended the child. A child that dies on its own removes its own record.
  */
@@ -57,8 +62,19 @@ const usersFileSchema = z.strictObject({
     name: z.string().min(1),
     role: z.enum(STUDIO_ROLES),
     token_sha256: z.string().regex(/^[0-9a-f]{64}$/, 'token_sha256 must be 64 lowercase hex characters'),
-  })),
+  })).min(1, 'list at least one user: an empty list would turn sign-in off'),
 });
+
+/** `value` as an http(s) origin with no path, query or fragment, such as http://127.0.0.1:8787; null when it is not one. */
+export function originOf(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  return (url.protocol === 'http:' || url.protocol === 'https:') && `${url.origin}/` === url.href ? url.origin : null;
+}
 
 /** The users of a `--users` file's text. Throws an Error naming the problem. */
 export function parseUsersFile(text: string): StudioUser[] {
@@ -100,6 +116,8 @@ export type StudioOptions = {
   readonly processes?: Processes | undefined;
   /** Who may sign in. Empty or absent is open mode: everyone is the admin `local`, and the host must be loopback. */
   readonly users?: readonly StudioUser[] | undefined;
+  /** The one public origin the studio is also reached at, such as http://127.0.0.1:9000 for a published container port or https://studio.example.com behind a proxy. */
+  readonly origin?: string | undefined;
 };
 
 export interface StudioServer {
@@ -374,6 +392,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     throw new Error(`studio refuses to bind ${host} with no sign-in: it starts worldgen runs. Pass --users <file> or set WORLDGEN_STUDIO_TOKEN, or bind 127.0.0.1`);
   }
   const signIn = users.length > 0;
+  const configuredOrigin = opts.origin === undefined ? undefined : originOf(opts.origin);
+  if (configuredOrigin === null) throw new Error(`studio origin must be an http(s) origin such as http://127.0.0.1:8787, got ${opts.origin}`);
   const digests = users.map((u) => {
     if (!/^[0-9a-f]{64}$/i.test(u.tokenSha256)) throw new Error(`studio user ${u.name}: tokenSha256 must be 64 hex characters`);
     return { user: u, digest: Buffer.from(u.tokenSha256, 'hex') };
@@ -1191,8 +1211,26 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return null;
   };
 
+  // Set once listen has resolved the real port.
+  const ownHosts = new Set<string>();
+  const ownOrigins = new Set<string>();
+
   const onStudio = async (req: IncomingMessage, who: Caller): Promise<Reply> => {
     const method = req.method ?? '';
+    const rawHost = req.headers.host;
+    let hostName: string | undefined;
+    try {
+      if (rawHost !== undefined) hostName = new URL(`http://${rawHost}`).host;
+    } catch {
+      // unparsable: refused below
+    }
+    if (hostName === undefined || !ownHosts.has(hostName)) {
+      return fail(403, 'host.forbidden', `Host ${rawHost ?? '(none)'} is not this studio, which answers to ${[...ownHosts].join(', ')}. To reach it by another name, start it with --origin <url>`);
+    }
+    const origin = req.headers.origin;
+    if (method === 'POST' && origin !== undefined && !ownOrigins.has(origin)) {
+      return fail(403, 'origin.forbidden', `POST from ${origin} is refused: a POST must come from the studio page (${[...ownOrigins].join(', ')}) or from a client that sends no Origin`);
+    }
     const segments = segmentsOf(req.url ?? '/');
     const hit = match(method, segments);
     if (hit === null) {
@@ -1200,7 +1238,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       if (other !== null) {
         return fail(405, 'method.not_allowed', `${method} /${segments.join('/')} is not allowed. Allowed: ${other.route.method}`);
       }
-      return fail(404, 'route.not_found', `No studio route ${method} /${segments.join('/')}. Studio routes: ${ROUTE_LIST}`);
+      const missing = `No studio route ${method} /${segments.join('/')}`;
+      return fail(404, 'route.not_found', signIn ? missing : `${missing}. Studio routes: ${ROUTE_LIST}`);
     }
     const need = hit.route.need;
     if (need !== 'public') {
@@ -1263,6 +1302,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       resolve(a !== null && typeof a === 'object' ? a.port : opts.port);
     });
   });
+
+  const wildcard = host === '0.0.0.0' || host === '::';
+  const names = wildcard ? [] : [host.includes(':') ? `[${host}]` : host];
+  if (LOOPBACK_HOSTS.has(host) || wildcard) names.push('127.0.0.1', 'localhost');
+  if (host === '::') names.push('[::1]');
+  for (const name of names) {
+    const own = new URL(`http://${name}:${port}`);
+    ownHosts.add(own.host);
+    ownOrigins.add(`http://${own.host}`);
+  }
+  if (configuredOrigin !== undefined) {
+    ownHosts.add(new URL(configuredOrigin).host);
+    ownOrigins.add(configuredOrigin);
+  }
 
   let closing: Promise<void> | undefined;
   return {
