@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { connect, createServer } from 'node:net';
+import { connect } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { after, before, describe, it } from 'node:test';
 import { checkWorld, serve, type CheckedWorld, type World, type WorldServer } from '#engine';
+import { quietPort } from './helpers/ports.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 type Reply = { status: number; body: unknown; text: string; type: string | null };
@@ -22,19 +23,6 @@ function checked(world: World): CheckedWorld {
   const report = checkWorld(world);
   if (!report.ok) assert.fail(`world did not pass check:\n${JSON.stringify(report.issues, null, 2)}`);
   return report.world;
-}
-
-/** A port that was free a moment ago, from the OS. */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once('error', reject);
-    s.listen(0, '127.0.0.1', () => {
-      const a = s.address();
-      const port = a !== null && typeof a === 'object' ? a.port : 0;
-      s.close(() => resolve(port));
-    });
-  });
 }
 
 /** One served minimal world per describe, reset to seed before each case. */
@@ -438,16 +426,7 @@ describe('serve: admin clock at the Date limit', () => {
 
 describe('serve: ports and lifecycle', () => {
   it('R2 the admin port defaults to the world port plus 1', async () => {
-    let server: WorldServer | undefined;
-    for (let attempt = 0; attempt < 10 && server === undefined; attempt++) {
-      const port = await freePort();
-      try {
-        server = await serve(checked(minimalWorld()), { port });
-      } catch (e) {
-        if ((e as { code?: unknown }).code !== 'EADDRINUSE') throw e;
-      }
-    }
-    assert.ok(server, 'no free pair of ports in 10 attempts');
+    const server = await serve(checked(minimalWorld()), { port: await quietPort(2) });
     try {
       assert.equal(server.adminPort, server.port + 1);
       assert.equal(server.url, `http://127.0.0.1:${server.port}`);
@@ -459,7 +438,7 @@ describe('serve: ports and lifecycle', () => {
   });
 
   it('R2 an explicit adminPort wins, and port 0 picks free ports', async () => {
-    const adminPort = await freePort();
+    const adminPort = await quietPort();
     const server = await serve(checked(minimalWorld()), { port: 0, adminPort });
     try {
       assert.equal(server.adminPort, adminPort);

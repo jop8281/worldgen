@@ -43,7 +43,6 @@
  *   ended the child. A child that dies on its own removes its own record.
  */
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import type { Dirent } from 'node:fs';
@@ -117,8 +116,8 @@ export type StudioOptions = {
   readonly runner: Runner;
   /** The source sha this server was built from, reported by /api/health. Unknown when absent. */
   readonly build?: string | undefined;
-  /** How long after Serve a refused API-console call is retried while the world starts listening. Default 10 s. */
-  readonly startupGraceMs?: number | undefined;
+  /** How long Serve waits for the world child to report its listening ports before it stops the child. Default 10 s. */
+  readonly serveWaitMs?: number | undefined;
   /** How long a stopped generation run gets after SIGINT before SIGTERM. Default 30 s. */
   readonly runStopWaitMs?: number | undefined;
   /** The model transport every worldgen it starts uses (`--transport`); the CLI default when absent. A container has no claude CLI, so it uses sdk (A-326). */
@@ -184,19 +183,15 @@ const MAX_BODY_BYTES = 1_048_576;
 const SIGNAL_WAIT_MS = 1_000;
 /** How long a generation run gets after SIGINT to cancel its call, bill it and write REPORT.md before SIGTERM (A-279). */
 const RUN_STOP_WAIT_MS = 30_000;
-const STARTUP_GRACE_MS = 10_000;
+/** How long Serve waits for `worldplay serve` to report its listening ports (A-348). */
+const SERVE_WAIT_MS = 10_000;
+/** How often Serve reads the child's output for that report. */
+const SERVE_POLL_MS = 50;
 /** How long a job's lease lasts unless its holder renews it (A-335). */
 const LEASE_MS = 30_000;
 /** How many finished proof replies are kept for a client key's retry. */
 const PROOF_REPLIES = 100;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,128}$/;
-
-/** A fetch that failed because nothing listened yet (Node: cause ECONNREFUSED; Bun: code ConnectionRefused). */
-function refused(e: unknown): boolean {
-  const code = (x: unknown): unknown => (typeof x === 'object' && x !== null ? (x as { code?: unknown }).code : undefined);
-  const c = code(e) ?? code(typeof e === 'object' && e !== null ? (e as { cause?: unknown }).cause : undefined);
-  return c === 'ECONNREFUSED' || c === 'ConnectionRefused';
-}
 
 /** How long a /api/costs answer stays fresh. */
 const COSTS_CACHE_MS = 30_000;
@@ -364,17 +359,19 @@ function write(res: ServerResponse, reply: Reply): void {
   res.end(text);
 }
 
-/** A port that was free a moment ago, from the OS. */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createNetServer();
-    probe.once('error', reject);
-    probe.listen(0, DEFAULT_HOST, () => {
-      const a = probe.address();
-      const port = a !== null && typeof a === 'object' ? a.port : 0;
-      probe.close(() => resolve(port));
-    });
-  });
+/** The ports `worldplay serve` reports once both listen: its `{"listening":{"world":W,"admin":A}}` line, or null before it. */
+function listeningPorts(output: string): { readonly world: number; readonly admin: number } | null {
+  for (const line of output.split('\n')) {
+    if (!line.startsWith('{"listening"')) continue;
+    try {
+      const v: unknown = JSON.parse(line);
+      const l = isObject(v) && isObject(v['listening']) ? v['listening'] : null;
+      if (l !== null && Number.isInteger(l['world']) && Number.isInteger(l['admin'])) return { world: l['world'] as number, admin: l['admin'] as number };
+    } catch {
+      // a line still being written
+    }
+  }
+  return null;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -528,6 +525,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   };
 
   const services = new Map<string, { record: ServiceRecord; child: SpawnedChild }>();
+  /** World names whose `worldplay serve` has not reported its ports yet. */
+  const starting = new Set<string>();
   let serviceSeq = 0;
   const jobs = new Map<string, Job>();
   const runOf = (runId: string): Job | undefined => {
@@ -852,31 +851,15 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const payload = body['body'];
     if (payload !== undefined && (method === 'GET' || method === 'DELETE')) return fail(400, 'call.body', `${method} takes no body`);
     const started = Date.now();
-    const send = (): Promise<Response> => fetch(url, {
-      method, redirect: 'manual', signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-      ...(payload === undefined ? {} : { body: JSON.stringify(payload), headers: { 'content-type': 'application/json' } }),
-    });
     let res: Response;
     try {
-      res = await send();
-    } catch (first) {
-      // A world spawned a moment ago may not listen yet. A refused connection never delivered the request, so it is safe
-      // to resend, POST included, until the world has had its startup grace to come up (A-278).
-      let last: unknown = first;
-      let got: Response | null = null;
-      while (refused(last) && Date.now() - Date.parse(hit.record.startedAt) < (opts.startupGraceMs ?? STARTUP_GRACE_MS)) {
-        await new Promise((r) => setTimeout(r, 250));
-        try {
-          got = await send();
-          break;
-        } catch (e) {
-          last = e;
-        }
-      }
-      if (got === null) {
-        return fail(502, 'call.unreachable', `world port ${hit.record.worldPort} of ${hit.record.name} did not answer ${method} ${url.pathname}${url.search}: ${last instanceof Error ? last.message : String(last)}`);
-      }
-      res = got;
+      // A service is recorded only once its world reported it listens (A-348), so a refused call is the world's real answer.
+      res = await fetch(url, {
+        method, redirect: 'manual', signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        ...(payload === undefined ? {} : { body: JSON.stringify(payload), headers: { 'content-type': 'application/json' } }),
+      });
+    } catch (e) {
+      return fail(502, 'call.unreachable', `world port ${hit.record.worldPort} of ${hit.record.name} did not answer ${method} ${url.pathname}${url.search}: ${e instanceof Error ? e.message : String(e)}`);
     }
     const bytes = Buffer.from(await res.arrayBuffer());
     const truncated = bytes.length > MAX_CALL_BYTES;
@@ -891,27 +874,67 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     };
   }
 
-  async function serveWorld(p: Params, body: unknown): Promise<Reply> {
+  /** What a just-spawned `worldplay serve` did first: reported its listening ports, exited, or neither within `waitMs`. */
+  async function firstReport(child: SpawnedChild, waitMs: number): Promise<{ kind: 'listening'; world: number; admin: number } | { kind: 'exited'; code: number | null } | { kind: 'timeout' }> {
+    const state: { exit: { code: number | null } | null } = { exit: null };
+    void child.exited.then((code) => {
+      state.exit = { code };
+    });
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      const ports = listeningPorts(child.output());
+      if (ports !== null) return { kind: 'listening', ...ports };
+      if (state.exit !== null) return { kind: 'exited', code: state.exit.code };
+      if (Date.now() >= deadline) return { kind: 'timeout' };
+      await sleep(SERVE_POLL_MS);
+    }
+  }
+
+  /**
+   * Serves a world as a `worldplay serve` child on ports the OS picks, and records the ports the child reports once both
+   * listen (A-348). Only an admin may pin a port, and never one a tracked service holds, so no caller can point the API
+   * console at another service's world.
+   */
+  async function serveWorld(p: Params, body: unknown, who: Caller): Promise<Reply> {
     const name = p['name'] ?? '';
     if (!safeSegment(name)) return fail(400, 'world.name_unsafe', 'a world name must be one plain path segment');
+    if (starting.has(name)) return fail(409, 'world.already_serving', `${name} is starting; wait for it or stop it`);
     for (const { record } of services.values()) {
       if (record.name === name) return fail(409, 'world.already_serving', `${name} is already served on port ${record.worldPort}; stop it first`);
     }
     const dir = path.join(worldsDir, name);
     if (!await isDir(dir)) return fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`);
     const wanted = isObject(body) ? body['port'] : undefined;
-    let port: number;
-    if (wanted === undefined) {
-      port = await freePort();
-    } else {
+    let port = 0;
+    if (wanted !== undefined && who.kind === 'user' && who.role === 'admin') {
       if (typeof wanted !== 'number' || !Number.isInteger(wanted) || wanted < 1 || wanted > 65534) {
         return fail(400, 'serve.port', 'port must be an integer from 1 to 65534 (the admin routes take port + 1)');
+      }
+      for (const { record } of services.values()) {
+        if ([record.worldPort, record.adminPort].some((held) => held === wanted || held === wanted + 1)) {
+          return fail(409, 'serve.port_taken', `port ${wanted} or its admin port ${wanted + 1} belongs to ${record.name} (${record.id})`);
+        }
       }
       port = wanted;
     }
     const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
+    starting.add(name);
+    let report: Awaited<ReturnType<typeof firstReport>>;
+    try {
+      report = await firstReport(child, opts.serveWaitMs ?? SERVE_WAIT_MS);
+    } finally {
+      starting.delete(name);
+    }
+    if (report.kind === 'exited') {
+      const said = child.output().trim().split('\n').pop()?.trim() ?? '';
+      return fail(502, 'serve.failed', `worldplay serve for ${name} exited ${report.code ?? 'by a signal'} before it listened${said === '' ? '' : `: ${said}`}`);
+    }
+    if (report.kind === 'timeout') {
+      await signalAndWait(child, ['SIGTERM', 'SIGKILL']);
+      return fail(504, 'serve.timeout', `worldplay serve for ${name} reported no listening ports within ${opts.serveWaitMs ?? SERVE_WAIT_MS} ms, so the studio stopped it`);
+    }
     const id = `svc-${(serviceSeq += 1)}`;
-    const record: ServiceRecord = { id, name, pid: child.pid, worldPort: port, adminPort: port + 1, startedAt: new Date().toISOString() };
+    const record: ServiceRecord = { id, name, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
     services.set(id, { record, child });
     void child.exited.then(() => {
       services.delete(id);
@@ -1504,7 +1527,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'report'], run: (p) => worldReport(p) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'export'], run: (p) => worldExport(p) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'explorer'], run: (p) => explorer(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b) => serveWorld(p, b) },
+    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b, who) => serveWorld(p, b, who) },
     { method: 'GET', need: 'viewer', parts: ['api', 'services'], run: () => ({ status: 200, body: { services: [...services.values()].map((s) => s.record) } }) },
     { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'stop'], run: (p) => stopService(p) },
     { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'call'], run: (p, b) => callService(p, b) },

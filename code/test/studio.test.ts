@@ -48,13 +48,33 @@ function errorOf(body: Json): { code: unknown; message: unknown } | null {
 // ---- fakes: every child is recorded, none is real ------------------------------------------------
 
 /** What the next spawn answers: which signals it dies to, its pid, and what it does on start. */
-type ChildPlan = { diesOn?: readonly string[]; pid?: number; onSpawn?: (argv: readonly string[]) => void };
+/**
+ * What the next spawn answers: which signals it dies to, its pid, and what it does on start. A `worldplay serve` child
+ * prints its listening line as the real one does (A-348): the asked port and port + 1, or fake OS-picked ports for port 0,
+ * unless `listening` names other ports, is null for a child that never reports, or `exitsFirst` makes it exit first.
+ */
+type ChildPlan = {
+  diesOn?: readonly string[];
+  pid?: number;
+  onSpawn?: (argv: readonly string[]) => void;
+  listening?: { readonly world: number; readonly admin: number } | null;
+  exitsFirst?: { readonly code: number; readonly line: string };
+};
 
-function fakeChild(plan: ChildPlan = {}): { child: SpawnedChild; signals: string[]; exitWith: (code: number | null) => void } {
+let pickedPorts = 46000;
+/** The listening line a fake `worldplay serve` prints for this argv and plan, or '' for any other child. */
+function serveLine(argv: readonly string[], plan: ChildPlan): string {
+  if (argv[1] !== 'src/cli/worldplay.ts' || argv[2] !== 'serve' || plan.listening === null || plan.exitsFirst !== undefined) return '';
+  const asked = Number(argv[argv.indexOf('--port') + 1]);
+  const ports = plan.listening ?? (asked > 0 ? { world: asked, admin: asked + 1 } : { world: (pickedPorts += 2), admin: pickedPorts + 1 });
+  return `${JSON.stringify({ listening: ports })}\n`;
+}
+
+function fakeChild(plan: ChildPlan = {}, argv: readonly string[] = []): { child: SpawnedChild; signals: string[]; exitWith: (code: number | null) => void } {
   const signals: string[] = [];
   const diesOn = plan.diesOn ?? ['SIGTERM', 'SIGKILL'];
   let dead = false;
-  let text = '';
+  let text = serveLine(argv, plan);
   let settle: (code: number | null) => void = () => {};
   const exited = new Promise<number | null>((resolve) => {
     settle = resolve;
@@ -72,6 +92,12 @@ function fakeChild(plan: ChildPlan = {}): { child: SpawnedChild; signals: string
     },
     output: () => text,
   };
+  if (plan.exitsFirst !== undefined) {
+    const { code, line } = plan.exitsFirst;
+    text = `${line}\n`;
+    dead = true;
+    setImmediate(() => settle(code));
+  }
   return {
     child,
     signals,
@@ -89,7 +115,7 @@ function fakeSpawner(plan: () => ChildPlan): { spawner: Spawner; spawned: Spawne
   const spawned: SpawnedCall[] = [];
   const spawner: Spawner = (argv, opts) => {
     const one = plan();
-    const handle = fakeChild(one);
+    const handle = fakeChild(one, argv);
     spawned.push({ argv: [...argv], cwd: opts?.cwd, handle });
     one.onSpawn?.(argv);
     return handle.child;
@@ -286,7 +312,7 @@ describe('studio', () => {
       costsCalls.push({ argv: [...argv], cwd: opts?.cwd });
       return costsResult;
     };
-    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, build: 'test-sha', startupGraceMs: 1500, runStopWaitMs: 1000, maxConcurrentRuns: 1000, maxConcurrentEpisodes: 1000 });
+    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, build: 'test-sha', serveWaitMs: 1500, runStopWaitMs: 1000, maxConcurrentRuns: 1000, maxConcurrentEpisodes: 1000 });
     base = server.url;
   });
 
@@ -444,18 +470,58 @@ describe('studio', () => {
       assert.deepEqual((await json(base, 'GET', '/api/services')).body, { services: [] });
     });
 
-    it('picks a free port when none is asked for', async () => {
+    it('serves on port 0 when none is asked for, and records the ports the child reports (A-348)', async () => {
+      spawnPlan = () => ({ listening: { world: 45678, admin: 45901 } });
       const r = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
       assert.equal(r.status, 200);
-      const port = r.body['worldPort'];
-      if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
-        assert.fail(`worldPort is ${String(port)}, not a free port`);
-      }
-      assert.equal(r.body['adminPort'], port + 1);
-      assert.deepEqual(lastSpawn().argv.slice(0, -2), ['bun', 'src/cli/worldplay.ts', 'serve', path.join(worldsDir, 'hand-beta')]);
-      assert.deepEqual(lastSpawn().argv.slice(-2), ['--port', String(port)]);
+      assert.deepEqual([r.body['worldPort'], r.body['adminPort']], [45678, 45901]);
+      assert.deepEqual(lastSpawn().argv, ['bun', 'src/cli/worldplay.ts', 'serve', path.join(worldsDir, 'hand-beta'), '--port', '0']);
       const id = String(r.body['id']);
       assert.deepEqual((await json(base, 'POST', `/api/services/${id}/stop`)).body, { id, stopped: true, signal: 'SIGTERM' });
+    });
+
+    it('answers 502 with the child\'s last line when worldplay serve exits before it listens', async () => {
+      spawnPlan = () => ({ exitsFirst: { code: 1, line: 'serve: listen EADDRINUSE: address already in use 127.0.0.1:4555' } });
+      const r = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
+      assert.deepEqual([r.status, r.body], [502, { error: { code: 'serve.failed', message: 'worldplay serve for hand-beta exited 1 before it listened: serve: listen EADDRINUSE: address already in use 127.0.0.1:4555' } }]);
+      assert.deepEqual((await json(base, 'GET', '/api/services')).body, { services: [] });
+    });
+
+    it('stops a child that reports no ports within serveWaitMs, and answers 504', async () => {
+      spawnPlan = () => ({ listening: null });
+      const r = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
+      assert.deepEqual([r.status, r.body], [504, { error: { code: 'serve.timeout', message: 'worldplay serve for hand-beta reported no listening ports within 1500 ms, so the studio stopped it' } }]);
+      assert.deepEqual(lastSpawn().handle.signals, ['SIGTERM']);
+      assert.deepEqual((await json(base, 'GET', '/api/services')).body, { services: [] });
+    });
+
+    it('refuses an admin port that a tracked service holds as its world or admin port', async () => {
+      spawnPlan = () => ({ listening: { world: 45100, admin: 45101 } });
+      const first = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
+      assert.equal(first.status, 200);
+      const id = String(first.body['id']);
+      try {
+        for (const port of [45100, 45101, 45099]) {
+          const r = await json(base, 'POST', '/api/worlds/gen-alpha/serve', { port });
+          assert.deepEqual([r.status, r.body], [409, { error: { code: 'serve.port_taken', message: `port ${port} or its admin port ${port + 1} belongs to hand-beta (${id})` } }], String(port));
+        }
+      } finally {
+        await json(base, 'POST', `/api/services/${id}/stop`);
+      }
+    });
+
+    it('refuses a call to a service whose child has exited', async () => {
+      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      assert.equal(served.status, 200);
+      const id = String(served.body['id']);
+      lastSpawn().handle.exitWith(0);
+      await new Promise((resolve) => setImmediate(resolve));
+      const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
+      assert.deepEqual([r.status, errorOf(r.body)?.code], [404, 'service.unknown']);
     });
 
     it('SIGKILLs a child that lingers past SIGTERM, and says so', async () => {
@@ -903,8 +969,9 @@ describe('studio', () => {
       assert.ok(report.ok);
       await writeWorld(path.join(worldsDir, 'console-delta'), minimalWorld());
       world = await serve(report.world, { port: 0 });
+      spawnPlan = () => ({ listening: { world: world.port, admin: world.adminPort } });
+      const served = await json(base, 'POST', '/api/worlds/console-delta/serve', {});
       spawnPlan = () => ({});
-      const served = await json(base, 'POST', '/api/worlds/console-delta/serve', { port: world.port });
       assert.equal(served.status, 200, JSON.stringify(served.body));
       svc = String(served.body['id']);
     });
@@ -950,28 +1017,12 @@ describe('studio', () => {
       assert.equal((await json(base, 'POST', '/api/services/svc-none/call', { method: 'GET', path: '/customers' })).status, 404);
     });
 
-    it('retries a refused call while a just-served world starts listening, then answers the world (A-278)', async () => {
-      const report = checkWorld(minimalWorld());
-      assert.ok(report.ok);
-      // The world binds this port 600 ms after the call starts, so it must be one no port-0 bind can take meanwhile.
+    it('answers a real 502 at once when nothing listens on the world port, never a made-up success', async () => {
+      // The world port is one no port-0 bind can be handed (YOS-105), so nothing listens there for this test's life.
       const port = await quietPort();
-      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', { port });
-      assert.equal(served.status, 200, JSON.stringify(served.body));
-      const id = String(served.body['id']);
-      const late = new Promise<WorldServer>((resolve, reject) => setTimeout(() => serve(report.world, { port, adminPort: 0 }).then(resolve, reject), 600));
-      late.catch(() => undefined);
-      try {
-        const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
-        assert.deepEqual([r.status, r.body['status']], [200, 200], JSON.stringify(r.body));
-      } finally {
-        await json(base, 'POST', `/api/services/${id}/stop`);
-        await (await late).close();
-      }
-    });
-
-    it('answers a real 502 when nothing listens on the world port, never a made-up success', async () => {
-      const port = await quietPort();
-      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', { port });
+      spawnPlan = () => ({ listening: { world: port, admin: port + 1 } });
+      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
       assert.equal(served.status, 200, JSON.stringify(served.body));
       const id = String(served.body['id']);
       try {
@@ -981,6 +1032,30 @@ describe('studio', () => {
         await json(base, 'POST', `/api/services/${id}/stop`);
       }
     });
+  });
+});
+
+describe('studio serve: only an admin pins a port (A-348)', () => {
+  it('serves an operator on port 0 whatever port the body names, and records the reported ports', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'studio-serve-'));
+    const worldsDir = path.join(root, 'prod', 'worlds');
+    await writeWorld(path.join(worldsDir, 'w'), minimalWorld());
+    const { spawner, spawned } = fakeSpawner(() => ({ listening: { world: 45300, admin: 45301 } }));
+    const runner: Runner = async () => ({ code: 0, stdout: '{}', stderr: '' });
+    // sha256 of 'operator-token-o1'.
+    const users = [{ name: 'olga', role: 'operator' as const, tokenSha256: '0d8dc9deab36314a0e348de096f11795a300d35258412ffe048c9eecdabb8edd' }];
+    const s = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, users, serveWaitMs: 1500 });
+    try {
+      const res = await fetch(`${s.url}/api/worlds/w/serve`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer operator-token-o1' }, body: JSON.stringify({ port: 4321 }),
+      });
+      const body = await res.json() as Json;
+      assert.deepEqual([res.status, body['worldPort'], body['adminPort']], [200, 45300, 45301]);
+      assert.deepEqual(spawned[0]?.argv.slice(-2), ['--port', '0']);
+    } finally {
+      await s.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

@@ -20,12 +20,17 @@ function free(port: number): Promise<boolean> {
   });
 }
 
-/** A loopback port in 20000..31999 with nothing listening on it, starting from an offset of this process's pid. */
-export async function quietPort(): Promise<number> {
+/**
+ * A loopback port in 20000..31999 with nothing listening on it or on the `span - 1` ports after it, such as a world port
+ * whose admin port defaults to port + 1, starting from an offset of this process's pid.
+ */
+export async function quietPort(span = 1): Promise<number> {
   const start = (process.pid * 37) % QUIET_COUNT;
   for (let i = 0; i < QUIET_COUNT; i++) {
-    const port = QUIET_FIRST + ((start + i) % QUIET_COUNT);
-    if (await free(port)) return port;
+    const port = QUIET_FIRST + ((start + i) % (QUIET_COUNT - span + 1));
+    let all = true;
+    for (let k = 0; k < span && all; k++) all = await free(port + k);
+    if (all) return port;
   }
   throw new Error(`no free loopback port in ${QUIET_FIRST}..${QUIET_FIRST + QUIET_COUNT - 1}`);
 }
