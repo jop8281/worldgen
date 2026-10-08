@@ -9,10 +9,13 @@ import { parsePlanYaml } from '../src/worldgen/plan.ts';
 const WORLDS = fileURLToPath(new URL('../../prod/worlds/', import.meta.url));
 const HELPDESK = path.join(WORLDS, 'helpdesk');
 
-/** Each world directory, relative to prod/worlds. `generated/` holds `npm run worldgen` output one level down. */
+/**
+ * Each world directory, relative to prod/worlds. `generated/` holds `npm run worldgen` output one level down. A dot
+ * dir is never a world: the studio stores uploads in `.uploads` (YOS-188).
+ */
 async function worldDirs(): Promise<string[]> {
   const subdirs = async (dir: string): Promise<string[]> =>
-    (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name);
   const top = await subdirs(WORLDS);
   const generated = top.includes('generated') ? (await subdirs(path.join(WORLDS, 'generated'))).map((n) => `generated/${n}`) : [];
   return [...top.filter((n) => n !== 'generated'), ...generated].sort();
