@@ -1,6 +1,6 @@
 # Studio screenshots
 
-Screenshots of WorldGen Studio, the operator web app that `bun run studio` serves on loopback. Six follow the demo's click path, driven in headless Chrome by `code/scripts/studio-rehearse.ts`. The 27 under [e2e/](e2e/) record the served-world E2E, driven by `code/scripts/studio-e2e.ts` (see [The served-world E2E](#the-served-world-e2e)). Each one is the real app. No model was called and no sandbox was started. The agent in the episode is the free `noop` agent.
+Screenshots of WorldGen Studio, the operator web app that `bun run studio` serves on loopback. The 29 under [demo/](demo/) are the recorded 15-minute demo walkthrough (see [The demo walkthrough](#the-demo-walkthrough)). Six more follow an earlier click path, driven in headless Chrome by `code/scripts/studio-rehearse.ts`. The 27 under [e2e/](e2e/) record the served-world E2E, driven by `code/scripts/studio-e2e.ts` (see [The served-world E2E](#the-served-world-e2e)). Each one is the real app. No model was called and no sandbox was started. The agent in the episode is the free `noop` agent.
 
 ## How they were taken
 
@@ -43,6 +43,79 @@ The worlds shown:
 
 - In 01, a generated world without a `capsule.json` shows `none` for wid, model, cost and attempts, because the dashboard reads those values from that file. 9 of the 23 generated worlds have none.
 - In 10 and 11, the Spend panel shows the spend ledger of the machine that took the screenshots, at that moment. It is not a measured result of this repository.
+
+## The demo walkthrough
+
+This is the recorded run of the 15-minute operator demo, YOS-193, following the click path in [research/studio-demo-runbook.md](../../research/studio-demo-runbook.md).
+- **The talk:** steps 01 to 27.
+- **Two checks the talk does not click:** 28, one job per Idempotency-Key, and 29, a team that sees no other team's runs.
+
+No model was called and no sandbox was started.
+
+| | |
+|---|---|
+| Code | Promotion 11: `main` at `50cec32fd365d10a2692975e4d5f6c77743b709d` (#121) in jop8281/worldgen. It has the tree of `stabilize/main` `e7b181f5`, which holds the page's error states (#106) and the past-runs and reset fixes (#110). The run was taken in a clean detached worktree at that SHA, with one file laid over from this change: `code/scripts/studio-rehearse.ts`, which walks the storyline. No Studio, engine or WorldGen file differed. The laid-over file is this change's script as of commit `0d30be55`. The merged file in this PR also has the trunk's 4-line `--help` exit (`31015ab9`, YOS-201), which a run without `--help` never reaches. |
+| Captured | 2026-10-08, three runs in a row starting 2026-10-08T09:47:09Z. The recorded run is the third, started at 2026-10-08T09:48:02Z. |
+| Runtime | Bun 1.4.2 on macOS 26.6, headless Google Chrome 154.0.8037.98, light color scheme |
+| Frames | 1400 CSS pixels wide at device scale 1. Most frames are the viewport, 1400 × 913, scrolled to the step's element. 04, 05, 07, 14 and 22 show their element whole, beyond the viewport, because what the step shows is taller than one screen: the Worlds section, the Explorer, the console result and the plan. |
+| Runs | 3 of 3 runs `ok` on all 29 steps, with 0 page errors each. These frames are the third run. |
+| Log | [demo/log.txt](demo/log.txt), sha256 `6bcbcef1459b0f5221e6e5f6f77a9f31670f6dd0c277a770ffc6ab6dbc2d546f`. It holds one line per step with its page time, then the episode ids that steps 28 and 29 compare. |
+
+From `code/`:
+
+```sh
+bun scripts/studio-rehearse.ts <out-dir> --record --viewport
+```
+
+What the rehearsal sets up and cleans up:
+- It starts its own studio on a free loopback port, on a scratch copy of `prod/worlds`.
+- The users file is a scratch one with four people and random tokens: ada, ana, vic and bob. Each signs in through the page's token field.
+- It uses its own Chrome on a port Chrome picks.
+- Every exit stops Chrome and the studio, stops every world the studio serves, and deletes the scratch worlds.
+- `--record` also writes `walkthrough.html`, one captioned frame per step. It is not kept here, because its frames repeat these PNGs.
+
+| File | Signed in | What it shows | Frame | Page time | sha256 |
+|---|---|---|---|--:|---|
+| [01-sign-in.png](demo/01-sign-in.png) | ada (admin, ops) | Sign in: the studio asks for a token, then names who is signed in and offers Sign out | viewport | 170 ms | `1981b8534c988d609067bc66ed13caa116c8dc41e801f2d234146aec265fe9f7` |
+| [02-dashboard.png](demo/02-dashboard.png) | ada (admin, ops) | Worlds: every world with its kind, tasks, wid, model, cost and attempts, and serve, report, plan, export and iterate | viewport | 174 ms | `67ab4badfefc5a1e69157b3689dfc0d722201948d34ea77b2a351cae16827443` |
+| [03-filter.png](demo/03-filter.png) | ada (admin, ops) | Filter: typing gen-stripe keeps the two Stripe worlds and the count reads 2 of all | viewport | 2 ms | `abacd35e011e9bda4464d03314186b7afa1830e79652b48d781b8f2821dbae5f` |
+| [04-serve-helpdesk.png](demo/04-serve-helpdesk.png) | ada (admin, ops) | Serve helpdesk: the count reads 1 served, and its row offers stop, world api and console; the world runs on its own port | its element, whole | 1678 ms | `1c40c259bfe43c6a74e7c20f4615f4bab0cba39cf5852abac5c5ced3c25da7e4` |
+| [05-explorer.png](demo/05-explorer.png) | ada (admin, ops) | Explorer: entities and references, the ticket workflow with its moves, seed rows by state, routes and actions with try buttons, jobs, and tasks as an agent is told them | its element, whole | 1373 ms | `0429736d551ba149ab6eb40856cb82b242bfe0a26c8876543d878af836a92348` |
+| [06-openapi.png](demo/06-openapi.png) | ada (admin, ops) | OpenAPI: the served world answers its own GET /openapi.json, an OpenAPI 3.1.0 document; the frame shows its start | viewport | 154 ms | `3e6b628b81367f5d9f31a75fd284e3cd57f106b247dbae683ae936a6bd42b4b4` |
+| [07-console-get.png](demo/07-console-get.png) | ada (admin, ops) | API console: a real GET on the world port, answered 200 with three open tickets | its element, whole | 155 ms | `00993379d11888a1909205ed0e6b864d6337a085afcebc243095dd0906583383` |
+| [08-console-422.png](demo/08-console-422.png) | ada (admin, ops) | A wrong write: an illegal status move with a legal priority change is refused whole, 422 state.transition | viewport | 153 ms | `cfc63f87b8755a92edd7979b8449e540cd92be8f6a6c1474e29997d799e51e09` |
+| [09-read-after-422.png](demo/09-read-after-422.png) | ada (admin, ops) | The same ticket read back: its priority is still high, so the legal half was not applied either | viewport | 154 ms | `555a2749a72b5aa6ee4c788cf015ae67d3358022f8d1bf6cd5a44d5d532c3d68` |
+| [10-reset-refused.png](demo/10-reset-refused.png) | ada (admin, ops) | Reset with the name box empty: refused, and nothing changes | viewport | 155 ms | `65d67dbc4d779f3bc66dabad5b57a37ecf958cc85a92aeb6adeae9fa34db238a` |
+| [11-reset.png](demo/11-reset.png) | ada (admin, ops) | Reset with the typed name: the world is back at its seed | viewport | 152 ms | `e21056e8a81a5982a07d002d0877c55307f3e2f764df64618c91027719e52e13` |
+| [12-builder-kind.png](demo/12-builder-kind.png) | ada (admin, ops) | World Builder, the page's Generation runs section: kind openapi lists the specs under eval/inputs and offers an upload | viewport | 155 ms | `765f8cafaf5b252ff79e41d34beaf42f40b2f6933002577fc9b203d5fc1ed30b` |
+| [13-builder-upload.png](demo/13-builder-upload.png) | ada (admin, ops) | Upload a spec: it is checked, kept for this tenant, picked, and its paths offered for --only; generate is not pressed | viewport | 154 ms | `5832e12d5f97be7e83b24e9f86835d5fce231956081ce5f8643ef0f309c0d474` |
+| [14-plan.png](demo/14-plan.png) | ada (admin, ops) | A generated world's plan: its assumptions, open questions, what is out of scope, and plan.md | its element, whole | 155 ms | `2e80d627f7c1f596d6467a5e1abd844619e426e3945df6a18dbe709c0d2e46e7` |
+| [15-iterate-form.png](demo/15-iterate-form.png) | ada (admin, ops) | Iterate: a change request for a world runs on a copy; the form is shown and cancelled here, since sending it starts a paid run | viewport | 3 ms | `b460d1bafabe6446dc1baf766399ce31dedb50217743ddc7d8a7ce6888c41b79` |
+| [16-iterate-result.png](demo/16-iterate-result.png) | ada (admin, ops) | A finished iterate: gen-stripe-customers' REPORT.md lists what its change request changed. The world's capsule.json names that run, run_20261007T165640Z_1022e845 | viewport | 155 ms | `aa648ee609dfe464e435f369038d418f705eaa9bd3b5ec2160573ab6ee343002` |
+| [17-proof.png](demo/17-proof.png) | ada (admin, ops) | Engine proof: per helpdesk task, the reference solution scores 1, doing nothing 0, near misses and decoys below 1, and the replay is identical | viewport | 1377 ms | `483fd1e81b64cdde4ac03e07b426650ffa9a1ab75a285a7e06e16c006c695a6f` |
+| [18-noop-episode.png](demo/18-noop-episode.png) | ada (admin, ops) | Agent Playground: a free noop agent on the first helpdesk task, graded by the engine from the end state | viewport | 6086 ms | `8cf88c133b0e60b659894eab6bcdfb6539e8143fc6ffaef77f16d0c38caba749` |
+| [19-spend.png](demo/19-spend.png) | ada (admin, ops) | Spend: today and all-time LLM and sandbox cost, by day, and the caps; only an admin sees it | viewport | 1 ms | `cde123bb529b14b170126e610fb62a32be0da2e800db19a75c2c820be2338738` |
+| [20-stop-helpdesk.png](demo/20-stop-helpdesk.png) | ada (admin, ops) | ada stops her served helpdesk | viewport | 152 ms | `28e9c4afa8de3ae2e5a6f5e88b94b5e2a21f55e0f521b1e099f8b60284bbc239` |
+| [21-operator-sign-in.png](demo/21-operator-sign-in.png) | ana (operator, acme) | ana signs in: the bar reads ana (operator), and the section links have no Spend or Eval, which need an admin | viewport | 2 ms | `4fe0a517a16251068228b5457214d6d04905cd82976888f3884a05f757801525` |
+| [22-operator-serve.png](demo/22-operator-serve.png) | ana (operator, acme) | She serves helpdesk for her team: the count reads 1 served, and its row offers stop | its element, whole | 1522 ms | `1c40c259bfe43c6a74e7c20f4615f4bab0cba39cf5852abac5c5ced3c25da7e4` |
+| [23-operator-masked.png](demo/23-operator-masked.png) | ana (operator, acme) | Her console GET /customers: each customer's email reads [sensitive], since email is a sensitive field and she is no admin | viewport | 1525 ms | `90b8b3e8639cd0d7254a7fd8e52e075edc812be5d054f16928a1d4eef9938630` |
+| [24-operator-stop.png](demo/24-operator-stop.png) | ana (operator, acme) | ana stops her served helpdesk | viewport | 154 ms | `5fc8fe07d83c2683c5cc2e2eafd6b08f2d69d750654d3f941676845272379454` |
+| [25-viewer-sign-in.png](demo/25-viewer-sign-in.png) | vic (viewer, acme) | vic signs in: the bar reads vic (viewer), and there is no Spend or Eval | viewport | 2 ms | `b187e5fb0bb8a7f4e3687fdf40ed027d17b15552b12b367499a6d22616176737` |
+| [26-viewer-report.png](demo/26-viewer-report.png) | vic (viewer, acme) | He opens helpdesk's report: hidden, because the world has sensitive fields | viewport | 155 ms | `1167549a88bd3b4fab07270263e83a806469e189e2774d8a55ec2cb22f947d1b` |
+| [27-viewer-serve.png](demo/27-viewer-serve.png) | vic (viewer, acme) | He presses serve: refused for his role, and the page says "Your role can't see this. Ask an admin for access." | viewport | 153 ms | `799dd9657172dba8345a6c816c98e94b450aae4dae4d9dd7c6b7daae96b348a8` |
+| [28-idempotent-retry.png](demo/28-idempotent-retry.png) | ana (operator, acme) | ana (acme) retries one job request: two POSTs with one Idempotency-Key, the second answer replays the first, and after a reload her Episodes list holds one run | viewport | 5661 ms | `fe558e2ad37cf52e75e8826415cb822c62d092de9d8c6bd4c8733d691fe09cff` |
+| [29-other-tenant.png](demo/29-other-tenant.png) | bob (operator, globex) | bob (globex) signs in: his Episodes list holds neither ana's acme run nor ada's ops run | viewport | 0 ms | `41ec7a1855451299a96d01b753cfef20671dde7682d7b0ebef1189f24e0eede8` |
+
+What to read with care:
+
+- **The console result in 07.** The page shows a response in a pane that scrolls at 24rem. For this frame the rehearsal shows the pane at full height, so all three tickets are in it. Nothing else on the page is changed.
+- **Spend (19).** The Spend panel shows the spend ledger of the machine that took the run, at that moment. It is not a measured result of this repository.
+- **The two unsent actions (13, 15).** In 13 the spec is uploaded into the scratch copy, and `generate` is not pressed. In 15 the iterate form is filled, then cancelled. Either button would start a Sonnet run.
+- **The finished iterate (16).** It is gen-stripe-customers' committed REPORT.md, from its change-request run `run_20261007T165640Z_1022e845`. It is not a run made during this recording.
+- **The masked email (23).** ana's page shows `[sensitive]` for helpdesk's customer emails because she is not an admin. ada's console answers in 07 to 09 are an admin's, so they show every field.
+- **The viewer's refusal (27).** The page shows its one role line, "Your role can't see this. Ask an admin for access.", for a refused serve as well as a refused read.
+- **Two identical frames (04 and 22).** They are the same PNG, byte for byte. Once ada or ana serves helpdesk, the Worlds section reads the same for both, and the section does not name who is signed in. 21, the frame just before 22, shows that page is ana's.
+- **Episodes.** The noop episodes of 18 and 28 are written under `eval/episodes/` of the worktree that ran them, which git ignores.
 
 ## The served-world E2E
 
