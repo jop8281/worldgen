@@ -67,6 +67,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
+import { maskSensitiveText, sensitiveOf } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { parsePlanYaml } from '../worldgen/plan.ts';
 import { renderPlanMd } from '../worldgen/plan-md.ts';
@@ -627,7 +628,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     child: SpawnedChild | null;
   };
 
-  const services = new Map<string, { record: ServiceRecord; dir: string; child: SpawnedChild }>();
+  type Service = { record: ServiceRecord; dir: string; child: SpawnedChild; sensitive: ReadonlyMap<string, ReadonlySet<string>> };
+  const services = new Map<string, Service>();
   /** Ids of the services a reset is running on, so a second reset of one waits for the first. */
   const resetting = new Set<string>();
   /** `<tenant> <world dir>` of each `worldplay serve` that has not reported its ports yet. */
@@ -1031,7 +1033,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   /** The API console: one request to the world port of a service this studio started, and the world's real answer. */
   /** A service `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
-  const serviceOf = (id: string, who: User, filter: string | null): { record: ServiceRecord; dir: string; child: SpawnedChild } | undefined => {
+  const serviceOf = (id: string, who: User, filter: string | null): Service | undefined => {
     const hit = services.get(id);
     return hit !== undefined && visible(hit.record.tenant, who, filter) ? hit : undefined;
   };
@@ -1070,13 +1072,15 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     const bytes = Buffer.from(await res.arrayBuffer());
     const truncated = bytes.length > MAX_CALL_BYTES;
+    const text = bytes.subarray(0, MAX_CALL_BYTES).toString('utf8');
     return {
       status: 200,
       body: {
         service: hit.record.id, world: hit.record.name, worldPort: hit.record.worldPort,
         request: { method, path: `${url.pathname}${url.search}`, body: payload ?? null },
         status: res.status, contentType: res.headers.get('content-type'), ms: Date.now() - started,
-        body: bytes.subarray(0, MAX_CALL_BYTES).toString('utf8'), truncated,
+        // A sensitive field's value never reaches a role below admin (A-356).
+        body: who.role === 'admin' || hit.sensitive.size === 0 ? text : maskSensitiveText(text, hit.sensitive), truncated,
       },
     };
   }
@@ -1107,6 +1111,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
     const dir = w.dir;
+    const sensitive = sensitiveOf(await loadWorld(dir).then((l) => (l.ok ? l.value : null)));
     // An admin serving with ?tenant=t serves the world for t, so t's own operators see and stop it.
     const owner = filter ?? who.tenant;
     const startKey = `${owner} ${dir}`;
@@ -1161,7 +1166,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     let id = `svc-${randomBytes(4).toString('hex')}`;
     while (services.has(id)) id = `svc-${randomBytes(4).toString('hex')}`;
     const record: ServiceRecord = { id, name, tenant: owner, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
-    services.set(id, { record, dir, child });
+    services.set(id, { record, dir, child, sensitive });
     void child.exited.then(() => {
       services.delete(id);
     });
@@ -1827,7 +1832,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!clientKey.ok) return clientKey.reply;
     const fingerprint = fingerprintOf('proof', [w.dir]);
     const key = clientKey.key ?? `derived:${fingerprint}`;
-    const slot = `${who.tenant} ${key}`;
+    // The key space is the world's tenant's, as the world was resolved for it.
+    const slot = `${ctx.filter ?? who.tenant} ${key}`;
     const known = proofsDone.get(slot) ?? proofsRunning.get(slot);
     if (known !== undefined) {
       if (known.fingerprint === fingerprint) return known.reply;
@@ -1868,7 +1874,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { world: name, verified: res.code === 0, tasks } };
   }
 
-  /** Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. */
+  /**
+   * Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. An admin's `?tenant=` names
+   * the world's shelf and the job's tenant, as for serve and iterate, so the transcript of a tenant's world stays its own.
+   */
   async function startEpisode(body: unknown, who: User, ctx: Ctx): Promise<Reply> {
     if (!isObject(body)) return fail(400, 'episode.body', 'body must be {"world": ..., "task": ..., "agent": "noop" | "sonnet"}');
     const world = typeof body['world'] === 'string' ? body['world'] : '';
@@ -1889,7 +1898,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory and no build sha is set, so the episode would have no engine identity');
     return startJob({
       kind: 'episode',
-      tenant: who.tenant,
+      tenant: ctx.filter ?? who.tenant,
       rawKey: ctx.key,
       request: ['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--agent', agent, ...flags],
       label: agent,
