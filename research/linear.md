@@ -20,7 +20,7 @@ Status: historical. This is the D1 decision note of 2026-10-06, kept for its rea
    ```
    Then run `/mcp` inside Claude Code and finish the OAuth login in the browser. `claude mcp list` shows it is connected. Source for `/mcp` and `claude mcp list`: https://code.claude.com/docs/en/mcp (verified). Add `--scope user` if you want it in every project (same source).
 2. In Linear, create the team `WorldGen` with key `WG` (Settings > Teams). Create a second team `WorldGen Test` with key `WGT` only if T3 is approved.
-3. Connect GitHub: Settings > Integrations > GitHub, pick the repo `jop8281/zozo123-genworld`. Turn on PR linking. Leave "GitHub Issues Sync" off. Source: https://linear.app/docs/github. Unverified: whether the basic GitHub integration is on the Free plan. Check it in the integrations page.
+3. Connect GitHub: Settings > Integrations > GitHub, pick the repo `jop8281/worldgen`. Turn on PR linking. Leave "GitHub Issues Sync" off. Source: https://linear.app/docs/github. Unverified: whether the basic GitHub integration is on the Free plan. Check it in the integrations page.
 4. Only if T3 is approved, and not before D7: create a personal API key at Settings > Security & access (https://linear.app/settings/account/security). Store it as `LINEAR_API_KEY` in your shell only. Never in the repo, `worldgen.config.json`, or the WorldGen env. Header is `Authorization: <API_KEY>` with no "Bearer". Source: https://linear.app/developers/graphql.
 
 ### What Claude does after

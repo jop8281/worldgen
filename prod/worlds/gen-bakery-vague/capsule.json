@@ -1,0 +1,23 @@
+{
+  "capsule": 1,
+  "runId": "run_20261008T013209Z_12c741e5",
+  "mode": "iterate",
+  "input": {
+    "kind": "change_request",
+    "digest": "55ff0f14577c7ccd2017cbf37395d66bf7675b44214a2c4cbbe474fc33e6d8fc"
+  },
+  "worldId": "wid_32dd36aa840229272114b3fc280e3c8b3c468b37032083b2f932c595a63f206e",
+  "model": "claude-sonnet-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 27217,
+      "costUsd": 0.2747806
+    }
+  ],
+  "ms": 31626,
+  "costUsd": 0.2747806
+}

@@ -1,6 +1,6 @@
 # Runtime architecture
 
-This file records who owns what at run time. [architecture.md](architecture.md) holds the module layout and the reasons. The module map in `AGENTS.md` names every source file, and `test/architecture.test.ts` fails when either map misses one. A diagram records boundaries. It does not prove behavior, so check the code and tests before relying on it.
+This file records who owns what at run time. [architecture.md](architecture.md) holds the module layout and the reasons. The module map in `AGENTS.md` and the directory tree in `architecture.md` each name every source file, and `test/architecture.test.ts` fails when either misses one; it does not check the ownership table below, which is prose. A diagram records boundaries. It does not prove behavior, so check the code and tests before relying on it.
 
 ```mermaid
 flowchart TD
