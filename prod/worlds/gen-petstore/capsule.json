@@ -6,7 +6,7 @@
     "kind": "openapi",
     "digest": "d83424f34836e289077d03d2a9ccf1f52dfcc233c5732814c83c2f6ed02d8fc0"
   },
-  "worldId": "wid_1574df506ee1d337f283358cb8b93186dfd9b996a33cf8bc7a7bbb7029d22c69",
+  "worldId": "wid_f119814c616eb24dae058f683feadaede880f80030d9d624601058c97d9e07fd",
   "model": "claude-sonnet-5-5",
   "transport": "claude-cli",
   "attempts": [

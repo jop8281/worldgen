@@ -518,11 +518,11 @@ describe('renderSummary on literal events', () => {
         '| orders-csv | done | crashed | crashed: not implemented | - | unknown | unknown | - | ok | no |',
         '| bakery-vague | done | done | - | plan 1 | 0.5 | 0.30 | fail: task.noop_nonzero | unlogged | no |',
         '',
-        '**Totals:** 5 expected cases: 2 done, 2 stopped, 1 crashed, 0 missing, 0 invalid; 4.1 min (4 of 5 cases); $3.35 (4 of 5 cases); 2 unlogged.',
+        '**Totals:** 5 expected cases: 1 success, 1 expected refusal, 2 product failure, 1 infra failure, 0 not run; 4.1 min (4 of 5 cases); $3.35 (4 of 5 cases); 2 unlogged.',
         '',
         '**Median and p95:** 0.5 min (4 of 5 cases) and 2.0 min (4 of 5 cases); $0.30 (4 of 5 cases) and $2.25 (4 of 5 cases).',
         '',
-        '**Pass rate:** 2/5 (40%).',
+        '**Pass rate:** 2/5 (40%), success and expected refusal over the 5 cases that ran (0 not run).',
         '',
         '## Unlogged',
         '',
@@ -634,7 +634,45 @@ describe('renderSummary on literal events', () => {
   });
 
   it('renders an empty run without a percentage', () => {
-    assert.equal(renderSummary(meta, []).split('\n')[11], '**Pass rate:** 0/0.');
+    assert.equal(renderSummary(meta, []).split('\n')[11], '**Pass rate:** 0/0, success and expected refusal over the 0 cases that ran (0 not run).');
+  });
+
+  it('counts every case in one of five outcome classes, and passes only a success or an expected refusal (A-336)', () => {
+    const machinery: CaseRecord = {
+      id: 'stopped-by-overload',
+      expect: 'stopped',
+      phases: [
+        phase('create', 'stopped', null, [
+          { ...AT, t: 'run_finished', ms: 1000, costUsd: 0, worldWritten: false, result: { kind: 'stopped', reason: { kind: 'model_error', message: '529 overloaded' } } },
+        ]),
+      ],
+      verify: { kind: 'not_run' },
+    };
+    const unverified: CaseRecord = { ...records[0]!, id: 'done-never-verified', verify: { kind: 'not_run' } };
+    const wrongDone: CaseRecord = { ...records[0]!, id: 'impossible-but-done', expect: 'stopped' };
+    assert.deepEqual(
+      [...records, machinery, unverified, wrongDone].map((r) => [r.id, summarizeCase(r).outcome, summarizeCase(r).pass]),
+      [
+        ['helpdesk-sla', 'success', true],
+        ['video-codec-impossible', 'expected refusal', true],
+        ['helpdesk-add-refunds', 'product failure', false],
+        ['orders-csv', 'infra failure', false],
+        ['bakery-vague', 'product failure', false],
+        ['stopped-by-overload', 'infra failure', false],
+        ['done-never-verified', 'infra failure', false],
+        ['impossible-but-done', 'product failure', false],
+      ],
+    );
+    const lines = renderSummary(meta, [
+      ...[...records, machinery].map((record) => ({ kind: 'record' as const, record })),
+      { kind: 'invalid', id: 'unreadable-case', expect: 'done', why: 'not JSON' },
+      { kind: 'missing', id: 'never-started', expect: 'done' },
+    ]).split('\n');
+    assert.equal(
+      lines.find((l) => l.startsWith('**Totals:**')),
+      '**Totals:** 8 expected cases: 1 success, 1 expected refusal, 2 product failure, 3 infra failure, 1 not run; 4.1 min (5 of 8 cases); $3.35 (5 of 8 cases); 2 unlogged.',
+    );
+    assert.equal(lines.find((l) => l.startsWith('**Pass rate:**')), '**Pass rate:** 2/7 (29%), success and expected refusal over the 7 cases that ran (1 not run).');
   });
 });
 
