@@ -1,0 +1,2140 @@
+format: 1
+meta:
+  name: gen_course_enrollments
+  description: "A course registrar world built from two imported tables. Courses have a department, credits, capacity and start date. Enrollments link a student email to a course and move through a lifecycle: waitlisted, enrolled, dropped or completed. Enrolling past capacity lands on the waitlist. Dropping an enrolled seat promotes the oldest waitlisted student, and an hourly job fills any seats that are free. Completing an enrollment requires a grade. Agents list and filter with paging, enroll, drop and grade students, and bulk-edit across a department."
+  resembles: "University course registration system (Ellucian Banner / Canvas SIS style): course catalog with capacity limits, student enrollments, waitlists and grading"
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-06T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  course:
+    description: A catalog course offering with department, credits, seat capacity and start date. Seats used are the enrollments of the course with status enrolled.
+    idPrefix: crs
+    fields:
+      code:
+        type: string
+        description: Catalog code such as C101.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 20
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      department:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - Computing
+          - Physics
+          - History
+          - Biology
+          - Art
+          - Math
+      credits:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+        max: 6
+      capacity:
+        type: int
+        description: Maximum enrolled seats. Lowering it below the seats used drops nobody.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      starts_on:
+        type: datetime
+        description: Course start date at 00:00:00Z.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  enrollment:
+    description: One student's seat or waitlist spot in a course, with a lifecycle status and an optional final grade. Created only by the enroll action.
+    idPrefix: enr
+    fields:
+      code:
+        type: string
+        description: Registrar code such as E5001.
+        required: true
+        nullable: false
+        unique: true
+        readonly: true
+        maxLength: 20
+      course_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: course
+        onDelete: restrict
+      student_email:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+        format: email
+      enrolled_on:
+        type: datetime
+        description: When the student asked for the seat. Orders the waitlist.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      status:
+        type: state
+        description: Lifecycle. dropped and completed are final. Changed only by actions and jobs.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - waitlisted
+          - enrolled
+          - dropped
+          - completed
+        initial: waitlisted
+        transitions:
+          waitlisted:
+            - enrolled
+            - dropped
+          enrolled:
+            - dropped
+            - completed
+          dropped: []
+          completed: []
+      grade:
+        type: enum
+        description: Final grade. Null unless status is completed.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        values:
+          - A
+          - B
+          - C
+          - D
+routes:
+  list_courses:
+    op: list
+    entity: course
+    filters:
+      - department
+      - credits
+    search:
+      - title
+      - code
+    sort:
+      - starts_on
+      - title
+    pageSize: 25
+    method: GET
+    path: /courses
+    description: List courses, paged.
+  get_course:
+    op: get
+    entity: course
+    method: GET
+    path: /courses/{id}
+    description: Fetch one course.
+  create_course:
+    op: create
+    entity: course
+    method: POST
+    path: /courses
+    description: Create a course.
+  update_course:
+    op: update
+    entity: course
+    method: PATCH
+    path: /courses/{id}
+    description: Edit a course such as capacity or start date.
+  list_enrollments:
+    op: list
+    entity: enrollment
+    filters:
+      - course_id
+      - status
+      - grade
+      - student_email
+    search: []
+    sort:
+      - enrolled_on
+    pageSize: 25
+    method: GET
+    path: /enrollments
+    description: List enrollments, paged.
+  get_enrollment:
+    op: get
+    entity: enrollment
+    method: GET
+    path: /enrollments/{id}
+    description: Fetch one enrollment.
+  list_course_enrollments:
+    op: list
+    entity: enrollment
+    filters:
+      - status
+    search: []
+    sort:
+      - enrolled_on
+    pageSize: 25
+    method: GET
+    path: /courses/{course_id}/enrollments
+    description: List enrollments of one course.
+actions:
+  enroll_student:
+    method: POST
+    path: /enrollments
+    description: Enroll a student in a course. Enrolled if a seat is free, otherwise waitlisted. Refuses a student who already holds an enrolled or waitlisted enrollment in the course.
+    input:
+      course_id:
+        type: ref
+        description: The course to join.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: course
+        onDelete: restrict
+      student_email:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+        format: email
+    handler: |-
+      (ctx) => {
+        const course = ctx.db.get('course', ctx.body.course_id);
+        if (course === null) ctx.fail(422, 'unknown_course', 'course ' + ctx.body.course_id + ' not found. List courses with GET /courses.');
+        const email = ctx.body.student_email;
+        const mine = ctx.db.list('enrollment', { where: { course_id: course.id } });
+        const dup = mine.find((e) => e.student_email === email && (e.status === 'enrolled' || e.status === 'waitlisted'));
+        if (dup) ctx.fail(409, 'already_enrolled', email + ' already holds ' + dup.status + ' enrollment ' + dup.id + ' in course ' + course.id + '.');
+        const used = mine.filter((e) => e.status === 'enrolled').length;
+        let max = 5000;
+        for (const e of ctx.db.list('enrollment')) {
+          const n = parseInt(String(e.code).slice(1), 10);
+          if (!isNaN(n) && n > max) max = n;
+        }
+        let row = ctx.db.create('enrollment', { code: 'E' + (max + 1), course_id: course.id, student_email: email, enrolled_on: ctx.now(), grade: null });
+        if (used < course.capacity) row = ctx.db.update('enrollment', row.id, { status: 'enrolled' });
+        return { status: 201, body: row };
+      }
+  drop_enrollment:
+    method: POST
+    path: /enrollments/{id}/drop
+    description: Drop an enrolled or waitlisted enrollment. A freed seat goes to the oldest waitlisted student of the course.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const e = ctx.db.get('enrollment', id);
+        if (e === null) ctx.fail(404, 'not_found', 'enrollment ' + id + ' not found');
+        if (e.status !== 'enrolled' && e.status !== 'waitlisted') ctx.fail(409, 'invalid_state', 'enrollment ' + id + ' is ' + e.status + '. Only enrolled and waitlisted enrollments can be dropped.');
+        const wasEnrolled = e.status === 'enrolled';
+        const updated = ctx.db.update('enrollment', id, { status: 'dropped' });
+        if (wasEnrolled) {
+          const course = ctx.db.get('course', e.course_id);
+          const rows = ctx.db.list('enrollment', { where: { course_id: e.course_id } });
+          let used = rows.filter((r) => r.status === 'enrolled').length;
+          const queue = rows.filter((r) => r.status === 'waitlisted').sort((a, b) => a.enrolled_on < b.enrolled_on ? -1 : a.enrolled_on > b.enrolled_on ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+          for (const w of queue) {
+            if (used >= course.capacity) break;
+            ctx.db.update('enrollment', w.id, { status: 'enrolled' });
+            used += 1;
+          }
+        }
+        return { status: 200, body: updated };
+      }
+  complete_enrollment:
+    method: POST
+    path: /enrollments/{id}/complete
+    description: Complete an enrolled enrollment with a final grade A, B, C or D.
+    input:
+      grade:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - A
+          - B
+          - C
+          - D
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const e = ctx.db.get('enrollment', id);
+        if (e === null) ctx.fail(404, 'not_found', 'enrollment ' + id + ' not found');
+        if (e.status !== 'enrolled') ctx.fail(409, 'invalid_state', 'enrollment ' + id + ' is ' + e.status + '. Only enrolled enrollments can be completed.');
+        const updated = ctx.db.update('enrollment', id, { status: 'completed', grade: ctx.body.grade });
+        return { status: 200, body: updated };
+      }
+  promote_waitlist:
+    method: POST
+    path: /courses/{id}/promote_waitlist
+    description: Fill the free seats of one course from its waitlist, oldest enrolled_on first then lowest id. Returns the promoted enrollments.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const course = ctx.db.get('course', id);
+        if (course === null) ctx.fail(404, 'not_found', 'course ' + id + ' not found');
+        const rows = ctx.db.list('enrollment', { where: { course_id: id } });
+        let used = rows.filter((r) => r.status === 'enrolled').length;
+        const queue = rows.filter((r) => r.status === 'waitlisted').sort((a, b) => a.enrolled_on < b.enrolled_on ? -1 : a.enrolled_on > b.enrolled_on ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+        const promoted = [];
+        for (const w of queue) {
+          if (used >= course.capacity) break;
+          promoted.push(ctx.db.update('enrollment', w.id, { status: 'enrolled' }));
+          used += 1;
+        }
+        return { status: 200, body: { promoted } };
+      }
+jobs:
+  promote_waitlisted:
+    description: Every hour, fill free seats of every course from its waitlist, oldest enrolled_on first then lowest id.
+    every: 1h
+    run: |-
+      (ctx) => {
+        const byCourse = {};
+        for (const e of ctx.db.list('enrollment')) {
+          if (e.status !== 'enrolled' && e.status !== 'waitlisted') continue;
+          (byCourse[e.course_id] = byCourse[e.course_id] || []).push(e);
+        }
+        for (const cid of Object.keys(byCourse)) {
+          const course = ctx.db.get('course', cid);
+          if (course === null) continue;
+          const rows = byCourse[cid];
+          let used = rows.filter((r) => r.status === 'enrolled').length;
+          const queue = rows.filter((r) => r.status === 'waitlisted').sort((a, b) => a.enrolled_on < b.enrolled_on ? -1 : a.enrolled_on > b.enrolled_on ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+          for (const w of queue) {
+            if (used >= course.capacity) break;
+            ctx.db.update('enrollment', w.id, { status: 'enrolled' });
+            used += 1;
+          }
+        }
+      }
+fixtures:
+  courses:
+    - course_id: C101
+      title: Physics Advanced Topics 1
+      department: Computing
+      credits: 4
+      capacity: 45
+      starts_on: 2026-11-02
+    - course_id: C102
+      title: Biology Advanced Topics 2
+      department: Physics
+      credits: 5
+      capacity: 30
+      starts_on: 2026-10-13
+    - course_id: C103
+      title: Art Advanced Topics 3
+      department: Physics
+      credits: 3
+      capacity: 12
+      starts_on: 2026-10-08
+    - course_id: C104
+      title: Computing Advanced Topics 4
+      department: Computing
+      credits: 2
+      capacity: 30
+      starts_on: 2026-10-10
+    - course_id: C105
+      title: History Advanced Topics 5
+      department: History
+      credits: 3
+      capacity: 12
+      starts_on: 2026-10-18
+    - course_id: C106
+      title: History Lab 6
+      department: Biology
+      credits: 2
+      capacity: 45
+      starts_on: 2026-10-20
+    - course_id: C107
+      title: Math Lab 7
+      department: History
+      credits: 2
+      capacity: 20
+      starts_on: 2026-10-23
+    - course_id: C108
+      title: Math Seminar 8
+      department: Art
+      credits: 3
+      capacity: 45
+      starts_on: 2026-09-22
+    - course_id: C109
+      title: Math Seminar 9
+      department: Biology
+      credits: 5
+      capacity: 20
+      starts_on: 2026-10-05
+    - course_id: C110
+      title: Physics Seminar 10
+      department: Art
+      credits: 2
+      capacity: 45
+      starts_on: 2026-10-12
+    - course_id: C111
+      title: Physics Lab 11
+      department: Biology
+      credits: 5
+      capacity: 45
+      starts_on: 2026-10-01
+    - course_id: C112
+      title: History Workshop 12
+      department: Math
+      credits: 5
+      capacity: 45
+      starts_on: 2026-09-25
+    - course_id: C113
+      title: Physics Lab 13
+      department: Biology
+      credits: 4
+      capacity: 12
+      starts_on: 2026-11-02
+    - course_id: C114
+      title: Math Workshop 14
+      department: Biology
+      credits: 3
+      capacity: 45
+      starts_on: 2026-11-04
+    - course_id: C115
+      title: Physics Advanced Topics 15
+      department: Computing
+      credits: 4
+      capacity: 30
+      starts_on: 2026-09-27
+    - course_id: C116
+      title: History Foundations 16
+      department: Math
+      credits: 4
+      capacity: 45
+      starts_on: 2026-10-02
+    - course_id: C117
+      title: Biology Advanced Topics 17
+      department: Physics
+      credits: 5
+      capacity: 30
+      starts_on: 2026-09-27
+    - course_id: C118
+      title: Biology Advanced Topics 18
+      department: Art
+      credits: 2
+      capacity: 20
+      starts_on: 2026-10-11
+    - course_id: C119
+      title: Computing Lab 19
+      department: Biology
+      credits: 4
+      capacity: 20
+      starts_on: 2026-10-03
+    - course_id: C120
+      title: History Lab 20
+      department: Art
+      credits: 3
+      capacity: 30
+      starts_on: 2026-10-21
+    - course_id: C121
+      title: History Foundations 21
+      department: Biology
+      credits: 2
+      capacity: 20
+      starts_on: 2026-10-14
+    - course_id: C122
+      title: Math Seminar 22
+      department: Physics
+      credits: 3
+      capacity: 30
+      starts_on: 2026-09-15
+    - course_id: C123
+      title: Physics Seminar 23
+      department: Art
+      credits: 4
+      capacity: 30
+      starts_on: 2026-09-27
+    - course_id: C124
+      title: Physics Seminar 24
+      department: Biology
+      credits: 4
+      capacity: 12
+      starts_on: 2026-10-10
+    - course_id: C125
+      title: Art Foundations 25
+      department: Math
+      credits: 2
+      capacity: 20
+      starts_on: 2026-09-26
+    - course_id: C126
+      title: Biology Advanced Topics 26
+      department: History
+      credits: 5
+      capacity: 30
+      starts_on: 2026-10-29
+    - course_id: C127
+      title: Math Seminar 27
+      department: Math
+      credits: 5
+      capacity: 45
+      starts_on: 2026-11-02
+    - course_id: C128
+      title: Physics Seminar 28
+      department: Math
+      credits: 5
+      capacity: 45
+      starts_on: 2026-10-25
+    - course_id: C129
+      title: Computing Foundations 29
+      department: Biology
+      credits: 3
+      capacity: 30
+      starts_on: 2026-10-24
+    - course_id: C130
+      title: History Foundations 30
+      department: Computing
+      credits: 3
+      capacity: 45
+      starts_on: 2026-09-08
+  enrollments:
+    - enrollment_id: E5001
+      course_id: C114
+      student_email: student68@uni.example
+      enrolled_on: 2026-08-28
+      status: enrolled
+      grade: null
+    - enrollment_id: E5002
+      course_id: C103
+      student_email: student22@uni.example
+      enrolled_on: 2026-09-05
+      status: enrolled
+      grade: null
+    - enrollment_id: E5003
+      course_id: C108
+      student_email: student50@uni.example
+      enrolled_on: 2026-08-24
+      status: dropped
+      grade: null
+    - enrollment_id: E5004
+      course_id: C101
+      student_email: student15@uni.example
+      enrolled_on: 2026-08-11
+      status: dropped
+      grade: null
+    - enrollment_id: E5005
+      course_id: C116
+      student_email: student35@uni.example
+      enrolled_on: 2026-09-05
+      status: completed
+      grade: A
+    - enrollment_id: E5006
+      course_id: C108
+      student_email: student10@uni.example
+      enrolled_on: 2026-09-06
+      status: enrolled
+      grade: null
+    - enrollment_id: E5007
+      course_id: C107
+      student_email: student59@uni.example
+      enrolled_on: 2026-08-01
+      status: dropped
+      grade: null
+    - enrollment_id: E5008
+      course_id: C111
+      student_email: student63@uni.example
+      enrolled_on: 2026-08-04
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5009
+      course_id: C113
+      student_email: student66@uni.example
+      enrolled_on: 2026-08-12
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5010
+      course_id: C112
+      student_email: student23@uni.example
+      enrolled_on: 2026-09-07
+      status: completed
+      grade: D
+    - enrollment_id: E5011
+      course_id: C114
+      student_email: student56@uni.example
+      enrolled_on: 2026-08-14
+      status: dropped
+      grade: null
+    - enrollment_id: E5012
+      course_id: C104
+      student_email: student51@uni.example
+      enrolled_on: 2026-08-03
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5013
+      course_id: C130
+      student_email: student40@uni.example
+      enrolled_on: 2026-08-10
+      status: completed
+      grade: D
+    - enrollment_id: E5014
+      course_id: C112
+      student_email: student66@uni.example
+      enrolled_on: 2026-08-25
+      status: completed
+      grade: B
+    - enrollment_id: E5015
+      course_id: C123
+      student_email: student38@uni.example
+      enrolled_on: 2026-08-23
+      status: completed
+      grade: D
+    - enrollment_id: E5016
+      course_id: C129
+      student_email: student47@uni.example
+      enrolled_on: 2026-09-08
+      status: enrolled
+      grade: null
+    - enrollment_id: E5017
+      course_id: C112
+      student_email: student42@uni.example
+      enrolled_on: 2026-08-25
+      status: enrolled
+      grade: null
+    - enrollment_id: E5018
+      course_id: C126
+      student_email: student33@uni.example
+      enrolled_on: 2026-08-24
+      status: enrolled
+      grade: null
+    - enrollment_id: E5019
+      course_id: C106
+      student_email: student51@uni.example
+      enrolled_on: 2026-08-11
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5020
+      course_id: C119
+      student_email: student18@uni.example
+      enrolled_on: 2026-08-07
+      status: enrolled
+      grade: null
+    - enrollment_id: E5021
+      course_id: C110
+      student_email: student12@uni.example
+      enrolled_on: 2026-09-01
+      status: enrolled
+      grade: null
+    - enrollment_id: E5022
+      course_id: C118
+      student_email: student21@uni.example
+      enrolled_on: 2026-08-05
+      status: completed
+      grade: A
+    - enrollment_id: E5023
+      course_id: C120
+      student_email: student46@uni.example
+      enrolled_on: 2026-09-02
+      status: completed
+      grade: A
+    - enrollment_id: E5024
+      course_id: C102
+      student_email: student25@uni.example
+      enrolled_on: 2026-09-06
+      status: enrolled
+      grade: null
+    - enrollment_id: E5025
+      course_id: C130
+      student_email: student44@uni.example
+      enrolled_on: 2026-09-10
+      status: enrolled
+      grade: null
+    - enrollment_id: E5026
+      course_id: C110
+      student_email: student27@uni.example
+      enrolled_on: 2026-08-16
+      status: enrolled
+      grade: null
+    - enrollment_id: E5027
+      course_id: C126
+      student_email: student57@uni.example
+      enrolled_on: 2026-08-05
+      status: enrolled
+      grade: null
+    - enrollment_id: E5028
+      course_id: C107
+      student_email: student25@uni.example
+      enrolled_on: 2026-08-31
+      status: completed
+      grade: A
+    - enrollment_id: E5029
+      course_id: C116
+      student_email: student50@uni.example
+      enrolled_on: 2026-09-14
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5030
+      course_id: C116
+      student_email: student5@uni.example
+      enrolled_on: 2026-08-19
+      status: completed
+      grade: D
+    - enrollment_id: E5031
+      course_id: C115
+      student_email: student25@uni.example
+      enrolled_on: 2026-08-16
+      status: enrolled
+      grade: null
+    - enrollment_id: E5032
+      course_id: C108
+      student_email: student45@uni.example
+      enrolled_on: 2026-09-08
+      status: enrolled
+      grade: null
+    - enrollment_id: E5033
+      course_id: C111
+      student_email: student67@uni.example
+      enrolled_on: 2026-08-28
+      status: dropped
+      grade: null
+    - enrollment_id: E5034
+      course_id: C109
+      student_email: student53@uni.example
+      enrolled_on: 2026-08-12
+      status: enrolled
+      grade: null
+    - enrollment_id: E5035
+      course_id: C116
+      student_email: student45@uni.example
+      enrolled_on: 2026-08-26
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5036
+      course_id: C106
+      student_email: student64@uni.example
+      enrolled_on: 2026-08-30
+      status: enrolled
+      grade: null
+    - enrollment_id: E5037
+      course_id: C127
+      student_email: student38@uni.example
+      enrolled_on: 2026-09-05
+      status: completed
+      grade: C
+    - enrollment_id: E5038
+      course_id: C128
+      student_email: student40@uni.example
+      enrolled_on: 2026-08-08
+      status: enrolled
+      grade: null
+    - enrollment_id: E5039
+      course_id: C101
+      student_email: student24@uni.example
+      enrolled_on: 2026-09-06
+      status: dropped
+      grade: null
+    - enrollment_id: E5040
+      course_id: C104
+      student_email: student21@uni.example
+      enrolled_on: 2026-09-08
+      status: dropped
+      grade: null
+    - enrollment_id: E5041
+      course_id: C111
+      student_email: student36@uni.example
+      enrolled_on: 2026-08-13
+      status: enrolled
+      grade: null
+    - enrollment_id: E5042
+      course_id: C130
+      student_email: student41@uni.example
+      enrolled_on: 2026-08-16
+      status: dropped
+      grade: null
+    - enrollment_id: E5043
+      course_id: C121
+      student_email: student2@uni.example
+      enrolled_on: 2026-08-29
+      status: completed
+      grade: A
+    - enrollment_id: E5044
+      course_id: C108
+      student_email: student11@uni.example
+      enrolled_on: 2026-08-15
+      status: enrolled
+      grade: null
+    - enrollment_id: E5045
+      course_id: C127
+      student_email: student62@uni.example
+      enrolled_on: 2026-09-01
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5046
+      course_id: C112
+      student_email: student7@uni.example
+      enrolled_on: 2026-09-09
+      status: enrolled
+      grade: null
+    - enrollment_id: E5047
+      course_id: C112
+      student_email: student5@uni.example
+      enrolled_on: 2026-08-03
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5048
+      course_id: C101
+      student_email: student60@uni.example
+      enrolled_on: 2026-08-05
+      status: enrolled
+      grade: null
+    - enrollment_id: E5049
+      course_id: C104
+      student_email: student47@uni.example
+      enrolled_on: 2026-08-12
+      status: dropped
+      grade: null
+    - enrollment_id: E5050
+      course_id: C102
+      student_email: student7@uni.example
+      enrolled_on: 2026-08-02
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5051
+      course_id: C120
+      student_email: student31@uni.example
+      enrolled_on: 2026-09-06
+      status: enrolled
+      grade: null
+    - enrollment_id: E5052
+      course_id: C120
+      student_email: student47@uni.example
+      enrolled_on: 2026-08-28
+      status: enrolled
+      grade: null
+    - enrollment_id: E5053
+      course_id: C119
+      student_email: student34@uni.example
+      enrolled_on: 2026-08-06
+      status: completed
+      grade: A
+    - enrollment_id: E5054
+      course_id: C120
+      student_email: student31@uni.example
+      enrolled_on: 2026-08-12
+      status: enrolled
+      grade: null
+    - enrollment_id: E5055
+      course_id: C118
+      student_email: student21@uni.example
+      enrolled_on: 2026-08-13
+      status: dropped
+      grade: null
+    - enrollment_id: E5056
+      course_id: C122
+      student_email: student32@uni.example
+      enrolled_on: 2026-09-10
+      status: enrolled
+      grade: null
+    - enrollment_id: E5057
+      course_id: C105
+      student_email: student57@uni.example
+      enrolled_on: 2026-08-19
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5058
+      course_id: C110
+      student_email: student39@uni.example
+      enrolled_on: 2026-09-15
+      status: dropped
+      grade: null
+    - enrollment_id: E5059
+      course_id: C101
+      student_email: student49@uni.example
+      enrolled_on: 2026-09-12
+      status: completed
+      grade: D
+    - enrollment_id: E5060
+      course_id: C128
+      student_email: student41@uni.example
+      enrolled_on: 2026-08-11
+      status: enrolled
+      grade: null
+    - enrollment_id: E5061
+      course_id: C104
+      student_email: student14@uni.example
+      enrolled_on: 2026-09-11
+      status: completed
+      grade: D
+    - enrollment_id: E5062
+      course_id: C101
+      student_email: student59@uni.example
+      enrolled_on: 2026-09-12
+      status: completed
+      grade: C
+    - enrollment_id: E5063
+      course_id: C110
+      student_email: student70@uni.example
+      enrolled_on: 2026-09-04
+      status: completed
+      grade: C
+    - enrollment_id: E5064
+      course_id: C116
+      student_email: student13@uni.example
+      enrolled_on: 2026-08-20
+      status: enrolled
+      grade: null
+    - enrollment_id: E5065
+      course_id: C123
+      student_email: student44@uni.example
+      enrolled_on: 2026-08-23
+      status: completed
+      grade: C
+    - enrollment_id: E5066
+      course_id: C104
+      student_email: student70@uni.example
+      enrolled_on: 2026-08-06
+      status: completed
+      grade: A
+    - enrollment_id: E5067
+      course_id: C115
+      student_email: student47@uni.example
+      enrolled_on: 2026-08-21
+      status: completed
+      grade: D
+    - enrollment_id: E5068
+      course_id: C104
+      student_email: student44@uni.example
+      enrolled_on: 2026-08-19
+      status: dropped
+      grade: null
+    - enrollment_id: E5069
+      course_id: C112
+      student_email: student61@uni.example
+      enrolled_on: 2026-08-13
+      status: completed
+      grade: B
+    - enrollment_id: E5070
+      course_id: C123
+      student_email: student66@uni.example
+      enrolled_on: 2026-08-27
+      status: enrolled
+      grade: null
+    - enrollment_id: E5071
+      course_id: C114
+      student_email: student21@uni.example
+      enrolled_on: 2026-09-13
+      status: completed
+      grade: B
+    - enrollment_id: E5072
+      course_id: C103
+      student_email: student23@uni.example
+      enrolled_on: 2026-09-06
+      status: enrolled
+      grade: null
+    - enrollment_id: E5073
+      course_id: C113
+      student_email: student42@uni.example
+      enrolled_on: 2026-08-25
+      status: completed
+      grade: B
+    - enrollment_id: E5074
+      course_id: C124
+      student_email: student61@uni.example
+      enrolled_on: 2026-08-22
+      status: dropped
+      grade: null
+    - enrollment_id: E5075
+      course_id: C117
+      student_email: student34@uni.example
+      enrolled_on: 2026-08-02
+      status: completed
+      grade: D
+    - enrollment_id: E5076
+      course_id: C125
+      student_email: student12@uni.example
+      enrolled_on: 2026-08-02
+      status: completed
+      grade: D
+    - enrollment_id: E5077
+      course_id: C119
+      student_email: student40@uni.example
+      enrolled_on: 2026-08-13
+      status: enrolled
+      grade: null
+    - enrollment_id: E5078
+      course_id: C123
+      student_email: student47@uni.example
+      enrolled_on: 2026-08-19
+      status: completed
+      grade: C
+    - enrollment_id: E5079
+      course_id: C126
+      student_email: student22@uni.example
+      enrolled_on: 2026-08-20
+      status: completed
+      grade: C
+    - enrollment_id: E5080
+      course_id: C111
+      student_email: student25@uni.example
+      enrolled_on: 2026-08-29
+      status: enrolled
+      grade: null
+    - enrollment_id: E5081
+      course_id: C110
+      student_email: student53@uni.example
+      enrolled_on: 2026-08-24
+      status: enrolled
+      grade: null
+    - enrollment_id: E5082
+      course_id: C105
+      student_email: student10@uni.example
+      enrolled_on: 2026-08-13
+      status: dropped
+      grade: null
+    - enrollment_id: E5083
+      course_id: C119
+      student_email: student63@uni.example
+      enrolled_on: 2026-09-01
+      status: completed
+      grade: C
+    - enrollment_id: E5084
+      course_id: C105
+      student_email: student32@uni.example
+      enrolled_on: 2026-08-22
+      status: enrolled
+      grade: null
+    - enrollment_id: E5085
+      course_id: C113
+      student_email: student2@uni.example
+      enrolled_on: 2026-09-11
+      status: enrolled
+      grade: null
+    - enrollment_id: E5086
+      course_id: C126
+      student_email: student22@uni.example
+      enrolled_on: 2026-09-04
+      status: enrolled
+      grade: null
+    - enrollment_id: E5087
+      course_id: C110
+      student_email: student11@uni.example
+      enrolled_on: 2026-09-02
+      status: completed
+      grade: B
+    - enrollment_id: E5088
+      course_id: C119
+      student_email: student42@uni.example
+      enrolled_on: 2026-08-19
+      status: completed
+      grade: A
+    - enrollment_id: E5089
+      course_id: C120
+      student_email: student1@uni.example
+      enrolled_on: 2026-08-06
+      status: dropped
+      grade: null
+    - enrollment_id: E5090
+      course_id: C105
+      student_email: student38@uni.example
+      enrolled_on: 2026-09-01
+      status: completed
+      grade: D
+    - enrollment_id: E5091
+      course_id: C116
+      student_email: student11@uni.example
+      enrolled_on: 2026-09-05
+      status: enrolled
+      grade: null
+    - enrollment_id: E5092
+      course_id: C114
+      student_email: student38@uni.example
+      enrolled_on: 2026-09-03
+      status: enrolled
+      grade: null
+    - enrollment_id: E5093
+      course_id: C116
+      student_email: student16@uni.example
+      enrolled_on: 2026-08-03
+      status: completed
+      grade: A
+    - enrollment_id: E5094
+      course_id: C126
+      student_email: student44@uni.example
+      enrolled_on: 2026-08-24
+      status: enrolled
+      grade: null
+    - enrollment_id: E5095
+      course_id: C120
+      student_email: student26@uni.example
+      enrolled_on: 2026-09-02
+      status: enrolled
+      grade: null
+    - enrollment_id: E5096
+      course_id: C130
+      student_email: student39@uni.example
+      enrolled_on: 2026-08-31
+      status: enrolled
+      grade: null
+    - enrollment_id: E5097
+      course_id: C107
+      student_email: student59@uni.example
+      enrolled_on: 2026-08-29
+      status: dropped
+      grade: null
+    - enrollment_id: E5098
+      course_id: C106
+      student_email: student53@uni.example
+      enrolled_on: 2026-08-22
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5099
+      course_id: C104
+      student_email: student32@uni.example
+      enrolled_on: 2026-08-27
+      status: dropped
+      grade: null
+    - enrollment_id: E5100
+      course_id: C130
+      student_email: student68@uni.example
+      enrolled_on: 2026-08-26
+      status: enrolled
+      grade: null
+    - enrollment_id: E5101
+      course_id: C116
+      student_email: student44@uni.example
+      enrolled_on: 2026-09-09
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5102
+      course_id: C109
+      student_email: student52@uni.example
+      enrolled_on: 2026-09-02
+      status: enrolled
+      grade: null
+    - enrollment_id: E5103
+      course_id: C113
+      student_email: student8@uni.example
+      enrolled_on: 2026-08-07
+      status: enrolled
+      grade: null
+    - enrollment_id: E5104
+      course_id: C111
+      student_email: student17@uni.example
+      enrolled_on: 2026-09-11
+      status: completed
+      grade: A
+    - enrollment_id: E5105
+      course_id: C112
+      student_email: student11@uni.example
+      enrolled_on: 2026-09-14
+      status: dropped
+      grade: null
+    - enrollment_id: E5106
+      course_id: C130
+      student_email: student19@uni.example
+      enrolled_on: 2026-08-19
+      status: completed
+      grade: B
+    - enrollment_id: E5107
+      course_id: C125
+      student_email: student24@uni.example
+      enrolled_on: 2026-08-18
+      status: completed
+      grade: A
+    - enrollment_id: E5108
+      course_id: C130
+      student_email: student50@uni.example
+      enrolled_on: 2026-08-07
+      status: enrolled
+      grade: null
+    - enrollment_id: E5109
+      course_id: C118
+      student_email: student70@uni.example
+      enrolled_on: 2026-08-21
+      status: completed
+      grade: C
+    - enrollment_id: E5110
+      course_id: C120
+      student_email: student6@uni.example
+      enrolled_on: 2026-08-23
+      status: enrolled
+      grade: null
+    - enrollment_id: E5111
+      course_id: C111
+      student_email: student14@uni.example
+      enrolled_on: 2026-08-11
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5112
+      course_id: C108
+      student_email: student5@uni.example
+      enrolled_on: 2026-08-02
+      status: enrolled
+      grade: null
+    - enrollment_id: E5113
+      course_id: C108
+      student_email: student46@uni.example
+      enrolled_on: 2026-08-13
+      status: completed
+      grade: D
+    - enrollment_id: E5114
+      course_id: C124
+      student_email: student66@uni.example
+      enrolled_on: 2026-08-05
+      status: enrolled
+      grade: null
+    - enrollment_id: E5115
+      course_id: C116
+      student_email: student11@uni.example
+      enrolled_on: 2026-08-01
+      status: dropped
+      grade: null
+    - enrollment_id: E5116
+      course_id: C124
+      student_email: student61@uni.example
+      enrolled_on: 2026-08-01
+      status: enrolled
+      grade: null
+    - enrollment_id: E5117
+      course_id: C104
+      student_email: student25@uni.example
+      enrolled_on: 2026-08-20
+      status: enrolled
+      grade: null
+    - enrollment_id: E5118
+      course_id: C116
+      student_email: student7@uni.example
+      enrolled_on: 2026-08-20
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5119
+      course_id: C127
+      student_email: student42@uni.example
+      enrolled_on: 2026-08-19
+      status: dropped
+      grade: null
+    - enrollment_id: E5120
+      course_id: C113
+      student_email: student26@uni.example
+      enrolled_on: 2026-08-28
+      status: enrolled
+      grade: null
+    - enrollment_id: E5121
+      course_id: C108
+      student_email: student36@uni.example
+      enrolled_on: 2026-08-14
+      status: completed
+      grade: D
+    - enrollment_id: E5122
+      course_id: C115
+      student_email: student34@uni.example
+      enrolled_on: 2026-08-02
+      status: dropped
+      grade: null
+    - enrollment_id: E5123
+      course_id: C110
+      student_email: student25@uni.example
+      enrolled_on: 2026-08-24
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5124
+      course_id: C103
+      student_email: student49@uni.example
+      enrolled_on: 2026-08-13
+      status: enrolled
+      grade: null
+    - enrollment_id: E5125
+      course_id: C104
+      student_email: student61@uni.example
+      enrolled_on: 2026-09-06
+      status: enrolled
+      grade: null
+    - enrollment_id: E5126
+      course_id: C101
+      student_email: student12@uni.example
+      enrolled_on: 2026-08-07
+      status: dropped
+      grade: null
+    - enrollment_id: E5127
+      course_id: C118
+      student_email: student57@uni.example
+      enrolled_on: 2026-08-04
+      status: enrolled
+      grade: null
+    - enrollment_id: E5128
+      course_id: C101
+      student_email: student36@uni.example
+      enrolled_on: 2026-08-16
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5129
+      course_id: C111
+      student_email: student61@uni.example
+      enrolled_on: 2026-08-17
+      status: dropped
+      grade: null
+    - enrollment_id: E5130
+      course_id: C106
+      student_email: student30@uni.example
+      enrolled_on: 2026-09-14
+      status: enrolled
+      grade: null
+    - enrollment_id: E5131
+      course_id: C110
+      student_email: student17@uni.example
+      enrolled_on: 2026-08-15
+      status: completed
+      grade: B
+    - enrollment_id: E5132
+      course_id: C103
+      student_email: student9@uni.example
+      enrolled_on: 2026-09-09
+      status: enrolled
+      grade: null
+    - enrollment_id: E5133
+      course_id: C104
+      student_email: student37@uni.example
+      enrolled_on: 2026-08-21
+      status: dropped
+      grade: null
+    - enrollment_id: E5134
+      course_id: C130
+      student_email: student46@uni.example
+      enrolled_on: 2026-08-21
+      status: dropped
+      grade: null
+    - enrollment_id: E5135
+      course_id: C108
+      student_email: student18@uni.example
+      enrolled_on: 2026-09-08
+      status: enrolled
+      grade: null
+    - enrollment_id: E5136
+      course_id: C112
+      student_email: student57@uni.example
+      enrolled_on: 2026-09-09
+      status: dropped
+      grade: null
+    - enrollment_id: E5137
+      course_id: C111
+      student_email: student45@uni.example
+      enrolled_on: 2026-09-02
+      status: enrolled
+      grade: null
+    - enrollment_id: E5138
+      course_id: C120
+      student_email: student34@uni.example
+      enrolled_on: 2026-09-13
+      status: dropped
+      grade: null
+    - enrollment_id: E5139
+      course_id: C123
+      student_email: student53@uni.example
+      enrolled_on: 2026-08-23
+      status: enrolled
+      grade: null
+    - enrollment_id: E5140
+      course_id: C101
+      student_email: student53@uni.example
+      enrolled_on: 2026-08-29
+      status: enrolled
+      grade: null
+    - enrollment_id: E5141
+      course_id: C124
+      student_email: student26@uni.example
+      enrolled_on: 2026-09-06
+      status: enrolled
+      grade: null
+    - enrollment_id: E5142
+      course_id: C115
+      student_email: student47@uni.example
+      enrolled_on: 2026-09-14
+      status: enrolled
+      grade: null
+    - enrollment_id: E5143
+      course_id: C110
+      student_email: student8@uni.example
+      enrolled_on: 2026-09-06
+      status: completed
+      grade: C
+    - enrollment_id: E5144
+      course_id: C128
+      student_email: student57@uni.example
+      enrolled_on: 2026-08-29
+      status: enrolled
+      grade: null
+    - enrollment_id: E5145
+      course_id: C119
+      student_email: student59@uni.example
+      enrolled_on: 2026-09-07
+      status: enrolled
+      grade: null
+    - enrollment_id: E5146
+      course_id: C114
+      student_email: student69@uni.example
+      enrolled_on: 2026-08-28
+      status: dropped
+      grade: null
+    - enrollment_id: E5147
+      course_id: C103
+      student_email: student4@uni.example
+      enrolled_on: 2026-08-07
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5148
+      course_id: C127
+      student_email: student23@uni.example
+      enrolled_on: 2026-08-12
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5149
+      course_id: C113
+      student_email: student52@uni.example
+      enrolled_on: 2026-08-05
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5150
+      course_id: C130
+      student_email: student21@uni.example
+      enrolled_on: 2026-08-07
+      status: enrolled
+      grade: null
+    - enrollment_id: E5151
+      course_id: C103
+      student_email: student21@uni.example
+      enrolled_on: 2026-09-15
+      status: completed
+      grade: A
+    - enrollment_id: E5152
+      course_id: C111
+      student_email: student61@uni.example
+      enrolled_on: 2026-08-15
+      status: completed
+      grade: D
+    - enrollment_id: E5153
+      course_id: C119
+      student_email: student60@uni.example
+      enrolled_on: 2026-08-31
+      status: enrolled
+      grade: null
+    - enrollment_id: E5154
+      course_id: C108
+      student_email: student1@uni.example
+      enrolled_on: 2026-09-03
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5155
+      course_id: C103
+      student_email: student33@uni.example
+      enrolled_on: 2026-08-06
+      status: enrolled
+      grade: null
+    - enrollment_id: E5156
+      course_id: C115
+      student_email: student47@uni.example
+      enrolled_on: 2026-08-23
+      status: enrolled
+      grade: null
+    - enrollment_id: E5157
+      course_id: C103
+      student_email: student63@uni.example
+      enrolled_on: 2026-08-08
+      status: enrolled
+      grade: null
+    - enrollment_id: E5158
+      course_id: C102
+      student_email: student23@uni.example
+      enrolled_on: 2026-08-06
+      status: completed
+      grade: A
+    - enrollment_id: E5159
+      course_id: C115
+      student_email: student21@uni.example
+      enrolled_on: 2026-08-27
+      status: enrolled
+      grade: null
+    - enrollment_id: E5160
+      course_id: C107
+      student_email: student52@uni.example
+      enrolled_on: 2026-08-20
+      status: dropped
+      grade: null
+    - enrollment_id: E5161
+      course_id: C112
+      student_email: student53@uni.example
+      enrolled_on: 2026-08-11
+      status: dropped
+      grade: null
+    - enrollment_id: E5162
+      course_id: C111
+      student_email: student39@uni.example
+      enrolled_on: 2026-08-04
+      status: completed
+      grade: C
+    - enrollment_id: E5163
+      course_id: C113
+      student_email: student61@uni.example
+      enrolled_on: 2026-09-10
+      status: completed
+      grade: D
+    - enrollment_id: E5164
+      course_id: C125
+      student_email: student21@uni.example
+      enrolled_on: 2026-08-02
+      status: enrolled
+      grade: null
+    - enrollment_id: E5165
+      course_id: C121
+      student_email: student59@uni.example
+      enrolled_on: 2026-09-10
+      status: completed
+      grade: D
+    - enrollment_id: E5166
+      course_id: C102
+      student_email: student2@uni.example
+      enrolled_on: 2026-08-04
+      status: enrolled
+      grade: null
+    - enrollment_id: E5167
+      course_id: C111
+      student_email: student22@uni.example
+      enrolled_on: 2026-09-12
+      status: dropped
+      grade: null
+    - enrollment_id: E5168
+      course_id: C107
+      student_email: student4@uni.example
+      enrolled_on: 2026-08-02
+      status: dropped
+      grade: null
+    - enrollment_id: E5169
+      course_id: C123
+      student_email: student26@uni.example
+      enrolled_on: 2026-08-04
+      status: enrolled
+      grade: null
+    - enrollment_id: E5170
+      course_id: C112
+      student_email: student3@uni.example
+      enrolled_on: 2026-08-18
+      status: completed
+      grade: A
+    - enrollment_id: E5171
+      course_id: C117
+      student_email: student43@uni.example
+      enrolled_on: 2026-09-15
+      status: dropped
+      grade: null
+    - enrollment_id: E5172
+      course_id: C115
+      student_email: student15@uni.example
+      enrolled_on: 2026-08-08
+      status: enrolled
+      grade: null
+    - enrollment_id: E5173
+      course_id: C102
+      student_email: student58@uni.example
+      enrolled_on: 2026-09-12
+      status: enrolled
+      grade: null
+    - enrollment_id: E5174
+      course_id: C124
+      student_email: student54@uni.example
+      enrolled_on: 2026-08-12
+      status: completed
+      grade: C
+    - enrollment_id: E5175
+      course_id: C128
+      student_email: student15@uni.example
+      enrolled_on: 2026-08-11
+      status: enrolled
+      grade: null
+    - enrollment_id: E5176
+      course_id: C113
+      student_email: student1@uni.example
+      enrolled_on: 2026-08-13
+      status: dropped
+      grade: null
+    - enrollment_id: E5177
+      course_id: C126
+      student_email: student27@uni.example
+      enrolled_on: 2026-09-06
+      status: dropped
+      grade: null
+    - enrollment_id: E5178
+      course_id: C129
+      student_email: student55@uni.example
+      enrolled_on: 2026-08-29
+      status: enrolled
+      grade: null
+    - enrollment_id: E5179
+      course_id: C108
+      student_email: student27@uni.example
+      enrolled_on: 2026-09-08
+      status: enrolled
+      grade: null
+    - enrollment_id: E5180
+      course_id: C117
+      student_email: student26@uni.example
+      enrolled_on: 2026-08-13
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5181
+      course_id: C129
+      student_email: student33@uni.example
+      enrolled_on: 2026-08-30
+      status: enrolled
+      grade: null
+    - enrollment_id: E5182
+      course_id: C111
+      student_email: student64@uni.example
+      enrolled_on: 2026-08-31
+      status: enrolled
+      grade: null
+    - enrollment_id: E5183
+      course_id: C110
+      student_email: student13@uni.example
+      enrolled_on: 2026-08-01
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5184
+      course_id: C126
+      student_email: student29@uni.example
+      enrolled_on: 2026-08-09
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5185
+      course_id: C108
+      student_email: student41@uni.example
+      enrolled_on: 2026-08-01
+      status: enrolled
+      grade: null
+    - enrollment_id: E5186
+      course_id: C108
+      student_email: student37@uni.example
+      enrolled_on: 2026-09-02
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5187
+      course_id: C126
+      student_email: student24@uni.example
+      enrolled_on: 2026-08-05
+      status: completed
+      grade: A
+    - enrollment_id: E5188
+      course_id: C119
+      student_email: student43@uni.example
+      enrolled_on: 2026-08-14
+      status: enrolled
+      grade: null
+    - enrollment_id: E5189
+      course_id: C103
+      student_email: student60@uni.example
+      enrolled_on: 2026-08-12
+      status: dropped
+      grade: null
+    - enrollment_id: E5190
+      course_id: C113
+      student_email: student21@uni.example
+      enrolled_on: 2026-08-17
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5191
+      course_id: C124
+      student_email: student47@uni.example
+      enrolled_on: 2026-09-14
+      status: enrolled
+      grade: null
+    - enrollment_id: E5192
+      course_id: C108
+      student_email: student59@uni.example
+      enrolled_on: 2026-08-23
+      status: enrolled
+      grade: null
+    - enrollment_id: E5193
+      course_id: C112
+      student_email: student52@uni.example
+      enrolled_on: 2026-09-04
+      status: completed
+      grade: A
+    - enrollment_id: E5194
+      course_id: C130
+      student_email: student8@uni.example
+      enrolled_on: 2026-09-06
+      status: enrolled
+      grade: null
+    - enrollment_id: E5195
+      course_id: C104
+      student_email: student9@uni.example
+      enrolled_on: 2026-09-07
+      status: enrolled
+      grade: null
+    - enrollment_id: E5196
+      course_id: C112
+      student_email: student6@uni.example
+      enrolled_on: 2026-08-26
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5197
+      course_id: C112
+      student_email: student50@uni.example
+      enrolled_on: 2026-08-26
+      status: enrolled
+      grade: null
+    - enrollment_id: E5198
+      course_id: C112
+      student_email: student25@uni.example
+      enrolled_on: 2026-08-07
+      status: enrolled
+      grade: null
+    - enrollment_id: E5199
+      course_id: C102
+      student_email: student38@uni.example
+      enrolled_on: 2026-08-31
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5200
+      course_id: C112
+      student_email: student26@uni.example
+      enrolled_on: 2026-09-09
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5201
+      course_id: C113
+      student_email: student55@uni.example
+      enrolled_on: 2026-08-10
+      status: completed
+      grade: D
+    - enrollment_id: E5202
+      course_id: C103
+      student_email: student24@uni.example
+      enrolled_on: 2026-08-05
+      status: completed
+      grade: B
+    - enrollment_id: E5203
+      course_id: C104
+      student_email: student2@uni.example
+      enrolled_on: 2026-08-25
+      status: completed
+      grade: B
+    - enrollment_id: E5204
+      course_id: C122
+      student_email: student47@uni.example
+      enrolled_on: 2026-08-24
+      status: enrolled
+      grade: null
+    - enrollment_id: E5205
+      course_id: C106
+      student_email: student21@uni.example
+      enrolled_on: 2026-08-14
+      status: enrolled
+      grade: null
+    - enrollment_id: E5206
+      course_id: C118
+      student_email: student14@uni.example
+      enrolled_on: 2026-09-13
+      status: dropped
+      grade: null
+    - enrollment_id: E5207
+      course_id: C115
+      student_email: student56@uni.example
+      enrolled_on: 2026-09-03
+      status: waitlisted
+      grade: null
+    - enrollment_id: E5208
+      course_id: C102
+      student_email: student64@uni.example
+      enrolled_on: 2026-09-06
+      status: dropped
+      grade: null
+    - enrollment_id: E5209
+      course_id: C114
+      student_email: student19@uni.example
+      enrolled_on: 2026-09-03
+      status: enrolled
+      grade: null
+    - enrollment_id: E5210
+      course_id: C105
+      student_email: student6@uni.example
+      enrolled_on: 2026-08-16
+      status: enrolled
+      grade: null
+seed:
+  course: |-
+    (ctx) => {
+      const day = (d) => { const s = String(d); return s.length === 10 ? s + 'T00:00:00.000Z' : s; };
+      return ctx.fixtures.courses.map((c) => ({
+        code: c.course_id,
+        title: c.title,
+        department: c.department,
+        credits: c.credits,
+        capacity: c.capacity,
+        starts_on: day(c.starts_on),
+        created_at: '2026-06-01T09:00:00.000Z',
+        updated_at: '2026-06-01T09:00:00.000Z',
+      }));
+    }
+  enrollment: |-
+    (ctx) => {
+      const day = (d) => { const s = String(d); return s.length === 10 ? s + 'T00:00:00.000Z' : s; };
+      const byCode = {};
+      for (const c of ctx.rows('course')) byCode[c.code] = c.id;
+      return ctx.fixtures.enrollments.map((e) => {
+        const when = day(e.enrolled_on);
+        const grade = e.status === 'completed' && e.grade ? e.grade : null;
+        return {
+          code: e.enrollment_id,
+          course_id: byCode[e.course_id],
+          student_email: e.student_email,
+          enrolled_on: when,
+          status: e.status,
+          grade,
+          created_at: when,
+          updated_at: when,
+        };
+      });
+    }
+tests:
+  enroll_waitlist_and_drop_promotes:
+    description: Enrolling past capacity waitlists, duplicates are refused, and dropping a seat promotes the oldest waitlisted student.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/courses', { code: 'T901', title: 'Test Course', department: 'Math', credits: 3, capacity: 1, starts_on: '2026-11-02T00:00:00.000Z' });
+        ctx.assert(c.status === 201, 'create course ' + JSON.stringify(c.body));
+        const a = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'a@uni.example' });
+        ctx.assert(a.status === 201 && a.body.status === 'enrolled', 'a enrolled ' + JSON.stringify(a.body));
+        const b = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'b@uni.example' });
+        ctx.assert(b.status === 201 && b.body.status === 'waitlisted', 'b waitlisted ' + JSON.stringify(b.body));
+        const d = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'd@uni.example' });
+        ctx.assert(d.body.status === 'waitlisted', 'd waitlisted');
+        const dup = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'b@uni.example' });
+        ctx.assert(dup.status === 409, 'duplicate refused ' + dup.status);
+        const bad = ctx.api('POST', '/enrollments', { course_id: 'crs_9999', student_email: 'x@uni.example' });
+        ctx.assert(bad.status >= 400 && bad.status < 500, 'unknown course refused ' + bad.status);
+        const drop = ctx.api('POST', '/enrollments/' + a.body.id + '/drop', {});
+        ctx.assert(drop.status === 200 && drop.body.status === 'dropped', 'drop ' + JSON.stringify(drop.body));
+        ctx.assert(ctx.api('GET', '/enrollments/' + b.body.id).body.status === 'enrolled', 'b promoted');
+        ctx.assert(ctx.api('GET', '/enrollments/' + d.body.id).body.status === 'waitlisted', 'd still waitlisted');
+        const again = ctx.api('POST', '/enrollments/' + a.body.id + '/drop', {});
+        ctx.assert(again.status === 409, 'second drop refused');
+        const miss = ctx.api('POST', '/enrollments/enr_9999/drop', {});
+        ctx.assert(miss.status === 404, 'missing drop 404');
+        const re = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'a@uni.example' });
+        ctx.assert(re.status === 201 && re.body.status === 'waitlisted', 're-enroll after drop waitlisted');
+      }
+  complete_requires_enrolled_and_grade:
+    description: complete_enrollment records the grade on enrolled enrollments only.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/courses', { code: 'T902', title: 'Test Course 2', department: 'Art', credits: 2, capacity: 1, starts_on: '2026-11-02T00:00:00.000Z' });
+        const a = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'a@uni.example' });
+        const b = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'b@uni.example' });
+        const w = ctx.api('POST', '/enrollments/' + b.body.id + '/complete', { grade: 'A' });
+        ctx.assert(w.status === 409, 'waitlisted cannot complete ' + w.status);
+        const nog = ctx.api('POST', '/enrollments/' + a.body.id + '/complete', {});
+        ctx.assert(nog.status >= 400 && nog.status < 500, 'grade required ' + nog.status);
+        const badg = ctx.api('POST', '/enrollments/' + a.body.id + '/complete', { grade: 'F' });
+        ctx.assert(badg.status >= 400 && badg.status < 500, 'bad grade refused ' + badg.status);
+        const ok = ctx.api('POST', '/enrollments/' + a.body.id + '/complete', { grade: 'B' });
+        ctx.assert(ok.status === 200 && ok.body.status === 'completed' && ok.body.grade === 'B', 'completed ' + JSON.stringify(ok.body));
+        const twice = ctx.api('POST', '/enrollments/' + a.body.id + '/complete', { grade: 'A' });
+        ctx.assert(twice.status === 409, 'second complete refused');
+        const miss = ctx.api('POST', '/enrollments/enr_9999/complete', { grade: 'A' });
+        ctx.assert(miss.status === 404, 'missing 404');
+      }
+  promote_waitlist_action_fills_free_seats:
+    description: promote_waitlist fills free seats oldest first, and lowering capacity drops nobody.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/courses', { code: 'T903', title: 'Test Course 3', department: 'Biology', credits: 4, capacity: 1, starts_on: '2026-11-02T00:00:00.000Z' });
+        const a = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'a@uni.example' });
+        const b = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'b@uni.example' });
+        const d = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'd@uni.example' });
+        const none = ctx.api('POST', '/courses/' + c.body.id + '/promote_waitlist', {});
+        ctx.assert(none.status === 200 && none.body.promoted.length === 0, 'full course promotes none');
+        ctx.assert(ctx.api('PATCH', '/courses/' + c.body.id, { capacity: 2 }).status === 200, 'raise capacity');
+        const r = ctx.api('POST', '/courses/' + c.body.id + '/promote_waitlist', {});
+        ctx.assert(r.status === 200 && r.body.promoted.length === 1 && r.body.promoted[0].id === b.body.id, 'b promoted ' + JSON.stringify(r.body));
+        ctx.assert(ctx.api('GET', '/enrollments/' + d.body.id).body.status === 'waitlisted', 'd waits');
+        ctx.assert(ctx.api('PATCH', '/courses/' + c.body.id, { capacity: 1 }).status === 200, 'lower capacity');
+        ctx.assert(ctx.api('GET', '/enrollments/' + a.body.id).body.status === 'enrolled' && ctx.api('GET', '/enrollments/' + b.body.id).body.status === 'enrolled', 'nobody dropped');
+        ctx.assert(ctx.api('POST', '/courses/crs_9999/promote_waitlist', {}).status === 404, 'missing course 404');
+      }
+  promote_waitlisted_job_runs_hourly:
+    description: The hourly job promotes waitlisted students when capacity grows.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/courses', { code: 'T904', title: 'Test Course 4', department: 'History', credits: 3, capacity: 1, starts_on: '2026-11-02T00:00:00.000Z' });
+        ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'a@uni.example' });
+        const b = ctx.api('POST', '/enrollments', { course_id: c.body.id, student_email: 'b@uni.example' });
+        ctx.assert(b.body.status === 'waitlisted', 'b waitlisted');
+        ctx.api('PATCH', '/courses/' + c.body.id, { capacity: 2 });
+        ctx.advance('2h');
+        ctx.assert(ctx.api('GET', '/enrollments/' + b.body.id).body.status === 'enrolled', 'job promoted b');
+      }
+tasks:
+  drop_student_from_course:
+    difficulty: easy
+    instruction: Drop the enrollment of student53@uni.example in the course titled 'Math Seminar 9'. Do not change that student's other enrollments or anyone else's.
+    grader: |-
+      (ctx) => {
+        const course = ctx.seed.list('course', { where: { title: 'Math Seminar 9' } })[0];
+        if (!course) return 0;
+        const target = ctx.seed.list('enrollment', { where: { course_id: course.id, student_email: 'student53@uni.example', status: 'enrolled' } })[0];
+        if (!target) return 0;
+        for (const c of ctx.changes()) {
+          if (c.entity !== 'enrollment' || c.kind === 'created') return 0;
+          if (c.id === target.id) continue;
+          const before = ctx.seed.get('enrollment', c.id);
+          const after = ctx.db.get('enrollment', c.id);
+          if (before && after && before.course_id === course.id && before.status === 'waitlisted' && after.status === 'enrolled') continue;
+          return 0;
+        }
+        const end = ctx.db.get('enrollment', target.id);
+        return end.status === 'dropped' ? 1 : 0;
+      }
+    solution: |-
+      (ctx) => {
+        const courses = ctx.api('GET', '/courses?q=Math+Seminar+9').body.data.filter((c) => c.title === 'Math Seminar 9');
+        ctx.assert(courses.length === 1, 'expected one course titled Math Seminar 9, found ' + courses.length);
+        const rows = ctx.api('GET', '/enrollments?course_id=' + courses[0].id + '&student_email=student53@uni.example&status=enrolled').body.data;
+        ctx.assert(rows.length === 1, 'expected one enrolled enrollment, found ' + rows.length);
+        const r = ctx.api('POST', '/enrollments/' + rows[0].id + '/drop', {});
+        ctx.assert(r.status === 200, 'drop failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: drops every enrolled enrollment of the student across all courses instead of only the one in Math Seminar 9
+        script: |-
+          (ctx) => {
+            const rows = ctx.api('GET', '/enrollments?student_email=student53@uni.example&status=enrolled').body.data;
+            for (const e of rows) ctx.api('POST', '/enrollments/' + e.id + '/drop', {});
+          }
+      - why: drops the other enrolled student of Math Seminar 9 instead of the named student
+        script: |-
+          (ctx) => {
+            const course = ctx.api('GET', '/courses?q=Math+Seminar+9').body.data.find((c) => c.title === 'Math Seminar 9');
+            const rows = ctx.api('GET', '/enrollments?course_id=' + course.id + '&status=enrolled').body.data;
+            const other = rows.find((e) => e.student_email !== 'student53@uni.example');
+            ctx.api('POST', '/enrollments/' + other.id + '/drop', {});
+          }
+    alternatives: []
+  enroll_into_full_course:
+    difficulty: medium
+    instruction: The course 'Physics Lab 13' is being cut back to 3 seats. Set its capacity to 3. Then enroll student99@uni.example in it, which should put that student on the waitlist because the course is full. Finally release the seat held by student8@uni.example so the waitlist moves forward. Do not raise the capacity or edit enrollments in any other way.
+    grader: |-
+      (ctx) => {
+        const course = ctx.seed.list('course', { where: { title: 'Physics Lab 13' } })[0];
+        if (!course) return 0;
+        const rows = ctx.seed.list('enrollment', { where: { course_id: course.id } });
+        const waiting = rows.filter((r) => r.status === 'waitlisted').sort((a, b) => a.enrolled_on < b.enrolled_on ? -1 : a.enrolled_on > b.enrolled_on ? 1 : a.id < b.id ? -1 : 1);
+        const seat = rows.find((r) => r.student_email === 'student8@uni.example' && r.status === 'enrolled');
+        if (!seat || waiting.length < 3) return 0;
+        const fresh = ctx.db.list('enrollment', { where: { course_id: course.id, student_email: 'student99@uni.example' } });
+        const newIds = new Set(fresh.map((r) => r.id));
+        const allowed = new Set([seat.id, waiting[0].id]);
+        const endCourse = ctx.db.get('course', course.id);
+        ctx.guard('only the course capacity changed on the course', endCourse.title === course.title && endCourse.department === course.department && endCourse.credits === course.credits && endCourse.starts_on === course.starts_on && endCourse.code === course.code);
+        const collateral = ctx.changes().some((c) => {
+          if (c.entity === 'course' && c.id === course.id) return false;
+          if (c.entity === 'enrollment' && (allowed.has(c.id) || newIds.has(c.id))) return false;
+          return true;
+        });
+        ctx.guard('nothing changed except the course, the new enrollment, the released seat and the promoted student', !collateral);
+        const end = (id) => ctx.db.get('enrollment', id);
+        ctx.goal(0.15, 'capacity set to 3', endCourse.capacity === 3);
+        ctx.goal(0.25, 'new student is waitlisted', fresh.length === 1 && fresh[0].status === 'waitlisted');
+        ctx.goal(0.2, 'student8 seat dropped', end(seat.id).status === 'dropped');
+        ctx.goal(0.4, 'only the oldest waitlisted student was promoted', end(waiting[0].id).status === 'enrolled' && end(waiting[1].id).status === 'waitlisted' && end(waiting[2].id).status === 'waitlisted' && end(seat.id).status === 'dropped');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const courses = ctx.api('GET', '/courses?q=Physics+Lab+13').body.data.filter((c) => c.title === 'Physics Lab 13');
+        ctx.assert(courses.length === 1, 'expected one Physics Lab 13, found ' + courses.length);
+        const course = courses[0];
+        const cap = ctx.api('PATCH', '/courses/' + course.id, { capacity: 3 });
+        ctx.assert(cap.status === 200, 'capacity update failed: ' + JSON.stringify(cap.body));
+        const enr = ctx.api('POST', '/enrollments', { course_id: course.id, student_email: 'student99@uni.example' });
+        ctx.assert(enr.status === 201 && enr.body.status === 'waitlisted', 'expected a waitlisted enrollment: ' + JSON.stringify(enr.body));
+        const seats = ctx.api('GET', '/enrollments?course_id=' + course.id + '&student_email=student8@uni.example&status=enrolled').body.data.filter((e) => e.student_email === 'student8@uni.example');
+        ctx.assert(seats.length === 1, 'expected one seat for student8, found ' + seats.length);
+        const drop = ctx.api('POST', '/enrollments/' + seats[0].id + '/drop', {});
+        ctx.assert(drop.status === 200, 'drop failed: ' + JSON.stringify(drop.body));
+      }
+    decoys:
+      - why: raises the capacity so the new student gets a seat directly instead of cutting it to 3 and using the waitlist
+        script: |-
+          (ctx) => {
+            const course = ctx.api('GET', '/courses?q=Physics+Lab+13').body.data.find((c) => c.title === 'Physics Lab 13');
+            ctx.api('PATCH', '/courses/' + course.id, { capacity: 4 });
+            ctx.api('POST', '/enrollments', { course_id: course.id, student_email: 'student99@uni.example' });
+          }
+      - why: drops a different enrolled student than student8 so the wrong seat is released
+        script: |-
+          (ctx) => {
+            const course = ctx.api('GET', '/courses?q=Physics+Lab+13').body.data.find((c) => c.title === 'Physics Lab 13');
+            ctx.api('PATCH', '/courses/' + course.id, { capacity: 3 });
+            ctx.api('POST', '/enrollments', { course_id: course.id, student_email: 'student99@uni.example' });
+            const other = ctx.api('GET', '/enrollments?course_id=' + course.id + '&status=enrolled').body.data.find((e) => e.student_email === 'student2@uni.example');
+            ctx.api('POST', '/enrollments/' + other.id + '/drop', {});
+          }
+      - why: drops the seat before lowering the capacity, so the drop promotes the whole waitlist instead of one student
+        script: |-
+          (ctx) => {
+            const course = ctx.api('GET', '/courses?q=Physics+Lab+13').body.data.find((c) => c.title === 'Physics Lab 13');
+            const seat = ctx.api('GET', '/enrollments?course_id=' + course.id + '&student_email=student8@uni.example&status=enrolled').body.data[0];
+            ctx.api('POST', '/enrollments/' + seat.id + '/drop', {});
+            ctx.api('PATCH', '/courses/' + course.id, { capacity: 3 });
+            ctx.api('POST', '/enrollments', { course_id: course.id, student_email: 'student99@uni.example' });
+          }
+      - why: lowers the capacity and drops the seat but never enrolls the new student
+        script: |-
+          (ctx) => {
+            const course = ctx.api('GET', '/courses?q=Physics+Lab+13').body.data.find((c) => c.title === 'Physics Lab 13');
+            ctx.api('PATCH', '/courses/' + course.id, { capacity: 3 });
+            const seat = ctx.api('GET', '/enrollments?course_id=' + course.id + '&student_email=student8@uni.example&status=enrolled').body.data[0];
+            ctx.api('POST', '/enrollments/' + seat.id + '/drop', {});
+          }
+    alternatives: []
+  grade_completed_department_courses:
+    difficulty: hard
+    instruction: For every course in the Computing department that starts before 2026-10-15, complete every enrollment that is currently enrolled with the final grade B. Leave waitlisted and dropped enrollments, other departments and later courses untouched.
+    grader: |-
+      (ctx) => {
+        const cutoff = '2026-10-15T00:00:00.000Z';
+        const courses = ctx.seed.list('course', { where: { department: 'Computing' } }).filter((c) => ctx.time.minutesBetween(c.starts_on, cutoff) > 0);
+        const ids = new Set(courses.map((c) => c.id));
+        const targets = ctx.seed.list('enrollment', { where: { status: 'enrolled' } }).filter((e) => ids.has(e.course_id));
+        if (targets.length === 0) return 0;
+        const tset = new Set(targets.map((t) => t.id));
+        for (const c of ctx.changes()) {
+          if (c.entity === 'enrollment' && tset.has(c.id)) continue;
+          return 0;
+        }
+        let done = 0;
+        for (const t of targets) {
+          const end = ctx.db.get('enrollment', t.id);
+          if (end && end.status === 'completed' && end.grade === 'B') done += 1;
+        }
+        return done / targets.length;
+      }
+    solution: |-
+      (ctx) => {
+        const pages = (path) => {
+          const rows = [];
+          let cursor = null;
+          do {
+            const r = ctx.api('GET', path + (cursor ? (path.indexOf('?') >= 0 ? '&' : '?') + 'cursor=' + cursor : ''));
+            ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body));
+            rows.push(...r.body.data);
+            cursor = r.body.next_cursor;
+          } while (cursor);
+          return rows;
+        };
+        const cutoff = '2026-10-15T00:00:00.000Z';
+        const courses = pages('/courses?department=Computing').filter((c) => c.starts_on < cutoff);
+        ctx.assert(courses.length > 0, 'no Computing courses before the cutoff');
+        for (const c of courses) {
+          const rows = pages('/courses/' + c.id + '/enrollments?status=enrolled');
+          for (const e of rows) {
+            const r = ctx.api('POST', '/enrollments/' + e.id + '/complete', { grade: 'B' });
+            ctx.assert(r.status === 200, 'complete ' + e.id + ' failed: ' + JSON.stringify(r.body));
+          }
+        }
+      }
+    decoys:
+      - why: reads only the first page of the unfiltered course list, so it misses the Computing course that sits on page 2
+        script: |-
+          (ctx) => {
+            const cutoff = '2026-10-15T00:00:00.000Z';
+            const page = ctx.api('GET', '/courses').body.data;
+            for (const c of page) {
+              if (c.department !== 'Computing' || c.starts_on >= cutoff) continue;
+              const rows = ctx.api('GET', '/courses/' + c.id + '/enrollments?status=enrolled').body.data;
+              for (const e of rows) ctx.api('POST', '/enrollments/' + e.id + '/complete', { grade: 'B' });
+            }
+          }
+      - why: ignores the start date and grades every Computing course including the one starting in November
+        script: |-
+          (ctx) => {
+            const courses = ctx.api('GET', '/courses?department=Computing').body.data;
+            for (const c of courses) {
+              const rows = ctx.api('GET', '/courses/' + c.id + '/enrollments?status=enrolled').body.data;
+              for (const e of rows) ctx.api('POST', '/enrollments/' + e.id + '/complete', { grade: 'B' });
+            }
+          }
+      - why: matches courses whose title contains Computing instead of using the department, so it grades a Biology course and misses real Computing courses
+        script: |-
+          (ctx) => {
+            const cutoff = '2026-10-15T00:00:00.000Z';
+            let cursor = null;
+            const courses = [];
+            do {
+              const r = ctx.api('GET', '/courses' + (cursor ? '?cursor=' + cursor : ''));
+              courses.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor);
+            for (const c of courses) {
+              if (c.title.indexOf('Computing') < 0 || c.starts_on >= cutoff) continue;
+              const rows = ctx.api('GET', '/courses/' + c.id + '/enrollments?status=enrolled').body.data;
+              for (const e of rows) ctx.api('POST', '/enrollments/' + e.id + '/complete', { grade: 'B' });
+            }
+          }
+      - why: completes the right enrollments but with grade A instead of B
+        script: |-
+          (ctx) => {
+            const cutoff = '2026-10-15T00:00:00.000Z';
+            const courses = ctx.api('GET', '/courses?department=Computing').body.data.filter((c) => c.starts_on < cutoff);
+            for (const c of courses) {
+              const rows = ctx.api('GET', '/courses/' + c.id + '/enrollments?status=enrolled').body.data;
+              for (const e of rows) ctx.api('POST', '/enrollments/' + e.id + '/complete', { grade: 'A' });
+            }
+          }
+      - why: reads only the first page of all enrolled enrollments and grades the matching ones, so it misses targets on later pages
+        script: |-
+          (ctx) => {
+            const cutoff = '2026-10-15T00:00:00.000Z';
+            const courses = ctx.api('GET', '/courses?department=Computing').body.data.filter((c) => c.starts_on < cutoff);
+            const ids = new Set(courses.map((c) => c.id));
+            const page = ctx.api('GET', '/enrollments?status=enrolled').body.data;
+            for (const e of page) {
+              if (ids.has(e.course_id)) ctx.api('POST', '/enrollments/' + e.id + '/complete', { grade: 'B' });
+            }
+          }
+    alternatives: []
