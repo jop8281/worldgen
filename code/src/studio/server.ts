@@ -17,16 +17,23 @@
  * - No private task material. The worlds route counts tasks, it never returns task source. The
  *   report route serves REPORT.md and capsule.json and refuses a report that embeds any
  *   grader, solution or decoy source. test/studio.test.ts proves both with canaries.
+ * - Sign-in (YOS-187). With users configured, every route but GET / and GET /api/health needs a bearer token whose
+ *   sha256 matches a user; GETs need the viewer role, POSTs the operator role, GET /api/audit the admin role. The
+ *   credential is a bearer header, never a cookie: a cookie ignores ports and would reach every served world on the
+ *   host, whose call log records request headers. With no users the studio is open and must stay on loopback. Every
+ *   POST is appended to <worldsDir>/.studio-audit.jsonl: who, what and the status, never a token or a body.
  * - Stops never leave zombies: SIGTERM, a short wait, SIGKILL, and the answer says which signal
  *   ended the child. A child that dies on its own removes its own record.
  */
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import type { Dirent } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { appendFile, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { z } from 'zod';
 import { checkWorld, loadWorld, type CheckedWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import type { Runner, SpawnedChild, Spawner } from '../sandboxes/backend.ts';
@@ -35,6 +42,38 @@ import { summarizeEpisodes } from './analytics.ts';
 import { explorerOf } from './explorer.ts';
 import { adoptedChild, loadRuns, osProcesses, saveRuns, type Processes, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
+
+/** Ordered: each role can do everything the roles before it can. */
+export const STUDIO_ROLES = ['viewer', 'operator', 'admin'] as const;
+export type StudioRole = (typeof STUDIO_ROLES)[number];
+/** One signed-in person. Holds the sha256 hex of their token, never the token. */
+export type StudioUser = { readonly name: string; readonly role: StudioRole; readonly tokenSha256: string };
+
+/** The audit log of POST requests, in the worlds dir. */
+export const AUDIT_FILE = '.studio-audit.jsonl';
+
+const usersFileSchema = z.strictObject({
+  users: z.array(z.strictObject({
+    name: z.string().min(1),
+    role: z.enum(STUDIO_ROLES),
+    token_sha256: z.string().regex(/^[0-9a-f]{64}$/, 'token_sha256 must be 64 lowercase hex characters'),
+  })),
+});
+
+/** The users of a `--users` file's text. Throws an Error naming the problem. */
+export function parseUsersFile(text: string): StudioUser[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const parsed = usersFileSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues.map((i) => `${i.path.join('.') || '(file)'}: ${i.message}`).join('; '));
+  }
+  return parsed.data.users.map((u) => ({ name: u.name, role: u.role, tokenSha256: u.token_sha256 }));
+}
 
 export type StudioOptions = {
   /** The studio port. 0 picks a free port. */
@@ -59,6 +98,8 @@ export type StudioOptions = {
   readonly transport?: 'claude-cli' | 'sdk' | undefined;
   /** Looks at and signals runs a previous studio started. Defaults to the OS (process.kill). */
   readonly processes?: Processes | undefined;
+  /** Who may sign in. Empty or absent is open mode: everyone is the admin `local`, and the host must be loopback. */
+  readonly users?: readonly StudioUser[] | undefined;
 };
 
 export interface StudioServer {
@@ -69,6 +110,10 @@ export interface StudioServer {
 }
 
 const DEFAULT_HOST = '127.0.0.1';
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', '::1', 'localhost']);
+/** How many audit lines GET /api/audit answers. */
+const AUDIT_TAIL = 200;
+const AUTH_CHALLENGE = { 'www-authenticate': 'Bearer realm="studio"' };
 /** The suffix of the directory a create run builds in until it is done (worldgen/run.ts partialDir, A-293). */
 const PARTIAL_SUFFIX = '.partial';
 /** Most CSV tables one generation reads. */
@@ -105,11 +150,11 @@ const ROUTE_PARAM = /^:/;
 
 /** An answer: a JSON body (the default), or one pre-encoded HTML document (the page). */
 type Reply =
-  | { readonly status: number; readonly body: unknown; readonly type?: undefined }
+  | { readonly status: number; readonly body: unknown; readonly type?: undefined; readonly headers?: Readonly<Record<string, string>> }
   | { readonly status: number; readonly body: string; readonly type: 'text/html; charset=utf-8' }
   | { readonly status: number; readonly body: Buffer; readonly type: 'application/zip'; readonly filename: string };
 
-const fail = (status: number, code: string, message: string): Reply => ({ status, body: { error: { code, message } } });
+const fail = (status: number, code: string, message: string, headers?: Readonly<Record<string, string>>): Reply => ({ status, body: { error: { code, message } }, ...(headers === undefined ? {} : { headers }) });
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -210,6 +255,15 @@ function zipOf(entries: readonly { readonly name: string; readonly data: Buffer 
   return Buffer.concat([...locals, dir, end]);
 }
 
+/** Who sent a request: no bearer, a bearer that matches no user, or a user. */
+type Caller =
+  | { readonly kind: 'anonymous' }
+  | { readonly kind: 'rejected' }
+  | { readonly kind: 'user'; readonly name: string; readonly role: StudioRole };
+
+const roleRank = (role: StudioRole): number => STUDIO_ROLES.indexOf(role);
+const sha256 = (text: string): Buffer => createHash('sha256').update(text).digest();
+
 function write(res: ServerResponse, reply: Reply): void {
   if (reply.type !== undefined) {
     res.writeHead(reply.status, {
@@ -221,7 +275,7 @@ function write(res: ServerResponse, reply: Reply): void {
     return;
   }
   const text = JSON.stringify(reply.body ?? null);
-  res.writeHead(reply.status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
+  res.writeHead(reply.status, { ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
   res.end(text);
 }
 
@@ -257,8 +311,9 @@ async function signalAndWait(child: SpawnedChild, signals: readonly NodeJS.Signa
 }
 
 type Params = Record<string, string>;
-type Handler = (params: Params, body: unknown) => Promise<Reply> | Reply;
-type Route = { readonly method: 'GET' | 'POST'; readonly parts: readonly string[]; readonly run: Handler };
+type Handler = (params: Params, body: unknown, who: Caller) => Promise<Reply> | Reply;
+/** `need` is the least role that may call the route; a public route needs no sign-in. */
+type Route = { readonly method: 'GET' | 'POST'; readonly need: StudioRole | 'public'; readonly parts: readonly string[]; readonly run: Handler };
 
 /** The capsule.json of one world dir, parsed, or null when absent or foreign. */
 async function readCapsule(dir: string): Promise<RunCapsule | null> {
@@ -314,6 +369,32 @@ function firstLines(text: string): string[] {
  */
 export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const host = opts.host ?? DEFAULT_HOST;
+  const users = opts.users ?? [];
+  if (users.length === 0 && !LOOPBACK_HOSTS.has(host)) {
+    throw new Error(`studio refuses to bind ${host} with no sign-in: it starts worldgen runs. Pass --users <file> or set WORLDGEN_STUDIO_TOKEN, or bind 127.0.0.1`);
+  }
+  const signIn = users.length > 0;
+  const digests = users.map((u) => {
+    if (!/^[0-9a-f]{64}$/i.test(u.tokenSha256)) throw new Error(`studio user ${u.name}: tokenSha256 must be 64 hex characters`);
+    return { user: u, digest: Buffer.from(u.tokenSha256, 'hex') };
+  });
+  const seen = new Set<string>();
+  for (const { user, digest } of digests) {
+    for (const [what, key] of [['name', user.name], ['token', digest.toString('hex')]] as const) {
+      if (seen.has(`${what} ${key}`)) throw new Error(`studio users share a ${what}: ${user.name}`);
+      seen.add(`${what} ${key}`);
+    }
+  }
+  /** Open mode makes every request the local admin; otherwise the bearer decides. Every digest is compared, in constant time. */
+  const callerOf = (req: IncomingMessage): Caller => {
+    if (!signIn) return { kind: 'user', name: 'local', role: 'admin' };
+    const m = /^bearer +(.+)$/i.exec(req.headers.authorization ?? '');
+    if (m === null) return { kind: 'anonymous' };
+    const given = sha256(m[1]!.trim());
+    let hit: StudioUser | null = null;
+    for (const d of digests) if (timingSafeEqual(given, d.digest)) hit = d.user;
+    return hit === null ? { kind: 'rejected' } : { kind: 'user', name: hit.name, role: hit.role };
+  };
   const repoRoot = path.resolve(opts.repoRoot);
   const worldsDir = path.resolve(opts.worldsDir ?? path.join(repoRoot, 'prod', 'worlds'));
   const codeDir = path.join(repoRoot, 'code');
@@ -352,6 +433,29 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     persisting = persisting.then(() => saveRuns(worldsDir, snapshot)).catch(() => undefined);
     return persisting;
   };
+  // The audit log: one line per POST, appended one at a time in order. A failed append never fails the reply (fail-open).
+  const auditPath = path.join(worldsDir, AUDIT_FILE);
+  let auditing: Promise<void> = Promise.resolve();
+  let unwritten = 0;
+  const audit = (entry: Record<string, unknown>): Promise<void> => {
+    auditing = auditing.then(() => appendFile(auditPath, `${JSON.stringify(entry)}\n`)).catch(() => {
+      unwritten += 1;
+    });
+    return auditing;
+  };
+  async function auditTail(): Promise<Reply> {
+    await auditing;
+    const text = await readFile(auditPath, 'utf8').catch(() => '');
+    const entries: unknown[] = [];
+    for (const line of text.split('\n').filter((l) => l.trim() !== '').slice(-AUDIT_TAIL)) {
+      try {
+        entries.push(JSON.parse(line));
+      } catch {
+        // a damaged line is skipped, not fatal
+      }
+    }
+    return { status: 200, body: { entries, unwritten } };
+  }
   const track = (run: RunRecord): void => {
     runs.set(run.runId, run);
     void run.child.exited.then((code) => {
@@ -1033,33 +1137,35 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   const routes: readonly Route[] = [
-    { method: 'GET', parts: [], run: () => ({ status: 200, body: studioPage(), type: 'text/html; charset=utf-8' }) },
-    { method: 'GET', parts: ['api', 'health'], run: () => health() },
-    { method: 'GET', parts: ['api', 'worlds'], run: () => worlds() },
-    { method: 'GET', parts: ['api', 'worlds', ':name', 'report'], run: (p) => worldReport(p) },
-    { method: 'GET', parts: ['api', 'worlds', ':name', 'export'], run: (p) => worldExport(p) },
-    { method: 'GET', parts: ['api', 'worlds', ':name', 'explorer'], run: (p) => explorer(p) },
-    { method: 'POST', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b) => serveWorld(p, b) },
-    { method: 'GET', parts: ['api', 'services'], run: () => ({ status: 200, body: { services: [...services.values()].map((s) => s.record) } }) },
-    { method: 'POST', parts: ['api', 'services', ':id', 'stop'], run: (p) => stopService(p) },
-    { method: 'POST', parts: ['api', 'services', ':id', 'call'], run: (p, b) => callService(p, b) },
-    { method: 'GET', parts: ['api', 'inputs'], run: () => inputs() },
-    { method: 'GET', parts: ['api', 'inputs', ':spec', 'paths'], run: (p) => specPaths(p) },
-    { method: 'POST', parts: ['api', 'generate'], run: (_p, b) => generate(b) },
-    { method: 'GET', parts: ['api', 'generate', ':runId'], run: (p) => runStatus(p) },
-    { method: 'GET', parts: ['api', 'generate', ':runId', 'events'], run: (p) => runStatus(p) },
-    { method: 'POST', parts: ['api', 'generate', ':runId', 'stop'], run: (p) => stopRun(p) },
-    { method: 'GET', parts: ['api', 'runs'], run: () => listRuns() },
-    { method: 'GET', parts: ['api', 'eval'], run: () => listEval() },
-    { method: 'GET', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
-    { method: 'GET', parts: ['api', 'costs'], run: () => costs() },
-    { method: 'GET', parts: ['api', 'worlds', ':name', 'tasks'], run: (p) => worldTasks(p) },
-    { method: 'POST', parts: ['api', 'worlds', ':name', 'proof'], run: (p) => worldProof(p) },
-    { method: 'GET', parts: ['api', 'episodes'], run: () => listEpisodes() },
-    { method: 'POST', parts: ['api', 'episodes'], run: (_p, b) => startEpisode(b) },
-    { method: 'GET', parts: ['api', 'episodes', 'analytics'], run: () => episodeAnalytics() },
-    { method: 'GET', parts: ['api', 'episodes', ':runId'], run: (p) => episodeStatus(p) },
-    { method: 'POST', parts: ['api', 'episodes', ':runId', 'stop'], run: (p) => stopEpisode(p) },
+    { method: 'GET', need: 'public', parts: [], run: () => ({ status: 200, body: studioPage(), type: 'text/html; charset=utf-8' }) },
+    { method: 'GET', need: 'public', parts: ['api', 'health'], run: () => health() },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds'], run: () => worlds() },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'report'], run: (p) => worldReport(p) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'export'], run: (p) => worldExport(p) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'explorer'], run: (p) => explorer(p) },
+    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b) => serveWorld(p, b) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'services'], run: () => ({ status: 200, body: { services: [...services.values()].map((s) => s.record) } }) },
+    { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'stop'], run: (p) => stopService(p) },
+    { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'call'], run: (p, b) => callService(p, b) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'inputs'], run: () => inputs() },
+    { method: 'GET', need: 'viewer', parts: ['api', 'inputs', ':spec', 'paths'], run: (p) => specPaths(p) },
+    { method: 'POST', need: 'operator', parts: ['api', 'generate'], run: (_p, b) => generate(b) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId'], run: (p) => runStatus(p) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId', 'events'], run: (p) => runStatus(p) },
+    { method: 'POST', need: 'operator', parts: ['api', 'generate', ':runId', 'stop'], run: (p) => stopRun(p) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'runs'], run: () => listRuns() },
+    { method: 'GET', need: 'viewer', parts: ['api', 'eval'], run: () => listEval() },
+    { method: 'GET', need: 'viewer', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'costs'], run: () => costs() },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'tasks'], run: (p) => worldTasks(p) },
+    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p) => worldProof(p) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'episodes'], run: () => listEpisodes() },
+    { method: 'POST', need: 'operator', parts: ['api', 'episodes'], run: (_p, b) => startEpisode(b) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'episodes', 'analytics'], run: () => episodeAnalytics() },
+    { method: 'GET', need: 'viewer', parts: ['api', 'episodes', ':runId'], run: (p) => episodeStatus(p) },
+    { method: 'POST', need: 'operator', parts: ['api', 'episodes', ':runId', 'stop'], run: (p) => stopEpisode(p) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'me'], run: (_p, _b, who) => ({ status: 200, body: { name: who.kind === 'user' ? who.name : null, role: who.kind === 'user' ? who.role : null, signIn } }) },
+    { method: 'GET', need: 'admin', parts: ['api', 'audit'], run: () => auditTail() },
   ];
   const ROUTE_LIST = routes.map((r) => `${r.method} /${r.parts.filter((p) => !p.startsWith(':')).join('/')}`).join(', ');
 
@@ -1085,7 +1191,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return null;
   };
 
-  const onStudio = async (req: IncomingMessage): Promise<Reply> => {
+  const onStudio = async (req: IncomingMessage, who: Caller): Promise<Reply> => {
     const method = req.method ?? '';
     const segments = segmentsOf(req.url ?? '/');
     const hit = match(method, segments);
@@ -1096,21 +1202,47 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       return fail(404, 'route.not_found', `No studio route ${method} /${segments.join('/')}. Studio routes: ${ROUTE_LIST}`);
     }
+    const need = hit.route.need;
+    if (need !== 'public') {
+      const what = `${method} /${segments.join('/')}`;
+      if (who.kind === 'anonymous') {
+        return fail(401, 'auth.required', `${what} needs sign-in: send Authorization: Bearer <token>, or sign in on the page`, AUTH_CHALLENGE);
+      }
+      if (who.kind === 'rejected') {
+        return fail(401, 'auth.invalid', `${what}: the bearer token matches no studio user; check it, or sign in again on the page`, AUTH_CHALLENGE);
+      }
+      if (roleRank(who.role) < roleRank(need)) {
+        return fail(403, 'auth.forbidden', `${what} needs the ${need} role; ${who.name} is ${who.role === 'viewer' ? 'a' : 'an'} ${who.role}`);
+      }
+    }
     const body = hit.route.method === 'POST' ? await readBody(req) : { ok: true as const, value: undefined };
     if (!body.ok) return fail(body.status, body.code, body.message);
-    return hit.route.run(hit.params, body.value);
+    return hit.route.run(hit.params, body.value, who);
   };
 
   const answer = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     let reply: Reply;
+    const who = callerOf(req);
     try {
-      reply = await onStudio(req);
+      reply = await onStudio(req, who);
     } catch (e) {
       if (e instanceof ConnectionClosed) {
         res.destroy();
         return;
       }
       reply = fail(500, 'studio.error', `Studio error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (req.method === 'POST') {
+      const error = isObject(reply.body) && isObject(reply.body['error']) ? reply.body['error']['code'] : undefined;
+      await audit({
+        at: new Date().toISOString(),
+        user: who.kind === 'user' ? who.name : null,
+        role: who.kind === 'user' ? who.role : null,
+        method: 'POST',
+        path: (req.url ?? '/').split('?')[0],
+        status: reply.status,
+        ...(typeof error === 'string' ? { code: error } : {}),
+      });
     }
     try {
       write(res, reply);

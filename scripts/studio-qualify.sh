@@ -15,13 +15,25 @@ trap 'rm -rf "$TMP"' EXIT
 pass() { printf 'PASS %s\n' "$*"; }
 fail() { printf 'FAIL %s\n' "$*"; exit 1; }
 
+# The token reaches curl through a mode-600 header file, never a command line. /api/health needs none.
+AUTH=()
+if [ -n "${WORLDGEN_STUDIO_TOKEN:-}" ]; then
+  ( umask 077; printf 'authorization: Bearer %s\n' "$WORLDGEN_STUDIO_TOKEN" > "$TMP/auth" )
+  AUTH=(-H "@$TMP/auth")
+fi
+
 health="$(curl -fsS "$URL/api/health")" || fail "GET /api/health did not answer"
 [ "$(jq -r .ok <<<"$health")" = true ] || fail "health: $health"
 pass "health: build $(jq -r .build <<<"$health"), $(jq -r .runtime <<<"$health"), $(jq -r .worlds <<<"$health") worlds"
 
+if [ -n "${WORLDGEN_STUDIO_TOKEN:-}" ]; then
+  me="$(curl -fsS ${AUTH[@]+"${AUTH[@]}"} "$URL/api/me")" || fail "GET /api/me did not answer 200"
+  pass "signed in as $(jq -r .name <<<"$me") ($(jq -r .role <<<"$me"))"
+fi
+
 export_ok() {
   local name="$1"
-  code="$(curl -sS -o "$TMP/$name.zip" -w '%{http_code}' "$URL/api/worlds/$name/export")"
+  code="$(curl -sS -o "$TMP/$name.zip" -w '%{http_code}' ${AUTH[@]+"${AUTH[@]}"} "$URL/api/worlds/$name/export")"
   [ "$code" = 200 ] || fail "export $name answered $code: $(head -c 200 "$TMP/$name.zip")"
   unzip -tq "$TMP/$name.zip" >/dev/null || fail "export $name is not a valid zip"
   unzip -l "$TMP/$name.zip" | grep -q "runs/" && fail "export $name carries runs/"
@@ -33,14 +45,14 @@ if [ -n "$BUDGET" ]; then
   awk "BEGIN{exit !($BUDGET > 0 && $BUDGET <= 2)}" || fail "--generate budget must be above 0 and at most 2 USD"
   slug="qualify-$(date +%s)"
   body="$(jq -n --arg slug "$slug" --argjson b "$BUDGET" '{kind:"description", text:"A tiny bookmarks app: bookmarks with a url and a title, tagged, and archived or active", outSlug:$slug, budgetUsd:$b, maxMinutes:15}')"
-  started="$(curl -fsS -X POST "$URL/api/generate" -H 'content-type: application/json' -d "$body")" || fail "POST /api/generate"
+  started="$(curl -fsS ${AUTH[@]+"${AUTH[@]}"} -X POST "$URL/api/generate" -H 'content-type: application/json' -d "$body")" || fail "POST /api/generate"
   run="$(jq -r .runId <<<"$started")"
   [ "$run" != null ] || fail "generate refused: $started"
   pass "generate started $run"
   state=""
   for _ in $(seq 1 120); do
     sleep 10
-    status="$(curl -fsS "$URL/api/generate/$run")"
+    status="$(curl -fsS ${AUTH[@]+"${AUTH[@]}"} "$URL/api/generate/$run")"
     state="$(jq -r .state <<<"$status")"
     case "$state" in done|stopped|failed) break ;; esac
   done

@@ -12,6 +12,9 @@
  *   it was served from. Links to a running world are built at runtime from the record's port
  *   numbers through `location`, never from a stored or absolute URL.
  * - Rendered strings go through textContent, never innerHTML.
+ * - Sign-in is a bearer token the page keeps in sessionStorage and sends as an Authorization header on every
+ *   fetch. No cookie: a cookie would ride along to every served world on the host. A 401 or 403 shows in one
+ *   error line; the server enforces roles, the page hides nothing.
  * - The studio port is the operator's own. A served world's ports are the agent's boundary and
  *   the page never fetches them: it offers links, and the Explorer's API console sends through
  *   the studio's call route, which reaches only the world port (A-268).
@@ -48,12 +51,24 @@ pre { background: #8881; border: 1px solid #8884; margin: 0.3rem 0 1rem; max-hei
 .state-failed { background: #fbdcdc; color: #7a1010; }
 #gen-only label { display: inline-block; margin: 0 1rem 0.2rem 0; font-family: monospace; }
 a { margin-right: 0.5rem; }
+#signin { margin: 0.5rem 0 0; }
+#signin form:not([hidden]) { display: inline; }
+#auth-error { color: #b00; margin: 0.25rem 0 0; }
 </style>
 </head>
 <body>
 <header>
 <h1>WorldGen studio</h1>
 <p class="meta">operator app on its own port; a served world keeps its own world and console ports</p>
+<div id="signin">
+<span id="who">checking sign-in</span>
+<button id="signout" type="button" hidden>Sign out</button>
+<form id="signin-form" hidden>
+<input id="signin-token" type="password" autocomplete="off" placeholder="studio token" aria-label="studio token">
+<button type="submit">Sign in</button>
+</form>
+<p id="auth-error" hidden></p>
+</div>
 </header>
 <section>
 <h2>Worlds<span id="worlds-meta" class="meta"></span></h2>
@@ -150,10 +165,77 @@ a { margin-right: 0.5rem; }
     return node;
   }
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
-  function getJson(path) { return fetch(path).then(function (r) { return r.json(); }); }
+  // ---- Sign-in: a bearer token in sessionStorage (per origin, so per port), never a cookie ----------
+  var TOKEN_KEY = 'studio-token';
+  var whoLine = byId('who');
+  var signoutBtn = byId('signout');
+  var signinForm = byId('signin-form');
+  var authError = byId('auth-error');
+  function storedToken() {
+    try { return sessionStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+  }
+  function authHeaders(headers) {
+    var token = storedToken();
+    if (token) headers.authorization = 'Bearer ' + token;
+    return headers;
+  }
+  /** Shows a 401 or 403 in the error line (and the sign-in form on a 401); other answers clear nothing. */
+  function authNote(status, body) {
+    if (status !== 401 && status !== 403) return;
+    var err = body && body.error ? body.error : {};
+    authError.textContent = 'HTTP ' + status + ' ' + err.code + ': ' + err.message;
+    authError.hidden = false;
+    if (status === 401) {
+      signinForm.hidden = false;
+      whoLine.textContent = 'not signed in';
+    }
+  }
+  function answered(r) {
+    return r.json().then(function (body) { authNote(r.status, body); return body; });
+  }
+  function getJson(path) { return fetch(path, { headers: authHeaders({}) }).then(answered); }
   function post(path, body) {
-    return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-      .then(function (r) { return r.json(); });
+    return fetch(path, { method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify(body) })
+      .then(answered);
+  }
+  signinForm.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var token = byId('signin-token').value;
+    if (token === '') return;
+    try { sessionStorage.setItem(TOKEN_KEY, token); } catch (e) { authError.textContent = 'this browser blocks sessionStorage, so it cannot keep a token'; authError.hidden = false; return; }
+    location.reload();
+  });
+  signoutBtn.addEventListener('click', function () {
+    try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) { /* nothing stored to remove */ }
+    location.reload();
+  });
+  fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
+    return r.json().then(function (body) {
+      authNote(r.status, body);
+      if (r.status !== 200) return;
+      if (!body.signIn) {
+        whoLine.textContent = body.name + ' (' + body.role + '), sign-in off';
+        return;
+      }
+      whoLine.textContent = body.name + ' (' + body.role + ')';
+      signoutBtn.hidden = false;
+    });
+  }, function (e) { whoLine.textContent = 'unreachable: ' + e; });
+  /** Downloads a zip the header-less link cannot fetch: with the token, through an object URL. */
+  function downloadZip(path, filename) {
+    fetch(path, { headers: authHeaders({}) }).then(function (r) {
+      if (!r.ok) return answered(r);
+      return r.blob().then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      });
+    }, function (e) { authError.textContent = 'export failed: ' + e; authError.hidden = false; });
   }
   function cell(value) {
     if (value === null || value === undefined) return 'null';
@@ -239,11 +321,11 @@ a { margin-right: 0.5rem; }
         reportBtn.textContent = 'report';
         reportBtn.addEventListener('click', function () { toggleReport(w.name); });
         actions.appendChild(reportBtn);
-        var exportLink = document.createElement('a');
-        exportLink.textContent = 'export';
-        exportLink.href = '/api/worlds/' + encodeURIComponent(w.name) + '/export';
-        exportLink.setAttribute('download', w.name + '.zip');
-        actions.appendChild(exportLink);
+        var exportBtn = document.createElement('button');
+        exportBtn.type = 'button';
+        exportBtn.textContent = 'export';
+        exportBtn.addEventListener('click', function () { downloadZip('/api/worlds/' + encodeURIComponent(w.name) + '/export', w.name + '.zip'); });
+        actions.appendChild(exportBtn);
         return {
           name: w.name,
           kind: w.generated ? 'generated' : 'hand-built',
