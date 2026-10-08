@@ -67,6 +67,10 @@ Jobs (2):
 - `purge_trash`: every 1d
 - `expire_public_shares`: every 1h
 
+## Changes
+
+No changes.
+
 ## Assumed and why
 
 - clock.start is 2026-10-06T09:00:00.000Z and tick is 0s.
@@ -132,12 +136,16 @@ Jobs (2):
 
 The engine check passed: 11 world tests, 3 warnings. Each row is one engine TaskVerdict.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix |
-|---|---|---|---|---|---|
-| mark_postgres_article_read | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a |
-| merge_maya_ml_tags | medium | 1.000 | 0.000 | 0.400, 0.000, 0.000, 0.600, 0.000 | n/a |
-| trash_maya_broken_links | hard | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.500 | 0.750 |
-| share_maya_big_private_collections | hard | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000, 0.500 | 0.500 |
+World id (WID): `wid_bdd0ffb7cd3a2ebee7c996187924407585da905902a7203d6964c2e014b8ee5d`.
+
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| mark_postgres_article_read | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 6/7 | `tid_f3a8dc159156be956014bd98c22723d638b612c97120cabe512c0fabbe62907f` |
+| merge_maya_ml_tags | medium | 1.000 | 0.000 | 0.400, 0.000, 0.000, 0.600, 0.000 | n/a | legacy; mutants 5/7 | `tid_b83475eb15d495c39933854bac4ea71b4968b0897c8a41ddfda220486a312011` |
+| trash_maya_broken_links | hard | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.500 | 0.750 | legacy; mutants 6/7 | `tid_5e9cb85d4a5a62cc3381b48ffd03792b625019e33dd236f1c29f344f083e76e2` |
+| share_maya_big_private_collections | hard | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000, 0.500 | 0.500 | legacy; mutants 6/7 | `tid_896b1ba807a11b136f163acb40726b404390d5a71327e3875b2893063c335532` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -158,17 +166,31 @@ Decoys:
 - `share_maya_big_private_collections` 0.000: publishes the large private collections instead of sharing them with Dev
 - `share_maya_big_private_collections` 0.500: uses a threshold of more than 3 bookmarks, so it shares only the biggest private collection and misses the one with exactly 3
 
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| mark_postgres_article_read | easy | 2 | none | bookmark | none declared |
+| merge_maya_ml_tags | medium | 14 | none | tag | none declared |
+| trash_maya_broken_links | hard | 8 | none | bookmark | hard: met |
+| share_maya_big_private_collections | hard | 6 | none | collection | hard: met |
+
 ## Run
 
-Mode: create from description. Model: claude-sonnet-5-5. Budget: $5.00.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $2.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 3.97 | 0.3896 |
-| model | 1 | 0.61 | 0.2017 |
-| workflow | 1 | 0.85 | 0.2557 |
-| seed | 1 | 1.54 | 0.4569 |
-| tasks | 1 | 2.53 | 0.4293 |
-| Total | 5 | 9.51 | 1.7333 |
+| plan | 1 | 0.13 | 0.1071 |
+| Total | 1 | 0.13 | 0.1071 |
 
-Run total: 9.70 minutes, $1.7333.
+Skipped:
+
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures; it keeps 1 issue(s) the world had before this iterate: plan.seed_rows_short
+- `tasks`: no planned change reaches tasks, entities, routes, actions, jobs, seed
+
+Run total: 0.22 minutes, $0.1071.

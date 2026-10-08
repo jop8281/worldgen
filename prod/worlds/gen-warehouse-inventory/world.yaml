@@ -10,10 +10,14 @@ meta:
     tick: 0s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -1324,6 +1328,7 @@ tasks:
         script: "(ctx) => { const sku = ctx.api('GET', '/skus?code=BLT-M8-40').body.data[0]; const bin = ctx.api('GET', '/bins?code=A-01-01').body.data[0]; ctx.api('POST', '/stock/adjust', { sku_id: sku.id, bin_id: bin.id, new_quantity: 12, reason: 'cycle count' }); }"
       - why: adjusts the right bin to 12 but records a different reason than cycle count
         script: "(ctx) => { const sku = ctx.api('GET', '/skus?code=BLT-M8-40').body.data[0]; const bin = ctx.api('GET', '/bins?code=A-03-02').body.data[0]; ctx.api('POST', '/stock/adjust', { sku_id: sku.id, bin_id: bin.id, new_quantity: 12, reason: 'recount by shift lead' }); }"
+    alternatives: []
   receive_rest_of_harbor_po:
     difficulty: medium
     instruction: The supplier Harbor Fasteners has delivered everything that is still outstanding on its partially received purchase order. Receive every outstanding unit on all of its lines into bin R-01, so that the order ends up fully received. Receive only what remains on each line, and change nothing else.
@@ -1336,6 +1341,7 @@ tasks:
         script: "(ctx) => { const sup = ctx.api('GET', '/suppliers?q=Harbor').body.data.find((s) => s.name === 'Harbor Fasteners'); const po = ctx.api('GET', '/purchase_orders?supplier_id=' + sup.id + '&status=partially_received').body.data[0]; const bin = ctx.api('GET', '/bins?code=R-02').body.data[0]; const lines = ctx.api('GET', '/purchase_orders/' + po.id + '/lines').body.data; for (const l of lines) { const rem = l.ordered_qty - l.received_qty; if (rem > 0) ctx.api('POST', '/purchase_orders/' + po.id + '/receive', { line_id: l.id, bin_id: bin.id, quantity: rem }); } }"
       - why: sends each line's full ordered_qty instead of the remaining quantity, so lines that were already partly received are refused with over_receipt
         script: "(ctx) => { const sup = ctx.api('GET', '/suppliers?q=Harbor').body.data.find((s) => s.name === 'Harbor Fasteners'); const po = ctx.api('GET', '/purchase_orders?supplier_id=' + sup.id + '&status=partially_received').body.data[0]; const bin = ctx.api('GET', '/bins?code=R-01').body.data[0]; const lines = ctx.api('GET', '/purchase_orders/' + po.id + '/lines').body.data; for (const l of lines) { ctx.api('POST', '/purchase_orders/' + po.id + '/receive', { line_id: l.id, bin_id: bin.id, quantity: l.ordered_qty }); } }"
+    alternatives: []
   cancel_unstarted_northgate_pos:
     difficulty: medium
     instruction: Cancel every submitted purchase order of the supplier Northgate Industrial (not the similarly named Northgate Industries) that has not received any goods yet. Leave its draft and partially received orders, and every other supplier's orders, exactly as they are.
@@ -1348,6 +1354,7 @@ tasks:
         script: (ctx) => { const sups = ctx.api('GET', '/suppliers?q=Northgate').body.data; for (const sup of sups) { const pos = ctx.api('GET', '/purchase_orders?supplier_id=' + sup.id + '&status=submitted').body.data; for (const po of pos) ctx.api('POST', '/purchase_orders/' + po.id + '/cancel', {}); } }
       - why: cancels only the first submitted purchase order it finds and stops, leaving the others open
         script: (ctx) => { const sup = ctx.api('GET', '/suppliers?q=Northgate').body.data.find((s) => s.name === 'Northgate Industrial'); const pos = ctx.api('GET', '/purchase_orders?supplier_id=' + sup.id + '&status=submitted').body.data; ctx.api('POST', '/purchase_orders/' + pos[0].id + '/cancel', {}); }
+    alternatives: []
   restock_pick_bins:
     difficulty: hard
     instruction: Restock the pick bins for the bracket and gasket families. For every active SKU whose code starts with BRK- or GSK- that has a stock level in a pick-zone bin below its reorder_point, transfer stock from a bulk-zone bin that holds that SKU into that pick bin. Transfer exactly the shortfall (the reorder_point minus the pick bin's current quantity), so the pick bin ends exactly at its reorder_point. Skip inactive SKUs and pick bins that are already at or above the reorder point. Do not touch any other stock.
@@ -1360,3 +1367,4 @@ tasks:
         script: "(ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : (path.indexOf('?') < 0 ? '?' : '&') + 'cursor=' + cursor)); rows.push(...r.body.data); cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor; } while (cursor !== null); return rows; }; const skus = pages('/skus').filter((s) => s.code.startsWith('BRK-') || s.code.startsWith('GSK-')); const pick = new Set(pages('/bins?zone=pick').map((b) => b.id)); const bulk = new Set(pages('/bins?zone=bulk').map((b) => b.id)); const levels = pages('/stock_levels'); for (const s of skus) { const mine = levels.filter((l) => l.sku_id === s.id); for (const p of mine.filter((l) => pick.has(l.bin_id) && l.quantity < s.reorder_point)) { const short = s.reorder_point - p.quantity; const srcs = mine.filter((l) => bulk.has(l.bin_id) && l.quantity >= short).sort((a, b) => b.quantity - a.quantity); if (srcs.length > 0) ctx.api('POST', '/stock/transfer', { sku_id: s.id, from_bin_id: srcs[0].bin_id, to_bin_id: p.bin_id, quantity: short }); } } }"
       - why: only restocks pick bins that are completely empty and ignores bins that are low but not empty
         script: "(ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : (path.indexOf('?') < 0 ? '?' : '&') + 'cursor=' + cursor)); rows.push(...r.body.data); cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor; } while (cursor !== null); return rows; }; const skus = pages('/skus').filter((s) => s.active && (s.code.startsWith('BRK-') || s.code.startsWith('GSK-'))); const pick = new Set(pages('/bins?zone=pick').map((b) => b.id)); const bulk = new Set(pages('/bins?zone=bulk').map((b) => b.id)); const levels = pages('/stock_levels'); for (const s of skus) { const mine = levels.filter((l) => l.sku_id === s.id); for (const p of mine.filter((l) => pick.has(l.bin_id) && l.quantity === 0)) { const short = s.reorder_point - p.quantity; const srcs = mine.filter((l) => bulk.has(l.bin_id) && l.quantity >= short).sort((a, b) => b.quantity - a.quantity); if (srcs.length > 0) ctx.api('POST', '/stock/transfer', { sku_id: s.id, from_bin_id: srcs[0].bin_id, to_bin_id: p.bin_id, quantity: short }); } } }"
+    alternatives: []

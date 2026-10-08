@@ -1,4 +1,4 @@
-revision: 1
+revision: 2
 software: Warehouse inventory / WMS-style stock ledger with purchase-order receiving (in the spirit of Odoo Inventory, NetSuite Inventory and Fishbowl)
 summary: A single-warehouse inventory system. SKUs are stocked in bins (stock_level rows, one per SKU and bin). Every change to stock is written to an append-only stock_movement ledger by an action, and stock can never go below zero. Purchase orders to suppliers move draft -> submitted -> partially_received -> received (or cancelled). Goods are received one PO line and one bin at a time, so a PO is received into bins in several partial shipments. Receiving is refused when it would exceed the ordered quantity, overfill a bin, or target an inactive or quarantine bin. Agents also issue stock, run cycle-count adjustments and transfer stock between bins. A job flags overdue purchase orders.
 clock:
@@ -97,6 +97,9 @@ workflows:
       - adjust_stock sets the exact quantity (>= 0) for a SKU and bin from a cycle count. It needs a non-blank reason. It writes an adjustment movement with delta new_quantity minus current. A zero delta is 409 no_change. Raising a quantity respects bin capacity.
       - transfer_stock moves quantity between two different bins (422 same_bin if equal). It is 409 insufficient_stock if the source holds less. The destination must be receivable (409 bin_not_receivable) and within capacity (409 bin_capacity_exceeded). It writes a transfer_out and a transfer_in movement atomically.
       - A stock_level row with quantity 0 is kept (not deleted) so history stays visible.
+    lifecycle:
+      representation: descriptive
+      reason: The states empty and stocked are derived from quantity being 0 or above 0. They are not stored in a state field.
     actions:
       - issue_stock
       - adjust_stock
@@ -559,4 +562,5 @@ outOfScope:
     why: Not relevant to the tested behaviour.
   - what: Multi-line receipts in a single call
     why: Action inputs are scalar. Receiving is one line and one bin per call.
-changes: []
+changes:
+  - workflows.stock_ledger because give workflow stock_ledger a lifecycle

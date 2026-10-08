@@ -105,7 +105,7 @@ worldgen/
     src/sandboxes/ backend files openshell sbx boat registry
     src/dataset/   episode solver pipeline local store schema verifier
     src/studio/    page explorer analytics runstore server watch
-    src/cli/       worldplay worldgen eval eval-analysis-files eval-retention costs sandbox dataset episode live models verifier studio-check studio studio-watch
+    src/cli/       worldplay worldgen eval eval-analysis-files eval-retention costs sandbox dataset episode live models verifier studio-check episode-prepare studio studio-watch
     src/lib/       never
     test/          architecture engine fields ctx sandbox worlds policy worldgen (*.test.ts)
   eval/        suite.yaml  inputs/  runs/<date>-<suite>/

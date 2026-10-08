@@ -8,15 +8,24 @@
  *   `plan.changes` marks an existing item as changed.
  * - Which stages run is `stagesToRun` (stages.ts, A-33). This file only supplies its input.
  */
+import { z } from 'zod';
 import { SECTIONS, renderWorldYaml, type Section, type World } from '#engine';
 import { changeItem, planSchema, plannedItems, renderPlanYaml, untestedActions, type Plan } from './plan.ts';
 import { stagesToRun } from './stages.ts';
 
-/** The plan step's instructions on iterate. The plan is the whole updated plan, not a delta. */
+/**
+ * The plan step's instructions on iterate. With an existing plan the answer is a patch on it (A-345). It holds only
+ * the keys that change, so an unchanged item, a frozen test above all, is never restated. Without a plan the answer is
+ * the whole plan.
+ */
 export const ITERATE_PLAN_BRIEF =
-  'An existing world must change to meet a change request. Write the whole updated plan that every later stage follows, saved as plan.yaml: ' +
-  'keep every existing entity, route, workflow, job and task the request does not change, and add what the request needs. ' +
-  'Write every workflow rule in the whole updated plan in the form of what enforces it: a rule enforced by actions or jobs as { rule, by, test }, by naming the enforcing action or job keys and test naming the id of the acceptance test that exercises the rule through that enforcement, each acceptance test bound by at most one rule and, when by names actions, its bound test exercising one of them; a rule only the data model enforces as { rule, schema } with the reason the schema enforces it; keep plain text only for context neither enforces. ' +
+  'An existing world must change to meet a change request. The plan that every later stage follows is saved as plan.yaml. ' +
+  'When the existing plan is shown, answer with a patch on it, not with the whole plan. Give revision, changes and only the keys that change. ' +
+  'An entity, route, workflow, job, task or acceptance test you give, matched by its name or id, replaces the existing one with that key or is added, so give each such item whole. ' +
+  'Every item you leave out stays exactly as it is, acceptance tests included. To change an existing item, name it in changes and give it whole. To drop one, list it in remove as <list>.<key>, such as tasks.<id>, routes.<id> or tests.<id>. ' +
+  'Assumptions, outOfScope and open_questions you give are added to the existing ones; software, summary, seed and verdict you give replace them. ' +
+  'When no plan exists, write the whole plan for the world as it is plus what the request needs. ' +
+  'Write every workflow rule you give in the form of what enforces it: a rule enforced by actions or jobs as { rule, by, test }, by naming the enforcing action or job keys and test naming the id of the acceptance test that exercises the rule through that enforcement, each acceptance test bound by at most one rule and, when by names actions, its bound test exercising one of them; a rule only the data model enforces as { rule, schema } with the reason the schema enforces it; keep plain text only for context neither enforces. ' +
   'Declare lifecycle: { representation: descriptive or removal, reason } on a workflow whose states no state field holds, such as a derived flag or deletion by removal, because a state-named workflow with no machine and no declaration is rejected. ' +
   'Preserve the existing world clock exactly; iterate cannot change world metadata. ' +
   'Fill `changes` with every EXISTING item the request alters or removes, as dotted paths rooted at the section or at the item key, such as ticket.fields.status or tasks.resolve_ticket; ' +
@@ -26,7 +35,7 @@ export const ITERATE_PLAN_BRIEF =
   'Set revision one above the existing plan\'s, and raise it again whenever the plan step runs again. ' +
   'List an acceptance test in acceptanceTests for every new workflow action; it is written into the world\'s tests exactly as given, and no later stage can edit tests. ' +
   'Each new or rewritten acceptance test must create every prerequisite row through ctx.api and check the public behavior with ctx.assert, without relying on rows the later seed stage will create, because workflow runs these tests before seed. ' +
-  'An existing test stays and reruns against the changed world: to rewrite it, list it under its existing id and name tests.<id> in `changes`; to drop it, name tests.<id> in `changes` and leave it out of acceptanceTests. ' +
+  'An existing test stays and reruns against the changed world: to rewrite it, give it under its existing id and name tests.<id> in `changes`; to drop it, name tests.<id> in `changes` and leave it out. ' +
   'Before planning, list each question you would ask a human about the request in open_questions, each with a question and a default_answer, and record every default as an entry in assumptions with the decision and why. Never guess silently. Put what you leave out in outOfScope with why. Refuse with a reason if the request asks for something harmful.';
 
 /** The stage prompt's block for an iterate run: the request and the rules of a minimal edit. */
@@ -56,6 +65,109 @@ export function iteratePlanBlocks(request: string, oldPlan: Plan | null, world: 
       ]
     : ['## Existing plan', '', '```yaml', renderPlanYaml(oldPlan).trimEnd(), '```'];
   return ['## Change request', '', request, '', '## Existing world clock', '', JSON.stringify(world.meta.clock), '', ...existing];
+}
+
+/** The keyed plan lists, each with the field that keys its items. A patch item replaces the existing item with its key, or is added. */
+const KEYED = { entities: 'name', routes: 'id', workflows: 'name', jobs: 'name', acceptanceTests: 'id', tasks: 'id' } as const;
+type KeyedList = keyof typeof KEYED;
+/** How `remove` names an existing item of a keyed list: `<prefix>.<key>`. An acceptance test is a world test. */
+const REMOVAL_PREFIX: Record<KeyedList, string> = { entities: 'entities', routes: 'routes', workflows: 'workflows', jobs: 'jobs', acceptanceTests: 'tests', tasks: 'tasks' };
+/** The unkeyed plan lists: a patch adds the entries the existing plan lacks. */
+const APPENDED = ['assumptions', 'outOfScope', 'open_questions'] as const;
+
+const shape = planSchema.shape;
+/**
+ * The plan step's answer on iterate when a plan exists (A-345). Revision is required and every other key is optional.
+ * A whole plan is also a valid patch. An unknown key is refused, never dropped, and so is a keyed item given twice.
+ */
+export const planPatchSchema = z.strictObject({
+  revision: z.number().int().positive().describe('one above the existing plan\'s revision, raised again whenever the plan step runs again'),
+  changes: shape.changes,
+  software: shape.software.optional(),
+  summary: shape.summary.optional(),
+  clock: shape.clock.optional(),
+  verdict: shape.verdict.optional(),
+  seed: shape.seed.optional(),
+  entities: shape.entities.optional(),
+  routes: shape.routes.optional(),
+  workflows: shape.workflows.optional(),
+  jobs: shape.jobs.removeDefault().optional(),
+  acceptanceTests: shape.acceptanceTests.removeDefault().optional().describe('acceptance tests fixed by the approved plan before implementation repair begins'),
+  tasks: shape.tasks.optional(),
+  assumptions: shape.assumptions.optional(),
+  outOfScope: shape.outOfScope.optional(),
+  open_questions: shape.open_questions,
+  remove: z.array(z.string()).optional().describe('existing items to drop, each as <list>.<key>, such as tasks.resolve_ticket or tests.<id>; each is also recorded in changes'),
+}).superRefine((patch, ctx) => {
+  for (const [list, key] of Object.entries(KEYED) as [KeyedList, string][]) {
+    const keys = ((patch[list] ?? []) as readonly Record<string, unknown>[]).map((item) => item[key]);
+    const twice = keys.filter((k, i) => keys.indexOf(k) !== i);
+    if (twice.length > 0) ctx.addIssue({ code: 'custom', path: [list], message: `${list} gives ${[...new Set(twice)].join(', ')} more than once: give each item once` });
+  }
+});
+export type PlanPatch = z.output<typeof planPatchSchema>;
+
+/**
+ * `base` with `patch` applied. A keyed item the patch gives replaces the existing item with its key, or is added.
+ * An existing item that `remove` lists as `<prefix>.<key>` is dropped. So is an acceptance test that `changes` names as
+ * `tests.<id>` and the patch leaves out, because a test cannot change without its new text. Every other item, and every
+ * key the patch leaves out, carries over as it is. `remove` entries join `changes`, so the stages and the preservation
+ * gate see the drop as planned. The result is judged against the full plan rules.
+ */
+export function applyPlanPatch(base: Plan, patch: PlanPatch): Plan {
+  const removed = new Set(patch.remove ?? []);
+  const named = new Set(patch.changes.map(changeItem));
+  const drops = (list: KeyedList, key: string): boolean =>
+    removed.has(`${REMOVAL_PREFIX[list]}.${key}`) || (list === 'acceptanceTests' && named.has(`tests.${key}`));
+  const merged = <L extends KeyedList>(list: L): Plan[L] => {
+    const key = KEYED[list];
+    const old = base[list] as readonly Record<string, unknown>[];
+    const given = (patch[list] ?? []) as readonly Record<string, unknown>[];
+    const byKey = new Map(given.map((item) => [item[key], item]));
+    const kept = old.flatMap((item) => (byKey.has(item[key]) ? [byKey.get(item[key])!] : drops(list, String(item[key])) ? [] : [item]));
+    const added = given.filter((item) => !old.some((o) => o[key] === item[key]));
+    return [...kept, ...added] as unknown as Plan[L];
+  };
+  const appended = <L extends (typeof APPENDED)[number]>(list: L): Plan[L] => {
+    const old = (base[list] ?? []) as readonly unknown[];
+    const seen = new Set(old.map((e) => JSON.stringify(e)));
+    const added = ((patch[list] ?? []) as readonly unknown[]).filter((e) => !seen.has(JSON.stringify(e)));
+    return [...old, ...added] as Plan[L];
+  };
+  return {
+    ...base,
+    revision: patch.revision,
+    changes: [...patch.changes, ...[...removed].filter((r) => !named.has(r))],
+    software: patch.software ?? base.software,
+    summary: patch.summary ?? base.summary,
+    clock: patch.clock ?? base.clock,
+    verdict: patch.verdict ?? base.verdict,
+    seed: patch.seed ?? base.seed,
+    entities: merged('entities'),
+    routes: merged('routes'),
+    workflows: merged('workflows'),
+    jobs: merged('jobs'),
+    acceptanceTests: merged('acceptanceTests'),
+    tasks: merged('tasks'),
+    assumptions: appended('assumptions'),
+    outOfScope: appended('outOfScope'),
+    ...(base.open_questions === undefined && patch.open_questions === undefined ? {} : { open_questions: appended('open_questions') }),
+  };
+}
+
+/**
+ * `plan` with each acceptance test the world already holds taken from world.tests. The world's tests are
+ * engine-checked, and a test fixed after generation can leave plan.yaml stale, so the world decides what an
+ * unchanged test is (A-345). A patch that leaves a test out then carries the world's version, never the stale copy.
+ */
+export function planWithWorldTests(plan: Plan, world: World): Plan {
+  return {
+    ...plan,
+    acceptanceTests: plan.acceptanceTests.map((t) => {
+      const w = Object.hasOwn(world.tests, t.id) ? world.tests[t.id] : undefined;
+      return w === undefined ? t : { ...t, description: w.description, script: w.script };
+    }),
+  };
 }
 
 /**

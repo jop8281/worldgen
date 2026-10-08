@@ -1,4 +1,4 @@
-revision: 1
+revision: 2
 software: Raindrop.io / Pocket-style bookmark manager (bookmarks, nested folders, tags, shared collections)
 summary: A multi-user bookmark manager. Users save bookmarks into a nested folder tree and label them with per-user tags. Each bookmark moves through unread, read, archived and trashed, and trash is purged after 30 days. Users group bookmarks into collections that are private, shared with members as viewer or editor, or public with an optional expiry. Actions enforce ownership, permission and cycle rules and write an activity log. Two jobs purge old trash and expire public links.
 clock:
@@ -104,6 +104,9 @@ workflows:
       - It returns 200 with the target tag.
       - merging a tag into itself returns 409 invalid_merge. Tags with different owners return 409 owner_mismatch.
       - merge_tags writes one tags_merged activity with subject_id set to the target tag id.
+    lifecycle:
+      representation: removal
+      reason: A tag is active while it exists, and merge_tags deletes the source tag, so no state field holds the lifecycle.
     actions:
       - tag_bookmark
       - untag_bookmark
@@ -118,6 +121,9 @@ workflows:
       - move_folder refuses moving a folder under itself or any of its descendants (409 folder_cycle).
       - The new parent must have the same owner (409 owner_mismatch) and exist (400 input.invalid).
       - delete_folder is refused while subfolders exist. Bookmarks in a deleted folder get folder_id null.
+    lifecycle:
+      representation: descriptive
+      reason: root and nested are derived from parent_id being null or set, not stored in a state field.
     actions:
       - move_folder
   - name: collection_sharing
@@ -479,4 +485,6 @@ outOfScope:
     why: Extra entities that do not add distinct rules beyond the core.
   - what: Full-text search of page content
     why: Search covers title, url and description only.
-changes: []
+changes:
+  - workflows.tagging because workflow tagging (entity tag) gets a lifecycle with representation removal
+  - workflows.folder_tree because workflow folder_tree (entity folder) gets a lifecycle with representation descriptive
