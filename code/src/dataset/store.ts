@@ -325,8 +325,6 @@ export async function releaseStaleClaim(out: string, runId: string, redact: Reda
   return { claim, pid: holder.pid, episodes };
 }
 
-const stateText = (dump: unknown): string => JSON.stringify(dump);
-
 /** Writes the engine's evidence for one episode under private/. A dump that holds a supplied secret is refused. */
 export async function writeArtifacts(out: string, episodeId: string, artifacts: PrivateArtifacts, redact: Redactor): Promise<void> {
   const dir = episodeDir(out, episodeId);
@@ -334,7 +332,7 @@ export async function writeArtifacts(out: string, episodeId: string, artifacts: 
   const parts: [string, unknown][] = [['initial.json', artifacts.initialState], ['final.json', artifacts.finalState], ['calls.json', artifacts.callLog === undefined ? undefined : redact.deep(artifacts.callLog)], ['errors.json', artifacts.errors === undefined ? undefined : redact.deep(artifacts.errors)]];
   for (const [name, value] of parts) {
     if (value === undefined) continue;
-    const text = stateText(value);
+    const text = JSON.stringify(value);
     redact.assertClean(`${name} of ${episodeId}`, text);
     await writeFile(path.join(dir, name), text, { mode: 0o600 });
   }

@@ -7,15 +7,17 @@
  * --record also writes walkthrough.html: one captioned viewport frame per step, the recorded screen walkthrough.
  * --viewport makes each step's PNG the browser viewport scrolled to that step's section, instead of the full page.
  *
- * It starts its own signed-in studio on a free loopback port, from a scratch users file with three people: ada (admin,
- * tenant ops) walks the click path, ana (operator, tenant acme) retries a job with one Idempotency-Key, and bob
- * (operator, tenant globex) shows that he sees neither team's runs. Their tokens are random, live only in this process,
- * and are typed into the page's sign-in form as a person would. It serves and stops helpdesk and runs free noop
- * episodes, which it leaves under eval/episodes. No model is called.
+ * It starts its own signed-in studio on a free loopback port, on a scratch copy of prod/worlds, from a scratch users file
+ * with four people: ada (admin, tenant ops) walks the click path, ana (operator, tenant acme) sees a sensitive field
+ * masked and retries a job with one Idempotency-Key, vic (viewer, acme) meets the role refusals, and bob (operator,
+ * tenant globex) shows that he sees neither team's runs. Their tokens are random, live only in this process, and are
+ * typed into the page's sign-in form as a person would. It serves and stops helpdesk, uploads a spec into the scratch
+ * copy, opens an iterate form without sending it, and runs free noop episodes, which it leaves under eval/episodes.
+ * No model is called.
  */
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -39,6 +41,7 @@ const USERS = [
   { name: 'ada', role: 'admin', tenant: 'ops' },
   { name: 'ana', role: 'operator', tenant: 'acme' },
   { name: 'bob', role: 'operator', tenant: 'globex' },
+  { name: 'vic', role: 'viewer', tenant: 'acme' },
 ] as const;
 type Name = (typeof USERS)[number]['name'];
 const tokens = new Map<Name, string>(USERS.map((u) => [u.name, randomBytes(24).toString('hex')]));
@@ -55,7 +58,10 @@ const studioPort = await freePort();
 const STUDIO = `http://127.0.0.1:${studioPort}`;
 // The studio refuses --users together with WORLDGEN_STUDIO_TOKEN, and the rehearsal never needs a model key.
 const studioEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'WORLDGEN_STUDIO_TOKEN' && k !== 'LLM_KEY'));
-const studio = spawn(process.execPath, ['src/cli/studio.ts', '--port', String(studioPort), '--users', usersFile], { cwd: CODE_DIR, env: studioEnv, stdio: 'ignore', detached: true });
+// A scratch copy of the worlds, so an upload, a served world's state and the job registry never touch prod/worlds.
+const WORLDS = mkdtempSync(path.join(tmpdir(), 'studio-rehearse-worlds-'));
+cpSync(path.join(CODE_DIR, '..', 'prod', 'worlds'), WORLDS, { recursive: true, filter: (src) => !path.basename(src).startsWith('.studio-') });
+const studio = spawn(process.execPath, ['src/cli/studio.ts', '--port', String(studioPort), '--users', usersFile, '--worlds-dir', WORLDS, '--repo-root', path.join(CODE_DIR, '..')], { cwd: CODE_DIR, env: studioEnv, stdio: 'ignore', detached: true });
 
 const CHROME = process.env['CHROME'] ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PROFILE = path.join(OUT, 'chrome-profile');
@@ -68,6 +74,7 @@ process.on('exit', () => {
   chrome.kill();
   try { process.kill(-studio.pid!, 'SIGTERM'); } catch {}
   rmSync(usersFile, { force: true });
+  rmSync(WORLDS, { recursive: true, force: true });
 });
 process.on('SIGINT', () => process.exit(130));
 const finish = (code: number): never => process.exit(code);
@@ -108,22 +115,33 @@ const until = async (expr: string, ms = 20000) => { const t = Date.now(); while 
 const RECORD = process.argv.includes('--record');
 const VIEWPORT = process.argv.includes('--viewport');
 const scrollTo = (focus: string) => ev(`document.querySelector(${JSON.stringify(focus)})?.scrollIntoView({block:'start'}), true`);
-const shot = async (name: string, focus: string) => {
-  if (VIEWPORT) await scrollTo(focus);
-  writeFileSync(`${OUT}/${name}.png`, Buffer.from((await cdp('Page.captureScreenshot', { captureBeyondViewport: !VIEWPORT })).result.data, 'base64'));
+/** A PNG of the full page, of the viewport scrolled to `focus` (--viewport), or, with `clip`, of `focus`'s whole box beyond the viewport. */
+const shot = async (name: string, focus: string, clip = false) => {
+  let params: object = { captureBeyondViewport: !VIEWPORT };
+  if (clip) {
+    const box = JSON.parse(String(await ev(`(()=>{const r=document.querySelector(${JSON.stringify(focus)}).getBoundingClientRect();return JSON.stringify({x:Math.max(0,r.left+scrollX-8),y:Math.max(0,r.top+scrollY-8),width:r.width+16,height:r.height+16})})()`)));
+    params = { clip: { ...box, scale: 1 }, captureBeyondViewport: true };
+  } else if (VIEWPORT) await scrollTo(focus);
+  writeFileSync(`${OUT}/${name}.png`, Buffer.from((await cdp('Page.captureScreenshot', params)).result.data, 'base64'));
 };
 await cdp('Runtime.enable'); await cdp('Page.enable');
 // The light scheme, whatever the machine's appearance, so a capture is the same on every Mac.
 await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
 const frames: { name: string; caption: string; ms: number; ok: boolean; jpeg: string }[] = [];
 const log: string[] = [];
-/** One step: act, wait up to `wait` ms until `waitFor` holds, then a PNG (full page, or `focus` with --viewport); with --record, also a captioned viewport frame of `focus`. */
-const step = async (name: string, caption: string, act: string, waitFor: string, focus = 'body', wait = 20000) => {
+/**
+ * One step: act, wait up to `wait` ms until `waitFor` holds, run `after` (such as scrolling a pane to the line the frame
+ * is about), then a PNG (full page, `focus` with --viewport, or `focus`'s whole box with `clip`); with --record, also a
+ * captioned viewport frame of `focus`.
+ */
+type Frame = { readonly after?: () => Promise<unknown>; readonly clip?: boolean };
+const step = async (name: string, caption: string, act: string, waitFor: string, focus = 'body', wait = 20000, frame: Frame = {}) => {
   const t0 = Date.now(); const e0 = errors.length;
   await ev(act);
   const w = await until(waitFor, wait);
   const ms = Date.now() - t0;
-  await shot(name, focus);
+  if (frame.after !== undefined) await frame.after();
+  await shot(name, focus, frame.clip === true);
   if (RECORD) {
     await scrollTo(focus);
     const jpeg = (await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 60 })).result.data as string;
@@ -148,12 +166,12 @@ const navigate = (to: string) => `(window.__old=true, ${to}, true)`;
 const fresh = `!window.__old`;
 const typeToken = (name: Name) => `(()=>{document.querySelector('#signin-token').value=${JSON.stringify(token(name))};document.querySelector('#signin-form').requestSubmit();return true})()`;
 const signedInAs = (name: Name) => `document.querySelector('#who')?.textContent===${JSON.stringify(`${name} (${USERS.find((u) => u.name === name)!.role})`)}`;
-/** Signs out through the page, then signs `name` in through its token form; false when either half never shows. */
+/** Signs out through the page, then signs `name` in through its token form; false when either half, or the worlds table, never shows. */
 const switchTo = async (name: Name): Promise<boolean> => {
   await ev(click('#signout'));
   if (await until(signedOut) < 0) return false;
   await ev(typeToken(name));
-  return await until(signedInAs(name)) >= 0;
+  return await until(`${signedInAs(name)}&&document.querySelectorAll('#worlds-table tr').length>5`) >= 0;
 };
 const NOOP_BODY = JSON.stringify({ world: 'helpdesk', task: 'assign_newest_acme_ticket', agent: 'noop', budgetUsd: 0.01, maxTurns: 3 });
 /** Two POSTs with one Idempotency-Key, then a wait until the one episode they started has finished. */
@@ -161,29 +179,68 @@ const retry = (key: string) => `(async()=>{const h={authorization:'Bearer '+sess
 
 await ev(`location.href=${JSON.stringify(STUDIO)}, true`);
 await until(signedOut);
-await step('00-sign-in', 'Sign in: the studio asks for a token, then names who is signed in and offers Sign out', typeToken('ada'), `${signedInAs('ada')}&&document.querySelectorAll('tr').length>5`, 'header');
-await step('01-dashboard', 'Worlds: every world with its kind, tasks, wid, model, cost and attempts', navigate(`location.href=${JSON.stringify(STUDIO)}`), `${fresh}&&${signedInAs('ada')}&&document.querySelectorAll('tr').length>5`);
-await step('02-serve-helpdesk', 'Serve helpdesk: it runs on its own world port; the admin port stays private', rowBtn('helpdesk', 'serve'), `${row('helpdesk')}?.innerText.includes('stop')`, 'table');
-await step('03-explorer-helpdesk', 'Explorer: entities and references, routes and actions, jobs, and tasks as an agent is told them', explore('helpdesk'), `document.body.innerText.includes('ticket_event')&&document.body.innerText.includes('escalate_breached')`, section(2));
-await step('04-console-get', 'API console: a real GET on the world port, answered 200 with three open tickets', consoleSend('GET', '/tickets?status=open&limit=3'), `/HTTP 200 /.test(document.body.innerText)&&document.body.innerText.includes('tkt_')`, '#console-meta');
-await step('05-console-illegal-write', 'A wrong write: an illegal status move is refused whole, 422 state.transition', consoleSend('PATCH', '/tickets/tkt_0001', '{"status":"new","priority":"low"}'), `/HTTP 422 /.test(document.body.innerText)&&document.body.innerText.includes('state.transition')`, '#console-meta');
-await step('06-explorer-generated', 'A generated world: gen-library-loans, built by WorldGen from two CSV files', explore('gen-library-loans'), `document.body.innerText.includes('/loans/{id}/pay_fine')`, section(2));
-await step('07-report', 'Its REPORT.md: what was built, assumed and left out, the task proofs and the decoys', rowBtn('gen-library-loans', 'report'), `document.body.innerText.includes('Decoys:')&&!document.body.innerText.includes('report.private_source')`, '#world-report');
-await step('08-export', 'Export: the world as a zip of world.yaml, plan.yaml, REPORT.md and capsule.json', `fetch('/api/worlds/gen-library-loans/export',${AUTH}).then(r=>{window.__export=r.status+' '+r.headers.get('content-type')}), true`, `window.__export==='200 application/zip'`, 'table');
-await step('09-eval', 'Eval: the rehearsal suites with their pass rates', `document.querySelector(${JSON.stringify(section(4))})?.scrollIntoView(), true`, `/\\d+\\/\\d+ \\(\\d+%\\)/.test(document.querySelector(${JSON.stringify(section(4))})?.innerText??'')`, section(4));
-await step('10-proof', 'Engine proof: per helpdesk task, the reference solution scores 1, doing nothing 0, near misses and decoys below 1, and the replay is identical', proof('helpdesk'), `document.querySelector('#play-proof-table')?.innerText.includes('every task verified')`, section(5), 120000);
-await step('11-noop-episode', 'Agent Playground: a free noop agent on the first helpdesk task, graded by the engine from the end state', `(document.querySelector('#play-agent').value='noop', document.querySelector('#play-run').click(), true)`, `!!document.querySelector('#episode-view table')`, '#episodes-meta', 120000);
+const text = (sel: string) => `(document.querySelector(${JSON.stringify(sel)})?.textContent??'')`;
+const typeInto = (sel: string, value: string, event = 'input') => `(()=>{const e=document.querySelector(${JSON.stringify(sel)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event(${JSON.stringify(event)}));return true})()`;
+const SENSITIVE = 'Hidden because this world has sensitive fields. Ask an admin to open it.';
+/** A viewer's refused serve is an action, so its line says do (J113). */
+const FORBIDDEN = "Your role can't do this. Ask an admin for access.";
+// The talk (research/studio-demo-runbook.md), in its order. ada, the admin, walks it first.
+await step('01-sign-in', 'Sign in: the studio asks for a token, then names who is signed in and offers Sign out', typeToken('ada'), `${signedInAs('ada')}&&document.querySelectorAll('#worlds-table tr').length>5`, 'header');
+await step('02-dashboard', 'Worlds: every world with its kind, tasks, wid, model, cost and attempts, and serve, report, plan, export and iterate', navigate(`location.href=${JSON.stringify(STUDIO)}`), `${fresh}&&${signedInAs('ada')}&&document.querySelectorAll('#worlds-table tr').length>5`, '#sec-worlds');
+await step('03-filter', 'Filter: typing gen-stripe keeps the two Stripe worlds and the count reads 2 of all', typeInto('#worlds-filter', 'gen-stripe'), `/^2 of \\d+$/.test(${text('#worlds-meta')})`, '#sec-worlds');
+await step('04-serve-helpdesk', 'Serve helpdesk: the count reads 1 served, and its row offers stop, world api and console; the world runs on its own port', `(${typeInto('#worlds-filter', '')}, ${rowBtn('helpdesk', 'serve')})`, `${row('helpdesk')}?.innerText.includes('stop')`, '#sec-worlds', 20000, { clip: true });
+await step('05-explorer', 'Explorer: entities and references, the ticket workflow with its moves, seed rows by state, routes and actions with try buttons, jobs, and tasks as an agent is told them', explore('helpdesk'), `${text('#explorer-body')}.includes('ticket.status')&&${text('#explorer-body')}.includes('by state')&&${text('#explorer-body')}.includes('escalate_breached')`, '#explorer-body', 20000, { clip: true });
+await step('06-openapi', 'OpenAPI: the served world answers its own GET /openapi.json', click('#console-openapi'), `${text('#console-result')}.includes('HTTP 200')&&${text('#console-result')}.includes('openapi')`, '#console-meta');
+// The response pane scrolls at 24rem; this frame shows it at full height, so all three tickets are in it.
+await step('07-console-get', 'API console: a real GET on the world port, answered 200 with three open tickets', consoleSend('GET', '/tickets?status=open&limit=3'), `${text('#console-result')}.includes('HTTP 200')&&(()=>{try{return JSON.parse(document.querySelector('#console-result pre').textContent).data.length===3}catch(e){return false}})()`, '#console-result', 20000,
+  { clip: true, after: () => ev(`(document.querySelector('#console-result pre').style.maxHeight='none', true)`) });
+const before = String(await ev(`(()=>{try{return JSON.parse(document.querySelector('#console-result pre').textContent).data.find(t=>t.id==='tkt_0001')?.priority??'?'}catch(e){return '?'}})()`) ?? '?');
+const illegalPriority = before === 'urgent' ? 'low' : 'urgent';
+await step('08-console-422', `A wrong write: an illegal status move with a legal priority change is refused whole, 422 state.transition`, consoleSend('PATCH', '/tickets/tkt_0001', `{"status":"new","priority":"${illegalPriority}"}`), `${text('#console-result')}.includes('HTTP 422')&&${text('#console-result')}.includes('state.transition')`, '#console-meta');
+await ev(`(document.querySelector('#console-result pre')&&(document.querySelector('#console-result pre').style.maxHeight=''), true)`);
+await step('09-read-after-422', `The same ticket read back: its priority is still ${before}, so the legal half was not applied either`, consoleSend('GET', '/tickets/tkt_0001'), `${text('#console-result')}.includes('HTTP 200')&&${text('#console-result')}.includes('"priority": "${before}"')`, '#console-meta');
+await step('10-reset-refused', 'Reset with the name box empty: refused, and nothing changes', `(${typeInto('#reset-confirm', '')}, ${click('#reset-send')})`, `${text('#console-result')}==='Type the world name exactly to confirm the reset.'`, '#console-meta');
+await step('11-reset', 'Reset with the typed name: the world is back at its seed', `(${typeInto('#reset-confirm', 'helpdesk')}, ${click('#reset-send')})`, `${text('#console-result')}.includes('reset to its seed')`, '#console-meta');
+await step('12-builder-kind', 'World Builder: kind openapi lists the specs under eval/inputs and offers an upload', typeInto('#gen-kind', 'openapi', 'change'), `!document.querySelector('#gen-openapi-row').hidden&&document.querySelectorAll('#gen-spec option').length>0`, '#sec-generation');
+// The file chooser is the OS's; CDP hands the input the file a person would pick.
+const doc = await cdp('DOM.getDocument');
+const fileInput = await cdp('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: '#gen-spec-file' });
+await cdp('DOM.setFileInputFiles', { nodeId: fileInput.result.nodeId, files: [path.join(CODE_DIR, '..', 'eval', 'inputs', 'petstore.openapi.yaml')] });
+await step('13-builder-upload', 'Upload a spec: it is checked, kept for this tenant, picked, and its paths offered for --only; generate is not pressed', click('#gen-spec-upload'), `${text('#gen-spec-note')}.startsWith('uploaded petstore.openapi.yaml')&&document.querySelector('#gen-spec').value.startsWith('upload:')&&document.querySelectorAll('input[name=gen-only-path]').length>0`, '#sec-generation');
+await step('14-plan', 'A generated world\'s plan: its assumptions, open questions, what is out of scope, and plan.md', rowBtn('gen-library-loans', 'plan'), `${text('#world-plan')}.includes('assumptions')&&${text('#world-plan')}.includes('plan.md')`, '#world-plan', 20000, { clip: true });
+await step('15-iterate-form', 'Iterate: a change request for a world runs on a copy; the form is shown and cancelled here, since sending it starts a paid run', `(${rowBtn('gen-library-loans', 'plan')}, ${rowBtn('gen-stripe-customers', 'iterate')}, ${typeInto('#iterate-change', 'Give each customer a status of active or archived')})`, `!document.querySelector('#iterate-form').hidden&&${text('#iterate-world')}==='gen-stripe-customers'`, '#iterate-form');
+await step('16-iterate-result', 'A finished iterate: gen-stripe-customers\' REPORT.md lists what its change request changed (run_20261007T165640Z_1022e845)', `(${click('#iterate-cancel')}, ${rowBtn('gen-stripe-customers', 'report')})`, `document.querySelector('#iterate-form').hidden&&${text('#world-report')}.includes('## Changes')&&${text('#world-report')}.includes('field_added')`, '#world-report', 20000,
+  { after: () => ev(`(()=>{const pre=document.querySelector('#world-report');const n=pre.firstChild;const i=pre.textContent.indexOf('## Changes');if(!n||i<0)return false;const r=document.createRange();r.setStart(n,i);r.setEnd(n,i+1);pre.scrollTop+=r.getBoundingClientRect().top-pre.getBoundingClientRect().top-8;return true})()`) });
+await step('17-proof', 'Engine proof: per helpdesk task, the reference solution scores 1, doing nothing 0, near misses and decoys below 1, and the replay is identical', proof('helpdesk'), `${text('#play-proof-table')}.includes('every task verified')`, '#sec-playground', 120000);
+await step('18-noop-episode', 'Agent Playground: a free noop agent on the first helpdesk task, graded by the engine from the end state', `(document.querySelector('#play-agent').value='noop', document.querySelector('#play-run').click(), true)`, `!!document.querySelector('#episode-view table')`, '#episodes-meta', 120000);
 const adaRun = String(await ev(`(document.querySelector('#episode-view h3')?.textContent??'').replace(/^episode /,'').replace(/ \\(running\\)$/,'')`) ?? '');
-await step('12-spend', 'Spend: today and all-time LLM and sandbox cost, by day, and the caps', click('#spend-refresh'), `/llm/.test(document.querySelector(${JSON.stringify(section(6))})?.innerText??'')`, section(6));
-await step('13-stop-helpdesk', 'Clean up: stop the served world', `(()=>{const b=[...${row('helpdesk')}.querySelectorAll('button')].find(b=>/^stop/i.test(b.textContent.trim()));b?.click();return !!b})()`, `${row('helpdesk')}?.innerText.includes('serve')`, 'table');
-await step('14-reload', 'Reload: the same state, nothing left running', navigate('location.reload()'), `${fresh}&&${signedInAs('ada')}&&document.querySelectorAll('tr').length>5&&!${row('helpdesk')}?.innerText.includes('stop')`);
-
+await step('19-spend', 'Spend: today and all-time LLM and sandbox cost, by day, and the caps; only an admin sees it', click('#spend-refresh'), `/llm/.test(${text('#spend-body')})`, '#sec-spend');
+await step('20-stop-helpdesk', 'ada stops her served helpdesk', `(()=>{const b=[...${row('helpdesk')}.querySelectorAll('button')].find(b=>/^stop/i.test(b.textContent.trim()));b?.click();return !!b})()`, `${row('helpdesk')}?.innerText.includes('serve')`, '#sec-worlds');
+// ana, an operator: no Spend or Eval, and a sensitive field masked in a world's answer.
 const anaIn = await switchTo('ana');
-await step('15-idempotent-retry', 'ana (acme) retries one job request: two POSTs with one Idempotency-Key start one noop episode, and the second answer replays the first', anaIn ? retry(`rehearse-${randomBytes(4).toString('hex')}`) : 'false', `typeof window.__retry==='string'&&window.__retry.startsWith('same ')`, '#episodes-meta', 90000);
-const retried = String(await ev('window.__retry') ?? 'missing');
+const noAdminSections = `document.querySelector('#sec-spend').hidden&&document.querySelector('#sec-eval').hidden&&document.querySelector('nav a[href="#sec-spend"]').hidden&&document.querySelector('nav a[href="#sec-eval"]').hidden`;
+await step('21-operator-sign-in', 'ana signs in: the bar reads ana (operator), and the section links have no Spend or Eval, which need an admin', 'true', `${anaIn}&&${signedInAs('ana')}&&${noAdminSections}`, 'header');
+await step('22-operator-serve', 'She serves helpdesk for her team: the count reads 1 served, and its row offers stop', rowBtn('helpdesk', 'serve'), `${row('helpdesk')}?.innerText.includes('stop')`, '#sec-worlds', 20000, { clip: true });
+await step('23-operator-masked', 'Her console GET /customers: each customer\'s email reads [sensitive], since email is a sensitive field and she is no admin', `(${explore('helpdesk')}, setTimeout(()=>{${consoleSend('GET', '/customers?limit=2')}},1500), true)`, `${text('#console-result')}.includes('HTTP 200')&&${text('#console-result')}.includes('[sensitive]')`, '#console-meta');
+await step('24-operator-stop', 'ana stops her served helpdesk', `(()=>{const b=[...${row('helpdesk')}.querySelectorAll('button')].find(b=>/^stop/i.test(b.textContent.trim()));b?.click();return !!b})()`, `${row('helpdesk')}?.innerText.includes('serve')`, '#sec-worlds');
+// vic, a viewer: the page shows what his role cannot do, in words.
+const vicIn = await switchTo('vic');
+await step('25-viewer-sign-in', 'vic signs in: the bar reads vic (viewer), and there is no Spend or Eval', 'true', `${vicIn}&&${signedInAs('vic')}&&${noAdminSections}`, 'header');
+await step('26-viewer-report', 'He opens helpdesk\'s report: hidden, because the world has sensitive fields', rowBtn('helpdesk', 'report'), `${text('#world-report')}===${JSON.stringify(SENSITIVE)}`, '#world-report');
+await step('27-viewer-serve', `He presses serve: refused for his role, and the page says "${FORBIDDEN}"`, rowBtn('helpdesk', 'serve'), `${text('#worlds-note')}===${JSON.stringify(FORBIDDEN)}`, '#worlds-note');
+
+// Beyond the talk: one job per Idempotency-Key, and a team that sees no other team's runs.
+const anaAgain = await switchTo('ana');
+let retried = 'missing';
+await step('28-idempotent-retry', 'ana (acme) retries one job request: two POSTs with one Idempotency-Key, the second answer replays the first, and after a reload her Episodes list holds one run', anaAgain ? retry(`rehearse-${randomBytes(4).toString('hex')}`) : 'false', `typeof window.__retry==='string'&&window.__retry.startsWith('same ')`, '#episodes-meta', 90000,
+  { after: async () => {
+    retried = String(await ev('window.__retry') ?? 'missing');
+    await ev(navigate('location.reload()'));
+    await until(`${fresh}&&${signedInAs('ana')}&&/^1 episode run/.test(${text('#episodes-meta')})&&/run\\(s\\)$/.test(${text('#runs-meta')})&&document.querySelectorAll('#play-world option').length>0`);
+  } });
 const anaRun = retried.startsWith('same ') ? retried.slice(5) : '';
 const bobIn = await switchTo('bob');
-await step('16-other-tenant', 'bob (globex) signs in: his Episodes list holds neither ana\'s acme run nor ada\'s ops run', 'true',
+await step('29-other-tenant', 'bob (globex) signs in: his Episodes list holds neither ana\'s acme run nor ada\'s ops run', 'true',
   `${bobIn}&&${signedInAs('bob')}&&/^0 episode run/.test(document.querySelector('#episodes-meta')?.textContent??'')&&!document.body.innerText.includes(${JSON.stringify(anaRun || 'missing-ana-run')})&&!document.body.innerText.includes(${JSON.stringify(adaRun || 'missing-ada-run')})&&${JSON.stringify(anaRun !== '' && adaRun !== '')}`, '#episodes-meta');
 
 const proved = `ada's ops run ${adaRun || 'missing'}; ana's acme retry: ${retried}; bob's episodes: ${await ev(`document.querySelector('#episodes-meta')?.textContent`) ?? 'missing'}`;

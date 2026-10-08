@@ -12,7 +12,7 @@ This repo holds two tools for a work trial. The world engine checks, serves, enf
 
 The task is in [research/spec.md](research/spec.md). The reasons behind this structure are in [research/architecture.md](research/architecture.md). Read the spec once. Do not copy it into code comments.
 
-Status on 2026-10-08, on stabilize/main: everything this file describes is built. The hand-in is the tag v1.0-handin on 4b3d2be4; later work lands on stabilize/main as before. The engine checks a world in all seven layers including lints, serves it with the admin port and `GET /openapi.json`, verifies, grades, writes docs, and compares a world with its source spec (`worldplay openapi`). WorldGen has the run loop, the `worldgen` CLI, the description, OpenAPI and CSV inputs, the iterate run (`--world`), the judge, the repair policy, the preservation gate and `REPORT.md`. Also built: the rehearsal runner, the live runner (`bun run live`, `scripts/live.sh`), the spend ledger (`bun run costs`), the OpenShell, sbx and Boat sandbox backends, the dataset export (`bun run dataset`), the Studio (`bun run studio`) with sign-in, jobs that run once, isolated check children and web hardening, its Docker deploy (`scripts/studio-deploy.sh`), its qualification (`scripts/studio-qualify.sh`) and its alert check (`bun run studio-watch`), the demos (`scripts/demo.sh`, `scripts/solve-demo.sh`, `scripts/demo-all.sh`) and the fresh-clone gate (`scripts/qualify-main.sh`). Bun is the default runtime and Node 22 the second gate. `prod/worlds/` holds 2 hand-built worlds (helpdesk and retail-tau2) and 23 generated ones. Every path this file names in backticks exists.
+Status on 2026-10-08, on stabilize/main: everything this file describes is built. The hand-in is the tag v1.0-handin on 4b3d2be4; later work lands on stabilize/main as before. The engine checks a world in all seven layers including lints, serves it with the admin port and `GET /openapi.json`, verifies, grades, writes docs, and compares a world with its source spec (`worldplay openapi`). WorldGen has the run loop, the `worldgen` CLI, the description, OpenAPI and CSV inputs, the iterate run (`--world`), the judge, the repair policy, the preservation gate and `REPORT.md`. Also built: the rehearsal runner, the live runner (`bun run live`, `scripts/live.sh`), the spend ledger (`bun run costs`), the OpenShell, sbx and Boat sandbox backends, the dataset export (`bun run dataset`), the Studio (`bun run studio`) with sign-in, jobs that run once, isolated check children and web hardening, its Docker deploy (`scripts/studio-deploy.sh`), its qualification (`scripts/studio-qualify.sh`) and its alert check (`bun run studio-watch`), the demos (`scripts/demo.sh`, `scripts/solve-demo.sh`, `scripts/demo-all.sh`) and the fresh-clone gate (`scripts/qualify-main.sh`). Bun is the only runtime and test runner, and CI runs no Node job (A-379). `prod/worlds/` holds 2 hand-built worlds (helpdesk and retail-tau2) and 23 generated ones. Every path this file names in backticks exists.
 
 ## How work lands
 
@@ -156,13 +156,12 @@ Each row names the mechanism that fails when you break the rule. Do not route ar
 
 ## Commands
 
-Run these from `code/`, after one `bun install` on Bun 1.4. Bun is the package manager, script runner, test runner and runtime. `package-lock.json` stays for the Node CI job, which runs the same tests under node:test on Node 22 and gates the snippet heap bound that Bun ignores (A-87).
+Run these from `code/`, after one `bun install` on Bun 1.4. Bun is the package manager, script runner, test runner and runtime. `package-lock.json` stays, kept in step with `bun.lock` by `test/lockfile-parity.test.ts`. CI runs Bun only, so the snippet heap bound that Bun ignores (A-87) is no longer CI-gated, by user order (A-379).
 
 ```sh
 bun run typecheck                                    # whole package, then engine core without Node types
 bun run test                                         # bun test runs the node:test files
 bun run check                                        # the default gate: typecheck, then every test under Bun (A-134)
-npm run check:node                                   # the second gate: typecheck, then node:test on Node 22; enforces the heap bound
 bun run docs                                         # regenerate ../prod/world-format.md
 bun run e2e                                          # acceptance: typecheck, helpdesk checked, verified and over HTTP, CLI help, fresh docs
 
@@ -243,7 +242,7 @@ Never branch on `def.type`, with a `switch` or an `===`, outside `fields.ts`. Ca
 - Test `policy.ts` with tables that map state and outcome to a decision. Do not route them through the fake model.
 - If a change in call order breaks the fake model script, fix the script. Do not loosen the assertion.
 - `test/architecture.test.ts` also checks that every path this file names exists.
-- Run receipts in CI's environment: `WORLDGEN_GUARD_SCALE=4`, which every job in `.github/workflows/check.yml` sets, for example `WORLDGEN_GUARD_SCALE=4 nice -n 15 bun test --timeout 120000 --max-concurrency 1 <files>`, and the same variable for `node --import tsx --test`. Unset, the snippet guard is 2000 ms, as a developer machine keeps it (A-169). Set to 4, it is the guard CI tests against, and a child built from `process.env` carries it.
+- Run receipts in CI's environment: `WORLDGEN_GUARD_SCALE=4`, which every job in `.github/workflows/check.yml` sets, for example `WORLDGEN_GUARD_SCALE=4 nice -n 15 bun test --timeout 120000 --max-concurrency 1 <files>`. Unset, the snippet guard is 2000 ms, as a developer machine keeps it (A-169). Set to 4, it is the guard CI tests against, and a child built from `process.env` carries it.
 - A test that asserts a child's environment passes its own env source (`env` on `childGrader`, `runLocalEpisode`, `runPipeline` or `studioServer`) and never reads `process.env` into the expectation, so CI's variables cannot change it.
 
 ## Decisions and assumptions
