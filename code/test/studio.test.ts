@@ -9,14 +9,17 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 import { createServer as createNetServer } from 'node:net';
 import { checkWorld, saveWorld, serve, worldIdOf, type World, type WorldServer } from '#engine';
-import type { RunResult, Runner, SpawnedChild, Spawner } from '../src/sandboxes/backend.ts';
+import { nodeRunner, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../src/sandboxes/backend.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 // ---- transport: fetch against the loopback studio ----------------------------------------------
+
+const REAL_CODE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 type Json = { [k: string]: unknown };
 
@@ -275,6 +278,8 @@ describe('studio', () => {
     spawned = calls;
     const costsResult: RunResult = { code: 0, stdout: `${JSON.stringify(COSTS_JSON, null, 2)}\n`, stderr: '' };
     const runner: Runner = async (argv, opts) => {
+      // The Explorer's check child runs for real, in the real code dir; the fake root has none.
+      if (argv.includes('src/cli/studio-check.ts')) return nodeRunner(argv, { ...opts, cwd: REAL_CODE_DIR });
       costsCalls.push({ argv: [...argv], cwd: opts?.cwd });
       return costsResult;
     };

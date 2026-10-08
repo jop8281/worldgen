@@ -39,12 +39,11 @@ import { appendFile, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { checkWorld, loadWorld, type CheckedWorld } from '#engine';
+import { loadWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
-import type { Runner, SpawnedChild, Spawner } from '../sandboxes/backend.ts';
+import type { RunResult, Runner, SpawnedChild, Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { explorerOf } from './explorer.ts';
 import { adoptedChild, loadRuns, osProcesses, saveRuns, type Processes, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
 
@@ -552,7 +551,15 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { worlds: list } };
   }
 
-  const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly world: CheckedWorld }>();
+  const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly body: Record<string, unknown> }>();
+
+  /** The check and proof children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338). */
+  const childEnv = (): Record<string, string> => {
+    const src = opts.env ?? process.env;
+    return { TZ: 'UTC', PATH: src['PATH'] ?? '', ...(src['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: src['WORLDGEN_GUARD_SCALE'] }) };
+  };
+  const checkTimeoutMs = opts.checkTimeoutMs ?? 300_000;
+  const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
 
   /** <name>.zip of the world's own files (EXPORT_FILES that exist), refused like the report when REPORT.md leaks task source. */
   async function worldExport(p: Params): Promise<Reply> {
@@ -594,18 +601,29 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!safeSegment(name)) return fail(400, 'world.name_unsafe', 'a world name must be one plain path segment');
     const dir = path.join(worldsDir, name);
     if (!await isDir(dir)) return fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`);
-    // checkWorld verifies every task, about 9 s on a big world, so an explored world is kept until its world.yaml changes.
+    // The check verifies every task, about 9 s on a big world, so an explored world is kept until its world.yaml changes.
     const yaml = await stat(path.join(dir, 'world.yaml')).catch(() => null);
     const cached = checkedWorlds.get(dir);
     if (yaml !== null && cached !== undefined && cached.mtimeMs === yaml.mtimeMs && cached.size === yaml.size) {
-      return { status: 200, body: explorerOf(name, cached.world) };
+      return { status: 200, body: cached.body };
     }
-    const loaded = await loadWorld(dir);
-    if (!loaded.ok) return fail(422, 'world.invalid', `${name} does not load: ${loaded.error[0].code}`);
-    const report = checkWorld(loaded.value);
-    if (!report.ok) return fail(422, 'world.invalid', `${name} does not check: ${report.issues.map((i) => i.code).slice(0, 5).join(', ')}`);
-    if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, world: report.world });
-    return { status: 200, body: explorerOf(name, report.world) };
+    let res: RunResult;
+    try {
+      res = await opts.runner(['bun', 'src/cli/studio-check.ts', dir, name], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
+    } catch {
+      return fail(502, 'check.failed', 'the check process could not start');
+    }
+    if (res.code === 3) return fail(422, 'world.invalid', lastLine(res.stderr).slice(0, 300));
+    if (res.code !== 0) return fail(502, 'check.failed', `the check process failed (exit ${res.code}): ${lastLine(res.stderr).slice(0, 200) || 'no output'}`);
+    let body: unknown;
+    try {
+      body = JSON.parse(res.stdout);
+    } catch {
+      body = null;
+    }
+    if (!isObject(body)) return fail(502, 'check.unreadable', 'the check process answered something that is not a JSON object');
+    if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, body });
+    return { status: 200, body };
   }
 
   /** The API console: one request to the world port of a service this studio started, and the world's real answer. */
@@ -1026,7 +1044,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   async function worldProof(p: Params): Promise<Reply> {
     const w = await worldDirOf(p['name'] ?? '');
     if (!w.ok) return w.reply;
-    const res = await opts.runner(['bun', 'src/cli/worldplay.ts', 'verify', w.dir, '--json'], { cwd: codeDir });
+    const res = await opts.runner(['bun', 'src/cli/worldplay.ts', 'verify', w.dir, '--json'], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
     const tasks: unknown[] = [];
     for (const line of res.stdout.split('\n')) {
       if (line.trim() === '') continue;
