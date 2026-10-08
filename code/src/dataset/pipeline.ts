@@ -35,8 +35,8 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
 // ---------------------------------------------------------------------------------------------
 // The world
 
-export type PreparedWorld = {
-  readonly world: CheckedWorld;
+/** A prepared world as plain data: what the prepare child answers, so a controller never asserts a CheckedWorld. */
+export type PreparedForRun = {
   readonly worldId: string;
   /** worldIdOf of the full world: the identity the public bundle stays bound to, by request and folder name (YOS-159). */
   readonly wid: Wid;
@@ -51,6 +51,8 @@ export type PreparedWorld = {
   readonly seedHash: string;
   readonly tasks: readonly { readonly id: string; readonly difficulty: Difficulty; readonly instruction: string }[];
 };
+/** A prepared world, with the CheckedWorld the prepare step holds in its own process. */
+export type PreparedWorld = PreparedForRun & { readonly world: CheckedWorld };
 
 const MAX_ISSUES_SHOWN = 5;
 
@@ -111,10 +113,10 @@ export async function checkInChild(worldDir: string, runner: Runner, env: Readon
 /** `prepareWorld` in the allowlisted prepare child: everything of the prepared world but the CheckedWorld. */
 export async function prepareInChild(
   worldDir: string, out: string, runner: Runner, env: Readonly<Record<string, string | undefined>>,
-): Promise<Omit<PreparedWorld, 'world'>> {
+): Promise<PreparedForRun> {
   const stdout = await inChild([worldDir, out], runner, env, 'prepare');
   try {
-    return JSON.parse(stdout) as Omit<PreparedWorld, 'world'>;
+    return JSON.parse(stdout) as PreparedForRun;
   } catch {
     throw new DatasetError('the prepare process answered with something other than a prepared world');
   }
