@@ -8,7 +8,7 @@ import { assertNever } from '#lib/never';
 import { boatUsageWindow } from '../boat/client.ts';
 import type { BoatSize } from '../costs/pricing.ts';
 import { BACKEND_KINDS, type BackendKind } from '../sandboxes/backend.ts';
-import { DEFAULT_SIZE_NAME, SIZE_NAMES, captureBoatUsage, discoverBoat, trackBoat, reconcileBoatUsage, reconcileCreate, downDetached, execDetached, upDetached } from '../sandboxes/registry.ts';
+import { DEFAULT_SIZE_NAME, SIZE_NAMES, captureBoatUsage, discoverBoat, trackBoat, reconcileBoatUsage, reconcileCreate, reconcileOrphans, downDetached, execDetached, upDetached } from '../sandboxes/registry.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 
@@ -21,6 +21,7 @@ const USAGE = `usage:
   bun run sandbox -- capture-usage --day YYYY-MM-DD [--org <wallet>]
   bun run sandbox -- reconcile-create <reservation-uuid>
   bun run sandbox -- reconcile-usage <observed-reservation-uuid> [--org <wallet>]
+  bun run sandbox -- reconcile-orphans [--org <wallet>] [--apply]
 
 up prints the sandbox id and the world URL. Only the world port is exposed; the admin port stays inside.
 --image picks the base image on openshell and sbx, such as node:22-bookworm; boat takes none.
@@ -37,6 +38,8 @@ down archives tracked VMs and records a verified cutoff while leaving unknown bi
 capture-usage saves UTC-day list-price receipts separately from spend; it never clears unknown holds.
 reconcile-usage requires exact provider coverage from creation through that cutoff. It replaces
 covered estimates with list-price estimates and resolves the observed hold; it does not verify an invoice.
+reconcile-orphans lists owned Boat VMs that no record, close lock or live claim holds. It is a dry run by default;
+--apply archives orphans and appends a receipt per VM to costs.jsonl.boat-orphans.jsonl; unknown billing stays null.
 `;
 
 class UsageError extends Error {}
@@ -47,6 +50,7 @@ type Command =
   | { readonly kind: 'down'; readonly id: string }
   | { readonly kind: 'reconcile-create'; readonly id: string }
   | { readonly kind: 'reconcile-usage'; readonly id: string; readonly org?: string }
+  | { readonly kind: 'reconcile-orphans'; readonly apply: boolean; readonly org?: string }
   | { readonly kind: 'discover'; readonly org?: string; readonly day?: string }
   | { readonly kind: 'track'; readonly org?: string }
   | { readonly kind: 'capture-usage'; readonly day: string; readonly org?: string }
@@ -107,6 +111,18 @@ function parse(argv: readonly string[]): Command {
       if (rest.length === 3 && rest[1] === '--org' && rest[2] !== undefined && rest[2] !== '' && !rest[2].startsWith('--')) return { kind: sub, id: rest[0], org: rest[2] };
     }
     throw new UsageError('reconcile-usage needs <observed-reservation-uuid> and optional --org <wallet>');
+  }
+  if (sub === 'reconcile-orphans') {
+    let org: string | undefined;
+    let apply = false;
+    for (let i = 0; i < rest.length; i += 1) {
+      const flag = rest[i];
+      const value = rest[i + 1];
+      if (flag === '--apply' && !apply) apply = true;
+      else if (flag === '--org' && org === undefined && value !== undefined && value !== '' && !value.startsWith('--')) { org = value; i += 1; }
+      else throw new UsageError('reconcile-orphans accepts --org <wallet> and --apply once each');
+    }
+    return { kind: sub, apply, ...(org === undefined ? {} : { org }) };
   }
   if (sub === 'down') {
     if (rest.length !== 1 || rest[0] === undefined) throw new UsageError('down needs exactly one <id>');
@@ -183,6 +199,11 @@ async function main(argv: readonly string[]): Promise<number> {
       case 'reconcile-usage':
         process.stdout.write(`${JSON.stringify(await reconcileBoatUsage(cmd.id, deps, cmd.org), null, 2)}\n`);
         return 0;
+      case 'reconcile-orphans': {
+        const result = await reconcileOrphans(deps, { apply: cmd.apply, ...(cmd.org === undefined ? {} : { org: cmd.org }) });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return result.receipts.some(r => r.action === 'archive_failed') ? 1 : 0;
+      }
       case 'reconcile-create': {
         const id = await reconcileCreate(cmd.id, deps);
         process.stdout.write(`${id} archived; creation reconciled at configured estimate rates\n`);
