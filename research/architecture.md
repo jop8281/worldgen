@@ -109,7 +109,7 @@ worldgen/
     src/lib/       never
     test/          architecture engine fields ctx sandbox worlds policy worldgen (*.test.ts)
   eval/        suite.yaml  inputs/  runs/<date>-<suite>/
-  prod/        README.md  design.md  world-format.md (generated)  worlds/helpdesk/  worlds/gen-<slug>/
+  prod/        README.md  design.md  world-format.md (generated)  worlds/helpdesk/  worlds/retail-tau2/  worlds/gen-<slug>/
 ```
 
 The runtime picture and who owns each concern at run time is in [runtime-architecture.md](runtime-architecture.md).
