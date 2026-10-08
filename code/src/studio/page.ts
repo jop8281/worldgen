@@ -101,6 +101,8 @@ a { margin-right: 0.5rem; }
 </p>
 <p><label>JSON body, for POST, PUT and PATCH <textarea id="console-body" rows="4"></textarea></label></p>
 </form>
+<p><button id="console-openapi" type="button">OpenAPI</button> <span class="meta">the served world's own GET /openapi.json</span></p>
+<p><label>type the world's name to reset its state to the seed <input id="reset-confirm" size="24" autocomplete="off"></label> <button id="reset-send" type="button" class="danger">reset</button></p>
 <div id="console-result"></div>
 </section>
 <section id="sec-generation">
@@ -229,6 +231,12 @@ a { margin-right: 0.5rem; }
   var signedIn = fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
     return r.json().then(function (body) {
       authNote(r.status, body);
+      // Spend needs the admin role, so any other page neither shows it nor asks for it.
+      if (r.status === 200 && body.role === 'admin') refreshSpend();
+      else {
+        byId('sec-spend').hidden = true;
+        document.querySelector('nav a[href="#sec-spend"]').hidden = true;
+      }
       if (r.status !== 200) return false;
       if (!body.signIn) {
         whoLine.textContent = body.name + ' (' + body.role + '), sign-in off';
@@ -891,6 +899,21 @@ a { margin-right: 0.5rem; }
       explorerBody.appendChild(grid(['entity', 'id prefix', 'fields', 'refers to', 'referenced by'], x.entities.map(function (e) {
         return { entity: e.name, 'id prefix': e.idPrefix, fields: e.fields.map(fieldText).join(', '), 'refers to': e.refersTo.join(', ') || 'none', 'referenced by': e.referencedBy.join(', ') || 'none' };
       })));
+      if (x.machines.length > 0) {
+        explorerBody.appendChild(el('h3', 'workflows (' + x.machines.length + ')'));
+        explorerBody.appendChild(grid(['field', 'states', 'starts', 'moves'], x.machines.map(function (m) {
+          var moves = Object.keys(m.transitions).map(function (s) { return s + ' -> ' + (m.transitions[s].length > 0 ? m.transitions[s].join(' | ') : 'final'); });
+          return { field: m.entity + '.' + m.field, states: m.states.join(', '), starts: m.initial, moves: moves.join('; ') };
+        })));
+      }
+      explorerBody.appendChild(el('h3', 'seed'));
+      explorerBody.appendChild(grid(['entity', 'rows', 'by state'], Object.keys(x.seed.rows).map(function (n) {
+        var by = Object.keys(x.seed.states).filter(function (k) { return k.indexOf(n + '.') === 0; }).map(function (k) {
+          var c = x.seed.states[k];
+          return k + ': ' + Object.keys(c).map(function (st) { return st + ' ' + c[st]; }).join(', ');
+        });
+        return { entity: n, rows: x.seed.rows[n], 'by state': by.join('; ') };
+      })));
       explorerBody.appendChild(el('h3', 'routes and actions (' + x.routes.length + ')'));
       explorerBody.appendChild(grid(['method', 'path', 'kind', 'about', 'console'], x.routes.map(function (r) {
         var buttons = document.createElement('span');
@@ -938,8 +961,30 @@ a { margin-right: 0.5rem; }
       });
     }).catch(function (e) { consoleMeta.textContent = 'unreachable: ' + e; });
   }
+  /** Resets the served world to its seed once its name is typed (A-357). */
+  function resetWorld() {
+    var name = explorerWorld.value;
+    var confirmBox = byId('reset-confirm');
+    clear(consoleResult);
+    getJson('/api/services').then(function (body) {
+      var svc = serviceFor(name, body.services || []);
+      if (svc === null) { consoleMeta.textContent = name + ' is not running: serve it in Worlds, then reset'; return null; }
+      return post('/api/services/' + encodeURIComponent(svc.id) + '/reset', { confirm: confirmBox.value }).then(function (r) {
+        if (r.error !== undefined) { consoleResult.appendChild(el('p', r.error.code + ': ' + r.error.message)); return; }
+        confirmBox.value = '';
+        consoleResult.appendChild(el('p', r.world + ' reset to its seed at ' + r.now + ', state ' + r.hash));
+      });
+    }).catch(function (e) { consoleMeta.textContent = 'unreachable: ' + e; });
+  }
   byId('explorer-load').addEventListener('click', explore);
   byId('console-form').addEventListener('submit', function (ev) { ev.preventDefault(); send(false); });
+  byId('console-openapi').addEventListener('click', function () {
+    consoleMethod.value = 'GET';
+    consolePath.value = '/openapi.json';
+    consoleBody.value = '';
+    send(false);
+  });
+  byId('reset-send').addEventListener('click', resetWorld);
 
   // ---- Resume: once sign-in and the worlds lists have resolved, the hash restores its view ----------
   function hasOption(select, name) {
@@ -977,7 +1022,6 @@ a { margin-right: 0.5rem; }
   refreshRuns();
   refreshEval();
   refreshEpisodes();
-  refreshSpend();
   Promise.all([signedIn, worldsReady]).then(function (done) {
     if (!done[0]) return;
     restoreFromHash();

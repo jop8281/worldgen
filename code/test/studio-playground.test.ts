@@ -4,16 +4,36 @@
  * the engine's own `worldplay verify`. Only the noop agent runs here, so no test makes a model call.
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { cp, mkdtemp, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { loadWorld } from '#engine';
 import { nodeRunner, nodeSpawn, type Runner } from '../src/sandboxes/backend.ts';
-import { studioServer, type StudioServer } from '../src/studio/server.ts';
+import { RUN_STORE_FILE } from '../src/studio/runstore.ts';
+import { AUDIT_FILE, studioServer, type StudioServer } from '../src/studio/server.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const WORLDS_DIR = path.resolve(CODE_DIR, '../prod/worlds');
+
+/**
+ * A worlds dir of its own under `repo`, holding a copy of helpdesk. The studio keeps its run store and audit log in its
+ * worlds dir, so a shared prod/worlds carried one run's jobs into the next, and an identical request replayed onto a
+ * stale one (YOS-233).
+ */
+async function worldsIn(repo: string): Promise<string> {
+  const worlds = path.join(repo, 'worlds');
+  await cp(path.join(WORLDS_DIR, 'helpdesk'), path.join(worlds, 'helpdesk'), { recursive: true });
+  return worlds;
+}
+
+/** Size and mtime of the studio's own files under the real prod/worlds, or null where one is absent. */
+const PROD_STUDIO_FILES = [RUN_STORE_FILE, AUDIT_FILE].map((f) => path.join(WORLDS_DIR, f));
+const stampProd = (): Promise<(string | null)[]> =>
+  Promise.all(PROD_STUDIO_FILES.map((f) => stat(f).then((s) => `${s.size}:${s.mtimeMs}`, () => null)));
+let prodBefore: (string | null)[];
+before(async () => { prodBefore = await stampProd(); });
+after(async () => { assert.deepEqual(await stampProd(), prodBefore, 'a studio test wrote its run store or audit log under prod/worlds'); });
 
 type Json = Record<string, unknown>;
 async function json(base: string, method: string, p: string, body?: unknown): Promise<{ status: number; body: Json }> {
@@ -30,7 +50,7 @@ describe('studio agent playground (YOS-190)', () => {
   before(async () => {
     repo = await mkdtemp(path.join(tmpdir(), 'wg-playground-'));
     await symlink(CODE_DIR, path.join(repo, 'code'));
-    studio = await studioServer({ port: 0, repoRoot: repo, worldsDir: WORLDS_DIR, spawner: nodeSpawn, runner: nodeRunner });
+    studio = await studioServer({ port: 0, repoRoot: repo, worldsDir: await worldsIn(repo), spawner: nodeSpawn, runner: nodeRunner });
   });
   after(async () => {
     await studio.close();
@@ -104,15 +124,17 @@ describe('studio agent playground with no git, as in the container image (YOS-23
   /** The image has no git binary, so the runner rejects as nodeRunner does for a missing binary. Every other command runs for real. */
   const noGit: Runner = (argv, o) => (argv[0] === 'git' ? Promise.reject(Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' })) : nodeRunner(argv, o));
   let repo: string;
+  let worlds: string;
   const studios: StudioServer[] = [];
   const start = async (build?: string): Promise<StudioServer> => {
-    const s = await studioServer({ port: 0, repoRoot: repo, worldsDir: WORLDS_DIR, spawner: nodeSpawn, runner: noGit, ...(build === undefined ? {} : { build }) });
+    const s = await studioServer({ port: 0, repoRoot: repo, worldsDir: worlds, spawner: nodeSpawn, runner: noGit, ...(build === undefined ? {} : { build }) });
     studios.push(s);
     return s;
   };
   before(async () => {
     repo = await mkdtemp(path.join(tmpdir(), 'wg-playground-nogit-'));
     await symlink(CODE_DIR, path.join(repo, 'code'));
+    worlds = await worldsIn(repo);
   });
   after(async () => {
     for (const s of studios) await s.close();
@@ -136,7 +158,7 @@ describe('studio agent playground with no git, as in the container image (YOS-23
 
   it('also falls back when git runs but finds no repository', async () => {
     const outside: Runner = (argv, o) => (argv[0] === 'git' ? Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: not a git repository' }) : nodeRunner(argv, o));
-    const studio = await studioServer({ port: 0, repoRoot: repo, worldsDir: WORLDS_DIR, spawner: nodeSpawn, runner: outside, build: BUILD });
+    const studio = await studioServer({ port: 0, repoRoot: repo, worldsDir: worlds, spawner: nodeSpawn, runner: outside, build: BUILD });
     studios.push(studio);
     const r = await json(studio.url, 'POST', '/api/episodes', { world: 'helpdesk', task: 'assign_newest_acme_ticket', agent: 'noop', budgetUsd: 0.01, maxTurns: 3 });
     assert.equal(r.status, 200, JSON.stringify(r.body));

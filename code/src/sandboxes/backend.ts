@@ -83,6 +83,11 @@ export type RunOpts = {
    * credentials. Unset, the child inherits this process's environment (YOS-159).
    */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * Aborting it stops the child: SIGTERM, then SIGKILL after ABORT_KILL_MS. The promise still settles only once the
+   * child is gone, with the code the signal gave it, so a caller can wait for the stop.
+   */
+  readonly signal?: AbortSignal;
 };
 export type RunResult = { readonly code: number; readonly stdout: string; readonly stderr: string };
 /**
@@ -96,6 +101,8 @@ export type Runner = (argv: readonly string[], opts?: RunOpts) => Promise<RunRes
  * `forward start -d`) can leave the helper holding our pipes, and `close` would never come.
  */
 const PIPE_GRACE_MS = 500;
+/** How long an aborted child gets after SIGTERM before SIGKILL. */
+const ABORT_KILL_MS = 1_000;
 
 /** The production Runner: `node:child_process` spawn, never through a shell. */
 export const nodeRunner: Runner = (argv, opts) =>
@@ -117,6 +124,17 @@ export const nodeRunner: Runner = (argv, opts) =>
     let settled = false;
     let exitCode = 1;
     let grace: NodeJS.Timeout | undefined;
+    let killLater: NodeJS.Timeout | undefined;
+    const abort = (): void => {
+      child.kill('SIGTERM');
+      killLater = setTimeout(() => child.kill('SIGKILL'), ABORT_KILL_MS);
+    };
+    if (opts?.signal?.aborted === true) abort();
+    else opts?.signal?.addEventListener('abort', abort, { once: true });
+    const unwatch = (): void => {
+      opts?.signal?.removeEventListener('abort', abort);
+      if (killLater !== undefined) clearTimeout(killLater);
+    };
     child.stdout.setEncoding('utf8').on('data', (s: string) => (stdout += s));
     child.stderr.setEncoding('utf8').on('data', (s: string) => (stderr += s));
     const finish = (): void => {
@@ -128,11 +146,13 @@ export const nodeRunner: Runner = (argv, opts) =>
       resolve({ code: exitCode, stdout, stderr });
     };
     child.on('error', (err) => {
+      unwatch();
       if (settled) return;
       settled = true;
       reject(err);
     });
     child.on('exit', (code, signal) => {
+      unwatch();
       exitCode = code ?? (signal === null ? 1 : 128 + constants.signals[signal]);
       grace = setTimeout(finish, PIPE_GRACE_MS);
     });
