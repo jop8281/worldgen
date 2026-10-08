@@ -70,28 +70,39 @@ a { margin-right: 0.5rem; }
 <p id="auth-error" hidden></p>
 </div>
 </header>
-<section>
+<nav aria-label="sections">
+<a href="#sec-worlds">Worlds</a>
+<a href="#sec-explorer">Explorer</a>
+<a href="#sec-generation">Generation runs</a>
+<a href="#sec-eval">Eval</a>
+<a href="#sec-playground">Agent Playground</a>
+<a href="#sec-spend">Spend</a>
+</nav>
+<main>
+<section id="sec-worlds">
 <h2>Worlds<span id="worlds-meta" class="meta"></span></h2>
-<p><button id="worlds-refresh" type="button">refresh</button></p>
+<p><button id="worlds-refresh" type="button">refresh</button> <label>filter <input id="worlds-filter" type="search" autocomplete="off" placeholder="world name"></label></p>
 <div id="worlds-table"></div>
 <pre id="world-report" hidden></pre>
 </section>
-<section>
+<section id="sec-explorer">
 <h2>Explorer<span id="explorer-meta" class="meta"></span></h2>
 <p><label>world <select id="explorer-world"></select></label> <button id="explorer-load" type="button">explore</button></p>
 <div id="explorer-body"></div>
 <h3>API console<span id="console-meta" class="meta">one real request to the world port of a served world, never its admin port</span></h3>
 <form id="console-form">
 <p>
-<select id="console-method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
-<input id="console-path" size="48" placeholder="/tickets?status=open">
+<select id="console-method" aria-label="HTTP method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+<input id="console-path" aria-label="request path" size="48" placeholder="/tickets?status=open">
 <button id="console-send" type="submit">send</button>
 </p>
 <p><label>JSON body, for POST, PUT and PATCH <textarea id="console-body" rows="4"></textarea></label></p>
 </form>
+<p><button id="console-openapi" type="button">OpenAPI</button> <span class="meta">the served world's own GET /openapi.json</span></p>
+<p><label>type the world's name to reset its state to the seed <input id="reset-confirm" size="24" autocomplete="off"></label> <button id="reset-send" type="button" class="danger">reset</button></p>
 <div id="console-result"></div>
 </section>
-<section>
+<section id="sec-generation">
 <h2>Generation runs</h2>
 <form id="generate-form">
 <p>
@@ -120,12 +131,12 @@ a { margin-right: 0.5rem; }
 <h3>Past runs<span id="runs-meta" class="meta"></span></h3>
 <div id="runs-table"></div>
 </section>
-<section>
+<section id="sec-eval">
 <h2>Eval<span id="eval-meta" class="meta"></span></h2>
 <div id="eval-table"></div>
 <pre id="eval-summary" hidden></pre>
 </section>
-<section>
+<section id="sec-playground">
 <h2>Agent Playground<span id="play-meta" class="meta">agent episodes on loopback, graded by the engine</span></h2>
 <p>
 <label>world <select id="play-world"></select></label>
@@ -149,11 +160,12 @@ a { margin-right: 0.5rem; }
 <h3>Analytics<span id="analytics-meta" class="meta">episodes by world, task and agent model; a success is an engine score of 1 with a reply and known cost</span></h3>
 <div id="analytics-table"></div>
 </section>
-<section id="spend">
+<section id="sec-spend">
 <h2>Spend<span id="spend-meta" class="meta">costs --json, cached up to 30 s</span></h2>
 <p><button id="spend-refresh" type="button">refresh</button></p>
 <div id="spend-body"></div>
 </section>
+</main>
 <script>
 (function () {
   'use strict';
@@ -209,21 +221,25 @@ a { margin-right: 0.5rem; }
     try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) { /* nothing stored to remove */ }
     location.reload();
   });
-  fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
+  var signedIn = fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
     return r.json().then(function (body) {
       authNote(r.status, body);
       // Spend needs the admin role, so any other page neither shows it nor asks for it.
       if (r.status === 200 && body.role === 'admin') refreshSpend();
-      else byId('spend').hidden = true;
-      if (r.status !== 200) return;
+      else {
+        byId('sec-spend').hidden = true;
+        document.querySelector('nav a[href="#sec-spend"]').hidden = true;
+      }
+      if (r.status !== 200) return false;
       if (!body.signIn) {
         whoLine.textContent = body.name + ' (' + body.role + '), sign-in off';
-        return;
+        return true;
       }
       whoLine.textContent = body.name + ' (' + body.role + ')';
       signoutBtn.hidden = false;
+      return true;
     });
-  }, function (e) { whoLine.textContent = 'unreachable: ' + e; });
+  }, function (e) { whoLine.textContent = 'unreachable: ' + e; return false; });
   /** Downloads a zip the header-less link cannot fetch: with the token, through an object URL. */
   function downloadZip(path, filename) {
     fetch(path, { headers: authHeaders({}) }).then(function (r) {
@@ -275,6 +291,29 @@ a { margin-right: 0.5rem; }
   var worldsMeta = byId('worlds-meta');
   var worldReport = byId('world-report');
   var reportWorld = null;
+  var worldsFilter = byId('worlds-filter');
+  var worldsBase = '';
+  var worldsTotal = 0;
+  /** Hides the rows whose world name lacks the filter text (case-insensitive); the meta shows shown of total while a filter is set. */
+  function applyFilter() {
+    var needle = worldsFilter.value.trim().toLowerCase();
+    var rows = worldsTable.querySelectorAll('tr');
+    var shown = 0;
+    for (var i = 1; i < rows.length; i++) {
+      var match = rows[i].cells[0].textContent.toLowerCase().indexOf(needle) !== -1;
+      rows[i].hidden = !match;
+      if (match) shown++;
+    }
+    worldsMeta.textContent = needle === '' ? worldsBase : shown + ' of ' + worldsTotal;
+  }
+  worldsFilter.addEventListener('input', applyFilter);
+  // ---- The view lives in the URL hash: #world=<name>&view=explorer|report|play, written with replaceState ----
+  function setHash(world, view) {
+    var params = new URLSearchParams();
+    params.set('world', world);
+    params.set('view', view);
+    try { history.replaceState(null, '', '#' + params.toString()); } catch (e) { /* a blocked history keeps the page working */ }
+  }
 
   function serviceFor(name, services) {
     for (var i = 0; i < services.length; i++) if (services[i].name === name) return services[i];
@@ -282,6 +321,12 @@ a { margin-right: 0.5rem; }
   }
   function toggleReport(name) {
     if (reportWorld === name && !worldReport.hidden) { worldReport.hidden = true; reportWorld = null; return; }
+    openReport(name);
+  }
+  function openReport(name) {
+    setHash(name, 'report');
+    worldReport.hidden = false;
+    worldReport.textContent = 'loading…';
     getJson('/api/worlds/' + encodeURIComponent(name) + '/report').then(function (body) {
       reportWorld = name;
       worldReport.hidden = false;
@@ -291,10 +336,13 @@ a { margin-right: 0.5rem; }
     }, function (e) { worldReport.hidden = false; worldReport.textContent = 'unreachable: ' + e; });
   }
   function refreshWorlds() {
+    worldsMeta.textContent = 'loading…';
     return Promise.all([getJson('/api/worlds'), getJson('/api/services')]).then(function (pair) {
       var worlds = pair[0].worlds || [];
       var services = pair[1].services || [];
-      worldsMeta.textContent = worlds.length + ' world(s), ' + services.length + ' served';
+      worldsTotal = worlds.length;
+      worldsBase = worlds.length + ' world(s), ' + services.length + ' served';
+      worldsMeta.textContent = worldsBase;
       clear(worldsTable);
       if (worlds.length === 0) { worldsTable.appendChild(el('p', 'no worlds')); return; }
       var rows = worlds.map(function (w) {
@@ -341,6 +389,7 @@ a { margin-right: 0.5rem; }
         };
       });
       worldsTable.appendChild(grid(['name', 'kind', 'tasks', 'wid', 'model', 'cost', 'attempts', 'actions'], rows));
+      applyFilter();
     }, function (e) { worldsMeta.textContent = 'unreachable: ' + e; });
   }
   byId('worlds-refresh').addEventListener('click', refreshWorlds);
@@ -430,6 +479,7 @@ a { margin-right: 0.5rem; }
         box.type = 'checkbox';
         box.value = p;
         box.name = 'gen-only-path';
+        box.setAttribute('aria-label', 'only ' + p);
         label.appendChild(box);
         label.appendChild(document.createTextNode(' ' + p));
         only.appendChild(label);
@@ -473,6 +523,7 @@ a { margin-right: 0.5rem; }
     }, function (e) { runState('unreachable: ' + e); });
   });
   function refreshRuns() {
+    runsMeta.textContent = 'loading…';
     return getJson('/api/runs').then(function (body) {
       var past = body.runs || [];
       runsMeta.textContent = past.length + ' run(s)';
@@ -500,6 +551,7 @@ a { margin-right: 0.5rem; }
     }, function (e) { evalSummary.hidden = false; evalSummary.textContent = 'unreachable: ' + e; });
   }
   function refreshEval() {
+    evalMeta.textContent = 'loading…';
     return getJson('/api/eval').then(function (body) {
       var runs = body.runs || [];
       evalMeta.textContent = runs.length + ' eval run(s)';
@@ -525,6 +577,7 @@ a { margin-right: 0.5rem; }
   var spendMeta = byId('spend-meta');
 
   function refreshSpend() {
+    spendMeta.textContent = 'loading…';
     return getJson('/api/costs').then(function (body) {
       clear(spendBody);
       var m = body.meters || {};
@@ -565,6 +618,7 @@ a { margin-right: 0.5rem; }
   var episodesTable = byId('episodes-table');
   var episodesMeta = byId('episodes-meta');
   var episodeView = byId('episode-view');
+  var PLAY_META = playMeta.textContent;
   var playTasks = [];
   var watching = null;
   function fill(select, values) {
@@ -577,11 +631,13 @@ a { margin-right: 0.5rem; }
   }
   function loadTasks() {
     if (!playWorld.value) return Promise.resolve();
+    playMeta.textContent = 'loading…';
     return getJson('/api/worlds/' + encodeURIComponent(playWorld.value) + '/tasks').then(function (body) {
       playTasks = body.tasks || [];
       fill(playTask, playTasks.map(function (t) { return { value: t.id, label: t.id }; }));
       showInstruction();
       clear(proofTable);
+      playMeta.textContent = PLAY_META;
     }, function (e) { playMeta.textContent = 'unreachable: ' + e; });
   }
   function loadPlayWorlds() {
@@ -590,7 +646,7 @@ a { margin-right: 0.5rem; }
       return loadTasks();
     }, function (e) { playMeta.textContent = 'unreachable: ' + e; });
   }
-  playWorld.addEventListener('change', loadTasks);
+  playWorld.addEventListener('change', function () { if (playWorld.value !== '') setHash(playWorld.value, 'play'); loadTasks(); });
   playTask.addEventListener('change', showInstruction);
   byId('play-proof').addEventListener('click', function () {
     clear(proofTable);
@@ -654,7 +710,9 @@ a { margin-right: 0.5rem; }
   }
   var analyticsTable = byId('analytics-table');
   var analyticsMeta = byId('analytics-meta');
+  var ANALYTICS_META = analyticsMeta.textContent;
   function refreshAnalytics() {
+    analyticsMeta.textContent = 'loading…';
     return getJson('/api/episodes/analytics').then(function (body) {
       clear(analyticsTable);
       var rows = (body.groups || []).map(function (g) {
@@ -669,10 +727,12 @@ a { margin-right: 0.5rem; }
       });
       if (rows.length > 0) analyticsTable.appendChild(grid(['world', 'task', 'model', 'runs', 'successes', 'success rate', 'cost usd', 'cost per success', 'mean turns', 'failure causes', 'provenance'], rows));
       if ((body.unreadable || []).length > 0) analyticsTable.appendChild(el('p', 'unreadable episode lines: ' + body.unreadable.join(', ')));
+      analyticsMeta.textContent = ANALYTICS_META;
     }, function (e) { analyticsMeta.textContent = 'unreachable: ' + e; });
   }
   function refreshEpisodes() {
     refreshAnalytics();
+    episodesMeta.textContent = 'loading…';
     return getJson('/api/episodes').then(function (body) {
       clear(episodesTable);
       var list = body.episodes || [];
@@ -737,7 +797,8 @@ a { margin-right: 0.5rem; }
   function explore() {
     var name = explorerWorld.value;
     if (name === '') return;
-    explorerMeta.textContent = 'checking ' + name;
+    explorerMeta.textContent = 'loading…';
+    setHash(name, 'explorer');
     getJson('/api/worlds/' + encodeURIComponent(name) + '/explorer').then(function (x) {
       clear(explorerBody);
       if (x.error !== undefined) { explorerMeta.textContent = x.error.code + ': ' + x.error.message; return; }
@@ -746,6 +807,21 @@ a { margin-right: 0.5rem; }
       explorerBody.appendChild(el('h3', 'entities (' + x.entities.length + ')'));
       explorerBody.appendChild(grid(['entity', 'id prefix', 'fields', 'refers to', 'referenced by'], x.entities.map(function (e) {
         return { entity: e.name, 'id prefix': e.idPrefix, fields: e.fields.map(fieldText).join(', '), 'refers to': e.refersTo.join(', ') || 'none', 'referenced by': e.referencedBy.join(', ') || 'none' };
+      })));
+      if (x.machines.length > 0) {
+        explorerBody.appendChild(el('h3', 'workflows (' + x.machines.length + ')'));
+        explorerBody.appendChild(grid(['field', 'states', 'starts', 'moves'], x.machines.map(function (m) {
+          var moves = Object.keys(m.transitions).map(function (s) { return s + ' -> ' + (m.transitions[s].length > 0 ? m.transitions[s].join(' | ') : 'final'); });
+          return { field: m.entity + '.' + m.field, states: m.states.join(', '), starts: m.initial, moves: moves.join('; ') };
+        })));
+      }
+      explorerBody.appendChild(el('h3', 'seed'));
+      explorerBody.appendChild(grid(['entity', 'rows', 'by state'], Object.keys(x.seed.rows).map(function (n) {
+        var by = Object.keys(x.seed.states).filter(function (k) { return k.indexOf(n + '.') === 0; }).map(function (k) {
+          var c = x.seed.states[k];
+          return k + ': ' + Object.keys(c).map(function (st) { return st + ' ' + c[st]; }).join(', ');
+        });
+        return { entity: n, rows: x.seed.rows[n], 'by state': by.join('; ') };
       })));
       explorerBody.appendChild(el('h3', 'routes and actions (' + x.routes.length + ')'));
       explorerBody.appendChild(grid(['method', 'path', 'kind', 'about', 'console'], x.routes.map(function (r) {
@@ -794,15 +870,69 @@ a { margin-right: 0.5rem; }
       });
     }).catch(function (e) { consoleMeta.textContent = 'unreachable: ' + e; });
   }
+  /** Resets the served world to its seed once its name is typed (A-357). */
+  function resetWorld() {
+    var name = explorerWorld.value;
+    var confirmBox = byId('reset-confirm');
+    clear(consoleResult);
+    getJson('/api/services').then(function (body) {
+      var svc = serviceFor(name, body.services || []);
+      if (svc === null) { consoleMeta.textContent = name + ' is not running: serve it in Worlds, then reset'; return null; }
+      return post('/api/services/' + encodeURIComponent(svc.id) + '/reset', { confirm: confirmBox.value }).then(function (r) {
+        if (r.error !== undefined) { consoleResult.appendChild(el('p', r.error.code + ': ' + r.error.message)); return; }
+        confirmBox.value = '';
+        consoleResult.appendChild(el('p', r.world + ' reset to its seed at ' + r.now + ', state ' + r.hash));
+      });
+    }).catch(function (e) { consoleMeta.textContent = 'unreachable: ' + e; });
+  }
   byId('explorer-load').addEventListener('click', explore);
   byId('console-form').addEventListener('submit', function (ev) { ev.preventDefault(); send(false); });
+  byId('console-openapi').addEventListener('click', function () {
+    consoleMethod.value = 'GET';
+    consolePath.value = '/openapi.json';
+    consoleBody.value = '';
+    send(false);
+  });
+  byId('reset-send').addEventListener('click', resetWorld);
 
-  refreshWorlds();
-  fillExplorerWorlds();
+  // ---- Resume: once sign-in and the worlds lists have resolved, the hash restores its view ----------
+  function hasOption(select, name) {
+    for (var i = 0; i < select.options.length; i++) if (select.options[i].value === name) return true;
+    return false;
+  }
+  function restoreFromHash() {
+    var params = new URLSearchParams(location.hash.slice(1));
+    var name = params.get('world');
+    var view = params.get('view');
+    if (name === null || name === '' || !hasOption(explorerWorld, name)) return;
+    if (view === 'explorer') {
+      explorerWorld.value = name;
+      byId('sec-explorer').scrollIntoView();
+      explore();
+    } else if (view === 'report') {
+      openReport(name);
+      byId('sec-worlds').scrollIntoView();
+    } else if (view === 'play' && hasOption(playWorld, name)) {
+      playWorld.value = name;
+      loadTasks();
+      byId('sec-playground').scrollIntoView();
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('nav a'), function (a) {
+    a.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      byId(a.getAttribute('href').slice(1)).scrollIntoView();
+    });
+  });
+  var worldsReady = Promise.all([refreshWorlds(), fillExplorerWorlds(), loadPlayWorlds()]);
   refreshRuns();
   refreshEval();
-  loadPlayWorlds();
   refreshEpisodes();
+  Promise.all([signedIn, worldsReady]).then(function (done) {
+    if (!done[0]) return;
+    restoreFromHash();
+    window.addEventListener('hashchange', restoreFromHash);
+  });
 }());
 </script>
 </body>

@@ -6,6 +6,7 @@
  * response or the page.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 import { checkWorld, saveWorld, serve, worldIdOf, type World, type WorldServer } from '#engine';
 import { nodeRunner, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../src/sandboxes/backend.ts';
+import { studioPage } from '../src/studio/page.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
 import { quietPort } from './helpers/ports.ts';
 import { minimalWorld } from './helpers/world.ts';
@@ -965,6 +967,7 @@ describe('studio', () => {
   describe('the API console', () => {
     let world: WorldServer;
     let svc = '';
+    let seedHash = '';
     const direct = async (method: string, p: string, body?: unknown): Promise<{ status: number; text: string }> => {
       const res = await fetch(`${world.url}${p}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }) });
       return { status: res.status, text: await res.text() };
@@ -976,6 +979,7 @@ describe('studio', () => {
       assert.ok(report.ok);
       await writeWorld(path.join(worldsDir, 'console-delta'), minimalWorld());
       world = await serve(report.world, { port: 0 });
+      seedHash = String(((await (await fetch(`${world.adminUrl}/_world/state`)).json()) as Json)['hash']);
       spawnPlan = () => ({ listening: { world: world.port, admin: world.adminPort } });
       const served = await json(base, 'POST', '/api/worlds/console-delta/serve', {});
       spawnPlan = () => ({});
@@ -1017,6 +1021,24 @@ describe('studio', () => {
       }
     });
 
+    it('resets the served world to its seed only once its name is typed, and answers the time and the state hash (A-357)', async () => {
+      const reset = (body?: unknown) => json(base, 'POST', `/api/services/${svc}/reset`, body);
+      const refusal = { error: { code: 'reset.confirm', message: 'a reset throws away every change to console-delta\'s state; send {"confirm": "console-delta"} to go ahead' } };
+      for (const body of [undefined, {}, { confirm: 'console' }, { confirm: 'CONSOLE-DELTA' }]) {
+        const r = await reset(body);
+        assert.deepEqual([r.status, r.body], [400, refusal], JSON.stringify(body));
+      }
+      const wrote = await send({ method: 'POST', path: '/customers', body: { name: 'Reset Co', tier: 'free' } });
+      assert.equal(wrote.body['status'], 201, JSON.stringify(wrote.body));
+      const state = async (): Promise<unknown> => ((await (await fetch(`${world.adminUrl}/_world/state`)).json()) as Json)['hash'];
+      assert.notEqual(await state(), seedHash);
+      const r = await reset({ confirm: 'console-delta' });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.deepEqual([r.body['service'], r.body['world'], r.body['hash'], typeof r.body['now']], [svc, 'console-delta', seedHash, 'string']);
+      assert.equal(await state(), seedHash);
+      assert.equal((await direct('GET', '/customers')).text.includes('Reset Co'), false);
+    });
+
     it('validates the method and the body, and 404s an unknown service', async () => {
       assert.equal(errorOf((await send({ method: 'TRACE', path: '/customers' })).body)?.code, 'call.method');
       assert.equal(errorOf((await send({ method: 'GET', path: '/customers', body: {} })).body)?.code, 'call.body');
@@ -1038,6 +1060,22 @@ describe('studio', () => {
       } finally {
         await json(base, 'POST', `/api/services/${id}/stop`);
       }
+    });
+  });
+});
+
+describe('the Explorer check child shows each state machine and the seed counts (A-357)', () => {
+  it('on the hand-built helpdesk', () => {
+    const r = spawnSync('bun', ['src/cli/studio-check.ts', path.resolve(REAL_CODE_DIR, '../prod/worlds/helpdesk'), 'helpdesk'], { cwd: REAL_CODE_DIR, encoding: 'utf8', timeout: 120_000 });
+    assert.equal(r.status, 0, r.stderr);
+    const x = JSON.parse(r.stdout) as Json;
+    assert.deepEqual(x['machines'], [{
+      entity: 'ticket', field: 'status', states: ['new', 'open', 'pending', 'escalated', 'resolved', 'closed'], initial: 'new',
+      transitions: { new: ['open', 'escalated'], open: ['pending', 'escalated', 'resolved'], pending: ['open', 'escalated', 'resolved'], escalated: ['resolved'], resolved: ['open', 'closed'], closed: [] },
+    }]);
+    assert.deepEqual(x['seed'], {
+      rows: { customer: 60, agent: 12, sla_policy: 12, oncall_shift: 39, ticket: 320, ticket_comment: 229, ticket_event: 1033 },
+      states: { 'ticket.status': { new: 30, open: 90, pending: 30, escalated: 40, resolved: 85, closed: 45 } },
     });
   });
 });
@@ -1119,5 +1157,47 @@ describe('studio runs across a restart (YOS-191, A-329)', () => {
     } finally {
       await c.close();
     }
+  });
+});
+
+describe('studio page accessibility (YOS-187)', () => {
+  const html = studioPage();
+  const tags = (name: string): { tag: string; at: number }[] =>
+    [...html.matchAll(new RegExp(`<${name}\\b[^>]*>`, 'g'))].map((m) => ({ tag: m[0], at: m.index ?? 0 }));
+  const labelledFor = new Set([...html.matchAll(/<label\s+for="([^"]+)"/g)].map((m) => m[1]));
+  const insideLabel = (at: number): boolean => {
+    const open = html.lastIndexOf('<label', at);
+    return open !== -1 && html.lastIndexOf('</label>', at) < open && html.indexOf('</label>', at) !== -1;
+  };
+
+  it('names every input, select and textarea', () => {
+    const controls = [...tags('input'), ...tags('select'), ...tags('textarea')];
+    assert.equal(controls.length, 19);
+    const unnamed = controls.filter((c) => {
+      const id = /\bid="([^"]+)"/.exec(c.tag)?.[1];
+      return !c.tag.includes('aria-label=') && !(id !== undefined && labelledFor.has(id)) && !insideLabel(c.at);
+    });
+    assert.deepEqual(unnamed.map((c) => c.tag), []);
+    assert.equal(html.includes('<input id="worlds-filter" type="search"'), true);
+  });
+
+  it('has one header, one main, a nav, and an h2 in every section', () => {
+    assert.equal(tags('header').length, 1);
+    assert.equal(tags('main').length, 1);
+    assert.equal(tags('nav').length, 1);
+    const sections = tags('section');
+    assert.equal(sections.length, 6);
+    const mainEnd = html.indexOf('</main>');
+    sections.forEach((s, i) => {
+      const end = Math.min(sections[i + 1]?.at ?? mainEnd, mainEnd);
+      assert.equal(html.slice(s.at, end).includes('<h2'), true, s.tag);
+      assert.equal(html.includes(`href="#${/id="([^"]+)"/.exec(s.tag)?.[1]}"`), true, s.tag);
+    });
+  });
+
+  it('gives every script-created input, select and textarea an aria-label', () => {
+    const created = [...html.matchAll(/createElement\('(input|select|textarea)'\)/g)];
+    assert.equal(created.length, 1);
+    assert.equal((html.match(/\.setAttribute\('aria-label'/g) ?? []).length, 1);
   });
 });

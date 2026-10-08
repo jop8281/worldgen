@@ -9,7 +9,9 @@
  *   `/_world` route exists here. The page is offline and every fetch it makes is same-origin and
  *   relative. The one way through to a world is the API console route (A-268): it forwards one
  *   request to the world port of a service this studio started, never to its admin port, and
- *   answers the world's real status and body, or the real failure.
+ *   answers the world's real status and body, or the real failure. The one exception is reset
+ *   (A-357): after the caller types the world's name, the studio itself sends that service's admin
+ *   port POST /_world/reset and GET /_world/state, and answers only the time and the state hash.
  * - Children only. The studio never imports llm.ts and never makes a model call: generation and
  *   serving are spawned CLIs through an injected `Spawner`, and `costs` runs through an injected
  *   `Runner`. Generation and episodes get the operator's environment, so it carries every key, minus the
@@ -57,12 +59,13 @@ import { appendFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
+import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, recoveryOf, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
 import { trafficCounter } from './watch.ts';
 
@@ -725,24 +728,26 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       void persist();
     });
   };
-  /**
-   * A job whose holder died (no lease, or one past its expiry) is resumed when its process lives and stopped when it
-   * does not. An intent is stopped, never started: its child may have started before the crash. True when it acted.
-   */
+  /** Applies the lease rules (`recoveryOf`, A-335) to a job whose holder may have died. True when it acted. */
   const recover = (job: Job, at: number): boolean => {
-    if (job.phase === 'finished' || holds(job) || (job.lease !== null && Date.parse(job.lease.expiresAt) > at)) return false;
-    const from = job.lease?.holder ?? 'legacy';
+    const decision = recoveryOf(job, at, me, processes);
     const when = new Date(at).toISOString();
-    if (job.phase === 'running' && job.pid !== null && processes.alive(job.pid)) {
-      job.lease = leaseFrom(at);
-      job.recovery = { at: when, from, outcome: 'resumed' };
-      watch(job, adoptedChild(job.pid, processes));
-    } else {
-      job.recovery = { at: when, from, outcome: 'stopped', reason: job.phase === 'intent' ? 'start_unconfirmed' : 'process_gone' };
-      job.phase = 'finished';
-      job.lease = null;
+    switch (decision.kind) {
+      case 'leave':
+        return false;
+      case 'resume':
+        job.lease = leaseFrom(at);
+        job.recovery = { at: when, from: decision.from, outcome: 'resumed' };
+        watch(job, adoptedChild(decision.pid, processes));
+        return true;
+      case 'stop':
+        job.recovery = { at: when, from: decision.from, outcome: 'stopped', reason: decision.reason };
+        job.phase = 'finished';
+        job.lease = null;
+        return true;
+      default:
+        return assertNever(decision);
     }
-    return true;
   };
   /**
    * The lease tick. Each unfinished job this studio holds gets a fresh lease, unless the file names another holder: a
@@ -1084,6 +1089,35 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       services.delete(id);
     });
     return { status: 200, body: record };
+  }
+
+  /**
+   * Resets a served world to its seed (A-357). The caller types the world's name as `confirm`, because a reset throws
+   * away every change to its state. The studio calls only that service's admin port, server-side, and answers the
+   * engine's time and the reset state's hash, never the state itself.
+   */
+  async function resetService(p: Params, body: unknown, who: User, filter: string | null): Promise<Reply> {
+    const hit = serviceOf(p['id'] ?? '', who, filter);
+    if (hit === undefined) return fail(404, 'service.unknown', `No service ${p['id'] ?? ''}`);
+    const name = hit.record.name;
+    if (!isObject(body) || body['confirm'] !== name) {
+      return fail(400, 'reset.confirm', `a reset throws away every change to ${name}'s state; send {"confirm": "${name}"} to go ahead`);
+    }
+    const admin = `http://127.0.0.1:${hit.record.adminPort}`;
+    const signal = (): AbortSignal => AbortSignal.timeout(CALL_TIMEOUT_MS);
+    try {
+      const reset = await fetch(`${admin}/_world/reset`, { method: 'POST', redirect: 'manual', signal: signal() });
+      if (!reset.ok) return fail(502, 'reset.failed', `the admin port of ${name} answered ${reset.status} to the reset`);
+      const done: unknown = await reset.json();
+      const state = await fetch(`${admin}/_world/state`, { redirect: 'manual', signal: signal() });
+      const dump: unknown = state.ok ? await state.json() : null;
+      const now = isObject(done) && typeof done['now'] === 'string' ? done['now'] : null;
+      const hash = isObject(dump) && typeof dump['hash'] === 'string' ? dump['hash'] : null;
+      if (now === null || hash === null) return fail(502, 'reset.failed', `the admin port of ${name} gave no time or state hash after the reset`);
+      return { status: 200, body: { service: hit.record.id, world: name, now, hash } };
+    } catch (e) {
+      return fail(502, 'reset.unreachable', `the admin port of ${name} did not answer the reset: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   async function stopService(p: Params, who: User, filter: string | null): Promise<Reply> {
@@ -1697,6 +1731,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'services'], run: (_p, _b, who, ctx) => ({ status: 200, body: { services: [...services.values()].filter((s) => visible(s.record.tenant, who, ctx.filter)).map((s) => s.record) } }) },
     { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'stop'], run: (p, _b, who, ctx) => stopService(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'call'], run: (p, b, who, ctx) => callService(p, b, who, ctx.filter) },
+    { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'reset'], run: (p, b, who, ctx) => resetService(p, b, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'inputs'], run: () => inputs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'inputs', ':spec', 'paths'], run: (p) => specPaths(p) },
     { method: 'POST', need: 'operator', parts: ['api', 'generate'], run: (_p, b, who, ctx) => generate(b, who, ctx.key) },

@@ -7,11 +7,14 @@ import { describe, it } from 'node:test';
 import { main, type CliDeps } from '../src/cli/dataset.ts';
 import { configSchema } from '../src/worldgen/config.ts';
 import { PROMPT_VERSION } from '../src/dataset/schema.ts';
+import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { engineGrader } from '../src/dataset/verifier.ts';
 import type { SolverProposer } from '../src/dataset/solver.ts';
 import { COMMIT, EASY_REPLY, HELPDESK_DIR, RUN_BUDGET, easyOnly, fakeBackend, helpdesk, randomPort, solveAll, tmp } from './dataset-kit.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
+/** These tests pass an env without PATH, so the bun children get the test process's PATH. */
+const withPath: Runner = (argv, opts) => nodeRunner(argv, { ...opts, env: { ...opts?.env, PATH: process.env['PATH'] ?? '' } });
 const KEYS = { LLM_KEY: 'sk-ant-api03-CLI-ANTHROPIC-SECRET', BOAT_API_KEY: 'boat_live_CLI-BOAT-SECRET-0001' };
 
 type Ran = { code: number; stdout: string; stderr: string };
@@ -102,6 +105,7 @@ describe('the dataset CLI as a program', () => {
     const out = path.join(tmp('invalid-custom-out'), 'out');
     const errors: string[] = [];
     const code = await main(required(out, { world }), { CUSTOM_LLM_KEY: secret }, {
+      runner: withPath,
       config: configSchema.parse({ model: 'claude-sonnet-5-5', apiKeyEnv: 'CUSTOM_LLM_KEY', maxCostUsd: 1 }),
       err: (line) => errors.push(line),
     });
@@ -148,6 +152,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
       makeBundle: async (dir) => ({ files: [{ path: 'worlds/w/world.yaml', data: readFileSync(path.join(dir, 'public', 'world.yaml')) }], world: 'worlds/w' }),
       // The CLI's default grader is the verifier child process; these tests verify in-process.
       grader: engineGrader,
+      runner: withPath,
       ...deps,
     });
     assert.equal(process.listenerCount('SIGINT'), before, 'the CLI left a signal handler behind');

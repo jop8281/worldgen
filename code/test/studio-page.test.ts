@@ -59,7 +59,7 @@ describe('the page script', () => {
       const page = await boot(c.me);
       assert.equal(page.fetched.includes('/api/me'), true);
       assert.equal(page.fetched.includes('/api/costs'), c.costs);
-      assert.equal(page.byId('spend').hidden === true, !c.costs);
+      assert.equal(page.byId('sec-spend').hidden === true, !c.costs);
     });
   }
 });
