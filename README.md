@@ -42,7 +42,7 @@ bun run live ../prod/prompts                                     # every prompt 
 
 ## Status of main
 
-The release is promotion 13, `6e28ba99` ([#135](https://github.com/jop8281/worldgen/pull/135)). Commits on `main` after it change only this README. Its verdict runs are green twice: [37767399613](https://github.com/jop8281/worldgen/actions/runs/37767399613) and [37767403670](https://github.com/jop8281/worldgen/actions/runs/37767403670). CI runs Bun only, with the full test suite and the end-to-end check ([#124](https://github.com/jop8281/worldgen/pull/124), [#134](https://github.com/jop8281/worldgen/pull/134); A-379, A-381). Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
+The release is v1.1.1, `{{V111_SHA}}` ([#{{V111_PR}}](https://github.com/jop8281/worldgen/pull/{{V111_PR}})). Commits on `main` after it change only this README. Its verdict runs are green twice: [{{RUN1}}](https://github.com/jop8281/worldgen/actions/runs/{{RUN1}}) and [{{RUN2}}](https://github.com/jop8281/worldgen/actions/runs/{{RUN2}}). CI runs Bun only, with the full test suite and the end-to-end check ([#124](https://github.com/jop8281/worldgen/pull/124), [#134](https://github.com/jop8281/worldgen/pull/134); A-379, A-381). Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
 
 | What | Where | PRs |
 |---|---|---|
@@ -61,6 +61,7 @@ The release is promotion 13, `6e28ba99` ([#135](https://github.com/jop8281/world
 | Repair: a retry builds on the step's best full attempt and sees the earlier ones; a seed that misses one field twice, the second time on its type, goes back to the model step; a create's seed must cover what the planned tasks need; a plan owes a stateMix only for an entity with a state field | `code/src/worldgen/run.ts`, `code/src/worldgen/policy.ts`, `code/src/worldgen/judge.ts`, `code/src/worldgen/plan.ts` | [#92](https://github.com/jop8281/worldgen/pull/92), [#94](https://github.com/jop8281/worldgen/pull/94), [#97](https://github.com/jop8281/worldgen/pull/97), [#98](https://github.com/jop8281/worldgen/pull/98) |
 | The spend ledger files each WorldGen model call and each solver call under its run and step, so `costs --by run` attributes new spend to its run | `code/src/costs/meter.ts`, `code/src/cli/models.ts`, `code/src/dataset/solver.ts` | [#82](https://github.com/jop8281/worldgen/pull/82), [#87](https://github.com/jop8281/worldgen/pull/87) |
 | Linux runs no longer fail with `spawn E2BIG`: the `claude -p` transport passes the system prompt, about 130 KB, as a private temp file instead of an argument, and refuses any argument of 128 KiB or more before spawning | `code/src/worldgen/llm.ts` | [#117](https://github.com/jop8281/worldgen/pull/117) |
+| v1.1.1 fixes the four known limits: {{FIX257_TEXT}} ({{FIX257}}); {{FIX258_TEXT}} ({{FIX258}}); {{FIX259_TEXT}} ({{FIX259}}); {{FIX260_TEXT}} ({{FIX260}}) | {{FIX_WHERE}} | {{FIX_PRS}} |
 | stress-4, 23 of 29 (see [Results](#the-full-suite)), and two fixes for defects it found: a `?limit=` lookup is not paging, and a frozen test that throws goes to the workflow step first | `eval/runs/2026-10-08-stress-4/`, `code/src/engine/tasks.ts`, `code/src/worldgen/stages.ts` | [#71](https://github.com/jop8281/worldgen/pull/71), [#73](https://github.com/jop8281/worldgen/pull/73) |
 | OpenAPI `--only`: the plan must name every input operation. The `--only /store` live run on main `e034036c` ended done in 248 s for $0.82, with 3 verified tasks, and `worldplay check` and `verify` exit 0 | `code/src/worldgen/input-coverage.ts`, `code/src/worldgen/stages.ts` | [#45](https://github.com/jop8281/worldgen/pull/45) |
 
@@ -90,7 +91,9 @@ stress-4 ran the 29-case `stress` suite once on main `4b3d2be4`, at $3 and 12 mi
 
 stress-5 reran the six stress-4 product failures on `acb23bbb` and `d761c213` ([#91](https://github.com/jop8281/worldgen/pull/91)): 5 of 6 now pass, and all 6 got past the step where they had stopped. The 7 runs, 6 creates and 1 change, took 29.9 min summed and $6.96. stripe-customers stopped at the tasks step on a new defect, YOS-253, which [#97](https://github.com/jop8281/worldgen/pull/97) fixes. Its source is [eval/runs/2026-10-08-stress-5/summary.md](eval/runs/2026-10-08-stress-5/summary.md).
 
-stress-6 reran the whole 29-case suite on `42ab9ca9` with the same settings ([#129](https://github.com/jop8281/worldgen/pull/129)): 27 of 29 (93%), 24 succeeded and 3 impossible inputs were refused. Per case, p50 was 4.5 min, p95 8.2 min and the max 8.8 min, and the suite cost $25.32. stripe-customers now finishes. The two stops, bookmarks and stripe-charges, are tracked as YOS-257 and YOS-258. Its source is [eval/runs/2026-10-08-stress-6/summary.md](eval/runs/2026-10-08-stress-6/summary.md).
+stress-6 reran the whole 29-case suite on `42ab9ca9` with the same settings ([#129](https://github.com/jop8281/worldgen/pull/129)): 27 of 29 (93%), 24 succeeded and 3 impossible inputs were refused. Per case, p50 was 4.5 min, p95 8.2 min and the max 8.8 min, and the suite cost $25.32. stripe-customers now finishes. Its two stops, bookmarks and stripe-charges, are fixed in v1.1.1 (YOS-257, YOS-258). Its source is [eval/runs/2026-10-08-stress-6/summary.md](eval/runs/2026-10-08-stress-6/summary.md).
+
+{{S7_LINE}}
 
 ### The live-run dress rehearsal
 
