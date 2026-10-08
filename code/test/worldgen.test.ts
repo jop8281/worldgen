@@ -12,7 +12,7 @@ import { describe, it, mock } from 'node:test';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { checkWorld, editJsonSchema, emptyWorld, formatReference, issue, loadWorld, renderWorldYaml, routeKey, worldIdOf, worldSchema, type CheckIssue, type CheckReport, type World } from '#engine';
-import { openLedger, SpendCapError } from '../src/costs/ledger.ts';
+import { CostUnenforceableError, openLedger, SpendCapError } from '../src/costs/ledger.ts';
 import { CAPSULE_FILE, capsuleSchema } from '../src/worldgen/capsule.ts';
 import { meteredModel } from '../src/costs/meter.ts';
 import { configSchema, type Config } from '../src/worldgen/config.ts';
@@ -1520,6 +1520,7 @@ const STOPS: Record<StopReason['kind'], () => Promise<Ran>> = {
     { check: tasksBreakWorkflowTest(3) }),
   budget_exhausted: () => run(HAPPY, { config: configSchema.parse({ model: 'claude-sonnet-5-5', maxCostUsd: 0.25, maxOutputTokens: 100 }) }),
   spend_cap: () => run([{ input: PLAN }, () => { throw new SpendCapError({ cap: 'maxTotalUsd', capUsd: 100, spentUsd: 100, remainingUsd: 0 }, '2026-10-07'); }]),
+  cost_unenforceable: () => run([{ input: PLAN }, () => { throw new CostUnenforceableError('maxTotalUsd', null, 'cost admission refused'); }]),
   time_exhausted: () => run(HAPPY, { config: configSchema.parse({ model: 'claude-sonnet-5-5', maxCostUsd: 5, maxMinutes: 1 }) }),
   stage_time_exhausted: () => run(HAPPY, { config: configSchema.parse({ model: 'claude-sonnet-5-5', maxCostUsd: 5, steps: { tasks: { reserve: 0.9 } } }) }),
   model_error: () => run([billedError]),
@@ -1608,6 +1609,25 @@ describe('runWorldGen create: REPORT.md on every exit (YOS-44)', () => {
     assert.deepEqual(attempts(events), [['plan', 1, 'accepted']]);
     assert.equal(report(filesDir).startsWith('Stopped: spend_cap\n\nThe run was refused by a spend cap shared by every session, not by its own budget: daily spend cap WORLDGEN_MAX_DAILY_USD=$60.00 reached: $60.08 spent today (2026-10-07 UTC), all sessions, model calls and sandboxes.\n'), true);
   });
+});
+
+describe('runWorldGen create: a call the ledger cannot admit (YOS-227)', () => {
+  for (const [claim, why] of [[null, 'some spend in its window has unknown cost'], ['e1467cfb', 'claim e1467cfb has unknown cost']] as const) {
+    it(`stops with cost_unenforceable, $0 and no unknown-cost call, when ${why}`, async () => {
+      const refused = new CostUnenforceableError('maxDailyUsd', claim, 'cost admission refused: WORLDGEN_MAX_DAILY_USD cannot be enforced');
+      const { result, events, filesDir } = await run([{ input: PLAN }, () => { throw refused; }]);
+      const reason: StopReason = { kind: 'cost_unenforceable', cap: 'maxDailyUsd', claim };
+      assert.deepEqual(result.kind === 'stopped' ? result.reason : null, reason);
+      assert.equal(result.costUsd, 0.125);
+      assert.deepEqual(attempts(events), [['plan', 1, 'accepted']]);
+      const finished = events.find((e) => e.t === 'run_finished');
+      assert.equal(finished?.t === 'run_finished' ? finished.unknownCostCalls : 'missing', undefined);
+      assert.equal(describeStop(reason),
+        `cost_unenforceable: not admitted: WORLDGEN_MAX_DAILY_USD cannot be enforced while ${why}; nothing was called or spent (see \`costs\`, settle with \`costs release <id> --usd <n>\`)`);
+      assert.equal(report(filesDir).split('\n').slice(0, 3).join('\n'),
+        `Stopped: cost_unenforceable\n\nThe run was not admitted: WORLDGEN_MAX_DAILY_USD cannot be enforced while ${why}; nothing was called or spent (see \`costs\`, settle with \`costs release <id> --usd <n>\`). Spend of unknown cost, from any session, blocks every capped run until it is settled.`);
+    });
+  }
 });
 
 describe('runWorldGen create: judging exceptions', () => {

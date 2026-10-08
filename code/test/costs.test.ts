@@ -8,6 +8,7 @@ import {
   SpendCapError,
   capStatus,
   capsFromEnv,
+  CostUnenforceableError,
   groupEvents,
   guard,
   ledgerPath,
@@ -321,7 +322,7 @@ describe('meteredModel', () => {
     assert.deepEqual([claim?.runId, claim?.model, claim?.step], ['pending-run', 'claude-sonnet-5-5', 'plan']);
     advance(3600);
     const capped = meteredModel(inner, openLedger(file, { now: ledger.now }), opts);
-    await assert.rejects(capped.propose(req), /active spending obligation is unknown/);
+    await assert.rejects(capped.propose(req), (e: unknown) => e instanceof CostUnenforceableError && e.cap === 'maxDailyLlmUsd' && e.claim === claim?.id && /active spending obligation is unknown/.test(e.message));
     assert.equal(inner.calls(), 1);
     const other = meteredModel(inner, openLedger(file, { now: ledger.now }), { ...opts, caps: {} });
     await other.propose(req);
@@ -963,7 +964,7 @@ describe('a Boat create whose outcome is unknown, and the operator who knows it 
     const { ledger } = fixture();
     const id = await failedStart(ledger, { kind: 'unknown' });
     assert.deepEqual(rows(ledger), [[null, true, undefined, 'sandbox creation outcome and billing are unknown']]);
-    assert.throws(() => admits(ledger), REFUSED);
+    assert.throws(() => admits(ledger), (e: unknown) => e instanceof CostUnenforceableError && e.cap === 'maxDailySandboxUsd' && e.claim === null && REFUSED.test(e.message));
     ledger.releaseClaim(id ?? '', 0);
     assert.deepEqual(rows(ledger), [[0, undefined, true, 'released by the operator with a stated cost']]);
     assert.equal(admits(ledger), true);

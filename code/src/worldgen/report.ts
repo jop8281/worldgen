@@ -12,7 +12,7 @@
  */
 import { assertNever } from '#lib/never';
 import { DESTRUCTIVE, taskIdOf, worldIdOf, type CheckIssue, type CheckReport, type Task, type TaskVerdict, type World, type WorldChange, type WorldDelta } from '#engine';
-import { capReached } from '../costs/ledger.ts';
+import { capReached, unenforceable } from '../costs/ledger.ts';
 import { fixtureFed } from './input-coverage.ts';
 import { refusedText, type AttemptOutcome, type CutProgress, type FidelityCheck, type RunEvent, type StopReason } from './events.ts';
 import type { Plan } from './plan.ts';
@@ -66,6 +66,8 @@ function stopFacts(stop: StopReason, events: readonly RunEvent[]): { why: string
       return { why: `The ${stop.step} step hit the backtrack limit after ${plural(stop.backtracks, 'backtrack')}.`, issues: lastAttemptIssues(events) };
     case 'budget_exhausted':
       return { why: `The run spent $${usd(stop.spentUsd)} of its per-run budget maxCostUsd=$${stop.limitUsd.toFixed(2)} (this run only; set by --budget-usd or worldgen.config.json).`, issues: lastAttemptIssues(events) };
+    case 'cost_unenforceable':
+      return { why: `The run was ${unenforceable(stop.cap, stop.claim)}. Spend of unknown cost, from any session, blocks every capped run until it is settled.`, issues: lastAttemptIssues(events) };
     case 'spend_cap':
       return { why: `The run was refused by a spend cap shared by every session, not by its own budget: ${capReached(stop.cap, stop.capUsd, stop.spentUsd, stop.day)}.`, issues: lastAttemptIssues(events) };
     case 'time_exhausted':
