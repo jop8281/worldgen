@@ -322,6 +322,7 @@ describe('studio', () => {
         worlds: [
           {
             name: 'gen-alpha',
+            tenant: null,
             generated: true,
             taskCount: 3,
             capsule: { wid: `wid_${'b'.repeat(64)}`, model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, attempts: 2 },
@@ -329,14 +330,15 @@ describe('studio', () => {
           },
           {
             name: 'gen-canary',
+            tenant: null,
             generated: true,
             taskCount: 3,
             capsule: { wid: null, model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, attempts: 2 },
             reportExists: true,
           },
-          { name: 'gen-leak', generated: false, taskCount: 3, reportExists: true },
-          { name: 'hand-beta', generated: false, taskCount: 3, reportExists: false },
-          { name: 'no-world-gamma', generated: true, taskCount: null, invalid: 'schema.invalid', reportExists: false },
+          { name: 'gen-leak', tenant: null, generated: false, taskCount: 3, reportExists: true },
+          { name: 'hand-beta', tenant: null, generated: false, taskCount: 3, reportExists: false },
+          { name: 'no-world-gamma', tenant: null, generated: true, taskCount: null, invalid: 'schema.invalid', reportExists: false },
         ],
       });
     });
@@ -390,8 +392,8 @@ describe('studio', () => {
       assert.equal(r.status, 200);
       assert.deepEqual(r.body, {
         runs: [
-          { name: 'gen-alpha', runId: 'run_20261007T181329Z_old1111', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, ms: 24000, outcome: 'done', hasReport: true },
-          { name: 'gen-canary', runId: 'run_20261007T000000Z_canary01', model: null, transport: null, costUsd: null, ms: null, outcome: null, hasReport: true },
+          { name: 'gen-alpha', tenant: null, runId: 'run_20261007T181329Z_old1111', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, ms: 24000, outcome: 'done', hasReport: true },
+          { name: 'gen-canary', tenant: null, runId: 'run_20261007T000000Z_canary01', model: null, transport: null, costUsd: null, ms: null, outcome: null, hasReport: true },
         ],
       });
     });
