@@ -234,7 +234,8 @@ async function publicBundle(codeDir: string, worldDir: string, deps: Deps): Prom
   const tmp = await mkdtemp(path.join(tmpdir(), 'worldgen-sandbox-public-'));
   try {
     const prepared = path.join(tmp, 'prepared');
-    const res = await (deps.runner ?? nodeRunner)(['bun', 'src/cli/episode-prepare.ts', worldDir, prepared], { cwd: codeDir, env: isolatedEnv(deps.env), timeoutMs: 300_000 });
+    // The child runs in codeDir, so a relative world path is resolved here, against the caller's own directory.
+    const res = await (deps.runner ?? nodeRunner)(['bun', 'src/cli/episode-prepare.ts', path.resolve(worldDir), prepared], { cwd: codeDir, env: isolatedEnv(deps.env), timeoutMs: 300_000 });
     if (res.code === 3) throw new SandboxError(res.stderr.trim());
     const last = res.stderr.trim().split('\n').slice(-1)[0] || 'no output';
     if (res.code !== 0) throw new SandboxError(`the prepare process failed (exit ${res.code}): ${last}`);
