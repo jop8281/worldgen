@@ -54,7 +54,7 @@ No model was called and no sandbox was started.
 
 | | |
 |---|---|
-| Code | Promotion 11: `main` at `50cec32fd365d10a2692975e4d5f6c77743b709d` (#121) in jop8281/worldgen. It has the tree of `stabilize/main` `e7b181f5`, which holds the page's error states (#106) and the past-runs and reset fixes (#110). The run was taken in a clean detached worktree at that SHA, with one file laid over from this change: `code/scripts/studio-rehearse.ts`, which walks the storyline. No Studio, engine or WorldGen file differed. |
+| Code | Promotion 11: `main` at `50cec32fd365d10a2692975e4d5f6c77743b709d` (#121) in jop8281/worldgen. It has the tree of `stabilize/main` `e7b181f5`, which holds the page's error states (#106) and the past-runs and reset fixes (#110). The run was taken in a clean detached worktree at that SHA, with one file laid over from this change: `code/scripts/studio-rehearse.ts`, which walks the storyline. No Studio, engine or WorldGen file differed. The laid-over file is this change's script as of commit `0d30be55`. The merged file in this PR also has the trunk's 4-line `--help` exit (`31015ab9`, YOS-201), which a run without `--help` never reaches. |
 | Captured | 2026-10-08, three runs in a row starting 2026-10-08T09:47:09Z. The recorded run is the third, started at 2026-10-08T09:48:02Z. |
 | Runtime | Bun 1.4.2 on macOS 26.6, headless Google Chrome 154.0.8037.98, light color scheme |
 | Frames | 1400 CSS pixels wide at device scale 1. Most frames are the viewport, 1400 × 913, scrolled to the step's element. 04, 05, 07, 14 and 22 show their element whole, beyond the viewport, because what the step shows is taller than one screen: the Worlds section, the Explorer, the console result and the plan. |
