@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command local deploy of WorldGen Studio in Docker (YOS-192, A-313). Loopback only until sign-in lands (YOS-187).
+# One-command local deploy of WorldGen Studio in Docker (YOS-192, A-313). Sign-in is required (YOS-187).
 #
 #   scripts/studio-deploy.sh up                 # build the image for this checkout's sha, run it, wait until healthy
 #   scripts/studio-deploy.sh down               # stop and remove the container; the volumes stay
@@ -9,6 +9,8 @@
 #   scripts/studio-deploy.sh restore <file.tgz> # replace both volumes' contents with a backup; the container must be down
 #
 # Generation in the container uses the SDK: export LLM_KEY, or set STUDIO_ENV_FILE to an env file outside the repo.
+# Sign-in: export WORLDGEN_STUDIO_TOKEN (one admin; its sha256 is what the studio keeps), or set STUDIO_ENV_FILE to an env file
+# that carries it. `up` refuses to start without one, because the container binds 0.0.0.0 and the studio refuses that without sign-in.
 # STUDIO_PORT (default 8787) picks the host port, always on 127.0.0.1. STUDIO_VOLUME_PREFIX (default worldgen-studio)
 # names the volumes <prefix>-worlds and <prefix>-ledger, so a restore drill can target scratch volumes.
 set -euo pipefail
@@ -30,6 +32,7 @@ in_image() { docker run --rm --user root --entrypoint "$1" "${@:2}"; }
 case "${1:-}" in
   up)
     sha="$(git -C "$ROOT" rev-parse HEAD)"
+    [ -n "${WORLDGEN_STUDIO_TOKEN:-}" ] || [ -n "${STUDIO_ENV_FILE:-}" ] || die "set WORLDGEN_STUDIO_TOKEN (or STUDIO_ENV_FILE with it): the container binds 0.0.0.0, and the studio refuses that without sign-in"
     docker build -q -f "$ROOT/Dockerfile.studio" --build-arg "WORLDGEN_BUILD_SHA=$sha" -t "$IMAGE:$sha" -t "$IMAGE:latest" "$ROOT" >/dev/null
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     # The studio runs as bun and writes worlds and the ledger, so the volumes are bun's; this also repairs older volumes.
@@ -39,6 +42,7 @@ case "${1:-}" in
     # never appears on a command line, and STUDIO_ENV_FILE must live outside the repo, so it cannot be committed.
     keys=()
     [ -n "${LLM_KEY:-}" ] && keys+=(-e LLM_KEY)
+    [ -n "${WORLDGEN_STUDIO_TOKEN:-}" ] && keys+=(-e WORLDGEN_STUDIO_TOKEN)
     if [ -n "${STUDIO_ENV_FILE:-}" ]; then
       envfile="$(cd "$(dirname "$STUDIO_ENV_FILE")" && pwd)/$(basename "$STUDIO_ENV_FILE")"
       case "$envfile" in "$ROOT"/*) die "STUDIO_ENV_FILE must live outside the repository, not $envfile" ;; esac
