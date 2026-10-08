@@ -1,0 +1,14 @@
+{
+  "id": "live-market-feed-impossible",
+  "expect": "stopped",
+  "phases": [
+    {
+      "phase": "create",
+      "result": "stopped",
+      "error": null
+    }
+  ],
+  "verify": {
+    "kind": "not_run"
+  }
+}
