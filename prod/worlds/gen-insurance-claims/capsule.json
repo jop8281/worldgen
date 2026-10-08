@@ -4,7 +4,10 @@
   "mode": "create",
   "input": {
     "kind": "description",
-    "digest": "ca1725846cd76c03bdb6ef285d25ea56edc105b9796b5b6b2ddbc82604ebccfb"
+    "digest": "ca1725846cd76c03bdb6ef285d25ea56edc105b9796b5b6b2ddbc82604ebccfb",
+    "source": {
+      "kind": "description"
+    }
   },
   "worldId": "wid_4398d84dc7700f549d3001c3e80a120af67f8c55a5a878129cfe98dab7e7fc8d",
   "model": "claude-sonnet-5-5",

@@ -570,6 +570,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const services = new Map<string, { record: ServiceRecord; dir: string; child: SpawnedChild }>();
   /** `<tenant> <world dir>` of each `worldplay serve` that has not reported its ports yet. */
   const starting = new Set<string>();
+  /** Ports an admin pinned for a `worldplay serve` that has not reported yet: the world port and its admin port. */
+  const pinning = new Set<number>();
   const jobs = new Map<string, Job>();
   /** A generation run `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
   const runOf = (runId: string, who: User, filter: string | null): Job | undefined => {
@@ -972,7 +974,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
     const dir = w.dir;
-    const startKey = `${who.tenant} ${dir}`;
+    // An admin serving with ?tenant=t serves the world for t, so t's own operators see and stop it.
+    const owner = filter ?? who.tenant;
+    const startKey = `${owner} ${dir}`;
     if (starting.has(startKey)) return fail(409, 'world.already_serving', `${name} is starting; wait for it or stop it`);
     // Only a service the caller sees blocks a second serve, so the refusal never names another tenant's port. A second
     // `worldplay serve` of one world dir is safe: serve keeps its state in memory and writes nothing into the dir.
@@ -990,8 +994,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
           return fail(409, 'serve.port_taken', `port ${wanted} or its admin port ${wanted + 1} belongs to ${record.name} (${record.id})`);
         }
       }
+      if (pinning.has(wanted) || pinning.has(wanted + 1)) {
+        return fail(409, 'serve.port_taken', `port ${wanted} or its admin port ${wanted + 1} is pinned by a serve that has not reported its ports yet`);
+      }
       port = wanted;
     }
+    // From the checks above to here nothing awaits, so a second pin of the same port cannot pass them before this one is held.
+    const pinned = port === 0 ? [] : [port, port + 1];
+    for (const held of pinned) pinning.add(held);
     const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
     starting.add(startKey);
     let report: Awaited<ReturnType<typeof firstReport>>;
@@ -999,6 +1009,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       report = await firstReport(child, opts.serveWaitMs ?? SERVE_WAIT_MS);
     } finally {
       starting.delete(startKey);
+      for (const held of pinned) pinning.delete(held);
     }
     if (report.kind === 'exited') {
       const said = child.output().trim().split('\n').pop()?.trim() ?? '';
@@ -1010,7 +1021,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     let id = `svc-${randomBytes(4).toString('hex')}`;
     while (services.has(id)) id = `svc-${randomBytes(4).toString('hex')}`;
-    const record: ServiceRecord = { id, name, tenant: who.tenant, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
+    const record: ServiceRecord = { id, name, tenant: owner, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
     services.set(id, { record, dir, child });
     void child.exited.then(() => {
       services.delete(id);
@@ -1397,14 +1408,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   // ---------------------------------------------------------------- agent playground (YOS-190)
 
   let commit: string | null = null;
-  /** The commit of the code the studio runs, recorded on every episode as its engine. Read once, through the injected runner. */
+  /**
+   * The commit of the code the studio runs, recorded on every episode as its engine. Read once, through the injected
+   * runner. The Studio image has neither .git nor a git binary, so there the sha it was built from (`build`) names
+   * it (YOS-236). A missing binary rejects the runner, and that counts as no commit too.
+   */
   async function engineCommit(): Promise<string | null> {
     if (commit !== null) return commit;
-    const r = await opts.runner(['git', 'rev-parse', 'HEAD'], { cwd: codeDir });
-    const sha = r.stdout.trim();
-    if (r.code !== 0 || !/^[0-9a-f]{7,64}$/.test(sha)) return null;
-    commit = sha;
-    return sha;
+    const isSha = (s: string | undefined): s is string => s !== undefined && /^[0-9a-f]{7,64}$/.test(s);
+    const r = await opts.runner(['git', 'rev-parse', 'HEAD'], { cwd: codeDir }).catch(() => null);
+    const sha = r === null ? '' : r.stdout.trim();
+    const found = r !== null && r.code === 0 && isSha(sha) ? sha : isSha(opts.build) ? opts.build : null;
+    if (found === null) return null;
+    commit = found;
+    return found;
   }
 
   /** The tasks of a world, public fields only: id, difficulty and the instruction an agent gets. Never a grader, solution or decoy. */
@@ -1492,7 +1509,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       flags.push(flag, String(v));
     }
     const sha = await engineCommit();
-    if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory, so the episode would have no engine identity');
+    if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory and no build sha is set, so the episode would have no engine identity');
     return startJob({
       kind: 'episode',
       tenant: who.tenant,

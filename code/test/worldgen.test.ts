@@ -916,6 +916,54 @@ describe('runWorldGen: a tasks -> seed pressure backtrack fits in the A-48 limit
   });
 });
 
+describe('runWorldGen: after a tasks -> model backtrack, workflow and seed rerun as repairs (YOS-54, A-349)', () => {
+  // The gym run's first pass as above, with the tasks rejection owned by model instead of seed. Model reruns with the
+  // backtrack's issues; workflow and seed rerun with none. Each call after the backtrack takes its repair estimate.
+  const GYM_MODEL = [
+    { input: PLAN, ms: 234_391, costUsd: 0.391 },
+    { input: EDITS.model, ms: 21_758, costUsd: 0.178 },
+    { input: EDITS.workflow, ms: 214_214, costUsd: 0.218 },
+    { input: EDITS.seed, ms: 130_144, costUsd: 0.355 },
+    { input: EDITS.tasks, ms: 139_725, costUsd: 0.404 },
+    { input: EDITS.model, ms: 5_440, costUsd: 0.045 },
+    { input: EDITS.workflow, ms: 53_554, costUsd: 0.054 },
+    { input: EDITS.seed, ms: 32_536, costUsd: 0.089 },
+    { input: EDITS.tasks, ms: 34_931, costUsd: 0.101 },
+  ];
+  const config = configSchema.parse({
+    model: 'claude-sonnet-5-5', maxCostUsd: 5, maxMinutes: 15, steps: { plan: { minShareSeconds: 330 } },
+    stepModels: { plan: { effort: 'medium' }, model: { effort: 'high' }, workflow: { effort: 'medium' }, seed: { effort: 'medium' }, tasks: { effort: 'high' } },
+  });
+
+  it('prices the workflow rerun with no feedback as the repair it is reserved as, and finishes at 866.7 s for $1.84', async () => {
+    let t = T0;
+    let n = 0;
+    const model: Model = {
+      async propose() {
+        const call = GYM_MODEL[n++];
+        if (call === undefined) throw new Error(`the gym script has no reply for call ${n}`);
+        t += call.ms;
+        return { input: call.input, advice: [], usage: USAGE, costUsd: call.costUsd, ms: call.ms };
+      },
+    };
+    const events: RunEvent[] = [];
+    const result = await runWorldGen(
+      { kind: 'create', input: { kind: 'description', text: 'Something like Mindbody for a gym' }, outDir: newOutDir() },
+      config,
+      { model, exampleWorld: minimalWorld(), emit: (e) => events.push(e), now: () => t, runId: 'run_test', check: tasksBreakModelOnce() },
+    );
+    assert.deepEqual(events.flatMap((e) => (e.t === 'call_refused' ? [[e.step, e.reason, e.estimateMs, e.remainingMs]] : [])), []);
+    assert.deepEqual(events.flatMap((e) => (e.t === 'backtracked' ? [[e.from, e.to]] : [])), [['tasks', 'model']]);
+    assert.deepEqual(attempts(events), [
+      ['plan', 1, 'accepted'], ['model', 1, 'accepted'], ['workflow', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'rejected'],
+      ['model', 1, 'accepted'], ['workflow', 2, 'accepted'], ['seed', 2, 'accepted'], ['tasks', 2, 'accepted'],
+    ]);
+    assert.equal(result.kind, 'done');
+    assert.equal(result.kind === 'done' ? result.ms : null, 866_693);
+    assert.equal(result.kind === 'done' ? result.costUsd.toFixed(3) : null, '1.835');
+  });
+});
+
 describe('runWorldGen judges the planned state mix on create, before any task exists (A-155)', () => {
   const withMix = (stateMix: Record<string, Record<string, number>>) => ({ ...PLAN, seed: { ...PLAN.seed, stateMix } });
 
@@ -1813,6 +1861,21 @@ describe('runWorldGen create: backtracking (YOS-44)', () => {
 describe('runWorldGen create: run capsule and content ids (YOS-83)', () => {
   const DIGEST = 'e1e715352a48477b04a8b8538b6680e889b2ebb26a22ee2c6f5203e1b4d862a4';
   const cap = (r: Ran) => capsuleSchema.parse(JSON.parse(readFileSync(join(r.outDir, CAPSULE_FILE), 'utf8')));
+  const CSV_DIGEST: InputDigest = { kind: 'csv', summary: 'orders', fixtures: {}, operations: [], observations: [], apiShape: null };
+
+  it('records CSV paths relative to the repository, and null for a file outside it (A-351)', async () => {
+    const r = await run(HAPPY, { input: { kind: 'csv', paths: ['../eval/inputs/orders.csv', join(tmpdir(), 'outside.csv')] }, digest: CSV_DIGEST });
+    assert.deepEqual(cap(r).input.source, { kind: 'csv', paths: ['eval/inputs/orders.csv', null] });
+  });
+
+  it('never lets a token in the input reach capsule.json (A-351)', async () => {
+    const token = 'sk-ant-abcDEF123456';
+    const described = await run(HAPPY, { input: { kind: 'description', text: `A helpdesk where overdue tickets escalate; our key is ${token}` } });
+    const tabled = await run(HAPPY, { input: { kind: 'csv', paths: [`../eval/inputs/${token}.csv`] }, digest: CSV_DIGEST });
+    for (const r of [described, tabled]) assert.equal(readFileSync(join(r.filesDir, CAPSULE_FILE), 'utf8').includes(token), false);
+    assert.deepEqual(cap(described).input.source, { kind: 'description' });
+    assert.deepEqual(cap(tabled).input.source, { kind: 'csv', paths: [null] });
+  });
 
   it('writes capsule.json next to REPORT.md with the input digest, world id, model, transport, attempts and costs', async () => {
     const r = await run(HAPPY);
@@ -1821,7 +1884,7 @@ describe('runWorldGen create: run capsule and content ids (YOS-83)', () => {
     const a = (step: string) => ({ step, n: 1, outcome: 'accepted', ms: 1000, costUsd: 0.125 });
     assert.deepEqual({ ...c, worldId: null, ms: 0 }, {
       capsule: 1, runId: 'run_test', mode: 'create',
-      input: { kind: 'description', digest: DIGEST },
+      input: { kind: 'description', digest: DIGEST, source: { kind: 'description' } },
       worldId: null, model: 'claude-sonnet-5-5', transport: 'claude-cli',
       attempts: [a('plan'), a('model'), a('workflow'), a('seed'), a('tasks')],
       ms: 0, costUsd: 0.625,

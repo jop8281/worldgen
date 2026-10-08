@@ -22,8 +22,11 @@ import { runWorldGen, stagePrompt, systemPrompt, type RunFs, type RunResult } fr
 import { minimalWorld } from './helpers/world.ts';
 
 const HELPDESK = resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
-const TODO = resolve(import.meta.dirname, '../../prod/worlds/gen-todo-projects');
-const BILLING = resolve(import.meta.dirname, '../../prod/worlds/gen-billing-dunning');
+// Frozen copies of two generated worlds, byte for byte from git, so a later change to the live prod world cannot move
+// the state these replays assume: gen-todo-projects as YOS-156 found it, gen-billing-dunning before W11 (#55) declared
+// the default_card lifecycle that the A-345 patch adds.
+const TODO = resolve(import.meta.dirname, 'fixtures/gen-todo-projects-a285');
+const BILLING = resolve(import.meta.dirname, 'fixtures/gen-billing-dunning-a345');
 const REQUEST = 'add refunds: an agent can refund a resolved ticket, and each refund is tracked';
 
 // ------------------------------------------------------------------ the refunds change, as the fake model proposes it
@@ -360,7 +363,15 @@ describe('runWorldGen iterate: add refunds to a copy of the golden helpdesk', ()
     assert.ok(report.includes('| assign_newest_acme_ticket | '));
     const c = capsuleSchema.parse(JSON.parse(readFileSync(join(dir, CAPSULE_FILE), 'utf8')));
     assert.equal(c.mode, 'iterate');
-    assert.deepEqual(c.input, { kind: 'change_request', digest: '30c2a0859ff08f0a9e51ebc8b8d082724e540031a7f27d320db4a350cc03ae23' });
+    assert.deepEqual(c.input, { kind: 'change_request', digest: '30c2a0859ff08f0a9e51ebc8b8d082724e540031a7f27d320db4a350cc03ae23', source: { kind: 'change_request', before: 'runs/run_iter/before' } });
+    // The world the change started from is saved, so the Changes section can be re-rendered from the capsule (A-351).
+    const snapshot = await loadWorld(join(dir, 'runs', 'run_iter', 'before'));
+    const startedFrom = snapshot.ok ? checkWorld(snapshot.value) : null;
+    const now = await loadWorld(dir);
+    const ended = now.ok ? checkWorld(now.value) : null;
+    assert.ok(startedFrom?.ok && ended?.ok);
+    assert.deepEqual(diffWorlds(startedFrom.world, ended.world).changes.map((ch) => `${ch.kind} ${ch.section}.${ch.key}`),
+      ['item_added entities.refund', 'item_added routes.get_refund', 'item_added routes.list_refunds', 'item_added actions.issue_refund', 'item_added seed.refund', 'item_added tests.issue_refund_on_resolved']);
     assert.equal(report.includes(`World id (WID): \`${c.worldId}\`.`), true);
     assert.deepEqual(readdirSync(join(dir, 'runs', 'run_iter')).filter((f) => f === 'events.jsonl'), ['events.jsonl']);
     assert.equal(readdirSync(join(dir, 'runs', 'run_iter')).filter((f) => f.endsWith('.json')).length, 5);
