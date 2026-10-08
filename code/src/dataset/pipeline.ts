@@ -402,6 +402,10 @@ export async function runPipeline(o: PipelineOptions, deps: PipelineDeps): Promi
   const checked = deps.checked ?? (await checkInChild(o.worldDir, runner, env));
   base.assertClean('the source world', checked.source);
   const prep = await prepareInChild(o.worldDir, o.out, runner, env);
+  // The guard read the world --check loaded; prepare reloaded it, so an edit in between would be frozen unguarded.
+  if (prep.wid !== checked.wid) {
+    throw new PreflightError(`the world in ${o.worldDir} changed between its check and its freeze (checked ${checked.wid}, froze ${prep.wid}); nothing ran, so run again`);
+  }
   if (!(await startRunLog(o.out, o.runId))) throw new PreflightError(`run id ${o.runId} is already used in ${o.out}: pick another --run-id`);
   log(`world ${prep.worldId} ${prep.worldVersion.slice(0, 12)} checked and frozen; ${prep.tasks.length} proven task(s)`);
 

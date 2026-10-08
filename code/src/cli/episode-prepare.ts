@@ -10,12 +10,13 @@
  * prints everything of the prepared world but the CheckedWorld as one JSON object on stdout, in an
  * environment of only TZ, PATH and the guard scale.
  *
- * `--check` only checks: it writes nothing and prints `{ tasks, source }`, where `source` is the
- * checked world as JSON for the controller's secret guard.
+ * `--check` only checks: it writes nothing and prints `{ tasks, source, wid }`, where `source` is the
+ * checked world as JSON for the controller's secret guard and `wid` its id, which the prepare's must match.
  *
  * Exit 0 comes with that object. 2 bad usage, 3 the world does not check or cannot be frozen
  * (stderr carries the message), 5 anything else.
  */
+import { worldIdOf } from '#engine';
 import { DatasetError } from '../dataset/schema.ts';
 import { PreflightError, checkForRun, prepareWorld } from '../dataset/pipeline.ts';
 
@@ -30,7 +31,7 @@ async function main(argv: readonly string[]): Promise<number> {
     if (argv.length !== 2 || dir === undefined) return fail(2, 'usage: episode-prepare --check <worldDir>');
     try {
       const { world, tasks } = await checkForRun(dir);
-      process.stdout.write(`${JSON.stringify({ tasks, source: JSON.stringify(world) })}\n`);
+      process.stdout.write(`${JSON.stringify({ tasks, source: JSON.stringify(world), wid: worldIdOf(world) })}\n`);
       return 0;
     } catch (e) {
       return fail(e instanceof PreflightError ? 3 : 5, e instanceof Error ? e.message : String(e));
