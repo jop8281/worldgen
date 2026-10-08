@@ -97,6 +97,50 @@ export function issueSetKey(issues: readonly CheckIssue[]): string {
 }
 
 /**
+ * The `<entity>.<field>` that a seed issue says one column misses: a seed value the engine refused
+ * (`row N, field F:`) or a CSV fixture value written differently (`F: expected`). Null for any other issue.
+ */
+function missedField(code: string, path: readonly string[], found: string): string | null {
+  if (path.length !== 2 || path[0] !== 'seed') return null;
+  const named = code === 'constraint.violation' ? [...found.matchAll(/^row \d+, field (\w+):/g)]
+    : code === 'plan.not_covered' ? [...found.matchAll(/(\w+): expected /g)] : [];
+  const fields = new Set(named.map((m) => m[1]));
+  return fields.size === 1 ? `${path[1]}.${[...fields][0]}` : null;
+}
+
+/**
+ * The one field every blocking seed issue misses, when at least one says a value does not fit the field's type
+ * (`field.type`) or a CSV fixture value was written differently. `layer.blocked`, which only follows them, is left out.
+ */
+function typeMiss(issues: readonly CheckIssue[]): string | null {
+  const real = issues.filter((i) => i.code !== 'layer.blocked');
+  const fields = new Set(real.map((i) => missedField(i.code, i.path.map(String), i.found)));
+  if (real.length === 0 || fields.size !== 1 || fields.has(null)) return null;
+  return real.some((i) => i.code === 'plan.not_covered' || i.expected.includes(' to satisfy field.type ')) ? [...fields][0]! : null;
+}
+
+/** The one field an issue-set key's seed issues miss, its `layer.blocked` left out, or null. Keys escape `\\` and `|` (issueSetKey). */
+function fieldOfKey(key: string): string | null {
+  const entries: string[] = [];
+  let entry = '';
+  for (let i = 0; i < key.length; i++) {
+    const c = key[i]!;
+    if (c === '\\') entry += key[++i] ?? '';
+    else if (c === '|') {
+      entries.push(entry);
+      entry = '';
+    } else entry += c;
+  }
+  entries.push(entry);
+  const fields = new Set(entries.filter((e) => !e.startsWith('layer.blocked@')).map((e) => {
+    const at = e.indexOf('@');
+    const colon = e.indexOf(': ', at);
+    return at < 0 || colon < 0 ? null : missedField(e.slice(0, at), e.slice(at + 1, colon).split('/'), e.slice(colon + 2));
+  }));
+  return fields.size === 1 && !fields.has(null) ? [...fields][0]! : null;
+}
+
+/**
  * The issues that count for an attempt: the blocking errors of a rejection, or all its issues when
  * none block; an `invalid_output`'s own issues. Empty for outcomes that carry no issues.
  */
@@ -231,7 +275,8 @@ export function preflight(config: Config, ledger: Ledger, nowMs: number, estimat
 /**
  * Call `record` (with `attemptIssueSet`) for the attempt just made, then `decide`. So `ledger.attempts[step]` counts
  * that attempt, and `seenIssueSets[step]` already holds its set.
- * Order of rules: budget, time, accepted, share_expired, judge_expired, stalled, model_error, backtrack, no_progress (a
+ * Order of rules: budget, time, accepted, share_expired, judge_expired, stalled, model_error, backtrack, a seed's second
+ * miss on one field's type (back to model, A-368), no_progress (a
  * repeated failing test at workflow or seed, or a repeated unmet pressure claim at tasks, backtracks to plan instead), attempts, retry.
  * A stalled call is the transport's failure, not the model's: it retries once per step (`stallRetries`), outside
  * `maxAttempts`, and preflight decides whether the retry fits in the time left. A second stall stops.
@@ -287,6 +332,14 @@ export function decide(config: Config, state: LoopState, outcome: AttemptOutcome
   const key = issueSetKey(lastIssues);
   // Same value as attemptIssueSet(outcome, issues), which the loop records.
   const seen = (ledger.seenIssueSets[step] ?? []).filter((k) => k === key).length;
+  // A seed that misses one field twice in a row, the second time on its type, is held by the type the model step
+  // chose, so it goes back there while a backtrack is left. A first miss stays: the seed may fix its own value (A-368).
+  if (step === 'seed' && seen < 2 && ledger.backtracks < config.maxBacktracks) {
+    const field = typeMiss(owned.map((o) => o.issue));
+    const prior = ledger.seenIssueSets.seed;
+    const before = prior.at(-1) === key ? prior.at(-2) : prior.at(-1);
+    if (field !== null && before !== undefined && before !== key && fieldOfKey(before) === field) return { kind: 'backtrack', to: 'model' };
+  }
   if (seen >= 2) {
     // Neither workflow nor seed can edit the plan's frozen tests, so a test they keep failing goes back to the plan that wrote it (A-161, A-165).
     if ((step === 'workflow' || step === 'seed') && owned.length > 0 && owned.every((o) => isTestRun(o.issue))) {
