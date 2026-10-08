@@ -153,13 +153,17 @@ export interface SpawnedChild {
   output(): string;
 }
 
-export type SpawnOpts = { readonly cwd?: string };
-/** Starts argv as a long-running child, no shell, stdio captured, environment inherited untouched. */
+export type SpawnOpts = {
+  readonly cwd?: string;
+  /** The child's whole environment, as in RunOpts. Unset, the child inherits this process's environment. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+};
+/** Starts argv as a long-running child, no shell, stdio captured, environment inherited unless opts.env replaces it. */
 export type Spawner = (argv: readonly string[], opts?: SpawnOpts) => SpawnedChild;
 
 /**
  * The production Spawner: `node:child_process` spawn, never through a shell, the environment
- * passed through untouched. The long-running sibling of nodeRunner: serve and studio children
+ * inherited unless opts.env replaces it. The long-running sibling of nodeRunner: serve and studio children
  * outlive the call that started them.
  */
 export const nodeSpawn: Spawner = (argv, opts) => {
@@ -169,6 +173,7 @@ export const nodeSpawn: Spawner = (argv, opts) => {
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     ...(opts?.cwd === undefined ? {} : { cwd: opts.cwd }),
+    ...(opts?.env === undefined ? {} : { env: opts.env }),
   });
   let text = '';
   child.stdout.setEncoding('utf8').on('data', (s: string) => (text += s));

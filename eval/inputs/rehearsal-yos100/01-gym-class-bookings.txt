@@ -1,0 +1,1 @@
+Something like Mindbody for a gym: members, classes and bookings. Agents sign people up and handle cancellations.

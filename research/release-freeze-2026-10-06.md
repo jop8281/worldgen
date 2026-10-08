@@ -4,7 +4,7 @@ Decision recorded in [A-71](decisions.md#decision-log). The named baseline is `m
 
 ## Gate evidence
 
-GitHub Actions run [37559284277](https://github.com/jop8281/zozo123-genworld/actions/runs/37559284277) for the exact SHA completed with `check` and `e2e` failing. `npm run check` reported 2,506 tests: 2,401 passed, 3 failed, 0 skipped and 102 TODO. Typecheck passed. The remaining 13 E2E steps passed, including helpdesk check/verify, HTTP serving and admin operations, CLI help and generated-doc freshness; E2E failed because its test step failed.
+GitHub Actions run 37559284277 (old repo) for the exact SHA completed with `check` and `e2e` failing. `npm run check` reported 2,506 tests: 2,401 passed, 3 failed, 0 skipped and 102 TODO. Typecheck passed. The remaining 13 E2E steps passed, including helpdesk check/verify, HTTP serving and admin operations, CLI help and generated-doc freshness; E2E failed because its test step failed.
 
 | Failing test | Observed failure | Owner / next action |
 |---|---|---|

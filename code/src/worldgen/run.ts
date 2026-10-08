@@ -33,7 +33,7 @@ import { CAPSULE_FILE, runCapsule } from './capsule.ts';
 import { stepModel, transportOf, type Config } from './config.ts';
 import { createEmitter, type AttemptOutcome, type CutProgress, type Emit, type FidelityCheck, type RunEvent, type StopReason } from './events.ts';
 import { INPUT_KINDS, digestInput, type Input, type InputDigest } from './input.ts';
-import { fixturePlanIssues } from './input-coverage.ts';
+import { fixturePlanIssues, operationPlanIssues } from './input-coverage.ts';
 import { ITERATE_PLAN_BRIEF, applyPlanPatch, changedSections, iteratePlanBlocks, iteratePlanSchema, iterateStageBlock, planPatchSchema, planWithWorldTests, revisesPlanOnly } from './iterate.ts';
 import { FIDELITY_FLOOR, fidelityGate, fidelityScore, parseFidelityReference } from './fidelity.ts';
 import { blockingIssues, checkJudgeable, infraIssues, preservationIssues, requestScopeIssues, unplannedChanges } from './judge.ts';
@@ -348,7 +348,8 @@ function valueAt(v: unknown, path: readonly (string | number)[]): unknown {
 
 /**
  * A plan proposal against `schema`. Once a plan is approved (in this run, or the recorded plan.yaml on iterate), a new one must raise its revision.
- * On create, a plan that pads or remaps an imported CSV table is rejected here, so the plan step fixes it before any seed runs (A-221).
+ * On create, a plan that pads or remaps an imported CSV table is rejected here, so the plan step fixes it before any seed runs (A-221),
+ * and so is a plan whose routes leave out an input OpenAPI operation, which would otherwise reach the model step unowned (YOS-244).
  */
 function judgePlan(schema: PlanSchema, input: unknown, approved: Plan | null, digest?: InputDigest): Judged<Plan> {
   const parsed = schema.safeParse(input);
@@ -357,7 +358,7 @@ function judgePlan(schema: PlanSchema, input: unknown, approved: Plan | null, di
       const problem = issue('schema.invalid', ['plan', 'revision'], { message: `revision must be greater than the approved revision ${approved.revision}` }, String(parsed.data.revision));
       return { ok: false, outcome: { kind: 'invalid_output', issues: [problem] }, issues: [problem] };
     }
-    const conflicts = digest === undefined ? [] : fixturePlanIssues(parsed.data, digest);
+    const conflicts = digest === undefined ? [] : [...fixturePlanIssues(parsed.data, digest), ...operationPlanIssues(parsed.data, digest)];
     if (conflicts.length > 0) return { ok: false, outcome: { kind: 'rejected', issues: conflicts }, issues: conflicts };
     return { ok: true, outcome: { kind: 'accepted', warnings: 0 }, value: parsed.data };
   }

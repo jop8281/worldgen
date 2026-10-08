@@ -12,8 +12,9 @@
  *   answers the world's real status and body, or the real failure.
  * - Children only. The studio never imports llm.ts and never makes a model call: generation and
  *   serving are spawned CLIs through an injected `Spawner`, and `costs` runs through an injected
- *   `Runner`. The environment passes through untouched, so the operator's own env carries every
- *   key; the studio stores and logs none.
+ *   `Runner`. Generation and episodes get the operator's environment, so it carries every key, minus the
+ *   studio's own sign-in token; a child that runs a world's snippets (check, proof, serve) gets only an
+ *   allowlist (A-338, A-343). The studio stores and logs no key.
  * - No private task material. The worlds route counts tasks, it never returns task source. The
  *   report route serves REPORT.md and capsule.json and refuses a report that embeds any
  *   grader, solution or decoy source. test/studio.test.ts proves both with canaries.
@@ -27,26 +28,37 @@
  *   Open mode makes every request the local admin, so without this any page the operator visits could POST
  *   /api/generate (cross-site), and a DNS-rebinding page would reach the studio as same-origin. A request with no
  *   Origin (curl, scripts) passes the Origin check.
+ * - A job runs once (A-335). A generation or an episode is recorded as an intent, with its key and a lease to this
+ *   studio, before its child is spawned, and with its pid after. The key is the Idempotency-Key header, else `derived:`
+ *   the request's sha256, which matches only an unfinished job; a client key reused for another request is 422. The
+ *   holder renews its lease every leaseMs / 3, and stops renewing when the file names another holder. A job whose
+ *   lease ran out is resumed when its process lives and stopped when it does not. An intent is stopped, never started,
+ *   because its child may have started before the crash. So a retried POST, a double click or a crash never starts a
+ *   second paid run.
+ * - Web hardening (YOS-234). Every answer carries SECURITY_HEADERS (frame, sniffing, referrer and a CSP the offline page
+ *   meets). Each POST route has one token bucket per client address, and a failed bearer draws from one bucket per
+ *   client that slows token guessing; both read the injected clock. Unfinished runs and episodes are capped, counted
+ *   after the idempotency lookup so a replay never gets 429. CSRF is the own-names guard's job (#12), not a check here.
  * - Stops never leave zombies: SIGTERM, a short wait, SIGKILL, and the answer says which signal
  *   ended the child. A child that dies on its own removes its own record.
  */
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import type { Dirent } from 'node:fs';
 import { appendFile, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { checkWorld, loadWorld, type CheckedWorld } from '#engine';
+import { loadWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
-import type { Runner, SpawnedChild, Spawner } from '../sandboxes/backend.ts';
+import type { RunResult, Runner, SpawnedChild, Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { explorerOf } from './explorer.ts';
-import { adoptedChild, loadRuns, osProcesses, saveRuns, type Processes, type StoredRun } from './runstore.ts';
+import { adoptedChild, loadRuns, osProcesses, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
+import { trafficCounter } from './watch.ts';
 
 /** Ordered: each role can do everything the roles before it can. */
 export const STUDIO_ROLES = ['viewer', 'operator', 'admin'] as const;
@@ -118,6 +130,37 @@ export type StudioOptions = {
   readonly users?: readonly StudioUser[] | undefined;
   /** The one public origin the studio is also reached at, such as http://127.0.0.1:9000 for a published container port or https://studio.example.com behind a proxy. */
   readonly origin?: string | undefined;
+  /** The environment the studio's children are built from: check, proof and serve get an allowlist of it, generation and episodes all of it. Defaults to process.env. */
+  readonly env?: Readonly<Record<string, string | undefined>> | undefined;
+  /** How long an isolated check or proof child may run. Default 300000 (the verifier's CHILD_TIMEOUT_MS). */
+  readonly checkTimeoutMs?: number | undefined;
+  /** How long a job's lease lasts without renewal. Default 30 s. Injected so tests can expire a lease without waiting. */
+  readonly leaseMs?: number | undefined;
+  /** The clock leases are read and written by. Default Date.now. Injected so tests can expire a lease without waiting. */
+  readonly now?: (() => number) | undefined;
+  /** The burst and refill of each client's bucket on each POST route. Default 60 and 1 per second. */
+  readonly rateLimit?: RateLimit | undefined;
+  /** The burst and refill of each client's failed-sign-in bucket. Default 10 and 1 per 6 s. */
+  readonly authThrottle?: RateLimit | undefined;
+  /** Most unfinished generation runs at once. Default 4. */
+  readonly maxConcurrentRuns?: number | undefined;
+  /** Most unfinished agent episodes at once. Default 4. */
+  readonly maxConcurrentEpisodes?: number | undefined;
+};
+
+export type RateLimit = { readonly capacity: number; readonly refillPerSecond: number };
+
+const DEFAULT_RATE_LIMIT: RateLimit = { capacity: 60, refillPerSecond: 1 };
+const DEFAULT_AUTH_THROTTLE: RateLimit = { capacity: 10, refillPerSecond: 1 / 6 };
+const DEFAULT_MAX_JOBS = 4;
+const MAX_BUCKETS = 1024;
+
+/** Sent on every answer. The page is one offline document with inline script and style and relative fetches only. */
+const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  'x-frame-options': 'DENY',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
 };
 
 export interface StudioServer {
@@ -143,6 +186,11 @@ const SIGNAL_WAIT_MS = 1_000;
 /** How long a generation run gets after SIGINT to cancel its call, bill it and write REPORT.md before SIGTERM (A-279). */
 const RUN_STOP_WAIT_MS = 30_000;
 const STARTUP_GRACE_MS = 10_000;
+/** How long a job's lease lasts unless its holder renews it (A-335). */
+const LEASE_MS = 30_000;
+/** How many finished proof replies are kept for a client key's retry. */
+const PROOF_REPLIES = 100;
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,128}$/;
 
 /** A fetch that failed because nothing listened yet (Node: cause ECONNREFUSED; Bun: code ConnectionRefused). */
 function refused(e: unknown): boolean {
@@ -175,6 +223,25 @@ type Reply =
 const fail = (status: number, code: string, message: string, headers?: Readonly<Record<string, string>>): Reply => ({ status, body: { error: { code, message } }, ...(headers === undefined ? {} : { headers }) });
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** The Idempotency-Key header as Node hands it over. */
+type RawKey = string | readonly string[] | undefined;
+
+/** The client's Idempotency-Key, undefined when it sent none, or the reply that refuses it. */
+function idempotencyKeyOf(raw: RawKey): { ok: true; key: string | undefined } | { ok: false; reply: Reply } {
+  if (raw === undefined) return { ok: true, key: undefined };
+  if (typeof raw === 'string' && IDEMPOTENCY_KEY.test(raw)) return { ok: true, key: raw };
+  return { ok: false, reply: fail(400, 'idempotency.key', 'Idempotency-Key must be 1 to 128 letters, digits, dots, underscores, colons or dashes') };
+}
+
+/** What makes two requests the same: the sha256 of the kind and the canonical request. */
+const fingerprintOf = (kind: string, request: readonly string[]): string => createHash('sha256').update(JSON.stringify([kind, request])).digest('hex');
+
+/** Why recovery stopped a run, as its status says it. */
+const STOPPED_REASON: Record<Extract<Recovery, { outcome: 'stopped' }>['reason'], string> = {
+  process_gone: 'the studio restarted while this run was running and its process is gone; its evidence stays in the <out>.partial directory',
+  start_unconfirmed: 'the studio stopped before it confirmed this run started, so it is never started again: its process may have started, and a paid run must not run twice',
+};
 
 /** One directory level of a request target: not empty, no separators, no dot segments. */
 const safeSegment = (s: string): boolean => s !== '' && s !== '.' && s !== '..' && !s.includes('/') && !s.includes('\\') && !s.includes('\0');
@@ -285,6 +352,7 @@ const sha256 = (text: string): Buffer => createHash('sha256').update(text).diges
 function write(res: ServerResponse, reply: Reply): void {
   if (reply.type !== undefined) {
     res.writeHead(reply.status, {
+      ...SECURITY_HEADERS,
       'content-type': reply.type,
       'content-length': typeof reply.body === 'string' ? Buffer.byteLength(reply.body) : reply.body.length,
       ...(reply.type === 'application/zip' ? { 'content-disposition': `attachment; filename="${reply.filename}"` } : {}),
@@ -293,7 +361,7 @@ function write(res: ServerResponse, reply: Reply): void {
     return;
   }
   const text = JSON.stringify(reply.body ?? null);
-  res.writeHead(reply.status, { ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
+  res.writeHead(reply.status, { ...SECURITY_HEADERS, ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
   res.end(text);
 }
 
@@ -329,7 +397,8 @@ async function signalAndWait(child: SpawnedChild, signals: readonly NodeJS.Signa
 }
 
 type Params = Record<string, string>;
-type Handler = (params: Params, body: unknown, who: Caller) => Promise<Reply> | Reply;
+/** `key` is the request's Idempotency-Key header, which only the job-starting POSTs read. */
+type Handler = (params: Params, body: unknown, who: Caller, key: RawKey) => Promise<Reply> | Reply;
 /** `need` is the least role that may call the route; a public route needs no sign-in. */
 type Route = { readonly method: 'GET' | 'POST'; readonly need: StudioRole | 'public'; readonly parts: readonly string[]; readonly run: Handler };
 
@@ -437,24 +506,92 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   };
 
   type ServiceRecord = { readonly id: string; readonly name: string; readonly pid: number | undefined; readonly worldPort: number; readonly adminPort: number; readonly startedAt: string };
-  type RunRecord = { readonly runId: string; readonly outDir: string; readonly child: SpawnedChild; readonly knownRuns: ReadonlySet<string>; readonly startedAt: string; running: boolean; exitCode: number | null; interrupted: boolean };
+  type EpisodeRequest = { readonly world: string; readonly task: string; readonly agent: string };
+  /**
+   * One generation run or agent episode (A-335): its stored record, and the process this studio watches. `child` is
+   * null before the spawn, for a job that was finished when it was loaded, and while another studio holds the lease.
+   */
+  type Job = {
+    readonly runId: string;
+    readonly kind: JobKind;
+    readonly key: string;
+    readonly fingerprint: string;
+    readonly outDir: string;
+    readonly knownRuns: ReadonlySet<string>;
+    readonly startedAt: string;
+    readonly episode: EpisodeRequest | undefined;
+    phase: StoredRun['phase'];
+    lease: Lease | null;
+    recovery: Recovery | undefined;
+    pid: number | null;
+    exitCode: number | null;
+    child: SpawnedChild | null;
+  };
 
   const services = new Map<string, { record: ServiceRecord; child: SpawnedChild }>();
   let serviceSeq = 0;
-  const runs = new Map<string, RunRecord>();
+  const jobs = new Map<string, Job>();
+  const runOf = (runId: string): Job | undefined => {
+    const job = jobs.get(runId);
+    return job?.kind === 'generate' ? job : undefined;
+  };
+  const isEpisode = (job: Job | undefined): job is Job & { readonly episode: EpisodeRequest } => job?.kind === 'episode' && job.episode !== undefined;
   const processes = opts.processes ?? osProcesses;
-  // One write at a time, in order, so the file on disk is always the latest whole registry.
-  let persisting: Promise<void> = Promise.resolve();
-  // Once close starts, the registry is final: a run still going is stored as unfinished, so a later studio
-  // marks it interrupted (A-329) and nothing writes into the worlds dir after close resolves.
+  const leaseMs = opts.leaseMs ?? LEASE_MS;
+  const now = opts.now ?? Date.now;
+  /** Token buckets by key, oldest inserted dropped beyond MAX_BUCKETS. Time is the injected clock. */
+  const bucketsOf = (limit: RateLimit) => {
+    const buckets = new Map<string, { tokens: number; at: number }>();
+    const refilled = (key: string): { tokens: number; at: number } => {
+      const t = now();
+      const b = buckets.get(key) ?? { tokens: limit.capacity, at: t };
+      b.tokens = Math.min(limit.capacity, b.tokens + Math.max(0, t - b.at) / 1000 * limit.refillPerSecond);
+      b.at = t;
+      if (!buckets.has(key)) {
+        buckets.set(key, b);
+        if (buckets.size > MAX_BUCKETS) buckets.delete(buckets.keys().next().value!);
+      }
+      return b;
+    };
+    return {
+      /** Whole seconds until one token is there (at least 1), or 0 when there is one. */
+      wait(key: string): number {
+        const b = refilled(key);
+        return b.tokens >= 1 ? 0 : Math.max(1, Math.ceil((1 - b.tokens) / limit.refillPerSecond));
+      },
+      draw(key: string): void {
+        const b = refilled(key);
+        b.tokens = Math.max(0, b.tokens - 1);
+      },
+    };
+  };
+  const me = `studio-${process.pid}-${randomBytes(4).toString('hex')}`;
+  const leaseFrom = (at: number): Lease => ({ holder: me, expiresAt: new Date(at + leaseMs).toISOString() });
+  const rateLimit = opts.rateLimit ?? DEFAULT_RATE_LIMIT;
+  const postBuckets = bucketsOf(rateLimit);
+  const authLimit = opts.authThrottle ?? DEFAULT_AUTH_THROTTLE;
+  const failedSignIns = bucketsOf(authLimit);
+  const maxJobs = { generate: opts.maxConcurrentRuns ?? DEFAULT_MAX_JOBS, episode: opts.maxConcurrentEpisodes ?? DEFAULT_MAX_JOBS };
+  const holds = (job: Job): boolean => job.lease?.holder === me;
+  /** Set by close(): from then on the registry is never written. */
   let closed = false;
-  const persist = (): Promise<void> => {
-    if (closed) return persisting;
-    const snapshot: StoredRun[] = [...runs.values()].map((r) => ({
-      runId: r.runId, outDir: r.outDir, pid: r.child.pid ?? null, knownRuns: [...r.knownRuns], startedAt: r.startedAt,
-      exitCode: r.exitCode, finished: !r.running,
-    }));
-    persisting = persisting.then(() => saveRuns(worldsDir, snapshot)).catch(() => undefined);
+  const storedOf = (job: Job): StoredRun => ({
+    runId: job.runId, kind: job.kind, key: job.key, fingerprint: job.fingerprint, phase: job.phase, lease: job.lease,
+    ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
+    outDir: job.outDir, pid: job.pid, knownRuns: [...job.knownRuns], startedAt: job.startedAt, exitCode: job.exitCode,
+    ...(job.episode === undefined ? {} : { episode: job.episode }),
+  });
+  const jobOf = (stored: StoredRun): Job => ({
+    runId: stored.runId, kind: stored.kind, key: stored.key, fingerprint: stored.fingerprint, outDir: stored.outDir,
+    knownRuns: new Set(stored.knownRuns), startedAt: stored.startedAt, episode: stored.episode, phase: stored.phase,
+    lease: stored.lease, recovery: stored.recovery, pid: stored.pid, exitCode: stored.exitCode, child: null,
+  });
+  // One write at a time, in order, so the file on disk is always the latest whole registry. True when it was written.
+  let persisting: Promise<boolean> = Promise.resolve(true);
+  const persist = (): Promise<boolean> => {
+    if (closed) return Promise.resolve(false);
+    const snapshot = [...jobs.values()].map(storedOf);
+    persisting = persisting.then(() => saveRuns(worldsDir, snapshot)).then(() => true, () => false);
     return persisting;
   };
   // The audit log: one line per POST, appended one at a time in order. A failed append never fails the reply (fail-open).
@@ -480,35 +617,93 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     return { status: 200, body: { entries, unwritten } };
   }
-  const track = (run: RunRecord): void => {
-    runs.set(run.runId, run);
-    void run.child.exited.then((code) => {
-      run.running = false;
-      run.exitCode = code;
+  /** Watches a job's process. Its end finishes the job, unless another studio took the lease and so records the end. */
+  const watch = (job: Job, child: SpawnedChild): void => {
+    job.child = child;
+    void child.exited.then((code) => {
+      if (job.child !== child) return;
+      job.phase = 'finished';
+      job.lease = null;
+      job.exitCode = code;
       void persist();
     });
   };
-  // Runs a previous studio left (A-329): a live process is adopted, so it can still be watched and stopped; a dead one
-  // that never finished is interrupted, its <out>.partial evidence and REPORT kept (A-293); none is started again.
-  for (const stored of await loadRuns(worldsDir)) {
-    const base = { runId: stored.runId, outDir: stored.outDir, knownRuns: new Set(stored.knownRuns), startedAt: stored.startedAt };
-    const done = { pid: stored.pid ?? undefined, exited: Promise.resolve(stored.exitCode), kill: () => false, output: () => '' };
-    if (stored.finished) runs.set(stored.runId, { ...base, child: done, running: false, exitCode: stored.exitCode, interrupted: false });
-    else if (stored.pid !== null && processes.alive(stored.pid)) track({ ...base, child: adoptedChild(stored.pid, processes), running: true, exitCode: null, interrupted: false });
-    else runs.set(stored.runId, { ...base, child: done, running: false, exitCode: null, interrupted: true });
-  }
-  void persist();
+  /**
+   * A job whose holder died (no lease, or one past its expiry) is resumed when its process lives and stopped when it
+   * does not. An intent is stopped, never started: its child may have started before the crash. True when it acted.
+   */
+  const recover = (job: Job, at: number): boolean => {
+    if (job.phase === 'finished' || holds(job) || (job.lease !== null && Date.parse(job.lease.expiresAt) > at)) return false;
+    const from = job.lease?.holder ?? 'legacy';
+    const when = new Date(at).toISOString();
+    if (job.phase === 'running' && job.pid !== null && processes.alive(job.pid)) {
+      job.lease = leaseFrom(at);
+      job.recovery = { at: when, from, outcome: 'resumed' };
+      watch(job, adoptedChild(job.pid, processes));
+    } else {
+      job.recovery = { at: when, from, outcome: 'stopped', reason: job.phase === 'intent' ? 'start_unconfirmed' : 'process_gone' };
+      job.phase = 'finished';
+      job.lease = null;
+    }
+    return true;
+  };
+  /**
+   * The lease tick. Each unfinished job this studio holds gets a fresh lease, unless the file names another holder: a
+   * studio took it over while this one stalled, so this one stops renewing it and only reads it from then on. A job
+   * held elsewhere is read from the file, then recovered if its lease ran out.
+   */
+  let renewing = false;
+  const renew = async (): Promise<void> => {
+    if (renewing) return;
+    renewing = true;
+    try {
+      await persisting;
+      const onDisk = new Map((await loadRuns(worldsDir)).map((stored) => [stored.runId, stored]));
+      if (closed) return;
+      const at = now();
+      let changed = false;
+      for (const job of jobs.values()) {
+        if (job.phase === 'finished') continue;
+        const disk = onDisk.get(job.runId);
+        if (holds(job) && (disk === undefined || disk.lease?.holder === me)) {
+          job.lease = leaseFrom(at);
+          changed = true;
+        } else if (disk !== undefined) {
+          job.phase = disk.phase;
+          job.lease = disk.lease;
+          job.recovery = disk.recovery;
+          job.pid = disk.pid;
+          job.exitCode = disk.exitCode;
+          job.child = null;
+        }
+        if (recover(job, at)) changed = true;
+      }
+      if (changed) await persist();
+    } finally {
+      renewing = false;
+    }
+  };
+  // Jobs a previous studio left (A-329, A-335) are recovered by the lease rules; none is started again. A finished
+  // one is listed as it was, and a dead run keeps its <out>.partial evidence and REPORT (A-293).
+  for (const stored of await loadRuns(worldsDir)) jobs.set(stored.runId, jobOf(stored));
+  const loadedAt = now();
+  for (const job of jobs.values()) recover(job, loadedAt);
+  await persist();
   let costsCache: { at: number; value: unknown } | null = null;
   let costsInFlight: Promise<unknown> | null = null;
+  const traffic = trafficCounter(now());
 
   // ---- handlers ---------------------------------------------------------------------------
 
-  /** Readiness for a container or load balancer: the worlds directory reads, and the build and runtime are named. */
+  /**
+   * Readiness for a container or load balancer: the worlds directory reads, and the build and runtime are named. Traffic
+   * counts every answer but health polls, since start and in the last 300 s (YOS-237). It is public, so it holds no spend.
+   */
   async function health(): Promise<Reply> {
     const bun = process.versions['bun'];
     const runtime = bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`;
     try {
-      return { status: 200, body: { ok: true, build: opts.build ?? 'unknown', runtime, worlds: (await worldNames()).length } };
+      return { status: 200, body: { ok: true, build: opts.build ?? 'unknown', runtime, worlds: (await worldNames()).length, traffic: traffic.snapshot(now()) } };
     } catch (e) {
       return fail(503, 'health.worlds_unreadable', `worlds directory ${worldsDir} cannot be read: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -548,7 +743,22 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { worlds: list } };
   }
 
-  const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly world: CheckedWorld }>();
+  const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly body: Record<string, unknown> }>();
+  /** Checks in flight, by world dir and world.yaml version: a repeated request joins the running child instead of starting another. */
+  const checking = new Map<string, Promise<Reply>>();
+
+  /** The check, proof and serve children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338, A-343). */
+  const childEnv = (): Record<string, string> => {
+    const src = opts.env ?? process.env;
+    return { TZ: 'UTC', PATH: src['PATH'] ?? '', ...(src['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: src['WORLDGEN_GUARD_SCALE'] }) };
+  };
+  /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
+  const modelEnv = (): Record<string, string | undefined> => {
+    const { WORLDGEN_STUDIO_TOKEN: _token, ...rest } = opts.env ?? process.env;
+    return rest;
+  };
+  const checkTimeoutMs = opts.checkTimeoutMs ?? 300_000;
+  const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
 
   /** <name>.zip of the world's own files (EXPORT_FILES that exist), refused like the report when REPORT.md leaks task source. */
   async function worldExport(p: Params): Promise<Reply> {
@@ -590,18 +800,38 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!safeSegment(name)) return fail(400, 'world.name_unsafe', 'a world name must be one plain path segment');
     const dir = path.join(worldsDir, name);
     if (!await isDir(dir)) return fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`);
-    // checkWorld verifies every task, about 9 s on a big world, so an explored world is kept until its world.yaml changes.
+    // The check verifies every task, about 9 s on a big world, so an explored world is kept until its world.yaml changes.
     const yaml = await stat(path.join(dir, 'world.yaml')).catch(() => null);
     const cached = checkedWorlds.get(dir);
     if (yaml !== null && cached !== undefined && cached.mtimeMs === yaml.mtimeMs && cached.size === yaml.size) {
-      return { status: 200, body: explorerOf(name, cached.world) };
+      return { status: 200, body: cached.body };
     }
-    const loaded = await loadWorld(dir);
-    if (!loaded.ok) return fail(422, 'world.invalid', `${name} does not load: ${loaded.error[0].code}`);
-    const report = checkWorld(loaded.value);
-    if (!report.ok) return fail(422, 'world.invalid', `${name} does not check: ${report.issues.map((i) => i.code).slice(0, 5).join(', ')}`);
-    if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, world: report.world });
-    return { status: 200, body: explorerOf(name, report.world) };
+    const key = `${dir}\n${yaml?.mtimeMs}\n${yaml?.size}`;
+    const running = checking.get(key);
+    if (running !== undefined) return running;
+    const reply = checkInChild(dir, name, yaml).finally(() => checking.delete(key));
+    checking.set(key, reply);
+    return reply;
+  }
+
+  async function checkInChild(dir: string, name: string, yaml: { readonly mtimeMs: number; readonly size: number } | null): Promise<Reply> {
+    let res: RunResult;
+    try {
+      res = await opts.runner(['bun', 'src/cli/studio-check.ts', dir, name], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
+    } catch {
+      return fail(502, 'check.failed', 'the check process could not start');
+    }
+    if (res.code === 3) return fail(422, 'world.invalid', lastLine(res.stderr).slice(0, 300));
+    if (res.code !== 0) return fail(502, 'check.failed', `the check process failed (exit ${res.code}): ${lastLine(res.stderr).slice(0, 200) || 'no output'}`);
+    let body: unknown;
+    try {
+      body = JSON.parse(res.stdout);
+    } catch {
+      body = null;
+    }
+    if (!isObject(body)) return fail(502, 'check.unreadable', 'the check process answered something that is not a JSON object');
+    if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, body });
+    return { status: 200, body };
   }
 
   /** The API console: one request to the world port of a service this studio started, and the world's real answer. */
@@ -684,7 +914,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       port = wanted;
     }
-    const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir });
+    const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
     const id = `svc-${(serviceSeq += 1)}`;
     const record: ServiceRecord = { id, name, pid: child.pid, worldPort: port, adminPort: port + 1, startedAt: new Date().toISOString() };
     services.set(id, { record, child });
@@ -751,7 +981,85 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return found.ok ? { status: 200, body: { spec: p['spec'], paths: found.paths } } : fail(400, 'generate.spec', found.why);
   }
 
-  async function generate(body: unknown): Promise<Reply> {
+  /** What a job start asks for. `request` is what two retries share: the child's argv without the run id each job mints or the transport. */
+  type JobStart = {
+    readonly kind: JobKind;
+    readonly rawKey: RawKey;
+    readonly request: readonly string[];
+    /** The run id after its UTC stamp. */
+    readonly label: string;
+    readonly knownRuns: ReadonlySet<string>;
+    readonly episode: EpisodeRequest | undefined;
+    /** The out dir and the child's argv, once the run id is fixed. */
+    readonly launch: (runId: string) => { readonly outDir: string; readonly argv: readonly string[] };
+  };
+
+  /** The answer to a start, the same for the first request and each replay of it. */
+  const startAnswer = (job: Job, replayed: boolean): Reply => {
+    const running = job.phase !== 'finished';
+    return { status: 200, body: isEpisode(job) ? { runId: job.runId, ...job.episode, running, replayed } : { runId: job.runId, outDir: job.outDir, running, replayed } };
+  };
+
+  /** What a status shows of a job's record. Never the request body or the argv. */
+  const jobView = (job: Job): Record<string, unknown> => ({
+    kind: job.kind, key: job.key, phase: job.phase, lease: job.lease, ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
+  });
+
+  /**
+   * Starts a job once per key (A-335). A client key names one job forever; a derived key matches only an unfinished
+   * job, so the same request after the first one finished is a deliberate rerun. The intent is on disk before the spawn.
+   */
+  async function startJob(start: JobStart): Promise<Reply> {
+    const clientKey = idempotencyKeyOf(start.rawKey);
+    if (!clientKey.ok) return clientKey.reply;
+    const fingerprint = fingerprintOf(start.kind, start.request);
+    const key = clientKey.key ?? `derived:${fingerprint}`;
+    // No await from this lookup to the insert below, so two requests with one key cannot both miss.
+    const prior = [...jobs.values()].find((j) => j.key === key && (clientKey.key !== undefined || j.phase !== 'finished'));
+    if (prior !== undefined) {
+      if (prior.fingerprint === fingerprint) return startAnswer(prior, true);
+      return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (job ${prior.runId})`);
+    }
+    // Counted after the lookup, so a replay answers first. Intents and jobs another studio leases count. Still no await.
+    const active = [...jobs.values()].filter((j) => j.kind === start.kind && j.phase !== 'finished').length;
+    if (active >= maxJobs[start.kind]) {
+      const what = start.kind === 'generate' ? 'generation runs' : 'agent episodes';
+      return fail(429, start.kind === 'generate' ? 'generate.concurrent_limit' : 'episode.concurrent_limit', `${active} ${what} are already active; the studio runs at most ${maxJobs[start.kind]} at once, so stop one first`);
+    }
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+    let runId = `${stamp}-${start.label}`;
+    for (let n = 2; jobs.has(runId); n++) runId = `${stamp}-${start.label}-${n}`;
+    const { outDir, argv } = start.launch(runId);
+    const job: Job = {
+      runId, kind: start.kind, key, fingerprint, outDir, knownRuns: start.knownRuns, startedAt: new Date().toISOString(),
+      episode: start.episode, phase: 'intent', lease: leaseFrom(now()), recovery: undefined, pid: null, exitCode: null, child: null,
+    };
+    jobs.set(runId, job);
+    const recorded = await persist();
+    // No child may outlive close(). An intent already written is stopped as unconfirmed by the next studio.
+    if (closed) return fail(503, 'studio.closing', `The studio is closing, so it did not start job ${runId}`);
+    if (!recorded) {
+      jobs.delete(runId);
+      return fail(503, 'job.unrecorded', `The studio could not write ${RUN_STORE_FILE}, so it did not start the job: a job it cannot record could run twice`);
+    }
+    let child: SpawnedChild;
+    try {
+      child = opts.spawner(argv, { cwd: codeDir, env: modelEnv() });
+    } catch (e) {
+      // A start that never happened is finished, so its derived key cannot answer every later retry with a dead intent.
+      job.phase = 'finished';
+      job.lease = null;
+      await persist();
+      throw e;
+    }
+    job.phase = 'running';
+    job.pid = child.pid ?? null;
+    watch(job, child);
+    await persist();
+    return startAnswer(job, false);
+  }
+
+  async function generate(body: unknown, rawKey: RawKey): Promise<Reply> {
     if (!isObject(body)) return fail(400, 'generate.body', 'the body must be a JSON object');
     const kind = body['kind'];
     if (kind !== 'description' && kind !== 'openapi' && kind !== 'csv') {
@@ -804,25 +1112,21 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       args = ['--csv', ...csv, '--out', outDir, ...flags];
     }
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-    const runId = `${stamp}-${slug}`;
     const runDir = path.join(outDir, 'runs');
     const knownRuns = new Set([
       ...await readdir(runDir).catch((): string[] => []),
       ...await readdir(path.join(`${outDir}${PARTIAL_SUFFIX}`, 'runs')).catch((): string[] => []),
     ]);
     const transport = opts.transport === undefined ? [] : ['--transport', opts.transport];
-    const child = opts.spawner(['bun', 'src/cli/worldgen.ts', ...args, ...transport], { cwd: codeDir });
-    track({ runId, outDir, child, knownRuns, startedAt: new Date().toISOString(), running: true, exitCode: null, interrupted: false });
-    await persist();
-    return { status: 200, body: { runId, outDir, running: true } };
+    const request = ['bun', 'src/cli/worldgen.ts', ...args];
+    return startJob({ kind: 'generate', rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...request, ...transport] }) });
   }
 
   /**
    * The events file of a run: `<out>/runs/<runId>/events.jsonl` when present, else the run dir
    * the child created after spawn (the worldgen CLI mints its own run id), newest first.
    */
-  async function eventsFileOf(run: RunRecord): Promise<string | null> {
+  async function eventsFileOf(run: Job): Promise<string | null> {
     // A create run builds in `<out>.partial` and renames it to `<out>` only when done (A-293), so a running or stopped
     // run's events live under the .partial sibling.
     let best: { file: string; mtime: number } | null = null;
@@ -841,7 +1145,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return best === null ? null : best.file;
   }
 
-  async function readEvents(run: RunRecord): Promise<unknown[]> {
+  async function readEvents(run: Job): Promise<unknown[]> {
     const file = await eventsFileOf(run);
     if (file === null) return [];
     const text = await readFile(file, 'utf8').catch(() => '');
@@ -873,7 +1177,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
    * What a run is doing, from its process and its own events (A-312): queued until it logs run_started, running until
    * run_finished, then done or stopped with the reason it logged. A process that exits without run_finished failed.
    */
-  function stateOf(running: boolean, exitCode: number | null, all: readonly unknown[], output = '', interrupted = false): { state: 'queued' | 'running' | 'done' | 'stopped' | 'failed' | 'interrupted'; reason?: string } {
+  function stateOf(running: boolean, exitCode: number | null, all: readonly unknown[], output = '', recovery?: Recovery): { state: 'queued' | 'running' | 'done' | 'stopped' | 'failed' | 'interrupted'; reason?: string } {
     const events = all.filter(isObject);
     const finished = [...events].reverse().find((e) => e['t'] === 'run_finished');
     const result = finished !== undefined && isObject(finished['result']) ? finished['result'] : null;
@@ -884,31 +1188,34 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     if (running) return { state: events.some((e) => e['t'] === 'run_started') ? 'running' : 'queued' };
     // The CLI says why on its last line (a missing key, a bad flag), so a failed run shows that, not just the exit code.
-    if (interrupted) return { state: 'interrupted', reason: 'the studio restarted while this run was running and its process is gone; its evidence stays in the <out>.partial directory' };
+    if (recovery?.outcome === 'stopped') return { state: 'interrupted', reason: STOPPED_REASON[recovery.reason] };
     const said = output.trim().split('\n').pop()?.trim() ?? '';
     return { state: 'failed', reason: `the worldgen process exited ${exitCode ?? 'by a signal'} before it logged run_finished${said === '' ? '' : `: ${said}`}` };
   }
 
   async function runStatus(p: Params): Promise<Reply> {
-    const run = runs.get(p['runId'] ?? '');
+    const run = runOf(p['runId'] ?? '');
     if (run === undefined) return fail(404, 'run.unknown', `No run ${p['runId'] ?? ''}`);
     const events = await readEvents(run);
+    const running = run.phase !== 'finished';
     return {
       status: 200,
       body: {
-        running: run.running,
-        ...stateOf(run.running, run.exitCode, events, run.child.output(), run.interrupted),
-        ...(run.running ? {} : { exitCode: run.exitCode }),
+        running,
+        ...stateOf(running, run.exitCode, events, run.child?.output() ?? '', run.recovery),
+        ...(running ? {} : { exitCode: run.exitCode }),
         events: events.slice(-EVENT_TAIL),
         totals: totalsOf(events),
+        job: jobView(run),
       },
     };
   }
 
   async function stopRun(p: Params): Promise<Reply> {
-    const run = runs.get(p['runId'] ?? '');
+    const run = runOf(p['runId'] ?? '');
     if (run === undefined) return fail(404, 'run.unknown', `No run ${p['runId'] ?? ''}`);
-    if (!run.running) return fail(409, 'run.finished', `Run ${run.runId} already finished`);
+    if (run.phase === 'finished') return fail(409, 'run.finished', `Run ${run.runId} already finished`);
+    if (run.child === null) return fail(409, 'run.unheld', `Run ${run.runId} has no process this studio watches; its lease is held by ${run.lease?.holder ?? 'no studio'}`);
     const gone = await signalAndWait(run.child, ['SIGINT', 'SIGTERM'], opts.runStopWaitMs ?? RUN_STOP_WAIT_MS);
     return { status: 200, body: { runId: run.runId, stopped: gone.exited, signal: gone.signal } };
   }
@@ -984,8 +1291,6 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   // ---------------------------------------------------------------- agent playground (YOS-190)
 
-  type EpisodeRun = { readonly runId: string; readonly world: string; readonly task: string; readonly agent: string; readonly out: string; readonly child: SpawnedChild; running: boolean; exitCode: number | null };
-  const episodes = new Map<string, EpisodeRun>();
   let episodeSeq = 0;
   let commit: string | null = null;
   /** The commit of the code the studio runs, recorded on every episode as its engine. Read once, through the injected runner. */
@@ -1018,11 +1323,43 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { world: p['name'], tasks } };
   }
 
+  // A proof runs inside the request through the runner and costs nothing, so it gets in-memory dedupe only: no lease,
+  // no registry record. Requests with one key share one runner call while it runs, and a client key keeps its reply.
+  const proofsRunning = new Map<string, { readonly fingerprint: string; readonly reply: Promise<Reply> }>();
+  const proofsDone = new Map<string, { readonly fingerprint: string; readonly reply: Reply }>();
+
   /** The engine's proof of every task: reference 1, doing nothing 0, every decoy and near miss below 1. `worldplay verify --json`, never a model. */
-  async function worldProof(p: Params): Promise<Reply> {
+  async function worldProof(p: Params, rawKey: RawKey): Promise<Reply> {
     const w = await worldDirOf(p['name'] ?? '');
     if (!w.ok) return w.reply;
-    const res = await opts.runner(['bun', 'src/cli/worldplay.ts', 'verify', w.dir, '--json'], { cwd: codeDir });
+    const clientKey = idempotencyKeyOf(rawKey);
+    if (!clientKey.ok) return clientKey.reply;
+    const fingerprint = fingerprintOf('proof', [w.dir]);
+    const key = clientKey.key ?? `derived:${fingerprint}`;
+    const known = proofsDone.get(key) ?? proofsRunning.get(key);
+    if (known !== undefined) {
+      if (known.fingerprint === fingerprint) return known.reply;
+      return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (the proof of another world)`);
+    }
+    const reply = proveWorld(w.dir, p['name'] ?? '');
+    proofsRunning.set(key, { fingerprint, reply });
+    try {
+      const done = await reply;
+      if (clientKey.key !== undefined) {
+        proofsDone.set(key, { fingerprint, reply: done });
+        for (const oldest of proofsDone.keys()) {
+          if (proofsDone.size <= PROOF_REPLIES) break;
+          proofsDone.delete(oldest);
+        }
+      }
+      return done;
+    } finally {
+      proofsRunning.delete(key);
+    }
+  }
+
+  async function proveWorld(dir: string, name: string): Promise<Reply> {
+    const res = await opts.runner(['bun', 'src/cli/worldplay.ts', 'verify', dir, '--json'], { cwd: codeDir, env: childEnv(), timeoutMs: checkTimeoutMs });
     const tasks: unknown[] = [];
     for (const line of res.stdout.split('\n')) {
       if (line.trim() === '') continue;
@@ -1036,11 +1373,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       const why = (res.stderr.trim() || res.stdout.trim() || 'no output').split('\n').slice(-1)[0];
       return fail(422, 'proof.failed', `verify exited ${res.code}: ${why}`);
     }
-    return { status: 200, body: { world: p['name'], verified: res.code === 0, tasks } };
+    return { status: 200, body: { world: name, verified: res.code === 0, tasks } };
   }
 
   /** Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. */
-  async function startEpisode(body: unknown): Promise<Reply> {
+  async function startEpisode(body: unknown, rawKey: RawKey): Promise<Reply> {
     if (!isObject(body)) return fail(400, 'episode.body', 'body must be {"world": ..., "task": ..., "agent": "noop" | "sonnet"}');
     const world = typeof body['world'] === 'string' ? body['world'] : '';
     const w = await worldDirOf(world);
@@ -1058,17 +1395,18 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     const sha = await engineCommit();
     if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory, so the episode would have no engine identity');
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-    const runId = `${stamp}-${agent}-${++episodeSeq}`;
-    const out = path.join(episodesDir, runId);
-    const child = opts.spawner(['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--out', out, '--run-id', runId, '--engine-commit', sha, '--agent', agent, ...flags], { cwd: codeDir });
-    const run: EpisodeRun = { runId, world, task, agent, out, child, running: true, exitCode: null };
-    episodes.set(runId, run);
-    void child.exited.then((code) => {
-      run.running = false;
-      run.exitCode = code;
+    return startJob({
+      kind: 'episode',
+      rawKey,
+      request: ['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--agent', agent, ...flags],
+      label: `${agent}-${++episodeSeq}`,
+      knownRuns: new Set(),
+      episode: { world, task, agent },
+      launch: (runId) => {
+        const out = path.join(episodesDir, runId);
+        return { outDir: out, argv: ['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--out', out, '--run-id', runId, '--engine-commit', sha, '--agent', agent, ...flags] };
+      },
     });
-    return { status: 200, body: { runId, world, task, agent, running: true } };
   }
 
   /** The episode a run exported and reopened, from its dataset.jsonl or failures.jsonl. The private evidence stays on disk. */
@@ -1091,18 +1429,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   async function episodeStatus(p: Params): Promise<Reply> {
     const runId = p['runId'] ?? '';
     if (!safeSegment(runId)) return fail(400, 'episode.name_unsafe', 'an episode run id must be one plain path segment');
-    const run = episodes.get(runId);
-    const out = run?.out ?? path.join(episodesDir, runId);
+    const job = jobs.get(runId);
+    const run = isEpisode(job) ? job : undefined;
+    const out = run?.outDir ?? path.join(episodesDir, runId);
     if (run === undefined && !await isDir(out)) return fail(404, 'episode.unknown', `No episode run ${runId}`);
     const episode = await exportedEpisode(out, runId);
-    const output = run?.child.output() ?? '';
+    const output = run?.child?.output() ?? '';
+    const running = run !== undefined && run.phase !== 'finished';
     return {
       status: 200,
       body: {
         runId,
-        ...(run === undefined ? {} : { world: run.world, task: run.task, agent: run.agent, running: run.running, exitCode: run.exitCode }),
+        ...(run === undefined ? {} : { ...run.episode, running, exitCode: run.exitCode, job: jobView(run) }),
         episode,
-        ...(run !== undefined && !run.running && run.exitCode !== 0 ? { failure: output.split('\n').filter((l) => l.trim() !== '').slice(-3) } : {}),
+        ...(run !== undefined && !running && run.exitCode !== 0 ? { failure: output.split('\n').filter((l) => l.trim() !== '').slice(-3) } : {}),
       },
     };
   }
@@ -1134,16 +1474,17 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   async function listEpisodes(): Promise<Reply> {
-    const ids = new Set([...(await dirsOf(episodesDir)), ...episodes.keys()]);
+    const ids = new Set([...(await dirsOf(episodesDir)), ...[...jobs.values()].filter(isEpisode).map((j) => j.runId)]);
     const rows = await Promise.all([...ids].sort().reverse().map(async (runId) => {
-      const run = episodes.get(runId);
-      const e = await exportedEpisode(run?.out ?? path.join(episodesDir, runId), runId);
+      const job = jobs.get(runId);
+      const run = isEpisode(job) ? job : undefined;
+      const e = await exportedEpisode(run?.outDir ?? path.join(episodesDir, runId), runId);
       const ep = isObject(e) ? e : null;
       return {
         runId,
-        running: run?.running ?? false,
-        task: ep?.['task_id'] ?? run?.task ?? null,
-        world: ep?.['world_id'] ?? run?.world ?? null,
+        running: run !== undefined && run.phase !== 'finished',
+        task: ep?.['task_id'] ?? run?.episode.task ?? null,
+        world: ep?.['world_id'] ?? run?.episode.world ?? null,
         stop: ep?.['stop_reason'] ?? null,
         score: ep?.['score'] ?? null,
         costUsd: isObject(ep?.['usage']) ? (ep['usage'] as Record<string, unknown>)['cost_usd'] ?? null : null,
@@ -1153,9 +1494,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   async function stopEpisode(p: Params): Promise<Reply> {
-    const run = episodes.get(p['runId'] ?? '');
-    if (run === undefined) return fail(404, 'episode.unknown', `No running episode ${p['runId'] ?? ''}`);
-    if (!run.running) return fail(409, 'episode.finished', `Episode ${run.runId} already finished`);
+    const run = jobs.get(p['runId'] ?? '');
+    if (!isEpisode(run)) return fail(404, 'episode.unknown', `No running episode ${p['runId'] ?? ''}`);
+    if (run.phase === 'finished') return fail(409, 'episode.finished', `Episode ${run.runId} already finished`);
+    if (run.child === null) return fail(409, 'episode.unheld', `Episode ${run.runId} has no process this studio watches; its lease is held by ${run.lease?.holder ?? 'no studio'}`);
     const gone = await signalAndWait(run.child, ['SIGINT', 'SIGTERM']);
     return { status: 200, body: { runId: run.runId, stopped: gone.exited, signal: gone.signal } };
   }
@@ -1173,7 +1515,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'call'], run: (p, b) => callService(p, b) },
     { method: 'GET', need: 'viewer', parts: ['api', 'inputs'], run: () => inputs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'inputs', ':spec', 'paths'], run: (p) => specPaths(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'generate'], run: (_p, b) => generate(b) },
+    { method: 'POST', need: 'operator', parts: ['api', 'generate'], run: (_p, b, _w, key) => generate(b, key) },
     { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId'], run: (p) => runStatus(p) },
     { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId', 'events'], run: (p) => runStatus(p) },
     { method: 'POST', need: 'operator', parts: ['api', 'generate', ':runId', 'stop'], run: (p) => stopRun(p) },
@@ -1182,9 +1524,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
     { method: 'GET', need: 'viewer', parts: ['api', 'costs'], run: () => costs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'tasks'], run: (p) => worldTasks(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p) => worldProof(p) },
+    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p, _b, _w, key) => worldProof(p, key) },
     { method: 'GET', need: 'viewer', parts: ['api', 'episodes'], run: () => listEpisodes() },
-    { method: 'POST', need: 'operator', parts: ['api', 'episodes'], run: (_p, b) => startEpisode(b) },
+    { method: 'POST', need: 'operator', parts: ['api', 'episodes'], run: (_p, b, _w, key) => startEpisode(b, key) },
     { method: 'GET', need: 'viewer', parts: ['api', 'episodes', 'analytics'], run: () => episodeAnalytics() },
     { method: 'GET', need: 'viewer', parts: ['api', 'episodes', ':runId'], run: (p) => episodeStatus(p) },
     { method: 'POST', need: 'operator', parts: ['api', 'episodes', ':runId', 'stop'], run: (p) => stopEpisode(p) },
@@ -1246,21 +1588,38 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       return fail(404, 'route.not_found', signIn ? missing : `${missing}. Studio routes: ${ROUTE_LIST}`);
     }
     const need = hit.route.need;
+    const client = req.socket.remoteAddress ?? 'unknown';
     if (need !== 'public') {
       const what = `${method} /${segments.join('/')}`;
+      // A throttled client is refused whether its token is right or wrong, so a guesser learns nothing.
+      // The cost is that a valid user on the same address waits too.
+      if (who.kind !== 'anonymous') {
+        const seconds = failedSignIns.wait(client);
+        if (seconds > 0) return fail(429, 'auth.throttled', `Too many failed sign-ins from ${client}: wait ${seconds} s before the next bearer token is checked`, { 'retry-after': String(seconds) });
+      }
       if (who.kind === 'anonymous') {
         return fail(401, 'auth.required', `${what} needs sign-in: send Authorization: Bearer <token>, or sign in on the page`, AUTH_CHALLENGE);
       }
       if (who.kind === 'rejected') {
+        failedSignIns.draw(client);
         return fail(401, 'auth.invalid', `${what}: the bearer token matches no studio user; check it, or sign in again on the page`, AUTH_CHALLENGE);
       }
       if (roleRank(who.role) < roleRank(need)) {
         return fail(403, 'auth.forbidden', `${what} needs the ${need} role; ${who.name} is ${who.role === 'viewer' ? 'a' : 'an'} ${who.role}`);
       }
     }
+    if (method === 'POST') {
+      const route = hit.route.parts.join('/');
+      const key = `POST ${route} ${client}`;
+      const seconds = postBuckets.wait(key);
+      if (seconds > 0) {
+        return fail(429, 'studio.rate_limited', `Too many POST /${route} requests from ${client}: the studio allows a burst of ${rateLimit.capacity}, refilled ${rateLimit.refillPerSecond} per second`, { 'retry-after': String(seconds) });
+      }
+      postBuckets.draw(key);
+    }
     const body = hit.route.method === 'POST' ? await readBody(req) : { ok: true as const, value: undefined };
     if (!body.ok) return fail(body.status, body.code, body.message);
-    return hit.route.run(hit.params, body.value, who);
+    return hit.route.run(hit.params, body.value, who, req.headers['idempotency-key']);
   };
 
   const answer = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -1275,6 +1634,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       reply = fail(500, 'studio.error', `Studio error: ${e instanceof Error ? e.message : String(e)}`);
     }
+    // Health polls would drown the traffic they report, so they are not counted.
+    const segments = segmentsOf(req.url ?? '/');
+    if (!(req.method === 'GET' && segments.length === 2 && segments[0] === 'api' && segments[1] === 'health')) traffic.record(now(), reply.status);
     if (req.method === 'POST') {
       const error = isObject(reply.body) && isObject(reply.body['error']) ? reply.body['error']['code'] : undefined;
       await audit({
@@ -1321,25 +1683,30 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     ownOrigins.add(configuredOrigin);
   }
 
+  const renewal = setInterval(() => void renew(), leaseMs / 3);
+  renewal.unref?.();
+
   let closing: Promise<void> | undefined;
   return {
     url: `http://${host.includes(':') ? `[${host}]` : host}:${port}`,
     port,
     close() {
-      closing ??= (async () => {
+      closing ??= new Promise<void>((resolve) => {
         closed = true;
+        clearInterval(renewal);
         for (const { child } of services.values()) child.kill('SIGTERM');
-        for (const { child } of runs.values()) child.kill('SIGTERM');
-        for (const { child } of episodes.values()) child.kill('SIGTERM');
-        if (server.listening) {
-          await new Promise<void>((resolve) => {
-            server.close(() => resolve());
-            server.closeAllConnections();
-          });
+        for (const job of jobs.values()) if (job.phase !== 'finished') job.child?.kill('SIGTERM');
+        if (!server.listening) {
+          resolve();
+          return;
         }
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }).then(async () => {
+        // Writes queued before close land before close returns; none is queued after (#28).
         await persisting;
         await auditing;
-      })();
+      });
       return closing;
     },
   };

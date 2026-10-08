@@ -455,26 +455,27 @@ const STOP_IS_VERDICT: Record<StopReason['kind'], boolean> = {
   cost_unenforceable: false,
   time_exhausted: true,
   stage_time_exhausted: true,
-  model_error: false,
+  model_error: false, // a 529 overload is not the product's verdict (A-340)
   judge_error: false,
   infra_unavailable: false,
   transport_stalled: false,
   cancelled: false,
 };
-const MACHINERY_STOPS = new Set<string>(Object.entries(STOP_IS_VERDICT).flatMap(([kind, verdict]) => (verdict ? [] : [kind])));
+const VERDICT_STOPS = new Set<string>(Object.entries(STOP_IS_VERDICT).flatMap(([kind, verdict]) => (verdict ? [kind] : [])));
 
 /**
  * What a suite case's end says (A-336), in the order summary.md counts them. A success or an expected refusal is a
- * pass. A product failure is the wrong verdict on the prompt. An infra failure is a crash, a machinery stop, a done
- * world the harness never verified, or an unreadable case.json, and is never a pass. Not run is a suite case with
- * no case output.
+ * pass. A product failure is the wrong verdict on the prompt. An infra failure is a crash, a machinery stop, a stop
+ * whose reason was never logged (A-340), a done world the harness never verified, or an unreadable case.json, and is
+ * never a pass. Not run is a suite case with no case output.
  */
 export const OUTCOMES = ['success', 'expected refusal', 'product failure', 'infra failure', 'not run'] as const;
 export type Outcome = (typeof OUTCOMES)[number];
-type RunOutcome = Exclude<Outcome, 'not run'>;
+export type RunOutcome = Exclude<Outcome, 'not run'>;
 
-function outcomeOf(expect: Expect, status: PhaseStatus, stopKind: string | null, verify: VerifyResult): RunOutcome {
-  if (status === 'crashed' || (status === 'stopped' && stopKind !== null && MACHINERY_STOPS.has(stopKind))) return 'infra failure';
+/** The one classifier of a case that left a readable record: summary.md and eval-outcomes.ts both call it (A-340). */
+export function outcomeOf(expect: Expect, status: PhaseStatus, stopKind: string | null, verify: VerifyResult): RunOutcome {
+  if (status === 'crashed' || (status === 'stopped' && (stopKind === null || !VERDICT_STOPS.has(stopKind)))) return 'infra failure';
   if (expect === 'stopped') return status === 'stopped' ? 'expected refusal' : 'product failure';
   if (status === 'stopped') return 'product failure';
   if (verify.kind === 'not_run') return 'infra failure';
@@ -574,7 +575,7 @@ function knownTotal(values: readonly (number | null)[], show: (n: number) => str
 
 /**
  * summary.md: one row per expected suite case, missing and invalid ones included, totals by outcome class, the pass
- * rate over the cases that ran, top issue triage, then why each case is missing, invalid, unlogged or crashed. Unknown
+ * rate over every expected case (A-341), top issue triage, then why each case is missing, invalid, unlogged or crashed. Unknown
  * time or cost prints as unknown, never 0.
  */
 export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[]): string {
@@ -584,7 +585,6 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
   const outcomes: readonly Outcome[] = [...rows.map((r) => r.outcome), ...absent.map((a): Outcome => (a.kind === 'missing' ? 'not run' : 'infra failure'))];
   const count = (o: Outcome): number => outcomes.filter((x) => x === o).length;
   const passed = rows.filter((r) => r.pass).length;
-  const ran = expected - count('not run');
   const unlogged = rows.filter((r) => !r.logged).length;
   const unknownCostCalls = rows.reduce((s, r) => s + r.unknownCostCalls, 0);
   const showFidelity = rows.some((r) => r.fidelity !== null);
@@ -612,7 +612,7 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
     `**Median and p95:** ${percentile(rows.map((r) => r.ms), 50, (n) => `${minutes(n)} min`, expected)} and ${percentile(rows.map((r) => r.ms), 95, (n) => `${minutes(n)} min`, expected)}; ` +
       `${percentile(rows.map((r) => r.costUsd), 50, (n) => `$${usd(n)}`, expected)} and ${percentile(rows.map((r) => r.costUsd), 95, (n) => `$${usd(n)}`, expected)}.`,
     '',
-    `**Pass rate:** ${passed}/${ran}${ran === 0 ? '' : ` (${Math.round((100 * passed) / ran)}%)`}, success and expected refusal over the ${ran} cases that ran (${count('not run')} not run).`,
+    `**Pass rate:** ${passed}/${expected}${expected === 0 ? '' : ` (${Math.round((100 * passed) / expected)}%)`}, success and expected refusal over all ${expected} expected cases (${count('not run')} not run).`,
   ];
   if (absent.length > 0) {
     out.push('', '## Missing or invalid', '', ...absent.map((a) => `- \`${a.id}\`: ${a.kind === 'missing' ? 'no case.json in the run directory' : `case.json is invalid: ${cell(a.why)}`}`));

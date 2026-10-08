@@ -162,7 +162,7 @@ export const ISSUES = {
   'task.decoy_required': def<{ difficulty: string }>()({ severity: 'error', owner: 'tasks',
     expected: () => 'at least one decoy on medium and hard tasks', hint: () => 'Add a plausible wrong solution, such as one that skips page 2.' }),
   'task.decoy_full_marks': def<{ why: string }>()({ severity: 'error', owner: 'tasks',
-    expected: () => 'every decoy scores below 1', hint: (p) => `The grader cannot tell apart the decoy "${p.why}". Tighten it.` }),
+    expected: () => 'every decoy scores below 1', hint: (p) => `The decoy "${p.why}" scored 1. Its script may not do what its why says (a list read right after a write often returns the row the script just created), or the grader cannot tell it apart. Check the script's calls first, then tighten the grader.` }),
   'task.decoy_trivial': def<{ why: string; reason: 'no_successful_write' | 'same_as_noop' | 'same_as_solution' }>()({ severity: 'error', owner: 'tasks',
     expected: () => 'a decoy that writes and ends in a state unlike both noop and the solution', hint: (p) => `Decoy "${p.why}" is ${p.reason}.` }),
   'task.decoy_server_error': def<{ task: string; why: string; call: string; body: string }>()({ severity: 'error', owner: 'at_path',
