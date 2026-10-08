@@ -13,7 +13,7 @@ import { DEFAULT_SIZE_NAME, SIZE_NAMES, captureBoatUsage, discoverBoat, trackBoa
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 
 const USAGE = `usage:
-  bun run sandbox -- up <worldDir> --backend openshell|sbx|boat [--size small|default|large] [--port 4000] [--ttl 1800] [--image <img>]
+  bun run sandbox -- up <worldDir> --backend openshell|sbx|boat [--size small|default|large] [--port 4000] [--ttl 1800] [--image <img>] [--private]
   bun run sandbox -- exec <id> -- <cmd...>
   bun run sandbox -- down <id>
   bun run sandbox -- discover [--org <wallet>] [--day YYYY-MM-DD]
@@ -23,6 +23,8 @@ const USAGE = `usage:
   bun run sandbox -- reconcile-usage <observed-reservation-uuid> [--org <wallet>]
   bun run sandbox -- reconcile-orphans [--org <wallet>] [--apply] [--id <sandbox-id>]...
 
+up uploads the public form of the world: no grader, solution or decoy source reaches the VM.
+--private uploads the private world instead, for debugging a world, and warns.
 up prints the sandbox id and the world URL. Only the world port is exposed; the admin port stays inside.
 --image picks the base image on openshell and sbx, such as node:22-bookworm; boat takes none.
 Sizes: small is 2 CPU and 4 GB (the default), default 4 and 8, large 8 and 16. boat needs BOAT_API_KEY and WORLDGEN_BOAT_ORG.
@@ -48,7 +50,7 @@ an intent and an outcome receipt to costs.jsonl.boat-orphans.jsonl; billing stay
 class UsageError extends Error {}
 
 type Command =
-  | { readonly kind: 'up'; readonly worldDir: string; readonly backend: BackendKind; readonly size: BoatSize; readonly port: number; readonly ttl: number | undefined; readonly image: string | undefined }
+  | { readonly kind: 'up'; readonly worldDir: string; readonly backend: BackendKind; readonly size: BoatSize; readonly port: number; readonly ttl: number | undefined; readonly image: string | undefined; readonly private: boolean }
   | { readonly kind: 'exec'; readonly id: string; readonly cmd: readonly string[] }
   | { readonly kind: 'down'; readonly id: string }
   | { readonly kind: 'reconcile-create'; readonly id: string }
@@ -141,6 +143,7 @@ function parse(argv: readonly string[]): Command {
   let port = 4000;
   let ttl: number | undefined;
   let image: string | undefined;
+  let isPrivate = false;
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
     const value = (): string => {
@@ -153,6 +156,7 @@ function parse(argv: readonly string[]): Command {
     else if (flag === '--port') port = int(flag, value(), 1, 65534);
     else if (flag === '--ttl') ttl = int(flag, value(), 60, 86400);
     else if (flag === '--image') image = value();
+    else if (flag === '--private') isPrivate = true;
     else if (flag.startsWith('-')) throw new UsageError(`unknown option ${flag}`);
     else if (worldDir === undefined) worldDir = path.resolve(flag);
     else throw new UsageError(`unexpected argument ${flag}`);
@@ -161,7 +165,7 @@ function parse(argv: readonly string[]): Command {
   if (backend === undefined) throw new UsageError(`up needs --backend ${BACKEND_KINDS.join('|')}`);
   if (ttl !== undefined && backend !== 'boat') throw new UsageError('--ttl applies to the boat backend only');
   if (image !== undefined && backend === 'boat') throw new UsageError('--image applies to the openshell and sbx backends only');
-  return { kind: 'up', worldDir, backend, size, port, ttl, image };
+  return { kind: 'up', worldDir, backend, size, port, ttl, image, private: isPrivate };
 }
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -180,8 +184,9 @@ async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(USAGE);
         return 0;
       case 'up': {
+        if (cmd.private) process.stderr.write('warning: --private uploads the private world: grader, solution and decoy source will be on the VM\n');
         const rec = await upDetached(
-          { kind: cmd.backend, codeDir: CODE_DIR, worldDir: cmd.worldDir, port: cmd.port, size: cmd.size, ...(cmd.ttl === undefined ? {} : { ttlSeconds: cmd.ttl }), ...(cmd.image === undefined ? {} : { image: cmd.image }) },
+          { kind: cmd.backend, codeDir: CODE_DIR, worldDir: cmd.worldDir, port: cmd.port, size: cmd.size, ...(cmd.ttl === undefined ? {} : { ttlSeconds: cmd.ttl }), ...(cmd.image === undefined ? {} : { image: cmd.image }), ...(cmd.private ? { private: true } : {}) },
           deps,
         );
         process.stdout.write(`${rec.id}\n${rec.url ?? ''}\n`);

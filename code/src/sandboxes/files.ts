@@ -54,8 +54,8 @@ export type BundleOptions = {
    * reference solution or decoy source reaches the sandbox (YOS-159). The public form is written
    * by the trusted side (dataset/pipeline.ts prepareWorld, through saveWorld); this option is
    * the upload rule, so it holds even if the world directory also holds the private world.yaml.
-   * Without it the whole world directory is uploaded, graders included: the trusted-machine
-   * demo path (`bun run sandbox up`, scripts/solve-demo.sh), which grades on the sandbox's admin port.
+   * Without it the whole world directory is uploaded, graders included: only `bun run sandbox up
+   * --private` does that (A-377), for an operator debugging a world. The demos grade locally.
    */
   readonly publicOnly?: boolean;
 };
