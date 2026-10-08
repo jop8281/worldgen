@@ -127,6 +127,19 @@ describe('worldgen CLI: model access is checked before any work', () => {
     assert.equal(existsSync(path.join(home, 'costs.jsonl')), false);
   });
 
+  it('reads a description that starts with - as text after --, and as an unknown option without it', () => {
+    const { home, env } = scratch();
+    const out = path.join(home, 'gen-pricing');
+    const noBin = { ...env, PATH: path.join(home, 'empty-bin') };
+    const text = worldgen(['--out', out, '--', '-5% price on tier 2'], noBin);
+    assert.equal(text.status, 2);
+    assert.equal(text.stderr.startsWith('the claude CLI "claude" was not found on PATH'), true, text.stderr);
+    const option = worldgen(['-5% price on tier 2', '--out', out], noBin);
+    assert.equal(option.status, 2);
+    assert.equal(option.stderr.split('\n')[0], 'unknown option -5% price on tier 2 (see --help)');
+    assert.equal(existsSync(out), false);
+  });
+
   it('the default claude-cli transport exits 2 when no claude binary is on PATH', () => {
     const { home, env } = scratch();
     const out = path.join(home, 'gen-helpdesk');
@@ -298,6 +311,18 @@ describe('worldgen CLI: a description to a finished world (M1)', () => {
     for (const task of ['resolve_password_ticket easy', 'resolve_initech_pending medium', 'escalate_acme hard']) {
       assert.ok(verify.stdout.split('\n').some((l) => l.startsWith(`${task} solution 1.000 noop 0.000 `)), `${task}: ${verify.stdout}`);
     }
+
+    // Every model call is filed under the run and its step (A-365), so `costs --by run` isolates the run.
+    const runDirs = readdirSync(path.join(out, 'runs'));
+    assert.equal(runDirs.length, 1);
+    const runId = runDirs[0];
+    const ledgerLines = readFileSync(env['WORLDGEN_COSTS_FILE'] ?? '', 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { op?: string; runId?: string; step?: string; event?: { kind?: string; runId?: string; step?: string } });
+    const steps = ['plan', 'model', 'workflow', 'seed', 'tasks'];
+    assert.deepEqual(ledgerLines.filter((l) => l.op === 'start_model').map((l) => [l.runId, l.step]), steps.map((step) => [runId, step]));
+    assert.deepEqual(ledgerLines.filter((l) => l.op === 'settle' && l.event?.kind === 'model_call').map((l) => [l.event?.runId, l.event?.step]), steps.map((step) => [runId, step]));
+    const byRun = cli('src/cli/costs.ts', ['--json', '--by', 'run'], env);
+    assert.equal(byRun.status, 0, byRun.stderr);
+    assert.deepEqual((JSON.parse(byRun.stdout) as { rows: { key: string; usd: number; events: number }[] }).rows.map((r) => [r.key, r.usd, r.events]), [[runId, 0.625, 5]]);
 
     assert.equal(readFileSync(path.join(out, 'REPORT.md'), 'utf8').split('\n')[0], '# WorldGen report: Zendesk-style helpdesk');
     assert.equal(parsePlanYaml(readFileSync(path.join(out, 'plan.yaml'), 'utf8'))?.software, PLAN.software);

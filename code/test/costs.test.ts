@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import { z } from 'zod';
 import {
   SpendCapError,
   capStatus,
@@ -290,6 +291,45 @@ describe('meters and unpriced time', () => {
 });
 
 describe('meteredModel', () => {
+  it('files each call under the run and step its request names, so one model shared by two runs splits its spend by run (A-365)', async () => {
+    const { ledger, file } = fixture();
+    const model = meteredModel(scripted([async () => proposal, async () => proposal, async () => proposal]), ledger,
+      { provider: 'claude-cli', account: 'claude-cli', runId: (r) => r.runId, step: (r) => r.step });
+    await model.propose({ ...req, runId: 'run_a', step: 'plan' });
+    await model.propose({ ...req, runId: 'run_b', step: 'model' });
+    await model.propose(req);
+    const lines = readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown> & { event?: Record<string, unknown> });
+    const claims = lines.filter((l) => l['op'] === 'start_model');
+    assert.deepEqual(claims.map((l) => [l['runId'] ?? null, l['step'] ?? null]), [['run_a', 'plan'], ['run_b', 'model'], [null, null]]);
+    assert.deepEqual(ledger.read().events.map((e) => [e.runId ?? null, e.step ?? null, e.usd]), [['run_a', 'plan', 0.0123], ['run_b', 'model', 0.0123], [null, null, 0.0123]]);
+    assert.deepEqual([claims[2] !== undefined && 'runId' in claims[2], 'runId' in (lines.filter((l) => l['op'] === 'settle')[2]?.event ?? {})], [false, false]);
+  });
+
+  it('writes model-call lines a reader frozen at the root commit parses: no key it does not know (A-365)', async () => {
+    // The keys the start_model claim and the settled spend event had at 733538fd, the root every live head descends from.
+    // The ledger is shared by every session on the machine, and an older reader refuses a line with a key it does not know.
+    const CLAIM_KEYS = ['op', 'id', 't', 'provider', 'account', 'kind', 'runId', 'walletId', 'caps', 'model', 'step', 'allowanceUsd'];
+    const EVENT_KEYS = ['t', 'provider', 'account', 'kind', 'runId', 'step', 'model', 'reservationId', 'sandboxId', 'walletId', 'inputTokens', 'outputTokens',
+      'cacheReadTokens', 'cacheWriteTokens', 'cacheWrite1hTokens', 'seconds', 'size', 'multiplier', 'usd', 'estimated', 'costBasis', 'failed', 'note',
+      'checkpoint', 'stated', 'lifetime', 'partialModelUsage', 'boatUsage', 'exposureUsd', 'priceBasis', 'entryId', 'inspectionAccount'];
+    // runId and step must also have the root's shape: an optional string.
+    const shapeOf = (k: string) => (k === 'runId' || k === 'step' ? z.string().optional() : z.unknown().optional());
+    const frozenClaim = z.strictObject(Object.fromEntries(CLAIM_KEYS.map((k) => [k, shapeOf(k)])));
+    const frozenSettle = z.strictObject({ op: z.literal('settle'), event: z.strictObject(Object.fromEntries(EVENT_KEYS.map((k) => [k, shapeOf(k)]))) });
+    const { ledger, file } = fixture();
+    const failing = new ModelError('the reply had no tool call', undefined, { usage: { inputTokens: 10, outputTokens: 0, cacheReadTokens: 0 }, costUsd: 0.001, ms: 200 });
+    const model = meteredModel(scripted([async () => proposal, async () => { throw failing; }]), ledger,
+      { provider: 'claude-cli', account: 'claude-cli', model: 'claude-sonnet-5-5', caps: { maxTotalUsd: 5 }, runId: (r) => r.runId, step: (r) => r.step, allowanceOf: () => 1 });
+    await model.propose({ ...req, runId: 'run_20261008T000000Z_abcdef12', step: 'plan' });
+    await assert.rejects(model.propose({ ...req, runId: 'run_20261008T000000Z_abcdef12', step: 'seed' }));
+    const lines = readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { op?: unknown });
+    assert.deepEqual(lines.map((l) => l.op), ['start_model', 'settle', 'start_model', 'settle']);
+    for (const line of lines) {
+      const parsed = (line.op === 'start_model' ? frozenClaim : frozenSettle).safeParse(line);
+      assert.equal(parsed.success, true, `${JSON.stringify(line)}: ${parsed.success ? '' : parsed.error.issues[0]?.message}`);
+    }
+  });
+
   it('forwards the admitted estimate allowance and releases claims when request adaptation fails before transport execution', async () => {
     const { ledger } = fixture();
     ledger.record(modelCall(0.6));
