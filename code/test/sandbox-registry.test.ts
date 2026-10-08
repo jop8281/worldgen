@@ -635,6 +635,15 @@ describe('npm run sandbox', () => {
     }
   });
 
+  it('says in its usage that the public form has no graders, so grading on the VM needs --private (A-377)', async () => {
+    const lines = (await run(['--help'], {})).stdout.split('\n');
+    assert.deepEqual(lines.filter((l) => /graders|--private/.test(l) && !l.startsWith('  bun run sandbox')), [
+      'up uploads the public form of the world: no grader, solution or decoy source reaches the VM, so it has no graders.',
+      'Grading on the VM (POST /_world/grade/<task> on its admin port) needs --private.',
+      '--private uploads the private world instead, for debugging or grading a world on the VM, and warns.',
+    ]);
+  });
+
   it('leaves a --help after exec -- to the command it runs', async () => {
     const r = await run(['exec', 'missing-id', '--', 'ls', '--help'], { WORLDGEN_COSTS_FILE: path.join(tmp, 'cli-costs.jsonl') });
     assert.deepEqual([r.code, r.stdout, r.stderr.startsWith('no sandbox missing-id in ')], [1, '', true]);

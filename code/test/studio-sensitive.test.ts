@@ -495,7 +495,27 @@ describe('sensitive fields: a generation run\'s events (A-367)', () => {
     await endLast('worldgen: error: seed row 0 tier "platinum" broke\n', 1, p);
     const reason = async (token: string): Promise<unknown> => (await get(studio.url, p, token)).body?.['reason'];
     assert.equal(await reason(ADMIN), 'the worldgen process exited 1 before it logged run_finished: worldgen: error: seed row 0 tier "platinum" broke');
-    assert.equal(await reason(VIEWER), `the worldgen process exited 1 before it logged run_finished: ${RUN_WITHHELD}`);
+    assert.equal(await reason(VIEWER), `the worldgen process exited 1 before it logged run_finished: ${CHILD_TEXT_WITHHELD}`);
+  });
+
+  it('withholds a failed run\'s output below admin even when its saved world has no sensitive field (A-374, A-377)', async () => {
+    const CANARY = 'RUN_OUTPUT_CANARY_8e2d';
+    const begun = await post(studio.url, '/api/generate', OPERATOR, { kind: 'description', text: 'A tiny helpdesk', outSlug: 'plain-run' });
+    assert.equal(begun.status, 200, JSON.stringify(begun.body));
+    // A saved world with no sensitive field: the case that showed the child's last line to a viewer.
+    const plain = checkWorld(minimalWorld());
+    assert.ok(plain.ok);
+    await saveWorld(String(begun.body['outDir']), plain.world);
+    const p = `/api/generate/${String(begun.body['runId'])}`;
+    const line = `worldgen: tasks.resolve_password_ticket.grader: (ctx) => { /* ${CANARY} */`;
+    await endLast(`${line}\n`, 1, p);
+    const body = async (token: string): Promise<Record<string, unknown> | null> => (await get(studio.url, p, token)).body;
+    assert.equal((await body(ADMIN))?.['reason'], `the worldgen process exited 1 before it logged run_finished: ${line}`);
+    for (const token of [OPERATOR, VIEWER]) {
+      const seen = await body(token);
+      assert.equal(seen?.['reason'], `the worldgen process exited 1 before it logged run_finished: ${CHILD_TEXT_WITHHELD}`);
+      assert.equal(JSON.stringify(seen).includes(CANARY), false);
+    }
   });
 
   it('withholds a failed episode\'s output below admin even when its exported world has no sensitive field (YOS-208)', async () => {

@@ -23,8 +23,9 @@ const USAGE = `usage:
   bun run sandbox -- reconcile-usage <observed-reservation-uuid> [--org <wallet>]
   bun run sandbox -- reconcile-orphans [--org <wallet>] [--apply] [--id <sandbox-id>]...
 
-up uploads the public form of the world: no grader, solution or decoy source reaches the VM.
---private uploads the private world instead, for debugging a world, and warns.
+up uploads the public form of the world: no grader, solution or decoy source reaches the VM, so it has no graders.
+Grading on the VM (POST /_world/grade/<task> on its admin port) needs --private.
+--private uploads the private world instead, for debugging or grading a world on the VM, and warns.
 up prints the sandbox id and the world URL. Only the world port is exposed; the admin port stays inside.
 --image picks the base image on openshell and sbx, such as node:22-bookworm; boat takes none.
 Sizes: small is 2 CPU and 4 GB (the default), default 4 and 8, large 8 and 16. boat needs BOAT_API_KEY and WORLDGEN_BOAT_ORG.
