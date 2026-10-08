@@ -340,6 +340,10 @@ describe('only a later-page list call counts as paging (A-360)', () => {
     assert.deepEqual(verdictOf(verify(only(EASY, { solution: lookup('?limit=5') }), EASY)).solutionPagedEntities, []);
   });
 
+  it('a refused later-page call reads no page, so it pages no entity', () => {
+    assert.deepEqual(verdictOf(verify(only(EASY, { solution: lookup('?cursor=bogus') }), EASY)).solutionPagedEntities, []);
+  });
+
   it('a solution that follows the next-page cursor pages that entity', () => {
     const solution = `(ctx) => {
       let page = ctx.api('GET', '/tickets?limit=1');

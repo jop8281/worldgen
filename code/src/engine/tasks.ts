@@ -45,7 +45,7 @@ export type TaskVerdict = {
   readonly solutionWrites: number;
   /** Successful GET calls of the solution before its first write. */
   readonly solutionReadsBeforeWrite: number;
-  /** Entities whose list route the solution called for a later page (a cursor, starting_after or ending_before parameter), sorted. Paging matters for these (A-360). */
+  /** Entities whose list route a successful solution call asked for a later page (a cursor, starting_after or ending_before parameter), sorted. Paging matters for these (A-360). */
   readonly solutionPagedEntities: readonly string[];
   /** Distinct rows the solution's successful calls changed. One means a single-row path (A-225). */
   readonly solutionRowsChanged: number;
@@ -862,15 +862,16 @@ const TRIVIAL_FOUND: Readonly<Record<'same_as_noop' | 'same_as_solution', string
  * run actually ran.
  */
 /**
- * Entities whose list route a call in `log` asked for a later page: the world's cursor, starting_after or
- * ending_before parameter, as `traceCoverage` reads a later page. A first-page call that only sets the limit is
- * a lookup, not paging (A-360).
+ * Entities whose list route a successful call in `log` asked for a later page: the world's cursor, starting_after
+ * or ending_before parameter, as `traceCoverage` reads a later page. A first-page call that only sets the limit is
+ * a lookup, and a refused call read no page, so neither is paging (A-360).
  */
 function pagedEntities(world: World, log: readonly CallRecord[]): readonly string[] {
   const list = world.meta.api.list;
   const params = [list.cursorParam, list.startingAfterParam, list.endingBeforeParam];
   const out = new Set<string>();
   for (const call of log) {
+    if (!succeeded(call)) continue;
     const route = call.routeId !== null && Object.hasOwn(world.routes, call.routeId) ? world.routes[call.routeId] : undefined;
     const query = queryOf(call.req);
     if (route?.op === 'list' && query !== null && params.some((p) => query.has(p))) out.add(route.entity);
