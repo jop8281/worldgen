@@ -112,7 +112,8 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `cli/worldplay.ts` | Argument parsing for the engine CLI: check, serve, verify, grade, docs. No logic. |
 | `cli/eval-analysis-files.ts` | Reads the current eval case paths for analysis, never hidden history as another case. |
 | `cli/eval-retention.ts` | `withEvalAttempt`: a per-case lock, and the previous case run renamed into `.attempts` before a new one writes its path. |
-| `cli/eval.ts` | Argument parsing and file IO for `bun run eval`. No logic. |
+| `cli/eval.ts` | File IO and wiring for `bun run eval`. No logic. |
+| `cli/eval-args.ts` | `bun run eval`'s options: `parseEvalArgs`, its usage and refusals, and `evalConfig`, the one config and transport an eval run builds its model from. `--transport` is a config override, like `--model`, so the model, `run_started` and `capsule.json` agree (YOS-255). |
 | `cli/costs.ts` | Argument parsing and printing for the spend CLI. |
 | `cli/dataset.ts` | `bun run dataset`: argument parsing and wiring for one sequential dataset run. The work is in `dataset/pipeline.ts`. No logic. |
 | `cli/verifier.ts` | The trusted verifier child process (YOS-159): spawned once per submission, it loads and checks the private world, verifies one protocol request, records the submission in the run's ledger, and prints one bounded verdict. No listener, no credential, no world or grader content on stderr. |
