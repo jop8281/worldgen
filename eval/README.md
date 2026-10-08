@@ -48,10 +48,10 @@ Running a case again deletes its `<case-id>/` directory first. `summary.md` list
 
 ## summary.md
 
-There is one row per case, with these columns: case, expect, result (`done`, `stopped` or `crashed`), stop reason, attempts per step (attempts in the change run are prefixed `change:`), minutes, $, verify, fidelity (only when a case has a reference), log and pass. Below the table come totals and the pass rate, followed by why each case is unlogged or crashed.
+There is one row per case, with these columns: case, expect, result (`done`, `stopped` or `crashed`), stop reason, attempts per step (attempts in the change run are prefixed `change:`), minutes, $, verify, fidelity (only when a case has a reference), log and pass. Below the table come totals, the pass rate and a one-line legend of what each outcome means, followed by why each case is unlogged or crashed.
 
 - A case marked `expect: done` passes when it ends `done` and verify passes.
-- A case marked `expect: stopped` passes on any stop except `model_error`.
+- A case marked `expect: stopped` passes only on an `input_rejected` stop: only an input_rejected stop counts as an expected refusal (A-384). Any other verdict stop on it, such as `attempts_exhausted`, `no_progress` or a budget or time stop, is a product failure. A machinery stop, such as `model_error`, is an infra failure on any case.
 - A case is `unlogged` when a step ran without an `attempt` event that carries `ms` and `costUsd`, when any attempt lacks either value, when a line in `events.jsonl` is broken, or when the run returned without a `run_finished` event. This enforces the AGENTS.md invariant that every stage, attempt, time and cost is logged.
 
 ## Fidelity

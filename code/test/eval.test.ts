@@ -525,6 +525,8 @@ describe('renderSummary on literal events', () => {
         '',
         '**Pass rate:** 2/5 (40%), success and expected refusal over all 5 expected cases (0 not run).',
         '',
+        '**Outcomes:** success = an `expect: done` case that ended done and passed verify; expected refusal = an input_rejected stop on an impossible case (A-384); product failure = the wrong verdict on the prompt: any other verdict stop, an impossible case that ended done, or a failed verify; infra failure = a crash, a machinery stop, a stop with no logged reason, an unverified done world or an unreadable case.json; not run = a suite case with no case output.',
+        '',
         '## Unlogged',
         '',
         '- `helpdesk-add-refunds` change: model attempt 2 has no costUsd',
@@ -636,6 +638,14 @@ describe('renderSummary on literal events', () => {
 
   it('renders an empty run without a percentage', () => {
     assert.equal(renderSummary(meta, []).split('\n')[11], '**Pass rate:** 0/0, success and expected refusal over all 0 expected cases (0 not run).');
+  });
+
+  it('ends the totals with a legend of what each of the five outcomes means (YOS-260, A-384)', () => {
+    assert.deepEqual(renderSummary(meta, []).split('\n').slice(12), [
+      '',
+      '**Outcomes:** success = an `expect: done` case that ended done and passed verify; expected refusal = an input_rejected stop on an impossible case (A-384); product failure = the wrong verdict on the prompt: any other verdict stop, an impossible case that ended done, or a failed verify; infra failure = a crash, a machinery stop, a stop with no logged reason, an unverified done world or an unreadable case.json; not run = a suite case with no case output.',
+      '',
+    ]);
   });
 
   it('counts every case in one of five outcome classes, and passes only a success or an expected refusal (A-336)', () => {
