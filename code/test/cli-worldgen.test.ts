@@ -299,6 +299,18 @@ describe('worldgen CLI: a description to a finished world (M1)', () => {
       assert.ok(verify.stdout.split('\n').some((l) => l.startsWith(`${task} solution 1.000 noop 0.000 `)), `${task}: ${verify.stdout}`);
     }
 
+    // Every model call is filed under the run and its step (A-365), so `costs --by run` isolates the run.
+    const runDirs = readdirSync(path.join(out, 'runs'));
+    assert.equal(runDirs.length, 1);
+    const runId = runDirs[0];
+    const ledgerLines = readFileSync(env['WORLDGEN_COSTS_FILE'] ?? '', 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { op?: string; runId?: string; step?: string; event?: { kind?: string; runId?: string; step?: string } });
+    const steps = ['plan', 'model', 'workflow', 'seed', 'tasks'];
+    assert.deepEqual(ledgerLines.filter((l) => l.op === 'start_model').map((l) => [l.runId, l.step]), steps.map((step) => [runId, step]));
+    assert.deepEqual(ledgerLines.filter((l) => l.op === 'settle' && l.event?.kind === 'model_call').map((l) => [l.event?.runId, l.event?.step]), steps.map((step) => [runId, step]));
+    const byRun = cli('src/cli/costs.ts', ['--json', '--by', 'run'], env);
+    assert.equal(byRun.status, 0, byRun.stderr);
+    assert.deepEqual((JSON.parse(byRun.stdout) as { rows: { key: string; usd: number; events: number }[] }).rows.map((r) => [r.key, r.usd, r.events]), [[runId, 0.625, 5]]);
+
     assert.equal(readFileSync(path.join(out, 'REPORT.md'), 'utf8').split('\n')[0], '# WorldGen report: Zendesk-style helpdesk');
     assert.equal(parsePlanYaml(readFileSync(path.join(out, 'plan.yaml'), 'utf8'))?.software, PLAN.software);
 
