@@ -75,9 +75,7 @@ const pu = issue('task.pressure_unmet', ['tasks', 'archive_all'], { task: 'archi
 const KEY_PU = 'task.pressure_unmet@tasks/archive_all: no later page';
 const KEY_PU_AND_NOOP = 'task.noop_not_zero@tasks/refund: 1|task.pressure_unmet@tasks/archive_all: no later page';
 // The petstore live run run_20261008T023033Z_a45809f6 (YOS-241): workflow made name required but gave it a default.
-const nameMissing = (found: string) => issue('openapi.required_field_missing', ['input', 'openapi', 'POST /pet', 'request', 'name'], { op: 'POST /pet', field: 'name' }, found);
-const nameOptional = nameMissing('name is optional');
-const nameDefaulted = nameMissing('name has a default, so a request may leave it out');
+const nameDefaulted = issue('openapi.required_field_missing', ['input', 'openapi', 'POST /pet', 'request', 'name'], { op: 'POST /pet', field: 'name' }, 'name has a default, so a request may leave it out');
 const KEY_NAME_OPTIONAL = 'openapi.required_field_missing@input/openapi/POST /pet/request/name: name is optional';
 const KEY_NAME_DEFAULTED = 'openapi.required_field_missing@input/openapi/POST /pet/request/name: name has a default, so a request may leave it out';
 /** The key the loop records for a seed rejection with these issues. */
