@@ -117,7 +117,7 @@ export type StudioOptions = {
   readonly users?: readonly StudioUser[] | undefined;
   /** The one public origin the studio is also reached at, such as http://127.0.0.1:9000 for a published container port or https://studio.example.com behind a proxy. */
   readonly origin?: string | undefined;
-  /** The environment the isolated check and proof children are built from; defaults to process.env. */
+  /** The environment the studio's children are built from: check, proof and serve get an allowlist of it, generation and episodes all of it. Defaults to process.env. */
   readonly env?: Readonly<Record<string, string | undefined>> | undefined;
   /** How long an isolated check or proof child may run. Default 300000 (the verifier's CHILD_TIMEOUT_MS). */
   readonly checkTimeoutMs?: number | undefined;
@@ -555,11 +555,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   /** Checks in flight, by world dir and world.yaml version: a repeated request joins the running child instead of starting another. */
   const checking = new Map<string, Promise<Reply>>();
 
-  /** The check and proof children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338). */
+  /** The check, proof and serve children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338, A-343). */
   const childEnv = (): Record<string, string> => {
     const src = opts.env ?? process.env;
     return { TZ: 'UTC', PATH: src['PATH'] ?? '', ...(src['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: src['WORLDGEN_GUARD_SCALE'] }) };
   };
+  /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included. */
+  const modelEnv = (): Readonly<Record<string, string | undefined>> => opts.env ?? process.env;
   const checkTimeoutMs = opts.checkTimeoutMs ?? 300_000;
   const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
 
@@ -717,7 +719,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       port = wanted;
     }
-    const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir });
+    const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
     const id = `svc-${(serviceSeq += 1)}`;
     const record: ServiceRecord = { id, name, pid: child.pid, worldPort: port, adminPort: port + 1, startedAt: new Date().toISOString() };
     services.set(id, { record, child });
@@ -845,7 +847,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       ...await readdir(path.join(`${outDir}${PARTIAL_SUFFIX}`, 'runs')).catch((): string[] => []),
     ]);
     const transport = opts.transport === undefined ? [] : ['--transport', opts.transport];
-    const child = opts.spawner(['bun', 'src/cli/worldgen.ts', ...args, ...transport], { cwd: codeDir });
+    const child = opts.spawner(['bun', 'src/cli/worldgen.ts', ...args, ...transport], { cwd: codeDir, env: modelEnv() });
     track({ runId, outDir, child, knownRuns, startedAt: new Date().toISOString(), running: true, exitCode: null, interrupted: false });
     await persist();
     return { status: 200, body: { runId, outDir, running: true } };
@@ -1094,7 +1096,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
     const runId = `${stamp}-${agent}-${++episodeSeq}`;
     const out = path.join(episodesDir, runId);
-    const child = opts.spawner(['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--out', out, '--run-id', runId, '--engine-commit', sha, '--agent', agent, ...flags], { cwd: codeDir });
+    const child = opts.spawner(['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--out', out, '--run-id', runId, '--engine-commit', sha, '--agent', agent, ...flags], { cwd: codeDir, env: modelEnv() });
     const run: EpisodeRun = { runId, world, task, agent, out, child, running: true, exitCode: null };
     episodes.set(runId, run);
     void child.exited.then((code) => {

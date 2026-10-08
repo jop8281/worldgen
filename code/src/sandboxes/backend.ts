@@ -163,7 +163,7 @@ export type Spawner = (argv: readonly string[], opts?: SpawnOpts) => SpawnedChil
 
 /**
  * The production Spawner: `node:child_process` spawn, never through a shell, the environment
- * passed through untouched. The long-running sibling of nodeRunner: serve and studio children
+ * inherited unless opts.env replaces it. The long-running sibling of nodeRunner: serve and studio children
  * outlive the call that started them.
  */
 export const nodeSpawn: Spawner = (argv, opts) => {
@@ -173,6 +173,7 @@ export const nodeSpawn: Spawner = (argv, opts) => {
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     ...(opts?.cwd === undefined ? {} : { cwd: opts.cwd }),
+    ...(opts?.env === undefined ? {} : { env: opts.env }),
   });
   let text = '';
   child.stdout.setEncoding('utf8').on('data', (s: string) => (text += s));

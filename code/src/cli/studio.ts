@@ -20,9 +20,10 @@ const USAGE = `usage: bun run studio [--port ${DEFAULT_PORT}] [--host 127.0.0.1]
 
 The operator web app on one port (default ${DEFAULT_PORT}, bound to 127.0.0.1): the worlds
 table, world rollout (a child worldplay serve per Serve click), generation runs (a child
-worldgen whose events.jsonl the page polls), the eval runs and the spend ledger. Children are
-spawned with the environment passed through untouched, so the operator's own env carries every
-key (LLM_KEY, BOAT_API_KEY, the spend caps); the studio stores and logs none.
+worldgen whose events.jsonl the page polls), the eval runs and the spend ledger. worldgen and
+episode children get the environment whole, so the operator's own env carries every key
+(LLM_KEY, BOAT_API_KEY, the spend caps); the studio stores and logs none. A child that runs a
+world's snippets (serve, the Explorer check, the proof) gets only TZ, PATH and the guard scale.
 --repo-root defaults to the repository this file lives in; --worlds-dir defaults to
 <repo-root>/prod/worlds. A served world keeps its own two ports; the studio port has no
 /_world route. Ctrl-C stops the studio; the studio SIGTERMs its tracked children.
