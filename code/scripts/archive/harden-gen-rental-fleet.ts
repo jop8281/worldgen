@@ -2,12 +2,12 @@
  * Pins the exact fields two gen-rental-fleet graders may see changed (ctx.guardChanges) and adds one
  * correct-fix-then-collateral decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: the grader edit is a replace of a known old text or a no-op, decoys match by `why`.
- * Usage: npx tsx scripts/harden-gen-rental-fleet.ts [worldDir]
+ * Usage: npx tsx scripts/archive/harden-gen-rental-fleet.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';
 
-const DIR = path.resolve(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../prod/worlds/gen-rental-fleet'));
+const DIR = path.resolve(process.argv.slice(2).find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-rental-fleet'));
 
 const edits: Record<string, { old: string; next: string; marker: string }> = {
   return_tomas_reyes_suv: {

@@ -4,14 +4,14 @@
  * the clock, so every slot and appointment keeps its offset from "now". 09:00 is the time the first slots begin: at
  * 08:00 the 30-minute check-in window holds no slot and the seed makes no checked_in appointment.
  * Rerunning is safe: it changes nothing once the clock is already set.
- * Usage: npx tsx scripts/set-gen-clinic-appointments-clock.ts [worldDir]
+ * Usage: npx tsx scripts/archive/set-gen-clinic-appointments-clock.ts [worldDir]
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';
-import { parsePlanYaml, renderPlanYaml } from '../src/worldgen/plan.ts';
+import { parsePlanYaml, renderPlanYaml } from '../../src/worldgen/plan.ts';
 
-const DIR = path.resolve(process.argv[2] ?? path.join(import.meta.dirname, '../../prod/worlds/gen-clinic-appointments'));
+const DIR = path.resolve(process.argv[2] ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-clinic-appointments'));
 const START = '2026-10-06T09:00:00.000Z';
 const OLD_MIX = 'Clock starts 2026-10-06T08:00Z.';
 const NEW_MIX = 'Clock starts 2026-10-06T09:00Z, when the first slots begin, so the 30-minute check-in window holds slots.';

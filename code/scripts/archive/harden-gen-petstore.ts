@@ -1,8 +1,8 @@
 /**
- * Rewrites three gen-petstore-refunds graders with exact-field ctx.guardChanges allowances and adds one
+ * Hardens three gen-petstore graders (order_available_pet, cancel_wrong_mochi_order, order_all_rescue_dogs; same patterns as PR #271) with exact-field ctx.guardChanges allowances and adds one
  * correct-fix-then-collateral decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: graders are replaced and decoys are matched by their `why`.
- * Usage: npx tsx scripts/harden-gen-petstore-refunds.ts [worldDir] [--decoys-only]
+ * Usage: npx tsx scripts/archive/harden-gen-petstore.ts [worldDir] [--decoys-only]
  * --decoys-only adds the decoys to the old graders and prints the check verdict without saving.
  */
 import path from 'node:path';
@@ -10,9 +10,9 @@ import { checkWorld, loadWorld, saveWorld } from '#engine';
 
 const args = process.argv.slice(2);
 const decoysOnly = args.includes('--decoys-only');
-const DIR = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../prod/worlds/gen-petstore-refunds'));
+const DIR = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-petstore'));
 
-const ORDER_FIELDS = `['pet_id', 'quantity', 'ship_date', 'status', 'complete', 'total_amount', 'refunded_amount']`;
+const ORDER_FIELDS = `['pet_id', 'quantity', 'ship_date', 'status', 'complete']`;
 
 const graders: Record<string, string> = {
   order_available_pet: `(ctx) => {
@@ -85,17 +85,17 @@ const decoys: Record<string, { why: string; script: string }> = {
 }`,
   },
   cancel_wrong_mochi_order: {
-    why: "deletes the cat Mochi's order, then also renames the cat",
+    why: "deletes the cat Mochi's order, then also replaces the cat's photos",
     script: `(ctx) => {
   const cats = ctx.api('GET', '/categories?q=Cats').body.data.find((c) => c.name === 'Cats');
   const p = ctx.api('GET', '/pet/findByStatus?q=Mochi').body.data.find((x) => x.name === 'Mochi' && x.category_id === cats.id);
   const o = ctx.api('GET', '/store/orders?pet_id=' + p.id).body.data[0];
   ctx.api('DELETE', '/store/orders/' + o.id);
-  ctx.api('PUT', '/pet', { id: p.id, name: 'Mochi Jr', category_id: p.category_id, photo_urls: p.photo_urls, status: 'available' });
+  ctx.api('PUT', '/pet', { id: p.id, name: p.name, category_id: p.category_id, photo_urls: 'https://img.example/mochi-new.jpg', status: 'available' });
 }`,
   },
   order_all_rescue_dogs: {
-    why: 'orders every rescue dog correctly, then also renames one of them',
+    why: 'orders every rescue dog correctly, then also moves one of them to the Cats category',
     script: `(ctx) => {
   const pages = (path) => {
     const rows = [];
@@ -108,12 +108,13 @@ const decoys: Record<string, { why: string; script: string }> = {
     return rows;
   };
   const dogs = ctx.api('GET', '/categories?q=Dogs').body.data.find((c) => c.name === 'Dogs');
+  const cats = ctx.api('GET', '/categories?q=Cats').body.data.find((c) => c.name === 'Cats');
   const rescue = ctx.api('GET', '/tags?q=rescue').body.data.find((t) => t.name === 'rescue');
   const rescued = new Set(pages('/pet_tags?tag_id=' + rescue.id).map((r) => r.pet_id));
   const targets = pages('/pet/findByStatus?status=available&category_id=' + dogs.id).filter((p) => rescued.has(p.id));
   for (const p of targets) ctx.api('POST', '/store/orders', { pet_id: p.id, quantity: 1 });
   const p = targets[0];
-  ctx.api('PUT', '/pet', { id: p.id, name: p.name + ' Jr', category_id: p.category_id, photo_urls: p.photo_urls, status: 'pending' });
+  ctx.api('PUT', '/pet', { id: p.id, name: p.name, category_id: cats.id, photo_urls: p.photo_urls, status: 'pending' });
 }`,
   },
 };

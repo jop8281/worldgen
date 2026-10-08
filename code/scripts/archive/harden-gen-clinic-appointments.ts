@@ -2,7 +2,7 @@
  * Hardens four gen-clinic-appointments graders with exact-field ctx.guardChanges allowances and adds one
  * correct-fix-then-collateral decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: the guard is inserted once and decoys are matched by their `why`.
- * Usage: npx tsx scripts/harden-gen-clinic-appointments.ts [worldDir] [--decoys-only]
+ * Usage: npx tsx scripts/archive/harden-gen-clinic-appointments.ts [worldDir] [--decoys-only]
  * --decoys-only adds the decoys to the old graders and prints the check verdict without saving.
  */
 import path from 'node:path';
@@ -10,7 +10,7 @@ import { checkWorld, loadWorld, saveWorld } from '#engine';
 
 const args = process.argv.slice(2);
 const decoysOnly = args.includes('--decoys-only');
-const DIR = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../prod/worlds/gen-clinic-appointments'));
+const DIR = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-clinic-appointments'));
 
 const APPT_CANCEL = `['status', 'cancel_reason', 'cancelled_at']`;
 const APPT_ALL = `['slot_id', 'patient_id', 'doctor_id', 'starts_at', 'status', 'reason', 'cancel_reason', 'cancelled_at', 'checked_in_at']`;

@@ -3,12 +3,12 @@
  * correct-fix-then-collateral decoy to each (the correct solution, then a product rename), then saves
  * through checkWorld and saveWorld. Rerunning is safe: the guard is replaced only when still the old
  * loop, and decoys are matched by their `why`.
- * Usage: npx tsx scripts/harden-gen-bakery-vague.ts [worldDir]
+ * Usage: npx tsx scripts/archive/harden-gen-bakery-vague.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';
 
-const DIR = path.resolve(process.argv[2] ?? path.join(import.meta.dirname, '../../prod/worlds/gen-bakery-vague'));
+const DIR = path.resolve(process.argv[2] ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-bakery-vague'));
 
 const BAKE_OLD = `for (const c of ctx.changes()) { if (!allowed.has(c.id)) return 0; }`;
 const BAKE_NEW = `ctx.guardChanges('only the croissant batch, its product stock and its recipe ingredient stock changed', [{ entity: 'production_batch', id: batch.id, kind: 'updated', fields: ['status', 'completed_at'] }, { entity: 'product', id: prod.id, kind: 'updated', fields: ['stock_on_hand'] }, ...lines.map((l) => ({ entity: 'ingredient', id: l.ingredient_id, kind: 'updated', fields: ['stock_qty'] }))]);`;
