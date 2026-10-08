@@ -2,7 +2,7 @@ name: check
 
 on:
   push:
-    branches: [main, stabilize/main, factory/integration]
+    branches: [main, stabilize/main]
   # No pull_request trigger: with dozens of PR pushes an hour the free runners queued for hours and no
   # gate head was ever checked. Gate a pinned head with `gh workflow run check.yml --ref promote/<sha>`.
   workflow_dispatch:

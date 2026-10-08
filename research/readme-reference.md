@@ -66,7 +66,7 @@ Everything below is built and merged into the trunk. Each row names the PRs that
 | Engine demo and solve demo | `scripts/demo.sh`, `scripts/solve-demo.sh` | #38, #149, #328 |
 | Graded dataset export on Boat | `code/src/cli/dataset.ts` | #151 |
 | Design doc | `prod/design.md` | #42, #135, #266 |
-| Factory target contract: `factory.toml`, `factory-check.sh`, `REVIEW.md`, JUnit evidence and the `factory/integration` CI trigger (A-186) | `factory.toml`, `scripts/factory-check.sh`, `REVIEW.md` | #419, #434 |
+| Factory target contract: `factory.toml`, `factory-check.sh`, `REVIEW.md` and JUnit evidence (A-186); the retired `factory/integration` branch no longer triggers CI (YOS-210) | `factory.toml`, `scripts/factory-check.sh`, `REVIEW.md` | #419, #434 |
 | Generated worlds | `prod/worlds/gen-*` | one per world, in [All worlds](#all-worlds) |
 
 ## 60-second demo
