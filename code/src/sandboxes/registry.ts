@@ -208,6 +208,8 @@ export type UpDetachedOpts = {
   readonly name?: string;
   /** Base image for openshell and sbx. */
   readonly image?: string;
+  /** Upload the private world, graders included, instead of its public form (A-377). */
+  readonly private?: boolean;
 };
 
 export type Deps = {
