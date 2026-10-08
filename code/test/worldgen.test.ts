@@ -860,6 +860,62 @@ describe('runWorldGen: a backtrack from tasks to model fits in the time left (A-
   });
 });
 
+describe('runWorldGen: a tasks -> seed pressure backtrack fits in the A-48 limits (YOS-226, A-330)', () => {
+  // The YOS-100 rehearsal's 01-gym run, call for call: each call takes its live time and cost, and the clock moves only inside calls.
+  // The two repairs after the backtrack take their estimates, a quarter of the step's first call (A-95).
+  const GYM = [
+    { input: PLAN, ms: 234_391, costUsd: 0.391 },
+    { input: EDITS.model, ms: 21_758, costUsd: 0.178 },
+    { input: EDITS.workflow, ms: 214_214, costUsd: 0.218 },
+    { input: EDITS.seed, ms: 130_144, costUsd: 0.355 },
+    { input: EDITS.tasks, ms: 139_725, costUsd: 0.404 },
+    { input: EDITS.seed, ms: 32_536, costUsd: 0.089 },
+    { input: EDITS.tasks, ms: 34_931, costUsd: 0.101 },
+  ];
+  const config = configSchema.parse({
+    model: 'claude-sonnet-5-5', maxCostUsd: 5, maxMinutes: 15, steps: { plan: { minShareSeconds: 330 } },
+    stepModels: { plan: { effort: 'medium' }, model: { effort: 'high' }, workflow: { effort: 'medium' }, seed: { effort: 'medium' }, tasks: { effort: 'high' } },
+  });
+  /** The first world that holds tasks misses a pressure claim the seed owns, as `seed.booking` did live. */
+  const pressureUnmetOnce = (): ((world: World) => CheckReport) => {
+    let left = 1;
+    return (world) => {
+      if (Object.keys(world.tasks).length === 0 || left === 0) return checkWorld(world);
+      left -= 1;
+      const unmet = issue('task.pressure_unmet', ['seed', 'ticket'], { task: 'resolve_pending_ticket', need: 'a filtered ticket list returns a row it leaves unchanged' }, 'no such row');
+      return { ok: false, reached: 'tasks', issues: [unmet], warnings: [] };
+    };
+  };
+
+  it('reruns seed and tasks as repairs with 159.8 s left and finishes at 807.7 s for $1.74', async () => {
+    let t = T0;
+    let n = 0;
+    const model: Model = {
+      async propose() {
+        const call = GYM[n++];
+        if (call === undefined) throw new Error(`the gym script has no reply for call ${n}`);
+        t += call.ms;
+        return { input: call.input, advice: [], usage: USAGE, costUsd: call.costUsd, ms: call.ms };
+      },
+    };
+    const events: RunEvent[] = [];
+    const result = await runWorldGen(
+      { kind: 'create', input: { kind: 'description', text: 'Something like Mindbody for a gym' }, outDir: newOutDir() },
+      config,
+      { model, exampleWorld: minimalWorld(), emit: (e) => events.push(e), now: () => t, runId: 'run_test', check: pressureUnmetOnce() },
+    );
+    assert.deepEqual(events.flatMap((e) => (e.t === 'call_refused' ? [[e.step, e.reason, e.estimateMs, e.remainingMs]] : [])), []);
+    assert.deepEqual(events.flatMap((e) => (e.t === 'backtracked' ? [[e.from, e.to]] : [])), [['tasks', 'seed']]);
+    assert.deepEqual(attempts(events), [
+      ['plan', 1, 'accepted'], ['model', 1, 'accepted'], ['workflow', 1, 'accepted'], ['seed', 1, 'accepted'],
+      ['tasks', 1, 'rejected'], ['seed', 1, 'accepted'], ['tasks', 2, 'accepted'],
+    ]);
+    assert.equal(result.kind, 'done');
+    assert.equal(result.kind === 'done' ? result.ms : null, 807_699);
+    assert.equal(result.kind === 'done' ? result.costUsd.toFixed(3) : null, '1.736');
+  });
+});
+
 describe('runWorldGen judges the planned state mix on create, before any task exists (A-155)', () => {
   const withMix = (stateMix: Record<string, Record<string, number>>) => ({ ...PLAN, seed: { ...PLAN.seed, stateMix } });
 
