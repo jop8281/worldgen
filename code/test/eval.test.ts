@@ -522,7 +522,7 @@ describe('renderSummary on literal events', () => {
         '',
         '**Median and p95:** 0.5 min (4 of 5 cases) and 2.0 min (4 of 5 cases); $0.30 (4 of 5 cases) and $2.25 (4 of 5 cases).',
         '',
-        '**Pass rate:** 2/5 (40%), success and expected refusal over the 5 cases that ran (0 not run).',
+        '**Pass rate:** 2/5 (40%), success and expected refusal over all 5 expected cases (0 not run).',
         '',
         '## Unlogged',
         '',
@@ -634,7 +634,7 @@ describe('renderSummary on literal events', () => {
   });
 
   it('renders an empty run without a percentage', () => {
-    assert.equal(renderSummary(meta, []).split('\n')[11], '**Pass rate:** 0/0, success and expected refusal over the 0 cases that ran (0 not run).');
+    assert.equal(renderSummary(meta, []).split('\n')[11], '**Pass rate:** 0/0, success and expected refusal over all 0 expected cases (0 not run).');
   });
 
   it('counts every case in one of five outcome classes, and passes only a success or an expected refusal (A-336)', () => {
@@ -672,7 +672,7 @@ describe('renderSummary on literal events', () => {
       lines.find((l) => l.startsWith('**Totals:**')),
       '**Totals:** 8 expected cases: 1 success, 1 expected refusal, 2 product failure, 3 infra failure, 1 not run; 4.1 min (5 of 8 cases); $3.35 (5 of 8 cases); 2 unlogged.',
     );
-    assert.equal(lines.find((l) => l.startsWith('**Pass rate:**')), '**Pass rate:** 2/7 (29%), success and expected refusal over the 7 cases that ran (1 not run).');
+    assert.equal(lines.find((l) => l.startsWith('**Pass rate:**')), '**Pass rate:** 2/8 (25%), success and expected refusal over all 8 expected cases (1 not run).');
   });
 });
 

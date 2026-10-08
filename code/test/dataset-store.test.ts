@@ -89,6 +89,7 @@ describe('the Episode schema', () => {
   it('is strict: no extra keys anywhere, only the Anthropic provider and a Claude model id (A-283), only version 1', () => {
     assert.equal(ok({ ...episode(), extra: 1 }), false);
     assert.equal(ok({ ...episode(), model: 'claude-opus-5-5' }), true);
+    assert.equal(ok({ ...episode(), model: null }), true, 'null: the agent called no model');
     assert.equal(ok({ ...episode(), model: 'gpt-5' }), false);
     assert.equal(ok({ ...episode(), model: 'claude-opus-5-5 --fallback-model x' }), false);
     assert.equal(ok({ ...episode(), provider: 'openai' }), false);
@@ -312,6 +313,29 @@ describe('export', () => {
     const out = outDir();
     await appendEpisode(out, await stage(out), noSecrets);
     await assert.rejects(exportDataset({ out, redact: redactor(['helpdesk']) }), /holds a supplied secret/);
+  });
+});
+
+describe('the recorded model (YOS-190)', () => {
+  it('reads an episode log row written before the noop agent existed, which names its model', async () => {
+    const file = path.join(tmp('old-row'), 'run1.episodes.jsonl');
+    writeFileSync(file, `${canonicalJson(episode())}\n`);
+    assert.deepEqual((await readEpisodeLog(file, noSecrets)).map((e) => e.model), ['claude-sonnet-5-5']);
+  });
+
+  it('exports a noop episode with no model beside a Sonnet one, and the manifest names Sonnet', async () => {
+    const out = outDir();
+    const sonnet = await stage(out);
+    const noop = await stage(out, {
+      task: 'noop-task', model: null, score: 0, final_reply: 'No action taken.',
+      messages: [episode().messages[0]!, { seq: 1, role: 'assistant', type: 'final_reply', text: 'No action taken.', commentary: '' }],
+      usage: { ...episode().usage, model_calls: 0, cost_usd: 0 },
+    });
+    for (const e of [sonnet, noop]) await appendEpisode(out, e, noSecrets);
+    const res = await exportDataset({ out, redact: noSecrets });
+    assert.deepEqual([res.accepted.map((e) => e.model), res.failed.map((e) => e.model)], [['claude-sonnet-5-5'], [null]]);
+    assert.equal(JSON.parse(read(out, MANIFEST_FILE)).model, 'claude-sonnet-5-5');
+    assert.equal((await validateExport(out, { redact: noSecrets })).model, 'claude-sonnet-5-5');
   });
 });
 

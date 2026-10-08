@@ -83,11 +83,12 @@ describe('studio agent playground (YOS-190)', () => {
     assert.deepEqual([e['run_id'], e['world_id'], e['task_id'], e['stop_reason'], e['score'], e['score_scope']],
       [runId, 'helpdesk', 'assign_newest_acme_ticket', 'done', 0, 'engine_state_only']);
     assert.equal(e['initial_state_hash'], e['final_state_hash']);
+    assert.equal(e['model'], null, 'the noop agent called no model');
     const list = (await json(studio.url, 'GET', '/api/episodes')).body['episodes'] as Json[];
     assert.deepEqual(list.filter((x) => x['runId'] === runId).map((x) => [x['stop'], x['score']]), [['done', 0]]);
     const analytics = (await json(studio.url, 'GET', '/api/episodes/analytics')).body;
     const groups = analytics['groups'] as Json[];
-    assert.deepEqual(groups.filter((g) => g['task'] === 'assign_newest_acme_ticket').map((g) => [g['world'], g['successes'], g['failures']]), [['helpdesk', 0, { 'scored 0': 1 }]]);
+    assert.deepEqual(groups.filter((g) => g['task'] === 'assign_newest_acme_ticket').map((g) => [g['world'], g['model'], g['successes'], g['failures']]), [['helpdesk', 'noop (no model)', 0, { 'scored 0': 1 }]]);
     assert.deepEqual(analytics['unreadable'], []);
   });
 

@@ -7,10 +7,10 @@ How to show WorldGen Studio in a browser in 15 minutes, on one seeded repository
 ## Setup (terminal, before the talk)
 
 1. Check out the release sha, then run `cd code && bun install --frozen-lockfile`.
-2. Start the studio with `bun run studio`. It prints `studio on http://127.0.0.1:8787`. Or use the container: `docker build -f Dockerfile.studio --build-arg WORLDGEN_BUILD_SHA=$(git rev-parse HEAD) -t worldgen-studio .`, then `docker run -d -p 127.0.0.1:8787:8787 worldgen-studio`.
+2. Start the studio with `bun run studio`. It prints `studio on http://127.0.0.1:8787`. Or use the container with `scripts/studio-deploy.sh up`. The container binds 0.0.0.0, so it needs sign-in: export `WORLDGEN_STUDIO_TOKEN`, or put it in `STUDIO_ENV_FILE`, an env file outside the repository. `up` refuses to start without it.
 3. Check readiness: `curl -s 127.0.0.1:8787/api/health` shows the sha you checked out, `bun 1.4.2`, and the world count (25 today).
 4. Rehearse once: `bun scripts/studio-rehearse.ts`. Every line should read `ok`, then `page errors total: 0`. It serves and stops helpdesk, so it leaves nothing running. It also runs one free noop episode into `eval/episodes/`, which git ignores.
-5. Open http://127.0.0.1:8787 in the browser. The studio has no login yet, so keep it on loopback (YOS-187 adds sign-in).
+5. Open http://127.0.0.1:8787 in the browser. `bun run studio` on loopback needs no sign-in. The container asks for the studio token in the page's sign-in field. Sign-in (YOS-187) is required whenever the studio binds anything but loopback.
 
 ## Click path
 
@@ -27,7 +27,7 @@ Times are the rehearsal's measured page times. The minutes are talk time. Each s
 | 7 to 9 | 7. Its report (`07-report`) | `report` on the **gen-library-loans** row | REPORT.md: what was built, what was assumed and why, what was left out, plus the run's cost and minutes. | **8.5 s**, the one visible pause, so talk over it |
 | 9 to 10 | 8. Eval (`09-eval`) | Scroll to Eval | Seven rehearsal runs with their pass rates (live-segment 2/3, stress-1b 7/14). `view` opens a summary. | instant |
 | 10 to 11 | 9. Engine proof (`10-proof`) | Agent Playground: world `helpdesk`, then `engine proof` | "engine proof: every task verified". For each of the 3 tasks, the reference solution scores 1 and doing nothing scores 0. The near miss and the decoys score below 1, and the replay is identical. | 1.2 to 1.5 s |
-| 11 to 13 | 10. A noop episode (`11-noop-episode`) | Agent `noop`, then `run episode` | One episode on `assign_newest_acme_ticket`. The free noop agent replies "No action taken.", and the engine scores the end state 0 at $0.0000. The seed and end state hashes match, because nothing changed. The engine grades the end state, not the reply. | 4.1 s |
+| 11 to 13 | 10. A noop episode (`11-noop-episode`) | Agent `noop`, then `run episode` | One episode on `assign_newest_acme_ticket`. The free noop agent replies "No action taken.", and the engine scores the end state 0 at $0.0000. The seed and end state hashes match, because nothing changed. The engine grades the end state, not the reply. The episode records no model, and Analytics files it under `noop (no model)`. | 4.1 s |
 | 13 to 14 | 11. Spend (`12-spend`) | `refresh` under Spend | Today's LLM and sandbox spend, by day, and the caps (each says when it is unset). | instant |
 | 14 to 15 | 12. Clean up (`13-stop-helpdesk`, `14-reload`) | `stop` on helpdesk, then reload the page | The served count returns to 0, and the reload shows the same state. | 0.2 s |
 
@@ -44,7 +44,6 @@ Generation runs → kind `description`, a one-line prompt, out slug, budget `3`,
 
 ## Known gaps
 
-- No sign-in (YOS-187). The studio must stay on loopback until then.
+- The click path runs on loopback, so it shows no sign-in step. Off loopback, sign-in (YOS-187) is required, and the talk would start at the token field.
 - Opening a big world's report takes about 8.5 s.
 - Generation, cancellation and export were not rehearsed live: no model calls in this pass.
-- Analytics still files a noop episode under `claude-sonnet-5-5`, so a free noop run counts as a Sonnet failure. The YOS-190 follow-up records it as noop with no model.

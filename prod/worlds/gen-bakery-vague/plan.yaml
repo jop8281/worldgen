@@ -1,3 +1,4 @@
+revision: 2
 software: 'Square-for-Restaurants / Toast-style bakery management app: pre-orders and pickup, product catalog, recipes and ingredient stock, and daily production batches'
 summary: A single-shop bakery back office. Customers place pickup orders (including pre-orders for a future pickup time). Staff confirm orders, mark them ready and hand them over. The kitchen runs production batches that consume ingredients, per each product's recipe, and add finished stock. Ingredient stock is tracked against reorder levels, and jobs expire uncollected orders and flag low stock.
 clock:
@@ -107,6 +108,9 @@ workflows:
     rules:
       - low_stock is true when stock_qty is at or below reorder_level. It is a derived bool, not a state machine.
       - restock_ingredient adds a positive quantity and recomputes low_stock.
+    lifecycle:
+      representation: descriptive
+      reason: The states ok and low are derived from the low_stock bool flag (low when stock_qty is at or below reorder_level). They are not stored in a state field.
     actions:
       - restock_ingredient
 jobs:
@@ -116,6 +120,7 @@ jobs:
   - name: flag_low_stock
     every: 1h
     rule: Recompute ingredient.low_stock as stock_qty <= reorder_level for every ingredient.
+acceptanceTests: []
 routes:
   - id: list_products
     method: GET
@@ -274,6 +279,8 @@ assumptions:
     why: The engine default for deterministic worlds.
   - decision: Allergen info is a simple text or enum field on product and is not enforced in workflows.
     why: Informational only, since compliance logic is out of scope.
+  - decision: The ingredient_stock workflow declares a descriptive lifecycle, because ok and low are derived from the low_stock flag and not held in a state field. Nothing in the world changes and all seed counts stay as they are.
+    why: The change request asks for a plan-only revision.
 outOfScope:
   - what: Real payments, refunds, tips, tax calculation
     why: Needs a payment processor model. Not needed for the stock and order workflows.

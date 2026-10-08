@@ -129,7 +129,7 @@ describe('decoys run from seed and must score below 1 (R2, R3, R10)', () => {
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets {"customer":"cus_0001","subject":"Cannot log in","priority":"low"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus DELETE /tickets/tkt_0001 scored 1'],
     ]);
-    assert.equal(issues[0]?.hint, `The grader cannot tell apart the decoy "${DECOY_WHY}". Tighten it.`);
+    assert.equal(issues[0]?.hint, `The decoy "${DECOY_WHY}" scored 1. Its script may not do what its why says (a list read right after a write often returns the row the script just created), or the grader cannot tell it apart. Check the script's calls first, then tighten the grader.`);
   });
 
   it('R10 a correct grader passes: the decoy scores 0.5 and the verdict carries it', () => {

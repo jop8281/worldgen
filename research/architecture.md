@@ -126,7 +126,7 @@ The runtime picture and who owns each concern at run time is in [runtime-archite
    - `FIELD_TYPES` holds every field type's schema, validator, comparator, query parser, CSV inference, doc and examples. Store, API and input code call into it and contain no type switch.
    - Ctx registries (`HANDLER_CTX` and the others) are typed `Registry<Ctx>`, so a member in the interface without a doc, or the reverse, fails to compile. The snippet docs are rendered from them.
    - `ISSUES` holds every code with severity, owner, expected text and hint. `IssueCode` is its key type.
-   - `SECTION_OWNER` gives each section exactly one stage.
+   - `SECTION_OWNER` gives each section exactly one owning step: the model, workflow, seed and tasks stages, the plan step for `tests`, and the input loader for `fixtures`.
    - `INPUT_KINDS` gives each input kind a loader and a digester.
 
 5. **The engine is the only judge, and the types say so.** Three brands each have one minter: `CheckedWorld` (`check.ts`), `CheckIssue` (`issues.ts`) and `TaskVerdict` (`tasks.ts`). `saveWorld`, `createRuntime` and `serve` accept only `CheckedWorld`. `REPORT.md` renders only `TaskVerdict`s. WorldGen's acceptance (`judge.ts`, `stages.ts` `done`, `policy.ts`) takes no `Model`. Model commentary, if any, goes to an `advice` event that acceptance never reads.
@@ -141,13 +141,13 @@ The runtime picture and who owns each concern at run time is in [runtime-archite
 
 10. **The WorldGen loop is a table, a pure policy and one loop.** `STAGES` lists model, workflow, seed and tasks. `decide()` maps a ledger and an outcome to retry, advance, backtrack or stop, and an issue's owner picks the backtrack target. One `Ledger` carries cost, attempts, backtracks and seen issue sets, so `no_progress` and budget stops read one source. This avoids temporal decomposition, because no module per stage re-encodes the format.
 
-11. **Iteration keeps what it does not mean to change.** `diffWorlds()` lists removed fields, states, transitions, idPrefix changes and removed items. `preservationIssues()` blocks each one that `edit.remove` and `plan.changes` do not name. Old tests and decoys rerun as regression checks. A stage reruns on iterate only if a section it owns or reads changed, so a route change does not regenerate the seed. On a stop, `world.yaml` is not touched.
+11. **Iteration keeps what it does not mean to change.** `diffWorlds()` lists removed fields, states, transitions, idPrefix changes and removed items. `preservationIssues()` blocks each one that `edit.remove` and `plan.changes` do not name. Old tests and decoys rerun as regression checks. The plan step runs first on iterate and owns `tests`: a plan can rewrite or drop a test only when `changes` names it, and a stage edit that touches a test is out of scope. A stage reruns only if a section it owns or reads changed, so a route change does not regenerate the seed. On a stop, `world.yaml` is not touched.
 
 12. **Inputs share one schema and never leak secrets.** `inputSchema` is parsed by the CLI and by `eval/suite.yaml`. Digest functions take only `Redacted<...>`, minted by `redact()`. Events and attempt dumps see only `InputDigest`. A digest can propose `meta.api` envelopes and `observations`, so OpenAPI worlds keep real list and error shapes.
 
 ### Interface depth
 
-`#engine` exports about ten functions (`checkWorld`, `applyEdit`, `createRuntime`, `serve`, `loadWorld`, `saveWorld`, `diffWorlds`, `editJsonSchema`, `formatReference`, `issue`) plus schemas and types. Behind it sit YAML, zod-to-issue mapping, ref-ordered seeding, the sandbox, the overlay store, enforcement, routing, paging, the clock, jobs, verification and replay. WorldGen exposes `runWorldGen(job, config, deps)`. The `Model` interface has two implementations, Anthropic and the scripted fake. `SnippetHost` has one production implementation and exists to keep engine core free of Node types.
+`#engine` exports about ten functions (`checkWorld`, `applyEdit`, `createRuntime`, `serve`, `loadWorld`, `saveWorld`, `diffWorlds`, `editJsonSchema`, `formatReference`, `issue`) plus schemas and types. Behind it sit YAML, zod-to-issue mapping, ref-ordered seeding, the sandbox, the overlay store, enforcement, routing, paging, the clock, jobs, verification and replay. WorldGen exposes `runWorldGen(job, config, deps)`. The `Model` interface has three implementations: the claude CLI, the Anthropic SDK and the scripted fake. `SnippetHost` has one production implementation and exists to keep engine core free of Node types.
 
 ### What the system does not do
 
@@ -206,7 +206,7 @@ Three candidates ran. A cross-judge scored them on six rubric criteria, R1 to R6
 - Engine-built mutants (its D-14), reduced to solution prefixes. Its "no model-written decoys" rule is relaxed. Decoys are test inputs that the engine runs and scores, never verdicts.
 
 **Changes versus the judge:**
-- Custom routes moved from `routes` into their own `actions` section. Single ownership needs it. The model stage owns `entities` and `routes`, and the workflow stage owns `actions`, `jobs` and `tests`. The judge asked only to remove the overlap.
+- Custom routes moved from `routes` into their own `actions` section. Single ownership needs it. The model stage owns `entities` and `routes`, the workflow stage owns `actions` and `jobs`, and the plan step owns `tests`. The judge asked only to remove the overlap.
 - Engine core also excludes `sandbox.ts`, and reaches it through `SnippetHost`. The judge's graft excluded only `index.ts` and `http.ts`, which would not compile because `sandbox.ts` imports `node:vm`.
 - "Restore the pre-run snapshot" became "never write until checked". The base already never writes `world.yaml` on a stop, so `run_finished.worldWritten` records it.
 - WorldGen-side codes (`plan.*`, `edit.*`, `iterate.*`) live in the same catalog, so worldgen mints issues through `issue()` too.
