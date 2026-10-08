@@ -8,7 +8,8 @@
  * through a record file, so the `down` in a later process records its whole lifetime once.
  */
 import { randomBytes } from 'node:crypto';
-import { appendFile, link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, link, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
@@ -21,6 +22,7 @@ import {
   BACKEND_KINDS,
   SandboxError,
   SandboxStartError,
+  isolatedEnv,
   nodeRunner,
   reachWorld,
   upWorld,
@@ -30,6 +32,7 @@ import {
   type Runner,
   type SandboxBackend,
   type SandboxSize,
+  type WorldBundle,
 } from './backend.ts';
 import { BOAT_WORKDIR, boatBackend } from './boat.ts';
 import { collectBundle, dirWorkspace, type Workspace } from './files.ts';
@@ -147,10 +150,6 @@ export function backendFor(kind: BackendKind, env: Env, runner: Runner = nodeRun
   return { kind, size, backend: meter.backend, meter, ledger };
 }
 
-export function isBackendKind(s: string): s is BackendKind {
-  return BACKEND_KINDS.some((k) => k === s);
-}
-
 /** `<prefix>-<6 hex>`, lowercased and slugged so every backend accepts it. */
 export function sandboxName(prefix: string, suffix: string = randomBytes(3).toString('hex')): string {
   const slug = prefix.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'world';
@@ -208,6 +207,8 @@ export type UpDetachedOpts = {
   readonly name?: string;
   /** Base image for openshell and sbx. */
   readonly image?: string;
+  /** Upload the private world, graders included, instead of its public form (A-377). */
+  readonly private?: boolean;
 };
 
 export type Deps = {
@@ -220,12 +221,43 @@ export type Deps = {
 };
 
 /**
+ * The bundle of the public form of a world (A-377). The form is built by the allowlisted
+ * episode-prepare child, so no world code runs in this process; sandboxes/ never imports the
+ * engine. The public world.yaml is copied under a temp folder named after the world, which keeps
+ * the bundle's `worlds/<name>` path.
+ */
+async function publicBundle(codeDir: string, worldDir: string, deps: Deps): Promise<WorldBundle> {
+  const tmp = await mkdtemp(path.join(tmpdir(), 'worldgen-sandbox-public-'));
+  try {
+    const prepared = path.join(tmp, 'prepared');
+    // The child runs in codeDir, so a relative world path is resolved here, against the caller's own directory.
+    const res = await (deps.runner ?? nodeRunner)(['bun', 'src/cli/episode-prepare.ts', path.resolve(worldDir), prepared], { cwd: codeDir, env: isolatedEnv(deps.env), timeoutMs: 300_000 });
+    if (res.code === 3) throw new SandboxError(res.stderr.trim());
+    const last = res.stderr.trim().split('\n').slice(-1)[0] || 'no output';
+    if (res.code !== 0) throw new SandboxError(`the prepare process failed (exit ${res.code}): ${last}`);
+    let publicDir: unknown;
+    try {
+      publicDir = Reflect.get(Object(JSON.parse(res.stdout)), 'publicDir');
+    } catch {
+      publicDir = undefined;
+    }
+    if (typeof publicDir !== 'string') throw new SandboxError(`the prepare process answered with something other than a prepared world (exit ${res.code}): ${last}`);
+    const stage = path.join(tmp, path.basename(path.resolve(worldDir)));
+    await mkdir(path.join(stage, 'public'), { recursive: true });
+    await copyFile(path.join(publicDir, 'world.yaml'), path.join(stage, 'public', 'world.yaml'));
+    return await collectBundle(codeDir, stage, { publicOnly: true });
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
  * Brings a world up and leaves it running. Only the world port is exposed, publicly on boat and
  * on the host's loopback otherwise. The lifetime is handed to a record file for `downDetached`.
  */
 export async function upDetached(o: UpDetachedOpts, deps: Deps): Promise<SandboxRecord> {
   if (o.kind === 'boat') boatKey(deps.env);
-  const bundle = await collectBundle(o.codeDir, o.worldDir);
+  const bundle = o.private === true ? await collectBundle(o.codeDir, o.worldDir) : await publicBundle(o.codeDir, o.worldDir, deps);
   const m = backendFor(o.kind, deps.env, deps.runner, {
     ...deps.backendOptions,
     ...(o.size === undefined ? {} : { size: o.size }),

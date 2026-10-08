@@ -23,6 +23,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  console.log('bun scripts/studio-rehearse.ts [out-dir] [--record] [--viewport]: rehearse the Studio click path in headless Chrome (research/studio-demo-runbook.md)');
+  process.exit(0);
+}
 const positional = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (/^https?:\/\//.test(positional[0] ?? '')) {
   console.error('studio-rehearse starts its own signed-in studio now; give only an output directory, not a studio URL');

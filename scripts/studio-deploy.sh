@@ -72,6 +72,7 @@ start() {
 }
 
 case "${1:-}" in
+  -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
   up)
     sha="$(git -C "$ROOT" rev-parse HEAD)"
     prepare

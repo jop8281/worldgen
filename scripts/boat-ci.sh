@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full check on a ref in a large Boat VM: `bun run check` and `npm run check:node` in parallel.
+# Run the full check on a ref in a large Boat VM: `bun run check`.
 #
 #   scripts/boat-ci.sh <ref>        # e.g. origin/main; needs BOAT_API_KEY and WORLDGEN_BOAT_ORG in the environment
 #
@@ -10,6 +10,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "${1:-}" in -h|--help) sed -n '2,9p' "$0"; exit 0 ;; esac
 REF="${1:?usage: scripts/boat-ci.sh <ref>}"
 [ -n "${BOAT_API_KEY:-}" ] || { echo "boat-ci.sh needs BOAT_API_KEY" >&2; exit 2; }
 [ -n "${WORLDGEN_BOAT_ORG:-}" ] || { echo "boat-ci.sh needs WORLDGEN_BOAT_ORG: the one Boat organization (wallet) this machine bills to (A-247)" >&2; exit 2; }
