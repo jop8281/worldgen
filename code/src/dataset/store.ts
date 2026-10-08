@@ -22,7 +22,7 @@ import {
   DatasetError, GRADING_NOTE, MANIFEST_VERSION, PROVIDER, SCHEMA_VERSION, canonicalJson, hashState, isCompleteSuccess, parseEpisode, parseManifest, sha256Hex,
   type Episode, type Manifest, type Redactor,
 } from './schema.ts';
-import { PINNED_MODEL } from '../worldgen/config.ts';
+import { DEFAULT_MODEL } from '../worldgen/config.ts';
 import type { PrivateArtifacts } from './episode.ts';
 
 export const DATASET_FILE = 'dataset.jsonl';
@@ -422,6 +422,9 @@ async function exportClaimed(o: ExportOptions): Promise<ExportResult> {
   if (filtered && chosen.length === 0) throw new DatasetError('the run, task and episode filters match no saved episode');
   const accepted = chosen.filter(isCompleteSuccess);
   const failed = chosen.filter((e) => !isCompleteSuccess(e));
+  // The manifest names one model (A-283). An empty export keeps the default, as before.
+  const models = sorted(chosen.map((e) => e.model));
+  if (models.length > 1) throw new DatasetError(`an export holds one model, and these episodes ran ${models.join(' and ')}: filter by run id`);
 
   const worlds = new Map<string, { world_id: string; world_version: string }>();
   for (const ep of chosen) {
@@ -446,7 +449,7 @@ async function exportClaimed(o: ExportOptions): Promise<ExportResult> {
     manifest_version: MANIFEST_VERSION,
     schema_version: SCHEMA_VERSION,
     provider: PROVIDER,
-    model: PINNED_MODEL,
+    model: models[0] ?? DEFAULT_MODEL,
     prompt_versions: sorted(chosen.map((e) => e.prompt_version)),
     config_versions: sorted(chosen.map((e) => e.config_version)),
     engine_commits: sorted(chosen.map((e) => e.engine_commit)),

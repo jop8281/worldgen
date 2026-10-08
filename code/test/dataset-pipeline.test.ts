@@ -6,7 +6,7 @@ import { PreflightError, checkForRun, prepareWorld, runPipeline, type PipelineDe
 import { CHUNK_SCRIPT, stateFromAdmin } from '../src/dataset/pipeline.ts';
 import { episodeSchema, hashState, sha256Hex } from '../src/dataset/schema.ts';
 import { collectBundle } from '../src/sandboxes/files.ts';
-import { turn, COMMIT, HELPDESK_DIR, easyOnly, fakeBackend, helpdesk, lazySolver, randomPort, solveAll, tmp, type FakeBackendOptions } from './dataset-kit.ts';
+import { turn, COMMIT, HELPDESK_DIR, easyOnly, fakeBackend, helpdesk, lazySolver, randomPort, RUN_BUDGET, solveAll, tmp, type FakeBackendOptions } from './dataset-kit.ts';
 import type { NextTurn } from '../src/dataset/episode.ts';
 import { checkWorld, dumpSha256, type StateDump } from '#engine';
 
@@ -33,7 +33,7 @@ async function run(s: Setup = {}) {
   const logs: string[] = [];
   const result = await runPipeline(
     {
-      worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, maxTurns: 60, budgetUsd: 5, maxMinutes: 5,
+      worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 60, budgetUsd: 5, maxMinutes: 5,
       secrets: [ANTHROPIC, BOAT], sandboxName: 'ds-run-1-abc123', port, ...s.opts,
     },
     { backend, nextTurn: s.solver ?? solveAll, makeBundle: tinyBundle, log: (l) => logs.push(l), ...s.deps },
@@ -45,7 +45,7 @@ const everyFile = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true, recursive: true }).filter((e) => e.isFile()).map((e) => path.join(e.parentPath, e.name));
 
 describe('a full run against the golden helpdesk through a fake Boat sandbox', () => {
-  it('refuses an inaccessible public API before any solver call and stops the sandbox', async () => {
+  it('refuses an inaccessible public API before any solver call and stops the sandbox', RUN_BUDGET, async () => {
     let clock = 0;
     let modelCalls = 0;
     const requested: string[] = [];
@@ -69,7 +69,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(backend.events.at(-1), 'down');
   });
 
-  it('solves all three proven tasks, exports and reopens the JSONL, then stops the sandbox', async () => {
+  it('solves all three proven tasks, exports and reopens the JSONL, then stops the sandbox', RUN_BUDGET, async () => {
     const { result, backend, out, logs, port } = await run();
     assert.deepEqual(result.problems, []);
     assert.equal(result.status, 'accepted');
@@ -117,7 +117,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(report.includes('does not independently certify that the final reply is factually correct'), true);
   });
 
-  it('keeps hidden world assets, admin routes and URLs out of the public files, and secrets out of every file', async () => {
+  it('keeps hidden world assets, admin routes and URLs out of the public files, and secrets out of every file', RUN_BUDGET, async () => {
     const w = await helpdesk();
     const { result, backend, out, port } = await run({
       solver: async (v, s) => ({ ...(await solveAll(v, s)), commentary: `using ${ANTHROPIC} and ${BOAT}` }),
@@ -144,7 +144,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     for (const f of backend.uploaded) assert.equal(Buffer.from(f.data).toString('utf8').includes(BOAT), false);
   });
 
-  it('rejects known secrets in the checked source world before freezing, bundling or model calls', async () => {
+  it('rejects known secrets in the checked source world before freezing, bundling or model calls', RUN_BUDGET, async () => {
     const secret = 'controller-secret-sentinel-834029';
     const world = await helpdesk();
     const report = checkWorld({ ...world, meta: { ...world.meta, description: secret } });
@@ -157,7 +157,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     let modelCalls = 0;
     const logs: string[] = [];
     await assert.rejects(runPipeline({
-      worldDir: HELPDESK_DIR, out, runId: 'reject-secret', engineCommit: COMMIT,
+      worldDir: HELPDESK_DIR, out, runId: 'reject-secret', engineCommit: COMMIT, model: 'claude-sonnet-5-5',
       maxTurns: 10, budgetUsd: 1, maxMinutes: 1, secrets: [secret], sandboxName: 'reject-secret', port,
     }, {
       checked: { world: report.world, tasks: Object.entries(report.world.tasks).map(([id, t]) => ({ id, difficulty: t.difficulty, instruction: t.instruction })) },
@@ -174,7 +174,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(report.world.meta.description, secret);
   });
 
-  it('uploads the code package and the public form of the world with the real bundle, and no credential or private file', async () => {
+  it('uploads the code package and the public form of the world with the real bundle, and no credential or private file', RUN_BUDGET, async () => {
     const w = await helpdesk();
     const { backend, out, result } = await run({ deps: { makeBundle: (dir) => collectBundle(CODE_DIR, dir, { publicOnly: true }) } });
     assert.equal(result.status, 'accepted');
@@ -204,7 +204,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(existsSync(path.join(out, 'private', 'worlds', version, 'public', 'world.yaml')), true);
   });
 
-  it('exports the failures and no accepted rows when no solver succeeded', async () => {
+  it('exports the failures and no accepted rows when no solver succeeded', RUN_BUDGET, async () => {
     const { result, out } = await run({ solver: lazySolver });
     assert.equal(result.status, 'incomplete');
     assert.deepEqual([result.accepted, result.failed], [0, 3]);
@@ -215,7 +215,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.deepEqual(result.problems, []);
   });
 
-  it('reports an incomplete run when only some tasks are solved, and keeps each row where it belongs', async () => {
+  it('reports an incomplete run when only some tasks are solved, and keeps each row where it belongs', RUN_BUDGET, async () => {
     const { result, out } = await run({ solver: easyOnly });
     assert.equal(result.status, 'incomplete');
     assert.deepEqual([result.accepted, result.failed], [1, 2]);
@@ -223,7 +223,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(lines(path.join(out, 'failures.jsonl')).length, 2);
   });
 
-  it('shares the model budget across episodes: once it is spent no later episode starts', async () => {
+  it('shares the model budget across episodes: once it is spent no later episode starts', RUN_BUDGET, async () => {
     const solver: NextTurn = async (v, s) => ({ ...(await solveAll(v, s)), costUsd: 0.01 });
     const { result } = await run({ solver, opts: { budgetUsd: 0.05 } });
     assert.deepEqual(result.episodes.map((e) => [e.stop_reason, e.usage.cost_usd, e.initial_state_hash === null]), [
@@ -236,7 +236,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(result.status, 'incomplete');
   });
 
-  it('stops every episode at the time limit, skips the remaining resets, and still stops the sandbox', async (t) => {
+  it('stops every episode at the time limit, skips the remaining resets, and still stops the sandbox', RUN_BUDGET, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     let clock = 0;
     let modelCalls = 0;
@@ -261,7 +261,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(backend.events.at(-1), 'down');
   });
 
-  it('makes no public request or solver call when provisioning exhausts the run deadline', async () => {
+  it('makes no public request or solver call when provisioning exhausts the run deadline', RUN_BUDGET, async () => {
     let clock = 0;
     let publicCalls = 0;
     let modelCalls = 0;
@@ -275,7 +275,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       return sandbox;
     };
     const result = await runPipeline({
-      worldDir: HELPDESK_DIR, out: tmp('startup-deadline'), runId: 'run-1', engineCommit: COMMIT,
+      worldDir: HELPDESK_DIR, out: tmp('startup-deadline'), runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5',
       maxTurns: 60, budgetUsd: 5, maxMinutes: 1 / 60, secrets: [], sandboxName: 'ds-deadline', port,
     }, {
       backend, makeBundle: tinyBundle, now: () => clock,
@@ -291,7 +291,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(backend.events.at(-1), 'down');
   });
 
-  it('stops cleanly when interrupted: the pending call is cancelled, evidence is kept and the sandbox stops', async () => {
+  it('stops cleanly when interrupted: the pending call is cancelled, evidence is kept and the sandbox stops', RUN_BUDGET, async () => {
     const controller = new AbortController();
     const solver: NextTurn = (_v, signal) => new Promise((_resolve, reject) => {
       signal.addEventListener('abort', () => reject(new Error('Request was aborted.')));
@@ -308,7 +308,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
 });
 
 describe('cleanup and evidence', () => {
-  it('stops the sandbox when the post-start logger throws', async () => {
+  it('stops the sandbox when the post-start logger throws', RUN_BUDGET, async () => {
     const backend = fakeBackend(await helpdesk(), { port: randomPort() });
     try {
       const { result, out } = await run({ deps: {
@@ -331,7 +331,7 @@ describe('cleanup and evidence', () => {
     }
   });
 
-  it('retains both failures when post-start logging and teardown fail', async () => {
+  it('retains both failures when post-start logging and teardown fail', RUN_BUDGET, async () => {
     const { result, backend } = await run({ backend: { failDown: true }, deps: {
       log: (line) => {
         if (line === 'sandbox fake-sandbox-1 is up') throw new Error('post-start logger failed');
@@ -347,7 +347,7 @@ describe('cleanup and evidence', () => {
     ]);
   });
 
-  it('keeps a confirmed stop when the post-stop logger throws', async () => {
+  it('keeps a confirmed stop when the post-stop logger throws', RUN_BUDGET, async () => {
     const { result, backend, out } = await run({ deps: {
       log: (line) => {
         if (line === 'sandbox fake-sandbox-1 stopped') throw new Error(`post-stop logger failed ${BOAT}`);
@@ -364,7 +364,7 @@ describe('cleanup and evidence', () => {
     assert.deepEqual(saved.problems, ['logging the confirmed stop of sandbox fake-sandbox-1 failed: post-stop logger failed [redacted]']);
   });
 
-  it('still stops the sandbox when the export fails, and says so', async () => {
+  it('still stops the sandbox when the export fails, and says so', RUN_BUDGET, async () => {
     const out = tmp('badlog');
     mkdirSync(path.join(out, 'logs'), { recursive: true });
     writeFileSync(path.join(out, 'logs', 'older.episodes.jsonl'), '{"schema_version":');
@@ -379,7 +379,7 @@ describe('cleanup and evidence', () => {
     assert.equal(readFileSync(path.join(out, 'private/diagnostics/run-1/summary.json'), 'utf8').includes('"status": "failed"'), true);
   });
 
-  it('makes a stop that was not confirmed visible, and is not a success', async () => {
+  it('makes a stop that was not confirmed visible, and is not a success', RUN_BUDGET, async () => {
     const { result, backend } = await run({ backend: { failDown: true } });
     assert.equal(result.status, 'failed');
     assert.equal(result.sandbox.teardown, 'failed');
@@ -388,7 +388,7 @@ describe('cleanup and evidence', () => {
     assert.equal(result.accepted, 3);
   });
 
-  it('keeps diagnostics when collecting from the sandbox partly fails, and still stops it', async () => {
+  it('keeps diagnostics when collecting from the sandbox partly fails, and still stops it', RUN_BUDGET, async () => {
     const { result, backend, out } = await run({ backend: { failExec: (cmd) => (cmd[2] === CHUNK_SCRIPT && cmd[3] === '/tmp/worldplay.log' ? 1 : undefined) } });
     assert.equal(result.status, 'failed');
     assert.deepEqual(result.problems, ['collecting from the sandbox failed: worldplay.log: read worldplay.log failed in the sandbox (exit 1): injected failure']);
@@ -400,7 +400,7 @@ describe('cleanup and evidence', () => {
     assert.equal(backend.events.at(-1), 'down');
   });
 
-  it('is not a success when an episode\'s evidence could not be kept', async () => {
+  it('is not a success when an episode\'s evidence could not be kept', RUN_BUDGET, async () => {
     const out = tmp('noevidence');
     mkdirSync(path.join(out, 'private'), { recursive: true });
     writeFileSync(path.join(out, 'private', 'episodes'), 'a file where the episode directories go');
@@ -411,7 +411,7 @@ describe('cleanup and evidence', () => {
     assert.equal(backend.events.at(-1), 'down');
   });
 
-  it('reports a sandbox that did not come up, with nothing to stop', async () => {
+  it('reports a sandbox that did not come up, with nothing to stop', RUN_BUDGET, async () => {
     const { result, backend, out } = await run({ backend: { failUp: true } });
     assert.equal(result.status, 'failed');
     assert.deepEqual(result.sandbox, { id: null, teardown: 'not_started' });
@@ -421,7 +421,7 @@ describe('cleanup and evidence', () => {
     assert.equal(existsSync(path.join(out, 'dataset.jsonl')), false);
   });
 
-  it('fails the run when the engine admin channel fails mid-run, as a world_error episode, not a crash', async () => {
+  it('fails the run when the engine admin channel fails mid-run, as a world_error episode, not a crash', RUN_BUDGET, async () => {
     const { result, backend, out } = await run({ backend: { failExec: (cmd) => (cmd[1] === '-e' && cmd[3] === 'POST' && String(cmd[4]).endsWith('/_world/reset') ? 2 : undefined) } });
     assert.deepEqual(result.episodes.map((e) => e.stop_reason), ['world_error', 'world_error', 'world_error']);
     assert.equal(result.episodes[0]?.error, 'the controller could not reset; the details are in the private diagnostics');
@@ -438,14 +438,14 @@ describe('refusals before anything starts', () => {
     const backend = fakeBackend(world, { port: randomPort() });
     const out = s.out ?? tmp('refused');
     await assert.rejects(
-      runPipeline({ worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'x-abc123', ...s.opts }, { backend, nextTurn: lazySolver, makeBundle: tinyBundle }),
+      runPipeline({ worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'x-abc123', ...s.opts }, { backend, nextTurn: lazySolver, makeBundle: tinyBundle }),
       (e: unknown) => e instanceof PreflightError && (typeof re === 'string' ? e.message === re : re.test(e.message)),
     );
     assert.deepEqual(backend.events, []);
     return out;
   };
 
-  it('rejects bad options by name', async () => {
+  it('rejects bad options by name', RUN_BUDGET, async () => {
     await idle({ opts: { runId: '../x' } }, /^run id "\.\.\/x" must be 1 to 64 letters/);
     await idle({ opts: { runId: 'nightly__v2' } }, 'run id "nightly__v2" must be 1 to 64 letters, digits, dots, dashes or underscores, starting with a letter or digit, with no "__" and no "_" at the end');
     await idle({ opts: { engineCommit: 'main' } }, 'engine commit "main" must be 7 to 64 lowercase hex digits');
@@ -454,7 +454,7 @@ describe('refusals before anything starts', () => {
     await idle({ opts: { maxMinutes: Number.NaN } }, 'max minutes must be a positive number');
   });
 
-  it('rejects a world that does not check, with the engine\'s issue, and creates no sandbox or world copy', async () => {
+  it('rejects a world that does not check, with the engine\'s issue, and creates no sandbox or world copy', RUN_BUDGET, async () => {
     const dir = tmp('brokenworld');
     writeFileSync(path.join(dir, 'world.yaml'), 'format: 1\n');
     const out = await idle({ opts: { worldDir: dir } }, /^the world in .* does not check \(\d+ issues?\):\n[a-z_.]+ /);
@@ -462,7 +462,7 @@ describe('refusals before anything starts', () => {
     await idle({ opts: { worldDir: path.join(dir, 'nowhere') } }, /does not check/);
   });
 
-  it('rejects a task whose name would make its episode ids ambiguous, before any sandbox', async () => {
+  it('rejects a task whose name would make its episode ids ambiguous, before any sandbox', RUN_BUDGET, async () => {
     const dir = tmp('dunder-task');
     cpSync(HELPDESK_DIR, dir, { recursive: true });
     const file = path.join(dir, 'world.yaml');
@@ -470,14 +470,14 @@ describe('refusals before anything starts', () => {
     await idle({ opts: { worldDir: dir } }, 'task "assign__newest_acme_ticket" cannot be used as a dataset task id: an episode id joins run, task and number with "__", so a task id cannot contain "__"');
   });
 
-  it('rejects a reused run id', async () => {
+  it('rejects a reused run id', RUN_BUDGET, async () => {
     const { out } = await run();
     await idle({ out }, `run id run-1 is already used in ${out}: pick another --run-id`);
   });
 });
 
 describe('an episode that a fake model cannot spend', () => {
-  it('records nothing it did not run: a model that always fails leaves zero cost and no accepted row', async () => {
+  it('records nothing it did not run: a model that always fails leaves zero cost and no accepted row', RUN_BUDGET, async () => {
     const solver: NextTurn = async () => {
       throw Object.assign(new Error('Anthropic API error 529: overloaded'), { status: 529 });
     };
@@ -491,7 +491,7 @@ describe('an episode that a fake model cannot spend', () => {
 });
 
 describe('runs that share one --out', () => {
-  it('freezes one world for runs that start together, leaving only the frozen file', async () => {
+  it('freezes one world for runs that start together, leaving only the frozen file', RUN_BUDGET, async () => {
     const out = tmp('freeze');
     const checked = await checkForRun(HELPDESK_DIR);
     const preps = await Promise.all(Array.from({ length: 8 }, () => prepareWorld(HELPDESK_DIR, out, checked)));
@@ -501,7 +501,7 @@ describe('runs that share one --out', () => {
     assert.deepEqual(readdirSync(path.join(out, 'private', 'worlds', version ?? '')), ['public', 'world.yaml']);
   });
 
-  it('runs two run ids at once: both are accepted and the last export holds both', async () => {
+  it('runs two run ids at once: both are accepted and the last export holds both', RUN_BUDGET, async () => {
     const out = tmp('shared');
     const runs = await Promise.all(['run-a', 'run-b'].map((runId) => run({ out, opts: { runId, sandboxName: `ds-${runId}-abc123` } })));
     assert.deepEqual(runs.map((r) => [r.result.status, r.result.problems]), [['accepted', []], ['accepted', []]]);
@@ -509,7 +509,7 @@ describe('runs that share one --out', () => {
     assert.deepEqual([manifest.counts.episodes, manifest.run_ids], [6, ['run-a', 'run-b']]);
   });
 
-  it('gives a run id to one run: a second run started with it at the same time is refused', async () => {
+  it('gives a run id to one run: a second run started with it at the same time is refused', RUN_BUDGET, async () => {
     const out = tmp('same-id');
     const settled = await Promise.allSettled([run({ out }), run({ out })]);
     const refused = settled.flatMap((s) => (s.status === 'rejected' ? [s.reason] : []));

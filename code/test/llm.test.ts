@@ -208,16 +208,16 @@ describe('pricing', () => {
     assert.equal(p.costUsd, 3.5);
   });
 
-  it('rejects a non-pinned model before any network call, at parse time and per request', async () => {
+  it('rejects an id that is not a Claude model before any network call, at parse time and per request', async () => {
     const seen: Record<string, unknown>[] = [];
     const client = fakeClient(ok([]), seen);
     const r = configSchema.safeParse({ model: 'mystery-model', maxCostUsd: 5 });
     assert.deepEqual(r.error?.issues.map((i) => [i.path.join('.'), i.message]), [
-      ['model', 'model "mystery-model" is not allowed: WorldGen runs only claude-sonnet-5-5'],
+      ['model', 'model "mystery-model" is not a Claude model id such as claude-sonnet-5-5'],
     ]);
     await assert.rejects(
       anthropicModel(config, { apiKey: FAKE_KEY, client }).propose({ ...req, model: 'mystery-model' }),
-      (e: unknown) => e instanceof ModelError && e.message === 'model "mystery-model" is not allowed: WorldGen runs only claude-sonnet-5-5',
+      (e: unknown) => e instanceof ModelError && e.message === 'model "mystery-model" is not allowed: use a Claude model id such as claude-sonnet-5-5',
     );
     assert.equal(seen.length, 0);
   });
@@ -324,12 +324,21 @@ describe('anthropicModel per-request model and effort', () => {
     assert.equal(Object.hasOwn(seen[0] ?? {}, 'output_config'), false);
   });
 
-  it('refuses a non-pinned request model before any network call', async () => {
+  it('calls exactly the priced model a request names, with no substitute (A-283)', async () => {
+    const seen: Record<string, unknown>[] = [];
+    const client = fakeClient(ok([{ type: 'tool_use', name: 'submit_plan', input: {} }]), seen);
+    const p = await anthropicModel(twoModels, { apiKey: FAKE_KEY, client, now: ticker() }).propose({ ...req, model: 'claude-opus-5-5' });
+    assert.deepEqual(seen.map((s) => s['model']), ['claude-opus-5-5']);
+    // Opus built-in: 1000*4 + 200*20 + 400*5 + 5000*0.2 = 11000 per million
+    assert.equal(p.costUsd, 0.011);
+  });
+
+  it('refuses a request model with no known price before any network call', async () => {
     const seen: Record<string, unknown>[] = [];
     const client = fakeClient(ok([]), seen);
     await assert.rejects(
-      anthropicModel(twoModels, { apiKey: FAKE_KEY, client }).propose({ ...req, model: 'claude-opus-5-5' }),
-      (e: unknown) => e instanceof ModelError && e.kind === 'model_error' && e.message === 'model "claude-opus-5-5" is not allowed: WorldGen runs only claude-sonnet-5-5' &&
+      anthropicModel(twoModels, { apiKey: FAKE_KEY, client }).propose({ ...req, model: 'claude-haiku-4-5' }),
+      (e: unknown) => e instanceof ModelError && e.kind === 'model_error' && e.message === 'model "claude-haiku-4-5" has no known price: add it to prices in worldgen.config.json' &&
         e.costUsd === undefined,
     );
     assert.equal(seen.length, 0);
@@ -765,11 +774,19 @@ describe('claudeCliModel', () => {
     assert.deepEqual([p.usage, p.costUsd], [{ inputTokens: 4, outputTokens: 38980, cacheReadTokens: 86706, cacheWriteTokens: 18971, cacheWrite1hTokens: 18971 }, 0.4830332]);
   });
 
-  it('rejects a non-pinned request model before spawning the CLI', async () => {
+  it('passes the CLI exactly one --model, the one named, and never a fallback model (A-283)', async () => {
+    const seen: SpawnCall[] = [];
+    await claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker()).propose({ ...req, model: 'claude-opus-5-5' });
+    const args = seen[0]?.args ?? [];
+    assert.deepEqual(args.flatMap((a, i) => (a === '--model' ? [args[i + 1]] : [])), ['claude-opus-5-5']);
+    assert.equal(args.some((a) => a.includes('fallback')), false);
+  });
+
+  it('rejects a request model with no known price before spawning the CLI', async () => {
     const seen: SpawnCall[] = [];
     await assert.rejects(
-      claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker()).propose({ ...req, model: 'claude-opus-5-5' }),
-      (e: unknown) => e instanceof ModelError && e.kind === 'model_error' && e.message === 'model "claude-opus-5-5" is not allowed: WorldGen runs only claude-sonnet-5-5',
+      claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker()).propose({ ...req, model: 'claude-haiku-4-5' }),
+      (e: unknown) => e instanceof ModelError && e.kind === 'model_error' && e.message === 'model "claude-haiku-4-5" has no known price: add it to prices in worldgen.config.json',
     );
     assert.equal(seen.length, 0);
   });

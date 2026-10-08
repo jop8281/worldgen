@@ -18,6 +18,8 @@ import { WAIT_FOR_PORT, type ExecOpts, type ExecResult, type SandboxBackend, typ
 export const HELPDESK_DIR = path.resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
 export const EASY = 'assign_newest_acme_ticket';
 export const COMMIT = 'a0ca1351234567';
+/** A test that runs the dataset CLI or pipeline takes seconds on a loaded machine: give it the budget `bun run test` gives, not bare `bun test`'s 5 s default. */
+export const RUN_BUDGET = { timeout: 120_000 };
 export const tmp = (name: string): string => mkdtempSync(path.join(tmpdir(), `dataset-${name}-`));
 
 let cached: CheckedWorld | undefined;
@@ -339,7 +341,7 @@ export async function episodeInput(port: WorldPort, nextTurn: NextTurn, over: Pa
   const task = prep.tasks.find((t) => t.id === EASY);
   if (task === undefined) throw new Error('no easy task');
   return {
-    runId: 'run1', engineCommit: COMMIT, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION, configVersion: 'cfg-000000000000',
+    runId: 'run1', engineCommit: COMMIT, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION, configVersion: 'cfg-000000000000', model: 'claude-sonnet-5-5',
     task, index: 1, openapi: prep.openapi, seedHash: prep.seedHash, port,
     grade: engineGrader({ world: prep.world, wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: COMMIT }),
     nextTurn, maxTurns: 10, budgetLeftUsd: 1, deadline: Date.now() + 60_000, now: Date.now, redact: noSecrets, ...over,

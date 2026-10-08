@@ -193,51 +193,58 @@ describe('model selection folded into worldgen.config.json', () => {
   });
 });
 
-describe('only the pinned model is allowed', () => {
-  const NOT_ALLOWED = (id: string): string => `model "${id}" is not allowed: WorldGen runs only claude-sonnet-5-5`;
+describe('a priced Claude model, Sonnet by default (A-283)', () => {
+  const NOT_CLAUDE = (id: string): string => `model "${id}" is not a Claude model id such as claude-sonnet-5-5`;
+  const NO_PRICE = (id: string): string => `model "${id}" has no known price: add prices.${id} with inputPerMTok and outputPerMTok, or use claude-sonnet-5-5`;
+  const issues = (r: { error?: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } }): string[][] =>
+    (r.error?.issues ?? []).map((i) => [i.path.join('.'), i.message]);
 
-  it('rejects a non-pinned default, step and escalation model at their paths with the literal message', () => {
-    const r = configSchema.safeParse({
-      model: 'claude-opus-5-5',
-      maxCostUsd: 1,
-      stepModels: { workflow: { model: 'claude-haiku-4-5' } },
-      escalate: { model: 'claude-opus-5-5' },
-    });
-    assert.equal(r.success, false);
-    const got = new Map(r.error?.issues.map((i) => [i.path.join('.'), i.message]));
-    assert.equal(got.size, 3);
-    assert.equal(got.get('model'), NOT_ALLOWED('claude-opus-5-5'));
-    assert.equal(got.get('stepModels.workflow.model'), NOT_ALLOWED('claude-haiku-4-5'));
-    assert.equal(got.get('escalate.model'), NOT_ALLOWED('claude-opus-5-5'));
-  });
-
-  it('rejects each non-pinned model on its own, under both transports', () => {
-    for (const transport of ['claude-cli', 'sdk'] as const) {
-      const a = configSchema.safeParse({ model: 'mystery-model', maxCostUsd: 1, transport });
-      assert.deepEqual(a.error?.issues.slice(0, 1).map((i) => [i.path.join('.'), i.message]), [['model', NOT_ALLOWED('mystery-model')]]);
-      const b = configSchema.safeParse({ model: 'claude-sonnet-5-5', maxCostUsd: 1, transport, stepModels: { seed: { model: 'cheap-model' } } });
-      assert.deepEqual(b.error?.issues.slice(0, 1).map((i) => [i.path.join('.'), i.message]), [['stepModels.seed.model', NOT_ALLOWED('cheap-model')]]);
-      const c = configSchema.safeParse({ model: 'claude-sonnet-5-5', maxCostUsd: 1, transport, escalate: { model: 'big-model' } });
-      assert.deepEqual(c.error?.issues.slice(0, 1).map((i) => [i.path.join('.'), i.message]), [['escalate.model', NOT_ALLOWED('big-model')]]);
-    }
-  });
-
-  it('accepts the pinned model at every position, priced by the built-in table under sdk', () => {
-    assert.equal(configSchema.safeParse({
-      model: 'claude-sonnet-5-5', maxCostUsd: 1, transport: 'sdk',
-      stepModels: { seed: { model: 'claude-sonnet-5-5' } }, escalate: { model: 'claude-sonnet-5-5' },
-    }).success, true);
-  });
-
-  it('fails at load time when a --model override is not the pinned model, under either transport', async () => {
-    for (const transport of ['claude-cli', 'sdk'] as const) {
-      await assert.rejects(
-        loadConfig(REAL, { transport, model: 'claude-haiku-4-5' }),
-        (e: unknown) => e instanceof Error && e.message.includes(`\nmodel: ${NOT_ALLOWED('claude-haiku-4-5')}`),
-      );
-    }
-    const c = await loadConfig(REAL, { transport: 'sdk', model: 'claude-sonnet-5-5' });
+  it('defaults every step to claude-sonnet-5-5 in the shipped config', async () => {
+    const c = await loadConfig(REAL, {});
     assert.equal(c.model, 'claude-sonnet-5-5');
+    assert.deepEqual([stepModel(c, 'plan', false).model, stepModel(c, 'tasks', false).model, stepModel(c, 'model', true).model], ['claude-sonnet-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5']);
+  });
+
+  it('accepts a --model override with a built-in price, under either transport', async () => {
+    for (const transport of ['claude-cli', 'sdk'] as const) {
+      const c = await loadConfig(REAL, { transport, model: 'claude-opus-5-5' });
+      assert.deepEqual([c.model, stepModel(c, 'seed', false).model], ['claude-opus-5-5', 'claude-opus-5-5']);
+    }
+  });
+
+  it('accepts any Claude model at every position once prices lists it', () => {
+    const r = configSchema.safeParse({
+      model: 'claude-haiku-4-5-20251001', maxCostUsd: 1,
+      stepModels: { workflow: { model: 'claude-fable-5-1' } }, escalate: { model: 'claude-opus-5-5' },
+      prices: { 'claude-haiku-4-5-20251001': { inputPerMTok: 1, outputPerMTok: 5 }, 'claude-fable-5-1': { inputPerMTok: 3, outputPerMTok: 15 } },
+    });
+    assert.deepEqual(issues(r), []);
+  });
+
+  it('refuses an id that is not a Claude model id at its path, under both transports', () => {
+    for (const transport of ['claude-cli', 'sdk'] as const) {
+      assert.deepEqual(issues(configSchema.safeParse({ model: 'gpt-4o', maxCostUsd: 1, transport })), [['model', NOT_CLAUDE('gpt-4o')]]);
+      assert.deepEqual(issues(configSchema.safeParse({ model: 'claude-sonnet-5-5', maxCostUsd: 1, transport, stepModels: { seed: { model: 'Claude-Opus' } } })), [['stepModels.seed.model', NOT_CLAUDE('Claude-Opus')]]);
+      assert.deepEqual(issues(configSchema.safeParse({ model: 'claude-sonnet-5-5', maxCostUsd: 1, transport, escalate: { model: 'claude-opus-5-5 --fallback-model x' } })), [['escalate.model', NOT_CLAUDE('claude-opus-5-5 --fallback-model x')]]);
+    }
+  });
+
+  it('refuses a Claude model with no known price at each position, even when prices lists another', () => {
+    const r = configSchema.safeParse({
+      model: 'claude-haiku-4-5', maxCostUsd: 1,
+      stepModels: { workflow: { model: 'claude-fable-5-1' } }, escalate: { model: 'claude-mystery-9' },
+      prices: { 'claude-other-1': { inputPerMTok: 1, outputPerMTok: 5 } },
+    });
+    assert.deepEqual(issues(r), [
+      ['model', NO_PRICE('claude-haiku-4-5')], ['stepModels.workflow.model', NO_PRICE('claude-fable-5-1')], ['escalate.model', NO_PRICE('claude-mystery-9')],
+    ]);
+  });
+
+  it('fails at load time when a --model override has no known price', async () => {
+    await assert.rejects(
+      loadConfig(REAL, { model: 'claude-haiku-4-5' }),
+      (e: unknown) => e instanceof Error && e.message.includes(`\nmodel: ${NO_PRICE('claude-haiku-4-5')}`),
+    );
   });
 
   it('rejects an unknown effort with the literal list of levels', () => {

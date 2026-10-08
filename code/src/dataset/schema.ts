@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { PINNED_MODEL } from '../worldgen/config.ts';
+import { claudeModelId } from '../worldgen/config.ts';
 
 export const SCHEMA_VERSION = 1;
 export const MANIFEST_VERSION = 1;
@@ -190,7 +190,7 @@ const episodeBase = z.strictObject({
   task_id: z.string().regex(TASK_ID),
   difficulty: z.enum(['easy', 'medium', 'hard']),
   provider: z.literal(PROVIDER),
-  model: z.literal(PINNED_MODEL),
+  model: claudeModelId,
   prompt_version: z.string().min(1),
   config_version: z.string().min(1),
   initial_state_hash: sha.nullable(),
@@ -253,7 +253,7 @@ export const manifestSchema = z.strictObject({
   manifest_version: z.literal(MANIFEST_VERSION),
   schema_version: z.literal(SCHEMA_VERSION),
   provider: z.literal(PROVIDER),
-  model: z.literal(PINNED_MODEL),
+  model: claudeModelId,
   prompt_versions: z.array(z.string()),
   config_versions: z.array(z.string()),
   engine_commits: z.array(z.string()),

@@ -47,6 +47,7 @@ reopens and validates them, and always stops the sandbox.
   --budget-usd <n>       most model spend for the whole run
   --max-minutes <n>      wall-clock limit for the episodes; a pending model call is cancelled at it
 
+  --model <id>          the solver's model, default the config's (claude-sonnet-5-5); any Claude model with a known price
   --transport <kind>    claude-cli (default) or sdk; sdk needs ${DEFAULT_API_KEY_ENV}
 
 Needs ${BOAT_KEY_ENV} and ${ORG_ENV} (the one Boat organization this machine bills to, A-247) in the environment. Exit 0 only when every task has an
@@ -88,6 +89,7 @@ type Args = {
   readonly world: string; readonly out: string; readonly runId: string; readonly engineCommit: string;
   readonly maxTurns: number; readonly budgetUsd: number; readonly maxMinutes: number;
   readonly transport?: Transport;
+  readonly model?: string;
 };
 class UsageError extends Error {}
 
@@ -105,7 +107,7 @@ function parse(argv: readonly string[]): Args | 'help' {
       allowPositionals: true,
       options: {
         world: { type: 'string' }, out: { type: 'string' }, 'run-id': { type: 'string' }, 'engine-commit': { type: 'string' },
-        transport: { type: 'string' }, 'max-turns': { type: 'string' }, 'budget-usd': { type: 'string' }, 'max-minutes': { type: 'string' }, help: { type: 'boolean', short: 'h' },
+        transport: { type: 'string' }, model: { type: 'string' }, 'max-turns': { type: 'string' }, 'budget-usd': { type: 'string' }, 'max-minutes': { type: 'string' }, help: { type: 'boolean', short: 'h' },
       },
     });
   } catch (e) {
@@ -122,6 +124,7 @@ function parse(argv: readonly string[]): Args | 'help' {
   if (transport !== undefined && transport !== 'claude-cli' && transport !== 'sdk') throw new UsageError('--transport must be claude-cli or sdk');
   return {
     ...(transport === undefined ? {} : { transport }),
+    ...(p.values.model === undefined ? {} : { model: p.values.model }),
     world: need('world'), out: need('out'), runId: need('run-id'), engineCommit: need('engine-commit'),
     maxTurns: positive('--max-turns', need('max-turns'), true),
     budgetUsd: positive('--budget-usd', need('budget-usd'), false),
@@ -195,7 +198,7 @@ export async function main(argv: readonly string[], env: Env = process.env, deps
 
   let config: Config;
   try {
-    config = deps.config ?? (await loadConfig(CONFIG_FILE, { maxOutputTokens: SOLVER_MAX_OUTPUT_TOKENS }));
+    config = deps.config ?? (await loadConfig(CONFIG_FILE, { maxOutputTokens: SOLVER_MAX_OUTPUT_TOKENS, ...(args.model === undefined ? {} : { model: args.model }) }));
   } catch (e) {
     err(messageOf(e));
     return 1;
@@ -248,7 +251,7 @@ export async function main(argv: readonly string[], env: Env = process.env, deps
     try {
       result = await runPipeline(
         {
-          worldDir: args.world, out: args.out, runId: args.runId, engineCommit: args.engineCommit,
+          worldDir: args.world, out: args.out, runId: args.runId, engineCommit: args.engineCommit, model: config.model,
           maxTurns: args.maxTurns, budgetUsd: args.budgetUsd, maxMinutes: args.maxMinutes,
           secrets, sandboxName: sandboxName(`ds-${args.runId}`), ...(deps.port === undefined ? {} : { port: deps.port }),
         },
