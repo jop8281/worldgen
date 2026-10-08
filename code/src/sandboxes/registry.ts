@@ -150,10 +150,6 @@ export function backendFor(kind: BackendKind, env: Env, runner: Runner = nodeRun
   return { kind, size, backend: meter.backend, meter, ledger };
 }
 
-export function isBackendKind(s: string): s is BackendKind {
-  return BACKEND_KINDS.some((k) => k === s);
-}
-
 /** `<prefix>-<6 hex>`, lowercased and slugged so every backend accepts it. */
 export function sandboxName(prefix: string, suffix: string = randomBytes(3).toString('hex')): string {
   const slug = prefix.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'world';
