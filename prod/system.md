@@ -110,7 +110,7 @@ flowchart LR
 ```
 
 - A summary counts five outcomes: success, expected refusal, product failure, infrastructure failure and not run.
-- stress-4 ran on the hand-in candidate `4b3d2be4` and passed 23 of 29: 20 successes and 3 expected refusals. Its p50 was 5.1 minutes, and it cost $26.71 in total. stress-5 reran the six failures on later trunk commits, and five of them now pass. The sources are [eval/runs/2026-10-08-stress-4/summary.md](../eval/runs/2026-10-08-stress-4/summary.md) and [eval/runs/2026-10-08-stress-5/summary.md](../eval/runs/2026-10-08-stress-5/summary.md).
+- stress-6 ran the 29-case suite once on main `42ab9ca9` and passed 27 of 29 (93%): 24 successes and 3 expected refusals, with p50 4.5 min, p95 8.2 and max 8.8, for $25.32 settled. Its two failures, bookmarks and stripe-charges, each carry a root cause and an issue (YOS-257, YOS-258). stress-4 (23 of 29 on the hand-in candidate `4b3d2be4`) and stress-5 (its six failures rerun, five then passing) are the earlier steps. The source is [eval/runs/2026-10-08-stress-6/summary.md](../eval/runs/2026-10-08-stress-6/summary.md).
 
 ## How to run each part
 
@@ -155,7 +155,7 @@ Serve a world on a Boat VM, then build a graded dataset. Both need `BOAT_API_KEY
 
 ```sh
 bun run sandbox up ../prod/worlds/helpdesk --backend boat --ttl 1800
-bun run dataset --world ../prod/worlds/helpdesk --out ../eval/runs/dataset-helpdesk --run-id ds1 --engine-commit 4b3d2be4 --max-turns 12 --budget-usd 2 --max-minutes 10
+bun run dataset --world ../prod/worlds/helpdesk --out ../eval/runs/dataset-helpdesk --run-id ds1 --engine-commit 6e28ba99 --max-turns 12 --budget-usd 2 --max-minutes 10
 ```
 
 Evaluate, and run the team's prompts:
