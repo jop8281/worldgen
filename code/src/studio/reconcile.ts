@@ -3,12 +3,13 @@
  * `.studio-runs.json` whose lease ran out and whose process is gone. A studio applies the same rule when it starts
  * (`recoveryOf`, A-335); this applies it without starting one. A dry run reads the registry and the process table only.
  * `apply` stops each such job as a studio would, with an intent receipt before and an outcome receipt after, in a
- * journal beside the registry. A job with a live lease or a live process is never touched.
+ * journal beside the registry. A job with a live lease or a live process is never touched. The registry has no lock:
+ * a studio that read it before the stop and writes after it undoes the stop, and the outcome then says so.
  */
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { loadRuns, recoveryOf, saveRuns, stoppedRun, type JobKind, type Processes, type StoredRun } from './runstore.ts';
+import { loadRuns, recoveryOf, saveRuns, stoppedRun, type JobKind, type Processes, type RecoveryDecision, type StoredRun } from './runstore.ts';
 
 /** The receipt journal's file name, beside the run registry in the worlds directory. */
 export const RECONCILE_JOURNAL = '.studio-reconcile.jsonl';
@@ -18,8 +19,12 @@ const receiptSchema = z.strictObject({
   runId: z.string().min(1),
   kind: z.enum(['generate', 'episode']),
   tenant: z.string(),
-  /** stop_skipped: the job was no longer stale when it was read again just before the write. */
   action: z.enum(['stop_started', 'stopped', 'stop_skipped', 'stop_failed']),
+  /**
+   * Why a stop was skipped: the job was no longer stale when read again just before the write, a studio's write undid
+   * the stop, the job finished by another path, or it left the registry.
+   */
+  why: z.enum(['no_longer_stale', 'overwritten', 'finished_elsewhere', 'missing']).optional(),
   reason: z.enum(['process_gone', 'start_unconfirmed']),
   /** The lease holder that left the job, or `legacy`. */
   from: z.string(),
@@ -28,6 +33,7 @@ const receiptSchema = z.strictObject({
   recovered: z.literal(true).optional(),
   error: z.string().min(1).regex(/^[^\n]*$/).optional(),
 }).refine((r) => (r.action === 'stop_failed') === (r.error !== undefined), { message: 'an error belongs to a failed stop only', path: ['error'] })
+  .refine((r) => (r.action === 'stop_skipped') === (r.why !== undefined), { message: 'a why belongs to a skipped stop only', path: ['why'] })
   .refine((r) => r.recovered === undefined || r.action === 'stopped', { message: 'only a stop is recovered', path: ['recovered'] });
 export type JobReceipt = z.output<typeof receiptSchema>;
 
@@ -70,51 +76,65 @@ export async function reconcileJobs(opts: ReconcileJobsOptions) {
   const mine = (run: { readonly tenant: string }): boolean => opts.tenant === undefined || run.tenant === opts.tenant;
   const listedAt = opts.now();
   const rows: JobRow[] = [];
+  const stale: { readonly row: JobRow; readonly pid: number | null; readonly decision: Extract<RecoveryDecision, { kind: 'stop' }> }[] = [];
   for (const run of await loadRuns(opts.worldsDir)) {
     if (run.phase === 'finished' || !mine(run)) continue;
     const decision = recoveryOf(run, listedAt, null, opts.processes);
     const verdict: JobVerdict = decision.kind === 'stop' ? 'stale' : decision.kind === 'resume' ? 'process_live' : 'lease_live';
-    rows.push({ runId: run.runId, kind: run.kind, tenant: run.tenant, phase: run.phase, verdict, action: verdict === 'stale' ? 'stop' : 'none' });
+    const row: JobRow = { runId: run.runId, kind: run.kind, tenant: run.tenant, phase: run.phase, verdict, action: verdict === 'stale' ? 'stop' : 'none' };
+    rows.push(row);
+    if (decision.kind === 'stop') stale.push({ row, pid: run.pid, decision });
   }
   const receipts: JobReceipt[] = [];
   const result = () => ({ worldsDir: opts.worldsDir, dryRun: !opts.apply, tenant: opts.tenant ?? null, journal, rows, receipts });
   if (!opts.apply) return result();
 
   const intents = await openIntents(journal);
-  const finished = new Map((await loadRuns(opts.worldsDir)).filter((r) => r.phase === 'finished').map((r) => [r.runId, r]));
-  const recovering = [...intents.values()].filter((i) => mine(i) && finished.get(i.runId)?.recovery?.outcome === 'stopped');
-  const stopping = rows.filter((r) => r.action === 'stop');
-  if (recovering.length === 0 && stopping.length === 0) return result();
+  const current = new Map((await loadRuns(opts.worldsDir)).map((r) => [r.runId, r]));
+  // An intent left open closes once its job finished: as stopped when a stop finished it, as skipped otherwise.
+  const closing = [...intents.values()].filter((i) => mine(i) && !stale.some((s) => s.row.runId === i.runId) && (current.get(i.runId)?.phase ?? 'finished') === 'finished');
+  if (closing.length === 0 && stale.length === 0) return result();
   await mkdir(opts.worldsDir, { recursive: true });
   await appendFile(journal, '', { mode: 0o600 });
   const at = () => new Date(opts.now()).toISOString();
-  // A run that crashed between its write and its outcome left an intent alone; the registry now shows the job stopped.
-  for (const intent of recovering) {
-    const { action: _action, at: _at, error: _error, ...kept } = intent;
-    receipts.push(await append(journal, { ...kept, action: 'stopped', at: at(), recovered: true }));
+  for (const intent of closing) {
+    const { action: _action, at: _at, error: _error, why: _why, ...kept } = intent;
+    const run = current.get(intent.runId);
+    receipts.push(await append(journal, run?.recovery?.outcome === 'stopped'
+      ? { ...kept, action: 'stopped', at: at(), recovered: true }
+      : { ...kept, action: 'stop_skipped', why: run === undefined ? 'missing' : 'finished_elsewhere', at: at() }));
   }
-  for (const row of stopping) {
-    // The registry is read again just before the write, and only this job changes, so a job a live studio recorded
-    // meanwhile survives, and a job it resumed or finished meanwhile is left as it is.
-    const fresh = await loadRuns(opts.worldsDir);
-    const run = fresh.find((r) => r.runId === row.runId);
-    const now = opts.now();
-    const decision = run === undefined ? undefined : recoveryOf(run, now, null, opts.processes);
-    const base = { version: 1, runId: row.runId, kind: row.kind, tenant: row.tenant, at: at() } as const;
-    if (run === undefined || decision?.kind !== 'stop') {
-      const open = intents.get(row.runId);
-      if (open !== undefined) receipts.push(await append(journal, { ...open, action: 'stop_skipped', at: at() }));
-      continue;
-    }
-    const facts = { ...base, reason: decision.reason, from: decision.from };
-    if (!intents.has(row.runId)) receipts.push(await append(journal, { ...facts, action: 'stop_started' }));
+  for (const { row, pid, decision: listed } of stale) {
+    const open = intents.get(row.runId);
+    const intent = open ?? await append(journal, { version: 1, runId: row.runId, kind: row.kind, tenant: row.tenant, reason: listed.reason, from: listed.from, action: 'stop_started', at: at() });
+    if (open === undefined) receipts.push(intent);
+    const facts = { version: 1, runId: row.runId, kind: row.kind, tenant: row.tenant, reason: intent.reason, from: intent.from } as const;
+    // Liveness is read first, so nothing but the decision runs between reading the registry and writing it back; a job a
+    // live studio recorded meanwhile survives, and one it resumed or finished meanwhile is left as it is.
+    const live = pid !== null && opts.processes.alive(pid);
+    const asOf: Processes = { alive: (p) => (p === pid ? live : opts.processes.alive(p)), kill: opts.processes.kill };
+    const at0 = opts.now();
+    let outcome: z.input<typeof receiptSchema>;
     try {
-      await saveRuns(opts.worldsDir, fresh.map((r) => (r.runId === row.runId ? stoppedRun(r, decision, now) : r)));
-      receipts.push(await append(journal, { ...facts, action: 'stopped', at: at() }));
+      const fresh = await loadRuns(opts.worldsDir);
+      const run = fresh.find((r) => r.runId === row.runId);
+      const decision = run === undefined ? undefined : recoveryOf(run, at0, null, asOf);
+      if (run === undefined || decision?.kind !== 'stop') {
+        outcome = { ...facts, action: 'stop_skipped', why: run === undefined ? 'missing' : run.phase === 'finished' ? 'finished_elsewhere' : 'no_longer_stale', at: at() };
+      } else {
+        await saveRuns(opts.worldsDir, fresh.map((r) => (r.runId === row.runId ? stoppedRun(r, decision, at0) : r)));
+        const doneAt = at();
+        const after = (await loadRuns(opts.worldsDir)).find((r) => r.runId === row.runId);
+        const held = after?.phase === 'finished' && after.recovery?.outcome === 'stopped';
+        outcome = held
+          ? { ...facts, reason: decision.reason, from: decision.from, action: 'stopped', at: doneAt }
+          : { ...facts, action: 'stop_skipped', why: 'overwritten', at: doneAt };
+      }
     } catch (err) {
       const message = (err instanceof Error ? err.message : String(err)).split('\n')[0]?.trim() || 'stop failed without a message';
-      receipts.push(await append(journal, { ...facts, action: 'stop_failed', at: at(), error: message }));
+      outcome = { ...facts, action: 'stop_failed', at: at(), error: message };
     }
+    receipts.push(await append(journal, outcome));
   }
   return result();
 }

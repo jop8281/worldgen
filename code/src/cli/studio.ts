@@ -53,6 +53,8 @@ GET /api/health answers readiness with WORLDGEN_BUILD_SHA, the runtime, the worl
 reconcile-jobs lists unfinished generation runs and episodes in the registry whose lease ran out and whose process
 is gone, without starting a studio (a dry run by default). --apply stops each as a studio would on start, with an intent
 and an outcome receipt in .studio-reconcile.jsonl beside the registry; a job with a live lease or process is never touched.
+Exit codes: 0 nothing stale (or every stop held), 3 a dry run found stale jobs, 1 a stop failed or a studio's write
+undid it, 2 bad usage.
 `;
 
 class UsageError extends Error {}
@@ -140,7 +142,8 @@ async function reconcile(argv: readonly string[]): Promise<number> {
   }
   const result = await reconcileJobs({ ...args, now: Date.now, processes: osProcesses });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  return result.receipts.some((r) => r.action === 'stop_failed') ? 1 : 0;
+  if (result.dryRun) return result.rows.some((r) => r.action === 'stop') ? 3 : 0;
+  return result.receipts.some((r) => r.action === 'stop_failed' || r.why === 'overwritten') ? 1 : 0;
 }
 
 async function main(argv: readonly string[]): Promise<number> {

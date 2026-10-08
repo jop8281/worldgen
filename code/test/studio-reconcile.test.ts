@@ -132,7 +132,8 @@ describe('reconcile-jobs', () => {
     });
     const result = await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes });
     assert.deepEqual(result.rows.map((r) => [r.runId, r.verdict]), [['run-dead', 'stale'], ['run-taken', 'stale']]);
-    assert.deepEqual(result.receipts, pair('run-dead', 'generate', 'default', 'process_gone', EXPIRED.holder));
+    const taken = { version: 1, runId: 'run-taken', kind: 'generate', tenant: 'default', reason: 'process_gone', from: EXPIRED.holder, at: NOW };
+    assert.deepEqual(result.receipts, [...pair('run-dead', 'generate', 'default', 'process_gone', EXPIRED.holder), { ...taken, action: 'stop_started' }, { ...taken, action: 'stop_skipped', why: 'no_longer_stale' }]);
     const after = await byId(dir);
     assert.deepEqual([after.get('run-taken')?.phase, after.get('run-taken')?.lease, after.get('run-new')?.phase], ['running', LIVE, 'intent']);
   });
@@ -151,6 +152,53 @@ describe('reconcile-jobs', () => {
     ]);
     assert.deepEqual((await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes })).receipts, []);
     assert.deepEqual((await lines(journal)).map((r) => (r as { action: string }).action), ['stop_started', 'stop_started', 'stopped', 'stopped']);
+  });
+
+  it('reads liveness before the registry, so a job a studio records while liveness is checked survives the write', async () => {
+    const dir = await registry('lost-write', [job({ runId: 'run-dead', pid: 303 })]);
+    let checks = 0;
+    // The second look at pid 303 is the one made just before the stop is written.
+    const { processes } = table([], (pid) => {
+      if (pid !== 303 || ++checks !== 2) return;
+      const file = path.join(dir, RUN_STORE_FILE);
+      writeFileSync(file, JSON.stringify([...(JSON.parse(readFileSync(file, 'utf8')) as StoredRun[]), job({ runId: 'run-b', phase: 'intent', lease: LIVE })]));
+    });
+    const result = await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes });
+    assert.deepEqual(result.receipts, pair('run-dead', 'generate', 'default', 'process_gone', EXPIRED.holder));
+    const after = await byId(dir);
+    assert.deepEqual([after.get('run-dead')?.phase, after.get('run-b')?.phase, after.get('run-b')?.lease], ['finished', 'intent', LIVE]);
+  });
+
+  it('records a stop that a studio write undid as stop_skipped overwritten, not stopped', async () => {
+    const dir = await registry('overwritten', [job({ runId: 'run-dead', pid: 303 })]);
+    const file = path.join(dir, RUN_STORE_FILE);
+    const original = readFileSync(file, 'utf8');
+    let undone = false;
+    // A studio that read the registry before the stop writes its old copy back right after it.
+    const now = (): number => {
+      if (!undone && (JSON.parse(readFileSync(file, 'utf8')) as StoredRun[])[0]?.phase === 'finished') {
+        undone = true;
+        writeFileSync(file, original);
+      }
+      return Date.parse(NOW);
+    };
+    const result = await reconcileJobs({ worldsDir: dir, apply: true, now, processes: table([]).processes });
+    const facts = { version: 1, runId: 'run-dead', kind: 'generate', tenant: 'default', reason: 'process_gone', from: EXPIRED.holder, at: NOW };
+    assert.deepEqual(result.receipts, [{ ...facts, action: 'stop_started' }, { ...facts, action: 'stop_skipped', why: 'overwritten' }]);
+    assert.equal((await byId(dir)).get('run-dead')?.phase, 'running');
+  });
+
+  it('closes an intent whose job finished by another path, or left the registry, as stop_skipped', async () => {
+    const dir = await registry('closed', [job({ runId: 'run-ended', phase: 'finished', lease: null, exitCode: 0, pid: 808 })]);
+    const journal = path.join(dir, RECONCILE_JOURNAL);
+    const facts = (runId: string) => ({ version: 1, runId, kind: 'generate', tenant: 'default', reason: 'process_gone', from: EXPIRED.holder, at: '2026-10-08T03:59:30.000Z' });
+    await appendFile(journal, `${JSON.stringify({ ...facts('run-ended'), action: 'stop_started' })}\n${JSON.stringify({ ...facts('run-gone'), action: 'stop_started' })}\n`);
+    const result = await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes: table([]).processes });
+    assert.deepEqual(result.receipts, [
+      { ...facts('run-ended'), action: 'stop_skipped', why: 'finished_elsewhere', at: NOW },
+      { ...facts('run-gone'), action: 'stop_skipped', why: 'missing', at: NOW },
+    ]);
+    assert.deepEqual((await reconcileJobs({ worldsDir: dir, apply: true, now: clock, processes: table([]).processes })).receipts, []);
   });
 
   it('writes nothing when no registry exists', async () => {
@@ -176,10 +224,11 @@ describe('bun run studio -- reconcile-jobs', () => {
     // No process has this pid: macOS and Linux both cap pids far below it.
     const dir = await registry('cli', [job({ runId: 'run-gone', pid: 2_000_000_000 })]);
     const dry = await run(['--worlds-dir', dir]);
-    assert.deepEqual([dry.code, (JSON.parse(dry.stdout) as { rows: { runId: string; action: string }[] }).rows.map((r) => [r.runId, r.action])], [0, [['run-gone', 'stop']]]);
+    assert.deepEqual([dry.code, (JSON.parse(dry.stdout) as { rows: { runId: string; action: string }[] }).rows.map((r) => [r.runId, r.action])], [3, [['run-gone', 'stop']]]);
     const applied = await run(['--worlds-dir', dir, '--apply', '--tenant', 'default']);
     assert.deepEqual([applied.code, (JSON.parse(applied.stdout) as { receipts: { action: string }[] }).receipts.map((r) => r.action)], [0, ['stop_started', 'stopped']]);
     assert.equal((await byId(dir)).get('run-gone')?.phase, 'finished');
+    assert.equal((await run(['--worlds-dir', dir])).code, 0);
     const bad = await run(['--force']);
     assert.deepEqual([bad.code, bad.stderr.split('\n')[0]], [2, 'reconcile-jobs: unknown or repeated argument --force']);
   });
