@@ -57,7 +57,7 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import { constants, type Dirent } from 'node:fs';
-import { appendFile, copyFile, mkdir, readdir, readFile, rename, stat } from 'node:fs/promises';
+import { appendFile, copyFile, lstat, mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
@@ -815,6 +815,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
    */
   async function worldDirOf(name: string, who: User, filter: string | null): Promise<{ ok: true; dir: string } | { ok: false; reply: Reply }> {
     if (!safeSegment(name)) return { ok: false, reply: fail(400, 'world.name_unsafe', 'a world name must be one plain path segment') };
+    // A .partial dir is a run that did not finish, never a world: no route reaches it by name.
+    if (name.endsWith(PARTIAL_SUFFIX)) return { ok: false, reply: fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`) };
     const own = who.role === 'admin' && filter !== null ? filter : who.tenant;
     for (const shelf of [...(tenants.has(own) ? [shelfOf(own)] : []), LIBRARY]) {
       const dir = path.join(shelf.root, name);
@@ -1278,9 +1280,12 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     // `default` keeps the old layout, so open mode and the token admin write where they always did.
     const outDir = path.join(who.tenant === DEFAULT_TENANT ? worldsDir : shelfOf(who.tenant).root, `gen-${slug}`);
     let args: string[];
+    // A description goes after `--`, so one that starts with - is text, never an option.
+    let description: string | null = null;
     if (kind === 'description') {
       if (text.trim() === '') return fail(400, 'generate.text', 'a description needs text');
-      args = [text, '--out', outDir, ...flags];
+      args = ['--out', outDir, ...flags];
+      description = text;
     } else if (kind === 'openapi') {
       const spec = await pathsOfSpec(typeof body['spec'] === 'string' ? body['spec'] : text);
       if (!spec.ok) return fail(400, 'generate.spec', spec.why);
@@ -1313,8 +1318,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       ...await readdir(path.join(`${outDir}${PARTIAL_SUFFIX}`, 'runs')).catch((): string[] => []),
     ]);
     const transport = opts.transport === undefined ? [] : ['--transport', opts.transport];
-    const request = ['bun', 'src/cli/worldgen.ts', ...args];
-    return startJob({ kind: 'generate', tenant: who.tenant, rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...request, ...transport] }) });
+    const head = ['bun', 'src/cli/worldgen.ts', ...args];
+    const tail = description === null ? [] : ['--', description];
+    const request = [...head, ...tail];
+    return startJob({ kind: 'generate', tenant: who.tenant, rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...head, ...transport, ...tail] }) });
   }
 
   /**
@@ -1356,7 +1363,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         const world = `${name}-${n}`;
         const outDir = path.join(root, world);
         claimedCopies.add(outDir);
-        return { outDir, argv: ['bun', 'src/cli/worldgen.ts', change, '--world', `${outDir}${PARTIAL_SUFFIX}`, ...transport], iterate: { source: name, world } };
+        // The change follows `--`, so a change that starts with - is text, never an option.
+        return { outDir, argv: ['bun', 'src/cli/worldgen.ts', '--world', `${outDir}${PARTIAL_SUFFIX}`, ...transport, '--', change], iterate: { source: name, world } };
       },
       prepare: {
         code: 'iterate.copy_failed',
@@ -1364,9 +1372,19 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
           const partial = `${job.outDir}${PARTIAL_SUFFIX}`;
           // Not recursive, so a name another writer took since the dir was read fails here instead of being shared.
           await mkdir(partial);
-          if (await stat(job.outDir).catch(() => null) !== null) throw new Error(`${job.outDir} appeared after its name was picked; iterate again`);
-          for (const f of EXPORT_FILES) {
-            if (await file(path.join(w.dir, f))) await copyFile(path.join(w.dir, f), path.join(partial, f), constants.COPYFILE_EXCL);
+          // The dir is this request's own from here, so a failed copy removes it: it holds no evidence of a run.
+          try {
+            if (await stat(job.outDir).catch(() => null) !== null) throw new Error(`${job.outDir} appeared after its name was picked; iterate again`);
+            for (const f of EXPORT_FILES) {
+              const source = path.join(w.dir, f);
+              const found = await lstat(source).catch(() => null);
+              if (found === null) continue;
+              if (!found.isFile()) throw new Error(`${name}/${f} is not a regular file, so it is not copied`);
+              await copyFile(source, path.join(partial, f), constants.COPYFILE_EXCL);
+            }
+          } catch (e) {
+            await rm(partial, { recursive: true, force: true });
+            throw e;
           }
         },
       },

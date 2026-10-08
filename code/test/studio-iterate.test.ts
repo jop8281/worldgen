@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -146,7 +146,7 @@ describe('studio iterate: a run that logged done publishes the copy (YOS-188)', 
     assert.match(runId, /^\d{8}T\d{6}Z-iterate-[0-9a-f]{6}$/);
     assert.deepEqual([r.status, r.body], [200, { runId, outDir: path.join(f.worldsDir, 'hand-beta-2'), running: true, replayed: false }]);
     const partial = path.join(f.worldsDir, 'hand-beta-2.partial');
-    assert.deepEqual(f.spawned.map((s) => s.argv), [['bun', 'src/cli/worldgen.ts', CHANGE, '--world', partial]]);
+    assert.deepEqual(f.spawned.map((s) => s.argv), [['bun', 'src/cli/worldgen.ts', '--world', partial, '--', CHANGE]]);
     assert.deepEqual(await hashes(partial), { 'world.yaml': before['world.yaml'], 'plan.yaml': before['plan.yaml'], 'REPORT.md': before['REPORT.md'] });
     assert.deepEqual(await worldNames(base), [['hand-beta', null]]);
 
@@ -195,7 +195,7 @@ describe('studio iterate: tenancy (YOS-188, A-344)', () => {
     const r = await call(base, 'POST', '/api/worlds/hand-beta/iterate', OTTO, { change: CHANGE });
     const runId = String(r.body['runId']);
     assert.deepEqual([r.status, r.body], [200, { runId, outDir: path.join(f.worldsDir, 'acme', 'hand-beta-2'), running: true, replayed: false }]);
-    assert.deepEqual(f.spawned.map((s) => s.argv), [['bun', 'src/cli/worldgen.ts', CHANGE, '--world', path.join(f.worldsDir, 'acme', 'hand-beta-2.partial')]]);
+    assert.deepEqual(f.spawned.map((s) => s.argv), [['bun', 'src/cli/worldgen.ts', '--world', path.join(f.worldsDir, 'acme', 'hand-beta-2.partial'), '--', CHANGE]]);
     f.spawned[0]!.finish(done);
     assert.deepEqual((await finished(base, runId, OTTO))['iterate'], { source: 'hand-beta', world: 'hand-beta-2', published: true });
 
@@ -230,8 +230,8 @@ describe('studio iterate: one job per key, one name per copy (YOS-188, A-335)', 
     const pair = await Promise.all([CHANGE, 'drop the sla job'].map((change) => call(base, 'POST', '/api/worlds/hand-beta/iterate', undefined, { change })));
     assert.deepEqual(pair.map((r) => [r.status, r.body['replayed']]), [[200, false], [200, false]]);
     assert.deepEqual(pair.map((r) => r.body['outDir']).sort(), [path.join(f.worldsDir, 'hand-beta-2'), path.join(f.worldsDir, 'hand-beta-3')]);
-    assert.deepEqual(f.spawned.map((s) => s.argv[4]).sort(), [path.join(f.worldsDir, 'hand-beta-2.partial'), path.join(f.worldsDir, 'hand-beta-3.partial')]);
-    assert.deepEqual(f.spawned.map((s) => s.argv[2]).sort(), ['add a refunds queue', 'drop the sla job']);
+    assert.deepEqual(f.spawned.map((s) => s.argv[3]).sort(), [path.join(f.worldsDir, 'hand-beta-2.partial'), path.join(f.worldsDir, 'hand-beta-3.partial')]);
+    assert.deepEqual(f.spawned.map((s) => s.argv.at(-1)).sort(), ['add a refunds queue', 'drop the sla job']);
   });
 });
 
@@ -270,8 +270,47 @@ describe('studio iterate: refusals (YOS-188)', () => {
     const registry = JSON.parse(await readFile(path.join(f.worldsDir, '.studio-runs.json'), 'utf8')) as Json[];
     assert.deepEqual(registry.map((j) => [j['phase'], j['lease'], j['iterate']]), [['finished', null, { source: 'hand-beta', world: 'hand-beta-2' }]]);
     assert.equal(f.spawned.length, 0);
-    // The failed job no longer holds a derived key, and its .partial evidence keeps -2 taken.
+    // A failed copy leaves no .partial: it holds no evidence of a run, and in prod/worlds it would break the world tests.
+    assert.equal(await exists(path.join(f.worldsDir, 'hand-beta-2.partial')), false);
+    // The failed job no longer holds a derived key, and its name is free again.
     const retry = await call(base, 'POST', '/api/worlds/hand-beta/iterate', undefined, { change: CHANGE });
-    assert.deepEqual([retry.status, retry.body['outDir'], retry.body['replayed'], f.spawned.length], [200, path.join(f.worldsDir, 'hand-beta-3'), false, 1]);
+    assert.deepEqual([retry.status, retry.body['outDir'], retry.body['replayed'], f.spawned.length], [200, path.join(f.worldsDir, 'hand-beta-2'), false, 1]);
+  });
+});
+
+describe('studio iterate: the #77 verification follow-ups', () => {
+  it('refuses to copy a symlinked source file, leaves no .partial, and spawns nothing', async () => {
+    const f = await fixture();
+    const outside = path.join(f.root, 'outside-report.md');
+    await writeFile(outside, '# not this world\n');
+    await rm(path.join(f.source, 'REPORT.md'));
+    await symlink(outside, path.join(f.source, 'REPORT.md'));
+    const base = await start(f);
+    const r = await call(base, 'POST', '/api/worlds/hand-beta/iterate', undefined, { change: CHANGE });
+    assert.deepEqual([r.status, r.body['error']], [500, { code: 'iterate.copy_failed', message: 'hand-beta/REPORT.md is not a regular file, so it is not copied' }]);
+    assert.equal(await exists(path.join(f.worldsDir, 'hand-beta-2.partial')), false);
+    assert.equal(f.spawned.length, 0);
+  });
+
+  it('never reaches a .partial dir by name: its report and an iterate of it are 404 world.unknown', async () => {
+    const f = await fixture();
+    await mkdir(path.join(f.worldsDir, 'hand-beta-2.partial'), { recursive: true });
+    await writeFile(path.join(f.worldsDir, 'hand-beta-2.partial', 'REPORT.md'), 'Stopped: time_exhausted\n');
+    const base = await start(f);
+    const unknown = { error: { code: 'world.unknown', message: `No world hand-beta-2.partial under ${f.worldsDir}` } };
+    const report = await call(base, 'GET', '/api/worlds/hand-beta-2.partial/report');
+    assert.deepEqual([report.status, report.body], [404, unknown]);
+    const again = await call(base, 'POST', '/api/worlds/hand-beta-2.partial/iterate', undefined, { change: CHANGE });
+    assert.deepEqual([again.status, again.body], [404, unknown]);
+    assert.equal(f.spawned.length, 0);
+  });
+
+  it('passes a change that starts with - after --, so the CLI reads it as text', async () => {
+    const f = await fixture();
+    const base = await start(f);
+    const change = '-5% price on tier 2';
+    const r = await call(base, 'POST', '/api/worlds/hand-beta/iterate', undefined, { change });
+    assert.equal(r.status, 200);
+    assert.deepEqual(f.spawned.map((s) => s.argv), [['bun', 'src/cli/worldgen.ts', '--world', path.join(f.worldsDir, 'hand-beta-2.partial'), '--', change]]);
   });
 });

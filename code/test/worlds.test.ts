@@ -9,10 +9,13 @@ import { parsePlanYaml } from '../src/worldgen/plan.ts';
 const WORLDS = fileURLToPath(new URL('../../prod/worlds/', import.meta.url));
 const HELPDESK = path.join(WORLDS, 'helpdesk');
 
-/** Each world directory, relative to prod/worlds. `generated/` holds `npm run worldgen` output one level down. */
+/**
+ * Each world directory, relative to prod/worlds. `generated/` holds `npm run worldgen` output one level down. A `.partial`
+ * dir is a run that did not finish, never a world (A-293, A-359), so it is skipped.
+ */
 async function worldDirs(): Promise<string[]> {
   const subdirs = async (dir: string): Promise<string[]> =>
-    (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.endsWith('.partial')).map((e) => e.name);
   const top = await subdirs(WORLDS);
   const generated = top.includes('generated') ? (await subdirs(path.join(WORLDS, 'generated'))).map((n) => `generated/${n}`) : [];
   return [...top.filter((n) => n !== 'generated'), ...generated].sort();
