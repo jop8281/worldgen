@@ -1146,9 +1146,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     kind: job.kind, key: job.key, phase: job.phase, lease: job.lease, ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
   });
 
+  /** A running job another studio holds whose process is gone: recovery stops it once that lease runs out. */
+  const ownerGone = (job: Job): boolean => !holds(job) && job.phase === 'running' && job.pid !== null && !processes.alive(job.pid);
+
   /**
    * Starts a job once per key (A-335). A client key names one job forever; a derived key matches only an unfinished
-   * job, so the same request after the first one finished is a deliberate rerun. The intent is on disk before the spawn.
+   * job, so the same request after the first one finished is a deliberate rerun. A derived key also passes over a job
+   * whose owner is gone, which would only hand this request a run that already ended (A-363). The intent is on disk
+   * before the spawn.
    */
   async function startJob(start: JobStart): Promise<Reply> {
     const clientKey = idempotencyKeyOf(start.rawKey);
@@ -1157,7 +1162,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const key = clientKey.key ?? `derived:${fingerprint}`;
     // No await from this lookup to the insert below, so two requests with one key cannot both miss. Another tenant's job
     // never matches: its key is unused here, since a replay or a refusal would tell this caller that the key exists.
-    const prior = [...jobs.values()].find((j) => j.tenant === start.tenant && j.key === key && (clientKey.key !== undefined || j.phase !== 'finished'));
+    const prior = [...jobs.values()].find((j) => j.tenant === start.tenant && j.key === key
+      && (clientKey.key !== undefined || (j.phase !== 'finished' && !ownerGone(j))));
     if (prior !== undefined) {
       if (prior.fingerprint === fingerprint) return startAnswer(prior, true);
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (job ${prior.runId})`);

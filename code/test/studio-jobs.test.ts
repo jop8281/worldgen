@@ -140,6 +140,19 @@ function jobWithMine(body: Json): Json {
   return { ...job, lease: { ...lease, holder: 'mine' } };
 }
 
+/**
+ * The run id of a generation of `body` that a gone studio left running as process 7701, its lease still live at T0.
+ * A studio records the request's derived key and fingerprint, then the file is rewritten as the gone studio left it.
+ */
+async function leftRunning(f: Fixture, body: Json): Promise<string> {
+  const a = await open(f, { now: () => T0 });
+  const runId = String((await json(a.url, 'POST', '/api/generate', body)).body['runId']);
+  await a.close();
+  const [record] = await stored(f);
+  await writeRegistry(f, [{ ...record, phase: 'running', lease: { holder: 'studio-dead', expiresAt: '2026-10-07T12:00:30.000Z' }, pid: 7701, exitCode: null }]);
+  return runId;
+}
+
 describe('studio jobs: idempotent starts (A-335)', () => {
   it('answers a retried POST with the same Idempotency-Key from the first job, and refuses the key for another request', async () => {
     const f = await fixture();
@@ -184,6 +197,32 @@ describe('studio jobs: idempotent starts (A-335)', () => {
     const rerun = await json(studio.url, 'POST', '/api/generate', body);
     assert.deepEqual([rerun.status, rerun.body['replayed'], s.spawned.length], [200, false, 2]);
     assert.notEqual(rerun.body['runId'], a.body['runId']);
+  });
+
+  it('starts the same request with no key anew when its running job belongs to a studio whose process is gone (A-363)', async () => {
+    const f = await fixture();
+    const body = { kind: 'description', text: 'T', outSlug: 'owner' };
+    const stale = await leftRunning(f, body);
+    const s = fakeSpawner();
+    const studio = await open(f, { spawner: s.spawner, now: () => T0 });
+    const fresh = await json(studio.url, 'POST', '/api/generate', body);
+    assert.deepEqual([fresh.status, fresh.body['running'], fresh.body['replayed'], s.spawned.length], [200, true, false, 1]);
+    assert.notEqual(fresh.body['runId'], stale);
+    const again = await json(studio.url, 'POST', '/api/generate', body);
+    assert.deepEqual([again.body['runId'], again.body['replayed'], s.spawned.length], [fresh.body['runId'], true, 1]);
+    const old = await json(studio.url, 'GET', `/api/generate/${stale}`);
+    assert.deepEqual([(old.body['job'] as Json)['phase'], leaseOf(old.body).holder], ['running', 'studio-dead']);
+  });
+
+  it('still replays the same request with no key onto a running job another studio holds while its process lives (A-363)', async () => {
+    const f = await fixture();
+    const body = { kind: 'description', text: 'T', outSlug: 'owner' };
+    const stale = await leftRunning(f, body);
+    f.live.add(7701);
+    const s = fakeSpawner();
+    const studio = await open(f, { spawner: s.spawner, now: () => T0 });
+    const again = await json(studio.url, 'POST', '/api/generate', body);
+    assert.deepEqual([again.status, again.body['runId'], again.body['running'], again.body['replayed'], s.spawned.length], [200, stale, true, true, 0]);
   });
 
   it('records the intent, held by this studio, before it spawns the child', async () => {
