@@ -322,6 +322,40 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
   });
 });
 
+describe('only a later-page list call counts as paging (A-360)', () => {
+  /** Finds the ticket on the first page the list call returns, then resolves it. */
+  const lookup = (query: string) => `(ctx) => {
+    ctx.api('GET', '/tickets${query}');
+    const list = ctx.api('GET', '/tickets?limit=25');
+    const t = list.body.data.find((x) => x.subject === 'Password reset loop');
+    ctx.assert(t, 'ticket not found');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
+  }`;
+
+  it('a lookup with a bare ?limit= and then a valid limit pages no entity', () => {
+    assert.deepEqual(verdictOf(verify(only(EASY, { solution: lookup('?limit=') }), EASY)).solutionPagedEntities, []);
+  });
+
+  it('a lookup with only a valid ?limit= pages no entity', () => {
+    assert.deepEqual(verdictOf(verify(only(EASY, { solution: lookup('?limit=5') }), EASY)).solutionPagedEntities, []);
+  });
+
+  it('a solution that follows the next-page cursor pages that entity', () => {
+    const solution = `(ctx) => {
+      let page = ctx.api('GET', '/tickets?limit=1');
+      let t = page.body.data.find((x) => x.subject === 'Password reset loop');
+      while (!t && page.body.next_cursor !== null) {
+        page = ctx.api('GET', '/tickets?limit=1&cursor=' + page.body.next_cursor);
+        t = page.body.data.find((x) => x.subject === 'Password reset loop');
+      }
+      ctx.assert(t, 'ticket not found');
+      ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
+    }`;
+    const v = verdictOf(verify(only(EASY, { solution }), EASY));
+    assert.deepEqual([v.solutionPagedEntities, v.solutionLaterPageEntities], [['ticket'], ['ticket']]);
+  });
+});
+
 describe('collateral mutants (A-156)', () => {
   /** Rejects changes to other rows, but not to other fields of the target row. */
   const ROW_ONLY = `(ctx) => {

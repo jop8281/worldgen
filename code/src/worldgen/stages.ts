@@ -253,9 +253,9 @@ export function pressureIssues(report: OkReport, plan: Plan): readonly CheckIssu
 
 /**
  * seed.too_few_rows_for_paging for each entity a task's solution pages through (its list route
- * called with a page-size or cursor parameter), owned by seed so the run backtracks there. An
- * entity whose rows come from an input fixture is exempt: the input decides its size, and
- * REPORT.md says so (A-182).
+ * called for a later page; a first-page lookup with only a limit does not count), owned by seed so
+ * the run backtracks there. An entity whose rows come from an input fixture is exempt: the input
+ * decides its size, and REPORT.md says so (A-182, A-360).
  */
 export function pagingBlocking(report: OkReport): readonly CheckIssue[] {
   const paged = new Set(Object.values(report.verdicts).flatMap((v) => v.solutionPagedEntities));
