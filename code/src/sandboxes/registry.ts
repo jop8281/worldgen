@@ -8,12 +8,12 @@
  * through a record file, so the `down` in a later process records its whole lifetime once.
  */
 import { randomBytes } from 'node:crypto';
-import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { boatUsageWindow, boatClientFromEnv, boatKey, boatOrg, MISSING_ORG, type BoatClient, type BoatInspection, type BoatInventorySandbox, type BoatUsage } from '../boat/client.ts';
-import { CAP_NAMES, CAPS, capsFromEnv, ledgerPath, openLedger, type Ledger, type SpendEvent, type ReconciliationInput } from '../costs/ledger.ts';
+import { CAP_NAMES, CAPS, capsFromEnv, ledgerPath, openLedger, utcDay, type Ledger, type Reservation, type SpendEvent, type ReconciliationInput } from '../costs/ledger.ts';
 import { boatReceiptsPath, openBoatReceipts } from '../costs/boat-receipts.ts';
 import { meteredSandbox, type SandboxMeter } from '../costs/meter.ts';
 import { BOAT_SIZES, accountFor, type BoatSize } from '../costs/pricing.ts';
@@ -285,13 +285,15 @@ function isAlive(pid: number): boolean {
   }
 }
 
+const lockFile = (dir: string, id: string): string => recordFile(dir, id).replace(/\.json$/, '.lock');
+
 /**
  * Claims the right to close sandbox `id`: `<id>.lock` in `dir`, created whole by link(2) so it is
  * never seen empty. A lock whose process is dead, or that is garbled, is moved aside and taken.
  * Throws SandboxError when a live process holds it. Returns the release.
  */
 async function claimClose(dir: string, id: string): Promise<() => Promise<void>> {
-  const lock = recordFile(dir, id).replace(/\.json$/, '.lock');
+  const lock = lockFile(dir, id);
   const body = `${JSON.stringify({ pid: process.pid })}\n`;
   const mine = `${lock}.${process.pid}.${randomBytes(4).toString('hex')}`;
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -507,4 +509,201 @@ export async function discoverBoat(deps: Deps, org?: string, day?: string) {
     rows.push({ id: vm.id, state: vm.state, type: vm.type, access: vm.access, createdAt: vm.createdAt, ...(vm.team === undefined ? {} : { team: vm.team }), ledger: { pending: pending.length > 0, recorded: recorded.length > 0, accounts: [...new Set([...pending, ...recorded].map(r => r.account))] }, usage });
   }
   return { wallet: org ?? UNPINNED, readOnly: true, requestedUsageWindow: window ?? null, ledgerCorrupt: state.corrupt, priceBasis: 'provider_list_usage', rows };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Owned Boat VMs that nothing will close
+
+/** Boat's stopped states: an archived or removed VM bills nothing more. */
+const STOPPED_STATES: ReadonlySet<string> = new Set(['archived', 'cancelled']);
+
+export type OrphanEvidence = 'untracked' | 'tracked' | 'claim_expired';
+export type OrphanVerdict =
+  | { readonly kind: 'not_owner' }
+  | { readonly kind: 'archived' }
+  | { readonly kind: 'archiving' }
+  | { readonly kind: 'settled' }
+  | { readonly kind: 'kept'; readonly owner: 'closing' | 'record' | 'pending_create' }
+  | { readonly kind: 'kept'; readonly owner: 'claim'; readonly until: string | null }
+  | { readonly kind: 'orphan'; readonly evidence: OrphanEvidence; readonly archived: boolean };
+/** `needs_id`: no metered owner is in evidence, but an unmetered one may be live, so only `--id` archives it. `other_key`: the expired claim belongs to another Boat key, whose `down` must close it. */
+export type OrphanAction = 'archive' | 'close' | 'needs_id' | 'other_key' | 'none';
+
+const orphanReceiptSchema = z.strictObject({
+  version: z.literal(1),
+  sandboxId: z.string().regex(ID_FILE),
+  action: z.enum(['archive_started', 'archived', 'archive_failed', 'close_started', 'already_archived']),
+  evidence: z.enum(['untracked', 'tracked', 'claim_expired']),
+  at: z.iso.datetime(),
+  inspectionAccount: z.string().regex(/^sha256:[0-9a-f]{12}$/),
+  walletId: z.string().regex(ID_FILE).optional(),
+  reservationId: z.uuid(),
+  costBasis: z.strictObject({ billing: z.literal('unknown'), usd: z.null() }),
+  error: z.string().min(1).regex(/^[^\n]*$/).optional(),
+  /** The outcome of an intent a crashed run left without one, written once Boat shows the VM archived. */
+  recovered: z.literal(true).optional(),
+}).refine(r => (r.action === 'archive_failed') === (r.error !== undefined), { message: 'an error belongs to a failed archive only', path: ['error'] })
+  .refine(r => r.recovered === undefined || r.action === 'archived' || r.action === 'already_archived', { message: 'only an archival outcome is recovered', path: ['recovered'] });
+export type BoatOrphanReceipt = z.output<typeof orphanReceiptSchema>;
+const UNKNOWN_BILLING = { billing: 'unknown', usd: null } as const;
+
+export const boatOrphanReceiptsPath = (ledgerFile: string): string => `${ledgerFile}.boat-orphans.jsonl`;
+
+async function appendOrphanReceipt(file: string, input: z.input<typeof orphanReceiptSchema>): Promise<BoatOrphanReceipt> {
+  const row = orphanReceiptSchema.parse(input);
+  const text = await readFile(file, 'utf8').catch(() => '');
+  await appendFile(file, `${text !== '' && !text.endsWith('\n') ? '\n' : ''}${JSON.stringify(row)}\n`, { mode: 0o600, flush: true });
+  return row;
+}
+
+/** The last intent of each VM that no outcome followed, in journal order. A line that does not parse is skipped. */
+async function openIntents(file: string): Promise<Map<string, BoatOrphanReceipt>> {
+  const open = new Map<string, BoatOrphanReceipt>();
+  const text = await readFile(file, 'utf8').catch(() => '');
+  for (const line of text.split('\n')) {
+    let raw: unknown;
+    try { raw = JSON.parse(line); } catch { continue; }
+    const row = orphanReceiptSchema.safeParse(raw);
+    if (!row.success) continue;
+    if (row.data.action === 'archive_started' || row.data.action === 'close_started') open.set(row.data.sandboxId, row.data);
+    else open.delete(row.data.sandboxId);
+  }
+  return open;
+}
+
+const observationOf = (reservations: readonly Reservation[], id: string): Reservation | undefined =>
+  reservations.find(r => r.origin === 'inventory' && r.provider === 'boat' && r.sandboxId === id);
+const admitted = (r: Reservation): boolean => r.origin === undefined && r.provider === 'boat' && r.kind === 'sandbox';
+/** Where the meter bounds an admitted VM's lifetime (its provider TTL), or undefined when the claim carries none. */
+const claimEnd = (r: Reservation): number | undefined =>
+  r.sandboxPricing?.maxLifetimeSeconds === undefined ? undefined : Date.parse(r.startedAt ?? r.t) + r.sandboxPricing.maxLifetimeSeconds * 1000;
+
+type PlanEntry = { readonly vm: BoatInventorySandbox; readonly verdict: OrphanVerdict; readonly action: OrphanAction; readonly reservationId?: string };
+
+async function planOf(vm: BoatInventorySandbox, state: { readonly events: readonly SpendEvent[]; readonly reservations: readonly Reservation[] }, listedAt: number, now: number, dir: string, account: string, named: boolean): Promise<PlanEntry> {
+  const entry = (verdict: OrphanVerdict, action: OrphanAction = 'none', reservationId?: string): PlanEntry => ({ vm, verdict, action, ...(reservationId === undefined ? {} : { reservationId }) });
+  if (vm.access !== 'owner') return entry({ kind: 'not_owner' });
+  const observed = observationOf(state.reservations, vm.id);
+  // An open admission claim on an archived VM is the meter's or reconcile-create's to settle.
+  if (STOPPED_STATES.has(vm.state)) return observed !== undefined && observed.closedAt === undefined ? entry({ kind: 'orphan', evidence: 'tracked', archived: true }, 'close', observed.id) : entry({ kind: 'archived' });
+  if (vm.state === 'archiving') return entry({ kind: 'archiving' });
+  const lock = await readFile(lockFile(dir, vm.id), 'utf8').catch(() => undefined);
+  const holder = lock === undefined ? undefined : holderOf(lock);
+  if (holder !== undefined && isAlive(holder)) return entry({ kind: 'kept', owner: 'closing' });
+  // A record that does not parse still names an owner.
+  if (await loadRecord(dir, vm.id).then(rec => rec !== undefined, () => true)) return entry({ kind: 'kept', owner: 'record' });
+  const claims = state.reservations.filter(r => admitted(r) && r.sandboxId === vm.id);
+  if (claims.length > 0) {
+    const ends = claims.map(claimEnd);
+    const known = ends.filter((end): end is number => end !== undefined);
+    if (known.length < ends.length) return entry({ kind: 'kept', owner: 'claim', until: null });
+    if (known.some(end => end > now)) return entry({ kind: 'kept', owner: 'claim', until: new Date(Math.max(...known)).toISOString() });
+    const own = claims.find(r => r.account === account);
+    return entry({ kind: 'orphan', evidence: 'claim_expired', archived: false }, own === undefined ? 'other_key' : 'archive', own?.id);
+  }
+  // Its owner closed it while the inventory was read. An older close, such as a claim released by hand, proves nothing now.
+  if (state.events.some(e => e.provider === 'boat' && e.kind === 'sandbox' && e.sandboxId === vm.id && e.checkpoint !== true && Date.parse(e.t) >= listedAt)) return entry({ kind: 'settled' });
+  // A live controller may be creating this very VM: the meter binds its claim only once `up` returns, and `track` may observe it before.
+  if (state.reservations.some(r => admitted(r) && r.sandboxId === undefined && (claimEnd(r) ?? Infinity) > now)) return entry({ kind: 'kept', owner: 'pending_create' });
+  const unmetered = named ? 'archive' : 'needs_id';
+  if (observed !== undefined) return entry({ kind: 'orphan', evidence: 'tracked', archived: false }, unmetered, observed.id);
+  return entry({ kind: 'orphan', evidence: 'untracked', archived: false }, unmetered);
+}
+
+/** The command that settles a receipt's unknown billing, or says why none can yet. */
+function followUp(vm: BoatInventorySandbox, receipt: BoatOrphanReceipt, day: string): string {
+  if (receipt.action === 'archive_failed') {
+    // A close or an expired claim is acted on without --id, and the next run refuses an --id for either.
+    const automatic = receipt.evidence === 'claim_expired' || STOPPED_STATES.has(vm.state);
+    return `bun run sandbox -- reconcile-orphans --apply${automatic ? '' : ` --id ${vm.id}`}`;
+  }
+  if (receipt.evidence === 'claim_expired') {
+    return `bun run sandbox -- capture-usage --day ${day}  # claim ${receipt.reservationId} settled at its TTL bound; its overrun past that bound is unknown and outside the caps, because reconcile-usage refuses an admission claim and capture-usage records evidence only`;
+  }
+  if (vm.createdAt === null) return `bun run sandbox -- discover  # Boat reports no creation time for ${vm.id}, so reconcile-usage ${receipt.reservationId} would refuse; rerun it once discover shows one, and until then its billing stays unknown`;
+  return `bun run sandbox -- reconcile-usage ${receipt.reservationId}`;
+}
+
+/**
+ * Owned Boat VMs that nothing will close. Only metered evidence acts on its own: an admission claim past its TTL is
+ * archived, and a tracked VM Boat already archived has its observation closed. A VM no metered owner explains may
+ * belong to an unmetered process, so it is listed, and archived only when `ids` names it. A dry run reads inventory
+ * and local state only. `apply` appends an intent receipt before each action and an outcome receipt after it.
+ */
+export async function reconcileOrphans(deps: Deps, opts: { readonly apply: boolean; readonly org?: string; readonly ids?: readonly string[] }) {
+  const pinned = boatOrg(deps.env);
+  if (opts.apply && opts.org !== undefined && opts.org !== pinned) {
+    throw new SandboxError(`reconcile-orphans --apply refused: --org ${opts.org} differs from WORLDGEN_BOAT_ORG ${pinned ?? '(unset)'}, and stops go through the pinned organization`);
+  }
+  const org = opts.org ?? pinned;
+  const account = accountFor('boat', boatKey(deps.env));
+  const ledger = deps.backendOptions?.ledger ?? openLedger(ledgerPath(deps.env));
+  const snapshot = () => {
+    const read = ledger.read();
+    if (opts.apply && read.corrupt > 0) throw new SandboxError('reconcile-orphans --apply refused: the spend ledger contains corrupt records');
+    return read;
+  };
+  if (opts.apply) snapshot();
+  const caps = opts.apply ? capsFromEnv(deps.env) : {};
+  const inspection = deps.boatInspection ?? boatClientFromEnv(deps.env);
+  const dir = recordsDir(deps.env);
+  const ids = new Set(opts.ids ?? []);
+  const listedAt = ledger.now();
+  const inventory = await inspection.inventory(org);
+  // Read after the inventory: the meter reserves before it creates, so every listed VM's claim is in this snapshot.
+  const state = snapshot();
+  const now = ledger.now();
+  const plan: PlanEntry[] = [];
+  for (const vm of inventory) plan.push(await planOf(vm, state, listedAt, now, dir, account, ids.has(vm.id)));
+  for (const id of ids) {
+    const row = plan.find(p => p.vm.id === id);
+    if (row === undefined) throw new SandboxError(`--id ${id} is not in the Boat inventory of ${org ?? UNPINNED}`);
+    if (row.action !== 'archive') throw new SandboxError(`--id ${id} names a VM reconcile-orphans will not archive (${row.verdict.kind === 'kept' ? `kept: ${row.verdict.owner}` : row.verdict.kind}); use \`bun run sandbox -- down ${id}\` if it must go`);
+  }
+  const rows = plan.map(({ vm, verdict, action }) => ({ id: vm.id, state: vm.state, verdict, action }));
+  const receiptsFile = boatOrphanReceiptsPath(ledger.path);
+  const receipts: BoatOrphanReceipt[] = [];
+  const next: string[] = [];
+  const acting = opts.apply ? plan.filter(p => p.action === 'archive' || p.action === 'close') : [];
+  const intents = opts.apply ? await openIntents(receiptsFile) : new Map<string, BoatOrphanReceipt>();
+  const recovering = inventory.flatMap(vm => {
+    const intent = intents.get(vm.id);
+    return intent !== undefined && STOPPED_STATES.has(vm.state) ? [{ vm, intent }] : [];
+  });
+  if (acting.length > 0 || recovering.length > 0) {
+    await mkdir(path.dirname(receiptsFile), { recursive: true, mode: 0o700 });
+    await appendFile(receiptsFile, '', { mode: 0o600 });
+  }
+  const at = () => new Date(ledger.now()).toISOString();
+  // A run that crashed between its action and the outcome left an intent alone; Boat now shows the action done.
+  for (const { vm, intent } of recovering) {
+    const { action, at: _at, error: _error, ...kept } = intent;
+    const outcome = await appendOrphanReceipt(receiptsFile, { ...kept, action: action === 'close_started' ? 'already_archived' : 'archived', at: at(), recovered: true });
+    receipts.push(outcome);
+    next.push(followUp(vm, outcome, utcDay(now)));
+  }
+  const shared: Deps = { ...deps, backendOptions: { ...deps.backendOptions, ledger } };
+  for (const { vm, verdict, action, reservationId: known } of acting) {
+    if (verdict.kind !== 'orphan') continue;
+    const reservationId = known ?? ledger.observeSandbox({ account, sandboxId: vm.id, caps });
+    const base = { version: 1, sandboxId: vm.id, evidence: verdict.evidence, inspectionAccount: account, reservationId, costBasis: UNKNOWN_BILLING, ...(vm.team === undefined ? {} : { walletId: vm.team.id }) } as const;
+    receipts.push(await appendOrphanReceipt(receiptsFile, { ...base, action: action === 'close' ? 'close_started' : 'archive_started', at: at() }));
+    let outcome: z.input<typeof orphanReceiptSchema>;
+    try {
+      if (action === 'close') {
+        ledger.markSandboxClosed(reservationId, vm.id);
+        outcome = { ...base, action: 'already_archived', at: at() };
+      } else {
+        await downDetached(vm.id, shared);
+        outcome = { ...base, action: 'archived', at: at() };
+      }
+    } catch (err) {
+      const message = (err instanceof Error ? err.message : String(err)).split('\n')[0]?.trim() || 'archive failed without a message';
+      outcome = { ...base, action: 'archive_failed', at: at(), error: message };
+    }
+    const written = await appendOrphanReceipt(receiptsFile, outcome);
+    receipts.push(written);
+    next.push(followUp(vm, written, utcDay(now)));
+  }
+  return { wallet: org ?? UNPINNED, dryRun: !opts.apply, ledgerCorrupt: state.corrupt, receiptsFile, rows, receipts, next };
 }

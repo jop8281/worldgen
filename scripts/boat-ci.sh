@@ -5,7 +5,8 @@
 #
 # When the ref has scripts/factory-check.sh, it runs as a third job, and its junit.xml lands in $BOAT_CI_JUNIT_DIR (default /tmp/claude-501).
 # Prints each runtime's exit code, test counts and failing test names, then a PASS/FAIL line. The VM always goes down.
-# Run it with WORLDGEN_MAX_DAILY_USD and WORLDGEN_MAX_TOTAL_USD unset (research/demo-runbook.md, Live segment).
+# The VM is metered (YOS-233): export BOAT_USD_PER_COMPUTE_HOUR and a WORLDGEN_MAX_DAILY_SANDBOX_USD that covers a large VM's
+# 2-hour TTL. WORLDGEN_MAX_DAILY_USD and WORLDGEN_MAX_TOTAL_USD may stay unset (research/demo-runbook.md, Live segment).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

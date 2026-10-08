@@ -20,6 +20,9 @@ commands:
   serve <dir> [--port 4000] [--admin-port <n>] [--host 127.0.0.1] [--admin-host 127.0.0.1]
                                        check, then serve the world's API on --port and the /_world
                                        admin routes on --admin-port (default port + 1) until Ctrl-C;
+                                       --port 0 lets the OS pick both ports (the admin port too, unless given);
+                                       once both listen it prints one line {"listening":{"world":<port>,"admin":<port>}},
+                                       then the world, admin and console URLs;
                                        the admin port also serves the operator console at /;
                                        --admin-host defaults to 127.0.0.1 even when --host is public;
                                        env WORLDPLAY_HOST and WORLDPLAY_ADMIN_HOST set the defaults
@@ -183,7 +186,8 @@ async function serveCommand(args: readonly string[]): Promise<number> {
   } catch (e) {
     return fail(`serve: ${messageOf(e)}`);
   }
-  process.stdout.write(`world ${server.url}\nadmin ${server.adminUrl}\nconsole ${server.adminUrl}/\n`);
+  // The first line is for a parent that started this serve on port 0 and needs the ports the OS picked (A-348).
+  process.stdout.write(`${JSON.stringify({ listening: { world: server.port, admin: server.adminPort } })}\nworld ${server.url}\nadmin ${server.adminUrl}\nconsole ${server.adminUrl}/\n`);
   await stopped;
   await server.close();
   return 0;
