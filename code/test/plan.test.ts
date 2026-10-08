@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parse } from 'yaml';
 import type { World } from '#engine';
 import { z } from 'zod';
-import { planCoverage, planSchema, planSchemaFor, renderPlanYaml, workflowIssues, type Plan } from '../src/worldgen/plan.ts';
+import { planCoverage, planSchema, planSchemaFor, pressurePlanIssues, renderPlanYaml, workflowIssues, type Plan } from '../src/worldgen/plan.ts';
 import { ownerOf } from '../src/worldgen/policy.ts';
 
 const plan: Plan = {
@@ -616,5 +616,34 @@ describe('task pressure in the plan (A-226, A-227)', () => {
   it('accepts a planned paging entity and workflow state, and keeps them through plan.yaml', () => {
     const r = planSchema.parse(withPressure({ paging: 'ticket', states: ['ticket.solved'] }));
     assert.deepEqual(planSchema.parse(parse(renderPlanYaml(r))).tasks[0]?.pressure, { paging: 'ticket', states: ['ticket.solved'] });
+  });
+});
+
+describe('a pressure state the plan\'s own lifecycle keeps out of every state field (A-369, YOS-253)', () => {
+  const removal = { name: 'agent_lifecycle', entity: 'agent', states: ['active', 'deleted'], rules: [], lifecycle: { representation: 'removal' as const, reason: 'a deleted agent is removed from the store' }, actions: [] };
+  const pressing = (states: string[], workflows: Plan['workflows'] = [...plan.workflows, removal]): Plan =>
+    ({ ...plan, workflows, tasks: plan.tasks.map((t) => (t.id === 'solve_vip' ? { ...t, pressure: { states } } : t)) });
+
+  it('mints plan.pressure_unreachable for a state only a removal workflow names, and routes it to plan', () => {
+    const issues = pressurePlanIssues(pressing(['agent.active']));
+    assert.deepEqual(issues.map((i) => [i.code, i.severity, i.path, i.found]), [
+      ['plan.pressure_unreachable', 'error', ['plan', 'tasks', 1, 'pressure', 'states', 0], 'agent.active is a state only of agent_lifecycle (lifecycle removal)'],
+    ]);
+    assert.equal(issues[0]?.expected, 'pressure states on solve_vip that a state field of agent holds');
+    assert.equal(issues[0]?.hint, 'agent.active belongs only to agent_lifecycle, whose declared lifecycle keeps it out of every state field, so no seed row can be in it. Drop agent.active from the pressure of solve_vip, or press a state of a workflow whose states a state field holds.');
+    assert.deepEqual(issues.map(ownerOf), ['plan']);
+  });
+
+  it('mints it for a descriptive lifecycle too, at the index of the claim', () => {
+    const flag = { ...removal, lifecycle: { representation: 'descriptive' as const, reason: 'active is a derived flag' } };
+    assert.deepEqual(pressurePlanIssues(pressing(['ticket.solved', 'agent.active'], [...plan.workflows, flag])).map((i) => [i.path, i.found]), [
+      [['plan', 'tasks', 1, 'pressure', 'states', 1], 'agent.active is a state only of agent_lifecycle (lifecycle descriptive)'],
+    ]);
+  });
+
+  it('leaves a state that a workflow without a lifecycle also names to the seed check', () => {
+    const held = { name: 'agent_status', entity: 'agent', states: ['active', 'away'], rules: [], actions: [] };
+    assert.deepEqual(pressurePlanIssues(pressing(['agent.active'], [...plan.workflows, removal, held])), []);
+    assert.deepEqual(pressurePlanIssues(pressing(['ticket.solved'])), []);
   });
 });

@@ -2089,6 +2089,41 @@ describe('runWorldGen: a seed shortfall found at tasks goes back to seed with it
     assert.deepEqual(listed(calls[3]?.prompt ?? '', 'Pressure each task must show, every claim in every answer'), []);
     assert.equal(result.kind, 'done');
   });
+
+  // stress-5 stripe-customers: a create's seed step had no task yet, so its report failed and the seed needs never ran there.
+  it('rejects a create seed that misses a planned need at the seed step and retries it there with the issue (YOS-253)', async () => {
+    const paged = { ...PLAN, tasks: PLAN.tasks.map((t) => (t.id === 'resolve_password_ticket' ? { ...t, pressure: { paging: 'ticket' } } : t)) };
+    // The paging claim needs the changed row reached only past the first page: the password ticket is row 2, so pages of one.
+    const secondRow = "ctx.api('GET', '/tickets?limit=1&cursor=' + ctx.api('GET', '/tickets?limit=1').body.next_cursor)";
+    const LATER_PAGE_TASKS = { note: 'three graded tasks; the easy one finds its ticket on the second one-row page', upsert: { tasks: Object.fromEntries(Object.entries(TARGET.tasks).map(([id, t]) =>
+      [id, id === 'resolve_password_ticket' ? { ...t, solution: t.solution?.replace("ctx.api('GET', '/tickets')", secondRow) } : t])) } };
+    const { result, events, calls } = await run([
+      { input: paged }, { input: PAGE_12 }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: SEED_24 }, { input: LATER_PAGE_TASKS },
+    ]);
+    assert.deepEqual(steps(events), [
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'rejected'], ['seed', 'accepted'], ['tasks', 'accepted'],
+    ]);
+    const seedIssues = events.flatMap((e) => (e.t === 'attempt' && e.step === 'seed' && e.outcome.kind === 'rejected' ? e.outcome.issues : []));
+    assert.deepEqual(seedIssues.map((i) => [i.code, i.path, i.expected, i.found]), [['seed.too_few_rows_for_paging', ['seed', 'ticket'], 'more than 12 ticket rows', '12 rows']]);
+    assert.equal(calls[4]?.prompt.includes('more than 12 ticket rows'), true);
+    assert.equal(result.kind, 'done');
+  });
+
+  it('rejects at the plan step a pressed state the plan holds in no state field, and the plan that drops it reaches done (YOS-253)', async () => {
+    const removal = { name: 'customer_lifecycle', entity: 'customer', states: ['active', 'deleted'], rules: [], lifecycle: { representation: 'removal', reason: 'a deleted customer is removed from the store' }, actions: [] };
+    // As stripe-customers' plan did: the schema asks every workflow entity for a stateMix, so the removal one gets active: 100.
+    const unmeetable = {
+      ...PLAN, workflows: [...PLAN.workflows, removal], seed: { ...PLAN.seed, stateMix: { ...PLAN.seed.stateMix, customer: { active: 100 } } },
+      tasks: PLAN.tasks.map((t) => (t.id === 'escalate_acme' ? { ...t, pressure: { states: ['customer.active'] } } : t)),
+    };
+    const { result, events, calls } = await run([{ input: unmeetable }, { input: PLAN }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }]);
+    const planIssues = events.flatMap((e) => (e.t === 'attempt' && e.step === 'plan' && e.outcome.kind === 'rejected' ? e.outcome.issues : []));
+    assert.deepEqual(planIssues.map((i) => [i.code, i.path, i.found]), [
+      ['plan.pressure_unreachable', ['plan', 'tasks', 2, 'pressure', 'states', 0], 'customer.active is a state only of customer_lifecycle (lifecycle removal)'],
+    ]);
+    assert.equal(calls[1]?.prompt.includes('Drop customer.active from the pressure of escalate_acme'), true);
+    assert.equal(result.kind, 'done');
+  });
 });
 
 

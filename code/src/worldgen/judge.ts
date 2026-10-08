@@ -11,7 +11,7 @@ import {
 import { inputCoverage } from './input-coverage.ts';
 import type { InputDigest } from './input.ts';
 import { actionRouteIds, changeItem, changeReason, planCoverage, seedPlanIssues, workflowIssues, type Plan } from './plan.ts';
-import { SECTION_OWNER, STAGES, STAGE_IDS, isTestRun, seedBlocking, type StageId } from './stages.ts';
+import { SECTION_OWNER, STAGES, STAGE_IDS, isTestRun, seedBlocking, seedNeedIssues, type StageId } from './stages.ts';
 
 /** How many times a check may run when the engine's snippet host fails to start. */
 export const INFRA_CHECK_TRIES = 2;
@@ -58,13 +58,17 @@ const DIFFICULTIES: readonly Difficulty[] = ['easy', 'medium', 'hard'];
  * The `STAGES[stage].done` rules that can run on a failed report, which carries warnings but
  * no checked world and no full stats. Seed's and workflow's rules read the report warnings (the
  * engine adds `action.unexercised` when the tasks layer failed only for too few tasks, A-136),
- * seed's plan rules read the seed counts a report past the seed layer carries, and the task count
- * and spread rules read `candidate`. Mirrors stages.ts (seed and workflow
- * `done`, `tasksDone`); keep the two in step until `Stage.done` accepts an unchecked world.
+ * seed's plan rules and seed needs read the seed counts a report past the seed layer carries, so a
+ * create's seed step, whose world has no task yet and so never checks ok, still blocks on what the
+ * planned tasks need (A-271, A-369). The task count and spread rules read `candidate`. Mirrors
+ * stages.ts (seed and workflow `done`, `tasksDone`); keep the two in step until `Stage.done` accepts
+ * an unchecked world.
  */
 function failedDone(stage: StageId, report: Extract<CheckReport, { ok: false }>, candidate: World | undefined, plan: Plan): readonly CheckIssue[] {
   if (stage === 'seed') {
-    const planned = report.stats === undefined || candidate === undefined ? [] : seedPlanIssues(plan, report.stats, candidate);
+    const planned = report.stats === undefined || candidate === undefined
+      ? []
+      : [...seedPlanIssues(plan, report.stats, candidate), ...seedNeedIssues(plan, candidate, report.stats)];
     return [...seedBlocking(report.warnings, plan), ...planned];
   }
   if (stage === 'workflow') return report.warnings.filter((w) => w.code === 'action.unexercised');

@@ -345,6 +345,16 @@ describe('task pressure from reference traces (A-225..A-227)', () => {
     ]);
   });
 
+  it('sends a pressed state no state field can hold to the plan at tasks, and checks no seeded rows for it (A-369, YOS-253)', () => {
+    const removal = { name: 'ticket_removal', entity: 'ticket', states: ['archived'], rules: [], lifecycle: { representation: 'removal' as const, reason: 'an archived ticket is deleted' }, actions: [] };
+    const unmeetable: Plan = { ...pressed('solve_vip', { states: ['ticket.archived'] }), workflows: [...plan.workflows, removal] };
+    const r = withTraces(traced(), [v('solve_vip', 'medium', 2)], { states: { 'ticket.status': { open: 40 } } });
+    assert.deepEqual(pressureIssues(r, unmeetable).map((i) => [i.code, i.path, i.found]), [
+      ['plan.pressure_unreachable', ['plan', 'tasks', 1, 'pressure', 'states', 0], 'ticket.archived is a state only of ticket_removal (lifecycle removal)'],
+    ]);
+    assert.deepEqual(pressureChecks(r, unmeetable), []);
+  });
+
   it('exempts an imported table instead of padding it, and says why', () => {
     const imported = traced({ fixtures: { tickets: [{ subject: 'a' }] } as unknown as World['fixtures'] });
     const plan2 = pressed('solve_vip', { paging: 'ticket', states: ['ticket.solved'] });
@@ -391,6 +401,15 @@ describe('what the planned tasks need from the seed, told and checked at the see
   it('leaves an entity fed from an input fixture to its input', () => {
     const fed = { ...built, fixtures: { tickets: [{ status: 'open' }] }, seed: { ticket: '(ctx) => ctx.fixture("tickets")' } } as unknown as World;
     assert.deepEqual(seedNeeds(pressing, fed), []);
+  });
+
+  it('asks the seed for no row in a state the plan\'s lifecycle keeps out of every state field, and sends the claim to the plan (A-369)', () => {
+    const removal = { name: 'ticket_removal', entity: 'ticket', states: ['archived'], rules: [], lifecycle: { representation: 'removal' as const, reason: 'an archived ticket is deleted' }, actions: [] };
+    const unmeetable: Plan = { ...pressing, workflows: [...plan.workflows, removal], tasks: plan.tasks.map((t) => (t.id === 'rebalance' ? { ...t, pressure: { states: ['ticket.archived'] } } : t)) };
+    assert.deepEqual(seedNeeds(unmeetable, built), []);
+    assert.deepEqual(STAGES.seed.done(report(built, { rows: { ticket: 12 }, states: { 'ticket.status': { open: 12 } } }), unmeetable).map((i) => [i.code, i.path, i.found]), [
+      ['plan.pressure_unreachable', ['plan', 'tasks', 2, 'pressure', 'states', 0], 'ticket.archived is a state only of ticket_removal (lifecycle removal)'],
+    ]);
   });
 });
 
