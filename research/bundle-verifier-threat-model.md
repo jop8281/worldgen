@@ -42,8 +42,9 @@ Status: an audit of stabilize/main `ab512b17`, with the fixes of A-374 (#107) an
 | 18 | Studio generation run events (`GET /api/generate/:runId/events`) | B | `studio-sensitive` "withholds every text that can quote task source below admin" (A-374) |
 | 19 | Studio child output: `serve.failed` and a failed episode's output lines | B | `studio-sensitive` "withholds a serve failure's last line below admin" and "withholds a failed episode's output below admin even when its exported world has no sensitive field" (A-377) |
 | 20 | Production upload paths: `bun run dataset` (default `makeBundle`) and `bun run sandbox up` | A | `dataset-cli` "uploads exactly the public form of the world through the production makeBundle default"; `sandbox-registry` "uploads the public form of the world by default, and the private world only with private: true" (A-377) |
+| 21 | Studio generation run status: a failed run's `reason`, which ends with the run child's last output line (`GET /api/generate/:runId`) | B | `studio-sensitive` "withholds a failed run's output below admin even when its saved world has no sensitive field" (A-374, A-377) |
 
-Rows 17 to 20 were gaps when this audit began, and each now has a test that failed first or pins the default.
+Rows 17 to 21 were gaps when this audit began, and each now has a test that failed first or pins the default.
 - **17 (A-374).** The export zips the private `world.yaml`, and it was open to viewers. A viewer of a world with no
   sensitive field got every grader and solution, including a library world reached from another tenant. It is now
   admin-only.
@@ -55,6 +56,11 @@ Rows 17 to 20 were gaps when this audit began, and each now has a test that fail
 - **20 (A-377).** `bun run sandbox up` uploaded the private world to a VM that is public on Boat. It now uploads the
   public form by default, built by the allowlisted prepare child, and `--private` keeps the old upload with a warning.
   The dataset's correct `publicOnly` default had no test, and is now pinned through the production `makeBundle`.
+  Grading on the VM (`POST /_world/grade/<task>` on its admin port) therefore needs `--private`: the public form has
+  no graders, and the usage and the docs say so.
+- **21 (A-374, A-377).** A failed generation run's `reason` ends with its child's last output line, which can quote a
+  check failure on a grader as an episode's can. Below admin it was withheld only when the run's saved world had a
+  sensitive field (A-367), so a viewer saw it for any other world. It is now withheld below admin whatever the world.
 
 ## Stated limits
 

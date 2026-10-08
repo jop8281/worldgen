@@ -67,7 +67,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
-import { bodyBelowAdmin, CHILD_TEXT_WITHHELD, episodeBelowAdmin, mergeSensitivity, RUN_TEXT_WITHHELD, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
+import { bodyBelowAdmin, CHILD_TEXT_WITHHELD, episodeBelowAdmin, mergeSensitivity, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { parsePlanYaml } from '../worldgen/plan.ts';
 import { renderPlanMd } from '../worldgen/plan-md.ts';
@@ -1922,12 +1922,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const events = await readEvents(run);
     const running = run.phase !== 'finished';
     const tail = events.slice(-EVENT_TAIL);
-    // Issue text, error messages and the child's own output can quote seed values or model output, so below admin they
-    // show only for a run whose saved world has no sensitive field. The out dir holds a world only once the run is done,
-    // so a run with none fails closed (A-367).
+    // Issue text and error messages can quote seed values or model output, so below admin they show only for a run whose
+    // saved world has no sensitive field; the out dir holds a world only once the run is done, so a run with none fails
+    // closed (A-367). The child's own output can quote world or task source, as an episode's can, so below admin it is
+    // withheld whatever the world's sensitivity (A-374, A-377).
     const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await sensitivityOf(run.outDir);
     const output = run.child?.output() ?? '';
-    const said = (sensitive !== null && sensitive.size === 0) || output.trim() === '' ? output : RUN_TEXT_WITHHELD;
+    const said = who.role === 'admin' || output.trim() === '' ? output : CHILD_TEXT_WITHHELD;
     return {
       status: 200,
       body: {
