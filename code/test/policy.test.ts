@@ -56,6 +56,9 @@ const KEY_TF = 'test.failed@tests/close_ticket: open';
 const actionBad = issue('snippet.runtime_error', ['actions', 'close_ticket', 'handler'], { message: 'boom' }, 'boom');
 const KEY_ACTION = 'snippet.runtime_error@actions/close_ticket/handler: boom';
 const KEY_TF_AND_ACTION = 'snippet.runtime_error@actions/close_ticket/handler: boom|test.failed@tests/close_ticket: open';
+// A frozen test that throws, as billing-dunning's did at the model step before workflow built POST /subscriptions (stress-4).
+const threw = issue('snippet.runtime_error', ['tests', 'close_ticket', 'script'], { message: 'inv is undefined' }, 'inv is undefined');
+const KEY_THREW = 'snippet.runtime_error@tests/close_ticket/script: inv is undefined';
 
 // The airline live run run_20261007T051502Z_6b44181a: seed attempt 2 fixed booking_id on row 0 and failed flight_id on it.
 const seatRef = (field: string, of: string, found: string) =>
@@ -141,6 +144,11 @@ const rows: Row[] = [
   { name: 'a failing test repeated beside a workflow error still stops no_progress', step: 'workflow', ledger: { attempts: { plan: 1, model: 1, workflow: 2, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_TF_AND_ACTION, KEY_TF_AND_ACTION], seed: [], tasks: [] } },
     outcome: rejected(tf, actionBad), issues: owned([tf, 'workflow'], [actionBad, 'workflow']),
     want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_TF_AND_ACTION, lastIssues: [tf, actionBad] } } },
+  // A-361: a frozen test that throws is a test run, so workflow repairs it first, and one it keeps throwing goes back to plan (A-165).
+  { name: 'a frozen test that throws once at workflow retries there, not a backtrack to plan', step: 'workflow', ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_THREW], seed: [], tasks: [] } },
+    outcome: rejected(threw), issues: owned([threw, 'workflow']), want: { kind: 'retry' } },
+  { name: 'a frozen test that throws twice at workflow backtracks to plan, not no_progress', step: 'workflow', ledger: { attempts: { plan: 1, model: 1, workflow: 2, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_THREW, KEY_THREW], seed: [], tasks: [] } },
+    outcome: rejected(threw), issues: owned([threw, 'workflow']), want: { kind: 'backtrack', to: 'plan' } },
   // A-165: the seed cannot edit the plan's frozen tests either, so a failing test it keeps repeating goes back to plan.
   { name: 'a frozen test failing twice at seed backtracks to plan, not no_progress', step: 'seed', ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 2, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_TF, KEY_TF], tasks: [] } },
     outcome: rejected(tf), issues: owned([tf, 'seed']), want: { kind: 'backtrack', to: 'plan' } },
@@ -266,6 +274,7 @@ describe('ownerOf', () => {
     ['fixed owner entities maps to model', bad, 'model'],
     ['fixed owner tasks maps to tasks', noop, 'tasks'],
     ['test.failed at tests maps to workflow, which fixes the implementation', tf, 'workflow'],
+    ['a frozen test that throws maps to workflow, not to the plan that wrote it (A-361)', threw, 'workflow'],
     ['layer.blocked at tests maps to workflow', issue('layer.blocked', ['tests'], { layer: 'tests' }, 'skipped layers: tests'), 'workflow'],
     ['iterate.regression of an old test maps to workflow', issue('iterate.regression', ['tests', 'old'], { what: 'w' }, 'f'), 'workflow'],
     ['an action no test calls maps to workflow, which wrote the action, not to plan (YOS-127)', issue('action.unexercised', ['actions', 'x'], { action: 'x' }, 'no test calls x'), 'workflow'],

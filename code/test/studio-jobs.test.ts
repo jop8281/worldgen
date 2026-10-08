@@ -92,6 +92,7 @@ const T0 = Date.parse('2026-10-07T12:00:00.000Z');
 const MINE = new RegExp(`^studio-${process.pid}-[0-9a-f]{8}$`);
 const GONE = 'the studio restarted while this run was running and its process is gone; its evidence stays in the <out>.partial directory';
 const UNCONFIRMED = 'the studio stopped before it confirmed this run started, so it is never started again: its process may have started, and a paid run must not run twice';
+const CLOSED = 'the studio closed before this run finished and sent its process SIGTERM, its clean stop; the run is never started again';
 
 const roots: string[] = [];
 const studios: StudioServer[] = [];
@@ -140,6 +141,19 @@ function jobWithMine(body: Json): Json {
   return { ...job, lease: { ...lease, holder: 'mine' } };
 }
 
+/**
+ * The run id of a generation of `body` that a gone studio left running as process 7701, its lease still live at T0.
+ * A studio records the request's derived key and fingerprint, then the file is rewritten as the gone studio left it.
+ */
+async function leftRunning(f: Fixture, body: Json): Promise<string> {
+  const a = await open(f, { now: () => T0 });
+  const runId = String((await json(a.url, 'POST', '/api/generate', body)).body['runId']);
+  await a.close();
+  const [record] = await stored(f);
+  await writeRegistry(f, [{ ...record, phase: 'running', lease: { holder: 'studio-dead', expiresAt: '2026-10-07T12:00:30.000Z' }, pid: 7701, exitCode: null }]);
+  return runId;
+}
+
 describe('studio jobs: idempotent starts (A-335)', () => {
   it('answers a retried POST with the same Idempotency-Key from the first job, and refuses the key for another request', async () => {
     const f = await fixture();
@@ -184,6 +198,32 @@ describe('studio jobs: idempotent starts (A-335)', () => {
     const rerun = await json(studio.url, 'POST', '/api/generate', body);
     assert.deepEqual([rerun.status, rerun.body['replayed'], s.spawned.length], [200, false, 2]);
     assert.notEqual(rerun.body['runId'], a.body['runId']);
+  });
+
+  it('starts the same request with no key anew when its running job belongs to a studio whose process is gone (A-363)', async () => {
+    const f = await fixture();
+    const body = { kind: 'description', text: 'T', outSlug: 'owner' };
+    const stale = await leftRunning(f, body);
+    const s = fakeSpawner();
+    const studio = await open(f, { spawner: s.spawner, now: () => T0 });
+    const fresh = await json(studio.url, 'POST', '/api/generate', body);
+    assert.deepEqual([fresh.status, fresh.body['running'], fresh.body['replayed'], s.spawned.length], [200, true, false, 1]);
+    assert.notEqual(fresh.body['runId'], stale);
+    const again = await json(studio.url, 'POST', '/api/generate', body);
+    assert.deepEqual([again.body['runId'], again.body['replayed'], s.spawned.length], [fresh.body['runId'], true, 1]);
+    const old = await json(studio.url, 'GET', `/api/generate/${stale}`);
+    assert.deepEqual([(old.body['job'] as Json)['phase'], leaseOf(old.body).holder], ['running', 'studio-dead']);
+  });
+
+  it('still replays the same request with no key onto a running job another studio holds while its process lives (A-363)', async () => {
+    const f = await fixture();
+    const body = { kind: 'description', text: 'T', outSlug: 'owner' };
+    const stale = await leftRunning(f, body);
+    f.live.add(7701);
+    const s = fakeSpawner();
+    const studio = await open(f, { spawner: s.spawner, now: () => T0 });
+    const again = await json(studio.url, 'POST', '/api/generate', body);
+    assert.deepEqual([again.status, again.body['runId'], again.body['running'], again.body['replayed'], s.spawned.length], [200, stale, true, true, 0]);
   });
 
   it('records the intent, held by this studio, before it spawns the child', async () => {
@@ -367,7 +407,7 @@ describe('studio jobs: leases and recovery (A-335)', () => {
     assert.deepEqual((await stored(f)).map((r) => [r['phase'], r['lease']]), [['running', thief]]);
   });
 
-  it('lets a restarted studio resume a job the closed one left running, and writes nothing after close', async () => {
+  it('records the job a closing studio stops as stopped by the close, writes nothing after, and a restart never resumes it (A-363)', async () => {
     const f = await fixture();
     const s = fakeSpawner(() => ({ pid: 7101, diesOn: [] }));
     let clockA = T0;
@@ -376,26 +416,31 @@ describe('studio jobs: leases and recovery (A-335)', () => {
     const runId = String(post.body['runId']);
     const holderA = leaseOf((await json(a.url, 'GET', `/api/generate/${runId}`)).body).holder;
     f.live.add(7101);
+    clockA = T0 + 500;
     await a.close();
+    assert.deepEqual(s.spawned[0]!.handle.signals, ['SIGTERM']);
     const closedFile = await readFile(registry(f), 'utf8');
+    const stopped = { at: '2026-10-07T12:00:00.500Z', from: holderA, outcome: 'stopped', reason: 'studio_closed' };
+    assert.deepEqual((JSON.parse(closedFile) as Json[]).map((r) => [r['runId'], r['phase'], r['lease'], r['exitCode'], r['recovery']]), [[runId, 'finished', null, null, stopped]]);
     clockA = T0 + 1_000;
     await sleep(100);
     assert.equal(await readFile(registry(f), 'utf8'), closedFile);
 
+    // Its process still lives, but the close stopped the job, so a restarted studio lists it as stopped and adopts nothing.
     const second = fakeSpawner();
     const b = await open(f, { spawner: second.spawner, now: () => T0 + 60_000 });
     const r = await json(b.url, 'GET', `/api/generate/${runId}`);
-    assert.notEqual(leaseOf(r.body).holder, holderA);
     const key = String((r.body['job'] as Json)['key']);
     assert.match(key, /^derived:[0-9a-f]{64}$/);
-    assert.deepEqual([r.body['running'], jobWithMine(r.body)], [true, {
-      kind: 'generate', key, phase: 'running', lease: { holder: 'mine', expiresAt: '2026-10-07T12:01:30.000Z' },
-      recovery: { at: '2026-10-07T12:01:00.000Z', from: holderA, outcome: 'resumed' },
+    assert.deepEqual([r.status, r.body], [200, {
+      running: false, state: 'interrupted', reason: CLOSED, exitCode: null, events: [], totals: null,
+      job: { kind: 'generate', key, phase: 'finished', lease: null, recovery: stopped },
     }]);
+    assert.equal(await readFile(registry(f), 'utf8'), closedFile);
     assert.deepEqual([s.spawned.length, second.spawned.length], [1, 0]);
   });
 
-  it('records nothing once closed, not even a child that ends after close', async () => {
+  it('records nothing after the close\'s own write, not even a child that ends after close', async () => {
     const f = await fixture();
     const s = fakeSpawner(() => ({ pid: 7601, diesOn: [] }));
     const studio = await open(f, { spawner: s.spawner, leaseMs: 60, now: () => T0 });
@@ -405,10 +450,10 @@ describe('studio jobs: leases and recovery (A-335)', () => {
     s.spawned[0]!.handle.exitWith(0);
     await s.spawned[0]!.handle.child.exited;
     await sleep(100);
-    assert.deepEqual((await stored(f)).map((r) => [r['phase'], r['exitCode'], (r['lease'] as Json)['expiresAt']]), [['running', null, '2026-10-07T12:00:00.060Z']]);
+    assert.deepEqual((await stored(f)).map((r) => [r['phase'], r['exitCode'], r['lease'], (r['recovery'] as Json)['reason']]), [['finished', null, null, 'studio_closed']]);
   });
 
-  it('starts an episode once per key, and a restarted studio lists it with its recovery', async () => {
+  it('starts an episode once per key, and a restarted studio lists it as the close stopped it and replays its key', async () => {
     const f = await fixture();
     const s = fakeSpawner(() => ({ pid: 7201, diesOn: [] }));
     const a = await open(f, { spawner: s.spawner, now: () => T0 });
@@ -430,16 +475,15 @@ describe('studio jobs: leases and recovery (A-335)', () => {
     const second = fakeSpawner();
     const b = await open(f, { spawner: second.spawner, now: () => T0 + 60_000 });
     const list = await json(b.url, 'GET', '/api/episodes');
-    assert.deepEqual(list.body['episodes'], [{ runId, running: true, task: 't1', world: 'w1', stop: null, score: null, costUsd: null }]);
+    assert.deepEqual(list.body['episodes'], [{ runId, running: false, task: 't1', world: 'w1', stop: null, score: null, costUsd: null }]);
     const st = await json(b.url, 'GET', `/api/episodes/${runId}`);
-    assert.deepEqual({ ...st.body, job: jobWithMine(st.body) }, {
-      runId, world: 'w1', task: 't1', agent: 'noop', running: true, exitCode: null,
-      job: {
-        kind: 'episode', key: 'ep-1', phase: 'running', lease: { holder: 'mine', expiresAt: '2026-10-07T12:01:30.000Z' },
-        recovery: { at: '2026-10-07T12:01:00.000Z', from: holderA, outcome: 'resumed' },
-      },
-      episode: null,
+    assert.deepEqual(st.body, {
+      runId, world: 'w1', task: 't1', agent: 'noop', running: false, exitCode: null,
+      job: { kind: 'episode', key: 'ep-1', phase: 'finished', lease: null, recovery: { at: '2026-10-07T12:00:00.000Z', from: holderA, outcome: 'stopped', reason: 'studio_closed' } },
+      episode: null, failure: [],
     });
+    const late = await json(b.url, 'POST', '/api/episodes', body, key);
+    assert.deepEqual(late.body, { runId, world: 'w1', task: 't1', agent: 'noop', running: false, replayed: true });
     assert.equal(second.spawned.length, 0);
   });
 });

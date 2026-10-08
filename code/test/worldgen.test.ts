@@ -2013,9 +2013,11 @@ it('a judging exception retains settled meter charges in the actual report and c
 
 describe('runWorldGen: a seed shortfall found at tasks goes back to seed with its numbers (YOS-219)', () => {
   const PAGE_12 = { note: 'entities and routes, twelve tickets a page', upsert: { entities: TARGET.entities, routes: routesWith('list_tickets', { pageSize: 12 }) } };
+  // The easy solution reads two pages of six through the cursor: only a later-page call counts as paging (A-360).
+  const twoPages = "((first) => ({ status: first.status, body: { data: [...first.body.data, ...ctx.api('GET', '/tickets?limit=6&cursor=' + first.body.next_cursor).body.data] } }))(ctx.api('GET', '/tickets?limit=6'))";
   const pagedTasks = Object.fromEntries(Object.entries(TARGET.tasks).map(([id, t]) =>
-    [id, id === 'resolve_password_ticket' ? { ...t, solution: t.solution?.replace("ctx.api('GET', '/tickets')", "ctx.api('GET', '/tickets?limit=12')") } : t]));
-  const PAGED_TASKS = { note: 'three graded tasks; the easy one lists tickets with a page size', upsert: { tasks: pagedTasks } };
+    [id, id === 'resolve_password_ticket' ? { ...t, solution: t.solution?.replace("ctx.api('GET', '/tickets')", twoPages) } : t]));
+  const PAGED_TASKS = { note: 'three graded tasks; the easy one pages through tickets six at a time', upsert: { tasks: pagedTasks } };
   const doubled = (TARGET.seed['ticket'] ?? '').replace('return spec.map(', "return [...spec, ...spec.map((s) => [s[0], s[1], s[2], s[3] + ' (follow-up)'])].map(");
   const SEED_24 = { note: 'customers and 24 tickets, the same mix', upsert: { seed: { ...TARGET.seed, ticket: doubled } } };
   const steps = (events: readonly RunEvent[]) => events.flatMap((e) => (e.t === 'attempt' ? [[e.step, e.outcome.kind] as const] : []));
