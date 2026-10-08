@@ -35,7 +35,7 @@ export const suiteCaseSchema = z.strictObject({
   input: inputSchema,
   /** A change request, run as an iterate job on the world the create phase saved. */
   change: z.string().trim().min(1).optional(),
-  /** `stopped` marks a prompt WorldGen should refuse. Such a case passes on an honest stop. */
+  /** `stopped` marks a prompt WorldGen should refuse. Only an `input_rejected` stop counts as an expected refusal (A-384). */
   expect: expectSchema.default('done'),
   /** What a good result looks like, for the person triaging. The runner never reads it. */
   note: z.string().optional(),
@@ -478,6 +478,14 @@ const REFUSAL_STOPS: ReadonlySet<string> = new Set<StopReason['kind']>(['input_r
  */
 export const OUTCOMES = ['success', 'expected refusal', 'product failure', 'infra failure', 'not run'] as const;
 export type Outcome = (typeof OUTCOMES)[number];
+/** summary.md's one-line legend: what each outcome means, in OUTCOMES order. A Record, so a new outcome needs a meaning. */
+const OUTCOME_MEANING: Record<Outcome, string> = {
+  success: 'an `expect: done` case that ended done and passed verify',
+  'expected refusal': 'an input_rejected stop on an impossible case (A-384)',
+  'product failure': 'the wrong verdict on the prompt: any other verdict stop, an impossible case that ended done, or a failed verify',
+  'infra failure': 'a crash, a machinery stop, a stop with no logged reason, an unverified done world or an unreadable case.json',
+  'not run': 'a suite case with no case output',
+};
 export type RunOutcome = Exclude<Outcome, 'not run'>;
 
 /** The one classifier of a case that left a readable record: summary.md and eval-outcomes.ts both call it (A-340). */
@@ -620,6 +628,8 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
       `${percentile(rows.map((r) => r.costUsd), 50, (n) => `$${usd(n)}`, expected)} and ${percentile(rows.map((r) => r.costUsd), 95, (n) => `$${usd(n)}`, expected)}.`,
     '',
     `**Pass rate:** ${passed}/${expected}${expected === 0 ? '' : ` (${Math.round((100 * passed) / expected)}%)`}, success and expected refusal over all ${expected} expected cases (${count('not run')} not run).`,
+    '',
+    `**Outcomes:** ${OUTCOMES.map((o) => `${o} = ${OUTCOME_MEANING[o]}`).join('; ')}.`,
   ];
   if (absent.length > 0) {
     out.push('', '## Missing or invalid', '', ...absent.map((a) => `- \`${a.id}\`: ${a.kind === 'missing' ? 'no case.json in the run directory' : `case.json is invalid: ${cell(a.why)}`}`));
