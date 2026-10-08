@@ -70,6 +70,21 @@ describe('CSV fixture fidelity for time columns and derived tables', () => {
     assert.deepEqual(paths(checkedCoverage(digestOf({ loans }), w)), [['plan.not_covered', ['seed', 'loan']]]);
   });
 
+  it('names the UTC instant to write when a date-only cell meets a datetime field seeded at another time (YOS-247)', () => {
+    const enrollments = [{ student: 'S1', enrolled_on: '2026-08-28' }, { student: 'S2', enrolled_on: '2026-08-29' }];
+    const w = minimalWorld({
+      entities: { enrollment: { description: 'An enrollment.', idPrefix: 'enr', fields: {
+        student: { type: 'string', required: true, unique: true },
+        enrolled_on: { type: 'datetime', required: true },
+      } } },
+      fixtures: { enrollments },
+      seed: { enrollment: "(ctx) => ctx.fixtures.enrollments.map((e) => ({ student: e.student, enrolled_on: e.enrolled_on + 'T09:00:00Z' }))" },
+    });
+    const [first] = checkedCoverage(digestOf({ enrollments }), w);
+    assert.equal(first?.code, 'plan.not_covered');
+    assert.equal(first?.found, 'row 1 (student="S1") enrolled_on: expected "2026-08-28", found "2026-08-28T09:00:00.000Z", write 2026-08-28T00:00:00.000Z; row 2 (student="S2") enrolled_on: expected "2026-08-29", found "2026-08-29T09:00:00.000Z", write 2026-08-29T00:00:00.000Z');
+  });
+
   it('accepts a null time where the kept imported status says it does not apply yet', () => {
     const shipments = [
       { code: 'S1', status: 'created', shipped_at: '2026-09-13T12:00:00Z' },
