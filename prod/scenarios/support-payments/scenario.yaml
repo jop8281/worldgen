@@ -1,0 +1,16 @@
+name: support-payments
+description: A helpdesk and a payments API behind one gateway, where the first refund response is lost.
+worlds:
+  support: ../../worlds/helpdesk
+  payments: ../../worlds/gen-stripe-charges
+gates:
+  - world: support
+    task: assign_newest_acme_ticket
+  - world: payments
+    task: refund_duplicate_charge
+faults:
+  - world: payments
+    method: POST
+    path: /v1/refunds
+    nth: 1
+    kind: drop_response
