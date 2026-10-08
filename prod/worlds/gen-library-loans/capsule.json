@@ -6,7 +6,7 @@
     "kind": "csv",
     "digest": "1455bcfe72a0cda5243ea74802c043beb637026bc1bb02453b5b83fd78dd5c18"
   },
-  "worldId": "wid_ef4057042f754ae3c63939a0287a6ecb17602c3e4e2c42beb785defec6ba1f6a",
+  "worldId": "wid_14b93ec57fdb9839d5023a5aa1069ed87f3c187d8afbe2c27e563fb3bd664297",
   "model": "claude-sonnet-5-5",
   "transport": "claude-cli",
   "attempts": [
