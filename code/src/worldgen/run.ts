@@ -34,7 +34,7 @@ import { stepModel, transportOf, type Config } from './config.ts';
 import { createEmitter, type AttemptOutcome, type CutProgress, type Emit, type FidelityCheck, type RunEvent, type StopReason } from './events.ts';
 import { INPUT_KINDS, digestInput, type Input, type InputDigest } from './input.ts';
 import { fixturePlanIssues, operationPlanIssues } from './input-coverage.ts';
-import { ITERATE_PLAN_BRIEF, changedSections, iteratePlanBlocks, iteratePlanSchema, iterateStageBlock, revisesPlanOnly } from './iterate.ts';
+import { ITERATE_PLAN_BRIEF, applyPlanPatch, changedSections, iteratePlanBlocks, iteratePlanSchema, iterateStageBlock, planPatchSchema, planWithWorldTests, revisesPlanOnly } from './iterate.ts';
 import { FIDELITY_FLOOR, fidelityGate, fidelityScore, parseFidelityReference } from './fidelity.ts';
 import { blockingIssues, checkJudgeable, infraIssues, preservationIssues, requestScopeIssues, unplannedChanges } from './judge.ts';
 import { CallStalled, ModelError, StepShareExpired, estimateCallUsd, type CallProgress, type Model, type Proposal, type ProposeRequest, type Usage } from './llm.ts';
@@ -211,16 +211,17 @@ function promptSection(title: string, lines: readonly string[]): string[] {
   return lines.length === 0 ? [] : ['', `## ${title}`, '', ...lines];
 }
 
-function feedbackBlock(feedback: Feedback | null): string[] {
+/** `again` asks for the next answer: in full by default, as a patch on the iterate plan step (A-345). */
+function feedbackBlock(feedback: Feedback | null, again = 'Answer again in full'): string[] {
   if (feedback === null) return [];
   const previous = feedback.previous === undefined ? [] : ['', 'Your previous answer:', '', '```json', JSON.stringify(feedback.previous, null, 2), '```'];
   const head = feedback.rerunBy !== undefined
     ? ['## Your previous answer was rejected for issues an earlier step owned', '',
-      `It was not applied. Since then the ${feedback.rerunBy} step has run again, and every step between it and this one has run again or been rechecked, so the world above may have changed. Answer again in full, keep what was right, and fix what the issues below still show.`]
+      `It was not applied. Since then the ${feedback.rerunBy} step has run again, and every step between it and this one has run again or been rechecked, so the world above may have changed. ${again}, keep what was right, and fix what the issues below still show.`]
     : feedback.from === undefined
-      ? ['## Your previous answer was rejected', '', 'It was not applied. Answer again in full, and fix every issue below.']
+      ? ['## Your previous answer was rejected', '', `It was not applied. ${again}, and fix every issue below.`]
       : [`## The ${feedback.from} step found issues that this step must fix`, '',
-        `Your earlier answer was accepted and is part of what you see above. Answer again in full, and fix every issue below. Every step after this one runs again.`];
+        `Your earlier answer was accepted and is part of what you see above. ${again}, and fix every issue below. Every step after this one runs again.`];
   return [
     '',
     ...head,
@@ -259,7 +260,9 @@ export function planPrompt(digest: InputDigest, feedback: Feedback | null, appro
 
 /** The plan step's prompt on iterate: the request, the old plan (or the world when there is none), then any rejection to fix. */
 export function iteratePlanPrompt(request: string, oldPlan: Plan | null, world: World, feedback: Feedback | null): string {
-  return [...iteratePlanBlocks(request, oldPlan, world), ...promptSection('Engine error codes', engineErrorCodes()), '', '## Your task', '', `Call ${PLAN_TOOL} with the whole updated plan.`, ...feedbackBlock(feedback)].join('\n');
+  const task = oldPlan === null ? `Call ${PLAN_TOOL} with the whole plan.` : `Call ${PLAN_TOOL} with a patch on the existing plan: revision, changes and only the keys that change.`;
+  const again = oldPlan === null ? undefined : 'Answer again with a patch on the plan above';
+  return [...iteratePlanBlocks(request, oldPlan, world), ...promptSection('Engine error codes', engineErrorCodes()), '', '## Your task', '', task, ...feedbackBlock(feedback, again)].join('\n');
 }
 
 /** A stage's prompt: the plan, the world so far, what the stage may write, then any rejection to fix. On iterate it carries the change request. */
@@ -300,6 +303,24 @@ function planTool(schema: PlanSchema): ProposeRequest['tool'] {
     description: 'Submit the plan for this world. Every later stage follows it.',
     inputSchema: z.toJSONSchema(schema, { io: 'input' }),
   };
+}
+
+/** The iterate plan tool when a plan exists: a patch on it (A-345). */
+const PATCH_TOOL: ProposeRequest['tool'] = {
+  name: PLAN_TOOL,
+  description: 'Submit a patch on the existing plan: revision, changes and only the keys that change. Every key you leave out stays as it is.',
+  inputSchema: z.toJSONSchema(planPatchSchema, { io: 'input' }),
+};
+
+/** A plan patch on `base`, judged as the whole plan it makes. A patch that does not parse is invalid output, with each issue at its path in the patch. */
+function judgePatch(schema: PlanSchema, input: unknown, base: Plan, approved: Plan | null): Judged<Plan> {
+  const parsed = planPatchSchema.safeParse(input);
+  if (parsed.success) return judgePlan(schema, applyPlanPatch(base, parsed.data), approved);
+  const issues = parsed.error.issues.map((zi) => {
+    const rel = zi.path.map((k) => (typeof k === 'number' ? k : String(k)));
+    return issue('schema.invalid', ['plan', ...rel], { message: zi.message }, renderFound(valueAt(input, rel)));
+  });
+  return { ok: false, outcome: { kind: 'invalid_output', issues }, issues };
 }
 
 function editTool(stage: StageId): ProposeRequest['tool'] {
@@ -841,6 +862,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
   /** The plan step's schema and prompt: from the input digest on create, from the request, old plan and world on iterate. */
   let planRules: PlanSchema;
   let askPlan: (feedback: Feedback | null) => Pick<ProposeRequest, 'prompt' | 'tool'>;
+  /** Iterate with a plan.yaml only: the plan a patch applies to, its acceptance tests as the world holds them (A-345). */
+  let patchBase: Plan | null = null;
   let gate: Gate | null = null;
   /** Iterate only: the engine report on the world as it was before the run, the baseline for its debt. */
   let beforeReport: CheckReport | null = null;
@@ -882,7 +905,10 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
     const previous = parsePlanYaml(await fs.readFile(join(outDir, 'plan.yaml'), 'utf8').catch(() => ''));
     oldPlan = previous;
     planRules = iteratePlanSchema(existing, previous);
-    askPlan = (fb) => ({ prompt: iteratePlanPrompt(job.request, previous, existing, fb), tool: planTool(planRules) });
+    const base = previous === null ? null : planWithWorldTests(previous, existing);
+    patchBase = base;
+    // After a backtrack the plan accepted earlier in this run is the plan a patch applies to, and the one shown.
+    askPlan = (fb) => ({ prompt: iteratePlanPrompt(job.request, base === null ? null : (plan ?? base), existing, fb), tool: base === null ? planTool(planRules) : PATCH_TOOL });
     reason = 'changed';
   }
 
@@ -896,7 +922,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
     carried = carried ?? rejectedBefore.get(step) ?? null;
     let outcome: StepOutcome<unknown>;
     if (step === 'plan') {
-      const r: StepOutcome<Plan> = await runStep<Plan>(step, reason, carried, askPlan, (input) => judgePlan(planRules, input, plan ?? oldPlan, coverageDigest));
+      const r: StepOutcome<Plan> = await runStep<Plan>(step, reason, carried, askPlan, (input) =>
+        patchBase === null ? judgePlan(planRules, input, plan ?? oldPlan, coverageDigest) : judgePatch(planRules, input, plan ?? patchBase, plan ?? oldPlan));
       if (r.kind === 'advance') {
         const accepted: Plan = r.value;
         plan = accepted;
@@ -920,7 +947,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
           toRun = new Set(stagesToRun(changed));
           if (gate !== null && beforeReport !== null) gate = { ...gate, debt: debtOf(beforeReport, before, oldPlan ?? accepted, toRun, coverageDigest) };
           // A plan-only revision (A-294) reaches no stage: every stage is then probed against the unchanged world below.
-          if (toRun.size === 0 && !revisesPlanOnly(oldPlan, accepted)) {
+          if (toRun.size === 0 && !revisesPlanOnly(patchBase ?? oldPlan, accepted)) {
               return await stop({ kind: 'input_rejected', why: 'the plan changes nothing in the world: it adds no item the world lacks and its changes name no existing item' });
           }
           world = { ...world, tests: frozenTests(accepted, before.tests) };
