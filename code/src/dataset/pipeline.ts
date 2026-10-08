@@ -16,7 +16,7 @@ import {
   checkWorld, createRuntime, dumpSha256, loadWorld, openApiOf, publicWorldOf, renderWorldYaml, saveWorld, taskPrivacy, worldIdOf,
   type CheckedWorld, type Difficulty, type OpenApiDocument, type StateDump, type Wid,
 } from '#engine';
-import { READY_TIMEOUT_SEC, SERVE_LOG, isolatedEnv, nodeRunner, reachWorld, upWorld, type Runner, type SandboxBackend, type WorldBundle } from '../sandboxes/backend.ts';
+import { READY_TIMEOUT_SEC, SANDBOX_BUN, SERVE_LOG, isolatedEnv, nodeRunner, reachWorld, upWorld, type Runner, type SandboxBackend, type WorldBundle } from '../sandboxes/backend.ts';
 import { runEpisode, type NextTurn, type SendableRequest, type WorldPort } from './episode.ts';
 import {
   DatasetError, GRADING_NOTE, PROMPT_VERSION, RUN_ID, TASK_ID, configVersion, hashState, isCompleteSuccess, redactor, sha256Hex,
@@ -245,11 +245,11 @@ export function sandboxPort(o: SandboxPortOptions): SandboxPort {
   };
 
   async function download(remotePath: string, known?: { bytes: number; sha256: string }): Promise<Buffer> {
-    const meta = known ?? (JSON.parse(await exec(['node', '-e', STAT_SCRIPT, remotePath], `stat ${path.posix.basename(remotePath)}`)) as { bytes: number; sha256: string });
+    const meta = known ?? (JSON.parse(await exec([SANDBOX_BUN, '-e', STAT_SCRIPT, remotePath], `stat ${path.posix.basename(remotePath)}`)) as { bytes: number; sha256: string });
     const parts: Buffer[] = [];
     for (let offset = 0; offset < meta.bytes; offset += CHUNK_BYTES) {
       const len = Math.min(CHUNK_BYTES, meta.bytes - offset);
-      const chunk = Buffer.from(await exec(['node', '-e', CHUNK_SCRIPT, remotePath, String(offset), String(len)], `read ${path.posix.basename(remotePath)}`), 'base64');
+      const chunk = Buffer.from(await exec([SANDBOX_BUN, '-e', CHUNK_SCRIPT, remotePath, String(offset), String(len)], `read ${path.posix.basename(remotePath)}`), 'base64');
       if (chunk.length !== len) throw new Error(`download of ${path.posix.basename(remotePath)} returned ${chunk.length} bytes at offset ${offset}, expected ${len}`);
       parts.push(chunk);
     }
@@ -263,7 +263,7 @@ export function sandboxPort(o: SandboxPortOptions): SandboxPort {
   /** One private admin request. `label` names it in errors, so no admin path or URL leaves this function. */
   async function admin(method: 'GET' | 'POST', route: string, label: string): Promise<unknown> {
     const file = `/tmp/wg-admin-${tag}-${++counter}.json`;
-    const r = parseAdminResult(await exec(['node', '-e', ADMIN_SCRIPT, method, `${adminBase}${route}`, file], label));
+    const r = parseAdminResult(await exec([SANDBOX_BUN, '-e', ADMIN_SCRIPT, method, `${adminBase}${route}`, file], label));
     const text = r.inline ?? (await download(file, r)).toString('utf8');
     if (r.inline !== undefined && sha256Hex(text) !== r.sha256) throw new Error(`${label} answer fails its checksum`);
     if (r.status !== 200) throw new Error(`${label} answered HTTP ${r.status}: ${text.slice(0, 300)}`);

@@ -42,7 +42,7 @@ function fakeClient(): { client: BoatClient; calls: Call[]; writes: Map<string, 
     },
     async exec(id, command) {
       calls.push(['exec', id, command]);
-      return { exitCode: 0, stdout: command === 'node -v' ? 'v22.1.0\n' : command.includes('bun-linux-') ? '1.4.2\n' : '', stderr: '', timedOut: false };
+      return { exitCode: 0, stdout: command.includes('bun-linux-') ? '1.4.2\n' : '', stderr: '', timedOut: false };
     },
     async start(id, command) {
       calls.push(['start', id, command]);

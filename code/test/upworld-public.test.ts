@@ -30,7 +30,7 @@ function recorder(): { backend: SandboxBackend; calls: unknown[][] } {
     },
     async exec(_id, cmd) {
       calls.push(['exec', cmd.join(' ')]);
-      return ok(cmd[0] === 'node' && cmd[1] === '-v' ? 'v22.1.0\n' : cmd.join(' ').includes('bun-linux-') ? '1.4.2\n' : cmd[0] === 'tail' ? 'Error: listen EADDRNOTAVAIL\n' : '');
+      return ok(cmd.join(' ').includes('bun-linux-') ? '1.4.2\n' : cmd[0] === 'tail' ? 'Error: listen EADDRNOTAVAIL\n' : '');
     },
     async start(_id, cmd) {
       calls.push(['start', cmd.join(' ')]);

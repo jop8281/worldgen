@@ -1,9 +1,9 @@
 /**
  * One interface over the places a world can run: local sandboxes (OpenShell, sbx) and hosted
- * ones (boat). Shell code: Node is allowed here, the engine is not imported at all.
+ * ones (boat). Shell code: node: modules are allowed here, the engine is not imported at all.
  *
  * The CLI backends spawn their binaries through an injected `Runner`, so tests record argv and
- * never need the binaries. `upWorld()` is the one recipe on top: upload, check Node, install pinned Bun,
+ * never need the binaries. `upWorld()` is the one recipe on top: upload, install pinned Bun (the sandbox needs no Node, A-385),
  * `bun install --frozen-lockfile`, start `worldplay serve` on that Bun detached, wait for the port, and expose the world port only.
  */
 import { execFileSync, spawn } from 'node:child_process';
@@ -302,25 +302,25 @@ export const SERVE_LOG = '/tmp/worldplay.log';
 export const INSTALL_TIMEOUT_SEC = 900;
 /** How long the world port may take to accept a connection after start. */
 export const READY_TIMEOUT_SEC = 60;
-export const MIN_NODE_MAJOR = 22;
 /** Bound by a public world's `serve`: a hosted proxy reaches the sandbox over its network address, not loopback. */
 export const PUBLIC_HOST = '0.0.0.0';
 /** Every sandbox serves on Bun pinned to the CI version (YOS-88), installed privately so an image's own Bun, or none, never matters. */
 export const SANDBOX_BUN_VERSION = '1.4.2';
 const SANDBOX_BUN_DIR = '/tmp/worldgen-bun';
-const SANDBOX_BUN = `${SANDBOX_BUN_DIR}/node_modules/.bin/bun`;
+/** The pinned Bun inside every sandbox, installed by BUN_BOOTSTRAP; it serves the world and runs every one-liner. */
+export const SANDBOX_BUN = `${SANDBOX_BUN_DIR}/node_modules/.bin/bun`;
 /**
  * Fetches Bun's own linux package for the sandbox's CPU and keeps only its binary. `npm install bun` hung for minutes
  * inside openshell while curl fetched the same tarball in under a second, so the bootstrap needs curl and tar, not npm (A-264).
  */
-const BUN_BOOTSTRAP =
+export const BUN_BOOTSTRAP =
   `D=${SANDBOX_BUN_DIR}; A=$(uname -m); case $A in x86_64) A=x64;; esac; mkdir -p $D/node_modules/.bin && ` +
   `curl -fsSL -o $D/bun.tgz https://registry.npmjs.org/@oven/bun-linux-$A/-/bun-linux-$A-${SANDBOX_BUN_VERSION}.tgz && ` +
   `tar -xzf $D/bun.tgz -C $D package/bin/bun && mv $D/package/bin/bun ${SANDBOX_BUN} && rm -rf $D/bun.tgz $D/package && ${SANDBOX_BUN} --version`;
 
 
 /**
- * A Node one-liner run inside the sandbox: connect to 127.0.0.1:<argv[1]> until it accepts, or
+ * A one-liner the sandbox's Bun runs with `-e`: connect to 127.0.0.1:<argv[1]> until it accepts, or
  * exit 1 after <argv[2]> seconds. It runs in the sandbox, so it needs nothing from the host.
  */
 export const WAIT_FOR_PORT =
@@ -382,19 +382,6 @@ function assertWorldPort(port: number): void {
   }
 }
 
-const NODE_VERSION = /^v(\d+)\./;
-
-function assertNode(res: ExecResult, kind: BackendKind): void {
-  const version = res.stdout.trim();
-  const major = NODE_VERSION.exec(version)?.[1];
-  if (res.exitCode !== 0 || major === undefined) {
-    throw new SandboxError(`node not found in the ${kind} sandbox: use an image with Node ${MIN_NODE_MAJOR} or later`);
-  }
-  if (Number(major) < MIN_NODE_MAJOR) {
-    throw new SandboxError(`the ${kind} sandbox has node ${version}: need Node ${MIN_NODE_MAJOR} or later`);
-  }
-}
-
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /**
@@ -411,8 +398,6 @@ export async function upWorld(backend: SandboxBackend, bundle: WorldBundle, opts
   });
   const { id, workdir } = sandbox;
   try {
-    assertNode(await backend.exec(id, ['node', '-v'], { workdir }), backend.kind);
-
     const boot = await backend.exec(id, ['sh', '-c', BUN_BOOTSTRAP], { timeoutSec: INSTALL_TIMEOUT_SEC });
     if (boot.exitCode !== 0 || boot.stdout.trim().split('\n').pop() !== SANDBOX_BUN_VERSION) {
       throw new SandboxError(`installing Bun ${SANDBOX_BUN_VERSION} in ${backend.kind} sandbox ${id} failed (exit ${boot.exitCode}):\n${lastLines(boot.stderr || boot.stdout, 10)}`);
@@ -425,7 +410,7 @@ export async function upWorld(backend: SandboxBackend, bundle: WorldBundle, opts
     const host = backend.kind === 'boat' || opts.public === true ? ['--host', PUBLIC_HOST] : [];
     await backend.start(id, [SANDBOX_BUN, 'src/cli/worldplay.ts', 'serve', bundle.world, '--port', port, ...host], { workdir, log: SERVE_LOG });
 
-    const ready = await backend.exec(id, ['node', '-e', WAIT_FOR_PORT, port, String(READY_TIMEOUT_SEC)], { workdir });
+    const ready = await backend.exec(id, [SANDBOX_BUN, '-e', WAIT_FOR_PORT, port, String(READY_TIMEOUT_SEC)], { workdir });
     if (ready.exitCode !== 0) {
       const log = await backend.exec(id, ['tail', '-n', '20', SERVE_LOG]);
       throw new SandboxError(`worldplay serve did not listen on port ${port} within ${READY_TIMEOUT_SEC}s in ${backend.kind} sandbox ${id}:\n${lastLines(log.stdout, 20)}`);

@@ -323,7 +323,7 @@ describe('reconcile-orphans', () => {
       ...boat.client,
       async create() { boat.inventory.set('sb_ci', { id: 'sb_ci', state: 'running', access: 'owner', createdAt: null }); created(); return { sandboxId: 'sb_ci' }; },
       async waitReady() { await gate; },
-      async exec(_id, command) { return { exitCode: 0, stdout: command.includes('node') ? 'v22.1.0\n' : '', stderr: '', timedOut: false }; },
+      async exec(_id, command) { return { exitCode: 0, stdout: command.includes('bun-linux-') ? '1.4.2\n' : '', stderr: '', timedOut: false }; },
       async writeFile() {},
     };
     const env = { ...f.env, WORLDGEN_MAX_DAILY_SANDBOX_USD: '10' };

@@ -10,7 +10,7 @@
  */
 import { BoatError, type BoatClient, type BoatType } from '../boat/client.ts';
 import { BOAT_SIZES } from '../costs/pricing.ts';
-import { DEFAULT_SIZE, MIN_NODE_MAJOR, PendingSandboxError, SandboxError, SandboxStartError, assertSandboxName, shQuote, type ExecOpts, type ExecResult, type SandboxBackend, type SandboxSize } from './backend.ts';
+import { DEFAULT_SIZE, PendingSandboxError, SandboxError, SandboxStartError, assertSandboxName, shQuote, type ExecOpts, type ExecResult, type SandboxBackend, type SandboxSize } from './backend.ts';
 
 /** Where the uploaded files land inside a boat sandbox. The home directory is unknown, so it is /tmp. */
 export const BOAT_WORKDIR = '/tmp/worldgen';
@@ -20,10 +20,6 @@ export const BOAT_DEFAULT_TTL_SEC = 1800;
 export const BOAT_UPLOAD_CONCURRENCY = 8;
 /** boat.dev accepts 1 to 600 seconds per command. */
 export const BOAT_MAX_COMMAND_SEC = 600;
-/** The NodeSource install, for a boat image without Node 22. Run through `sh -c`, so the pipe works. */
-const INSTALL_NODE =
-  'if [ "$(id -u)" -eq 0 ]; then S=; else S=sudo; fi; ' +
-  `curl -fsSL https://deb.nodesource.com/setup_${MIN_NODE_MAJOR}.x | $S bash - && $S apt-get install -y nodejs`;
 /** The exit code reported for a command boat killed at its timeout, as coreutils `timeout` does. */
 export const TIMED_OUT_EXIT = 124;
 
@@ -89,23 +85,6 @@ export function boatBackend(deps: BoatDeps): SandboxBackend {
     return { exitCode: res.timedOut ? TIMED_OUT_EXIT : (res.exitCode ?? 1), stdout: res.stdout, stderr: res.stderr };
   };
 
-  /** The Node major `node -v` reports, or undefined when node is missing or unparsable. */
-  const nodeMajor = async (id: string): Promise<number | undefined> => {
-    const r = await exec(id, ['node', '-v']);
-    const m = /^v(\d+)\./.exec(r.stdout.trim());
-    return r.exitCode === 0 && m?.[1] !== undefined ? Number(m[1]) : undefined;
-  };
-
-  /** Installs Node from NodeSource only when the image has none, or one older than the engine needs. */
-  const ensureNode = async (id: string): Promise<void> => {
-    const before = await nodeMajor(id);
-    if (before !== undefined && before >= MIN_NODE_MAJOR) return;
-    const install = await exec(id, ['sh', '-c', INSTALL_NODE], { timeoutSec: BOAT_MAX_COMMAND_SEC });
-    if (install.exitCode !== 0) throw new SandboxError(`installing Node ${MIN_NODE_MAJOR} in boat sandbox ${id} failed (exit ${install.exitCode}): ${(install.stderr.trim() || install.stdout.trim() || 'no output').split('\n').slice(-1)[0]}`);
-    const after = await nodeMajor(id);
-    if (after === undefined || after < MIN_NODE_MAJOR) throw new SandboxError(`boat sandbox ${id} still has no Node ${MIN_NODE_MAJOR} after the install`);
-  };
-
   /** Stops the VM and waits until boat.dev says it is archived, so a leaked sandbox is never silent. */
   const down = async (id: string): Promise<void> => {
     await call(async () => {
@@ -130,7 +109,6 @@ export function boatBackend(deps: BoatDeps): SandboxBackend {
       catch (err) { throw new SandboxStartError(messageOf(err), { kind: err instanceof BoatError && REFUSED_CREATE.has(err.status ?? 0) ? 'not_started' : 'unknown' }); }
       try {
         await call(() => client.waitReady(id));
-        await ensureNode(id);
         const dirs = dirsOf(files.map((f) => f.path)).map((d) => `${BOAT_WORKDIR}/${d}`);
         const mkdir = await exec(id, ['mkdir', '-p', BOAT_WORKDIR, ...dirs]);
         if (mkdir.exitCode !== 0) throw new SandboxError(`mkdir in boat sandbox ${id} failed (exit ${mkdir.exitCode}): ${mkdir.stderr.trim() || 'no output'}`);
