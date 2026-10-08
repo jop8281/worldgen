@@ -21,7 +21,7 @@ const USAGE = `usage:
   bun run sandbox -- capture-usage --day YYYY-MM-DD [--org <wallet>]
   bun run sandbox -- reconcile-create <reservation-uuid>
   bun run sandbox -- reconcile-usage <observed-reservation-uuid> [--org <wallet>]
-  bun run sandbox -- reconcile-orphans [--org <wallet>] [--apply]
+  bun run sandbox -- reconcile-orphans [--org <wallet>] [--apply] [--id <sandbox-id>]...
 
 up prints the sandbox id and the world URL. Only the world port is exposed; the admin port stays inside.
 --image picks the base image on openshell and sbx, such as node:22-bookworm; boat takes none.
@@ -38,8 +38,11 @@ down archives tracked VMs and records a verified cutoff while leaving unknown bi
 capture-usage saves UTC-day list-price receipts separately from spend; it never clears unknown holds.
 reconcile-usage requires exact provider coverage from creation through that cutoff. It replaces
 covered estimates with list-price estimates and resolves the observed hold; it does not verify an invoice.
-reconcile-orphans lists owned Boat VMs that no record, close lock or live claim holds. It is a dry run by default;
---apply archives orphans and appends a receipt per VM to costs.jsonl.boat-orphans.jsonl; unknown billing stays null.
+reconcile-orphans lists owned Boat VMs that no record, close lock or live claim holds. It is a dry run by default.
+--apply archives VMs whose admission claim outlived its TTL and closes tracked VMs Boat already archived. A VM with no
+metered owner may belong to an unmetered process, so --apply archives it only when --id names it. Each action appends
+an intent and an outcome receipt to costs.jsonl.boat-orphans.jsonl; billing stays unknown (null), never $0.
+--apply refuses an --org other than WORLDGEN_BOAT_ORG.
 `;
 
 class UsageError extends Error {}
@@ -50,7 +53,7 @@ type Command =
   | { readonly kind: 'down'; readonly id: string }
   | { readonly kind: 'reconcile-create'; readonly id: string }
   | { readonly kind: 'reconcile-usage'; readonly id: string; readonly org?: string }
-  | { readonly kind: 'reconcile-orphans'; readonly apply: boolean; readonly org?: string }
+  | { readonly kind: 'reconcile-orphans'; readonly apply: boolean; readonly org?: string; readonly ids: readonly string[] }
   | { readonly kind: 'discover'; readonly org?: string; readonly day?: string }
   | { readonly kind: 'track'; readonly org?: string }
   | { readonly kind: 'capture-usage'; readonly day: string; readonly org?: string }
@@ -115,14 +118,17 @@ function parse(argv: readonly string[]): Command {
   if (sub === 'reconcile-orphans') {
     let org: string | undefined;
     let apply = false;
+    const ids: string[] = [];
     for (let i = 0; i < rest.length; i += 1) {
       const flag = rest[i];
       const value = rest[i + 1];
+      const valued = value !== undefined && value !== '' && !value.startsWith('--');
       if (flag === '--apply' && !apply) apply = true;
-      else if (flag === '--org' && org === undefined && value !== undefined && value !== '' && !value.startsWith('--')) { org = value; i += 1; }
-      else throw new UsageError('reconcile-orphans accepts --org <wallet> and --apply once each');
+      else if (flag === '--org' && org === undefined && valued) { org = value; i += 1; }
+      else if (flag === '--id' && valued && !ids.includes(value)) { ids.push(value); i += 1; }
+      else throw new UsageError('reconcile-orphans accepts --org <wallet> and --apply once each, and --id <sandbox-id> per VM');
     }
-    return { kind: sub, apply, ...(org === undefined ? {} : { org }) };
+    return { kind: sub, apply, ids, ...(org === undefined ? {} : { org }) };
   }
   if (sub === 'down') {
     if (rest.length !== 1 || rest[0] === undefined) throw new UsageError('down needs exactly one <id>');
@@ -200,8 +206,9 @@ async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(`${JSON.stringify(await reconcileBoatUsage(cmd.id, deps, cmd.org), null, 2)}\n`);
         return 0;
       case 'reconcile-orphans': {
-        const result = await reconcileOrphans(deps, { apply: cmd.apply, ...(cmd.org === undefined ? {} : { org: cmd.org }) });
+        const result = await reconcileOrphans(deps, { apply: cmd.apply, ids: cmd.ids, ...(cmd.org === undefined ? {} : { org: cmd.org }) });
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        for (const line of result.next) process.stderr.write(`next: ${line}\n`);
         return result.receipts.some(r => r.action === 'archive_failed') ? 1 : 0;
       }
       case 'reconcile-create': {
