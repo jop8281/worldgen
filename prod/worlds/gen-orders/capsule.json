@@ -4,7 +4,13 @@
   "mode": "create",
   "input": {
     "kind": "csv",
-    "digest": "4afe706f0d69d369c46263323319c6d64f4fd6798114eb235078cf88c0d3ca5d"
+    "digest": "4afe706f0d69d369c46263323319c6d64f4fd6798114eb235078cf88c0d3ca5d",
+    "source": {
+      "kind": "csv",
+      "paths": [
+        "eval/inputs/orders.csv"
+      ]
+    }
   },
   "worldId": "wid_1c5930a8dd46e0e53a803a779af16cf46e776569a7a940a4a1401ca7218e231f",
   "model": "claude-sonnet-5-5",

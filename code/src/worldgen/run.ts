@@ -19,8 +19,9 @@
  *   runs/<runId>/<seq>-<step>-<n>.json. policy.decide() alone chooses what happens next.
  */
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import {
   DeadlineExpired, SECTIONS, applyEdit, checkWorld, contentDigest, diffWorlds, editJsonSchema, emptyWorld, formatReference, issue, loadWorld, lowerRules, openapiFidelity, renderWorldYaml,
@@ -29,10 +30,10 @@ import {
 } from '#engine';
 import { assertNever } from '#lib/never';
 import { CostUnenforceableError, SpendCapError, type SpendEvent } from '../costs/ledger.ts';
-import { CAPSULE_FILE, runCapsule } from './capsule.ts';
+import { CAPSULE_FILE, runCapsule, type InputSource } from './capsule.ts';
 import { stepModel, transportOf, type Config } from './config.ts';
 import { createEmitter, type AttemptOutcome, type CutProgress, type Emit, type FidelityCheck, type RunEvent, type StopReason } from './events.ts';
-import { INPUT_KINDS, digestInput, type Input, type InputDigest } from './input.ts';
+import { INPUT_KINDS, digestInput, redact, type Input, type InputDigest } from './input.ts';
 import { fixturePlanIssues, operationPlanIssues } from './input-coverage.ts';
 import { ITERATE_PLAN_BRIEF, applyPlanPatch, changedSections, iteratePlanBlocks, iteratePlanSchema, iterateStageBlock, planPatchSchema, planWithWorldTests, revisesPlanOnly } from './iterate.ts';
 import { FIDELITY_FLOOR, fidelityGate, fidelityScore, parseFidelityReference } from './fidelity.ts';
@@ -621,6 +622,40 @@ async function setAside(fs: RunFs, from: string, to: string): Promise<void> {
   }
 }
 
+/** Whether redact() leaves this text as it is, so the capsule can carry it without a secret (A-351). */
+const safeText = (text: string): boolean => redact('description', { text }).text === text;
+
+/** A path the capsule can carry: relative to the repository holding it, or null outside one or when redact() would mask part of it. */
+function repoPath(file: string): string | null {
+  const abs = resolve(file);
+  let dir = dirname(abs);
+  while (!existsSync(join(dir, '.git'))) {
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+  const rel = relative(dir, abs).split(sep).join('/');
+  return safeText(rel) ? rel : null;
+}
+
+/** The input as capsule.json records it, so rerender-report.ts can re-render the report with no arguments (A-351). */
+function sourceOf(job: Job, runRel: string): InputSource {
+  if (job.kind === 'iterate') return { kind: 'change_request', before: `${runRel.split(sep).join('/')}/before` };
+  const input = job.input;
+  switch (input.kind) {
+    case 'description':
+      return { kind: 'description' };
+    case 'openapi': {
+      const clean = input.only.every(safeText);
+      return { kind: 'openapi', path: clean ? repoPath(input.path) : null, only: clean ? [...input.only] : [] };
+    }
+    case 'csv':
+      return { kind: 'csv', paths: input.paths.map(repoPath) };
+    default:
+      return assertNever(input);
+  }
+}
+
 export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Promise<RunResult> {
   const fs = deps.fs ?? nodeFs;
   /** Where a done run's world lands. A create builds in `<out>.partial` and renames it here only when done (A-293). */
@@ -669,10 +704,11 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
   let writtenWorld: World | null = null;
   let worldWritten: boolean | null = false;
   let inputDigest: string | null = job.kind === 'iterate' ? contentDigest(job.request) : null;
+  const source = sourceOf(job, runRel);
 
   /** capsule.json beside REPORT.md: what this run was given, what it wrote, and what it spent. */
   const writeCapsule = (events: readonly RunEvent[], written: World | null): Promise<void> =>
-    fs.writeFile(join(outDir, CAPSULE_FILE), `${JSON.stringify(runCapsule(events, { inputDigest, world: written }), null, 2)}\n`);
+    fs.writeFile(join(outDir, CAPSULE_FILE), `${JSON.stringify(runCapsule(events, { inputDigest, world: written, source }), null, 2)}\n`);
 
   /** REPORT.md carries the stop reason (and on iterate the delta); world.yaml, plan.yaml and plan.md are untouched. */
   const stop = async (reason: StopReason): Promise<RunResult> => {
@@ -898,6 +934,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
         return await stop({ kind: 'input_rejected', why: `the existing world does not pass the engine: ${first.code} at ${first.path.join('.')} (${first.found})` });
     }
     const existing = checkedOld.world;
+    // The world this change starts from, so its report's Changes section can be re-rendered later (A-351).
+    await saveWorld(join(outDir, runRel, 'before'), existing);
     before = existing;
     world = existing;
     beforeReport = checkedOld;
