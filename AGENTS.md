@@ -239,6 +239,8 @@ Never branch on `def.type`, with a `switch` or an `===`, outside `fields.ts`. Ca
 - Test `policy.ts` with tables that map state and outcome to a decision. Do not route them through the fake model.
 - If a change in call order breaks the fake model script, fix the script. Do not loosen the assertion.
 - `test/architecture.test.ts` also checks that every path this file names exists.
+- Run receipts in CI's environment: `WORLDGEN_GUARD_SCALE=4`, which every job in `.github/workflows/check.yml` sets, for example `WORLDGEN_GUARD_SCALE=4 nice -n 15 bun test --timeout 120000 --max-concurrency 1 <files>`, and the same variable for `node --import tsx --test`. Unset, the snippet guard is 2000 ms, as a developer machine keeps it (A-169). Set to 4, it is the guard CI tests against, and a child built from `process.env` carries it.
+- A test that asserts a child's environment passes its own env source (`env` on `childGrader`, `runLocalEpisode`, `runPipeline` or `studioServer`) and never reads `process.env` into the expectation, so CI's variables cannot change it.
 
 ## Decisions and assumptions
 
