@@ -621,7 +621,7 @@ for (;;) {
 `;
 
 /**
- * The snippet process: run with `node -e`, it opens the two FIFOs, says hello, and starts the
+ * The snippet process: run with `-e` on the running runtime, it opens the two FIFOs, says hello, and starts the
  * snippet worker with resourceLimits. Its own thread keeps an event loop, so it hears the worker
  * die and reports it as a 'dead' frame, then exits. A watchdog reports a worker that stays busy
  * past its wait (guardMs for a run, guardMs + slack for a compile) with no ctx call as stuck. When main closes the lane the worker reads EOF
