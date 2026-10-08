@@ -479,3 +479,70 @@ describe('studio-deploy.sh up guard', () => {
     assert.equal(r.calls.some((l) => l.includes('env-token-2')), false);
   });
 });
+
+describe('studio-deploy.sh rollback and STUDIO_IMAGE (YOS-236)', () => {
+  const cwd = path.resolve(import.meta.dirname, '..');
+  const script = path.resolve(cwd, '..', 'scripts', 'studio-deploy.sh');
+  let dir = '';
+  let log = '';
+
+  before(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'studio-rollback-'));
+    log = path.join(dir, 'docker.log');
+    await mkdir(path.join(dir, 'bin'));
+    const docker = path.join(dir, 'bin', 'docker');
+    // Healthy at once; `image inspect` of a tag ending in :missing finds no image.
+    await writeFile(docker, `#!/bin/sh\necho "$@" >> '${log}'\n[ "$1" = inspect ] && echo healthy\nif [ "$1" = image ] && [ "$2" = inspect ]; then case "$3" in *:missing) exit 1 ;; esac; fi\nexit 0\n`);
+    await chmod(docker, 0o755);
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const deploy = async (args: readonly string[], extra: Record<string, string>): Promise<{ status: number | null; stdout: string; stderr: string; calls: string[] }> => {
+    await rm(log, { force: true });
+    const env = { PATH: `${path.join(dir, 'bin')}:${process.env['PATH']}`, HOME: process.env['HOME'] ?? '', ...extra };
+    const r = spawnSync('bash', [script, ...args], { cwd, env, encoding: 'utf8', timeout: 60_000 });
+    const calls = await readFile(log, 'utf8').then((t) => t.split('\n').filter((l) => l !== ''), () => []);
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls };
+  };
+  const TOKEN = { WORLDGEN_STUDIO_TOKEN: 'drill-token-1' };
+
+  it('rollback runs an existing image on the same volumes and never builds', async () => {
+    const r = await deploy(['rollback', 'abc1234'], TOKEN);
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, 'studio worldgen-studio:abc1234 healthy on http://127.0.0.1:8787\n');
+    assert.equal(r.calls.some((l) => l.startsWith('build')), false);
+    assert.equal(r.calls[0], 'image inspect worldgen-studio:abc1234');
+    const run = r.calls.filter((l) => l.startsWith('run -d'));
+    assert.equal(run.length, 1);
+    assert.equal(run[0]!.endsWith('-v worldgen-studio-worlds:/app/prod/worlds -v worldgen-studio-ledger:/home/bun/.worldgen worldgen-studio:abc1234'), true);
+    assert.equal(r.calls.some((l) => l.includes('drill-token-1')), false);
+  });
+
+  it('rollback refuses a tag with no image before it touches the running container', async () => {
+    const r = await deploy(['rollback', 'missing'], TOKEN);
+    assert.equal(r.status, 1);
+    assert.equal(r.stderr, 'studio-deploy: no image worldgen-studio:missing here; rollback runs an image built earlier and never builds one\n');
+    assert.deepEqual(r.calls, ['image inspect worldgen-studio:missing']);
+  });
+
+  it('rollback refuses without a token before any docker call, as up does', async () => {
+    const r = await deploy(['rollback', 'abc1234'], {});
+    assert.equal(r.status, 1);
+    assert.equal(r.stderr.includes('set WORLDGEN_STUDIO_TOKEN, or put WORLDGEN_STUDIO_TOKEN=<token> in STUDIO_ENV_FILE'), true);
+    assert.deepEqual(r.calls, []);
+  });
+
+  it('STUDIO_IMAGE names the repository up builds and runs, so a drill never moves worldgen-studio:latest', async () => {
+    const r = await deploy(['up'], { ...TOKEN, STUDIO_IMAGE: 'drill-studio' });
+    assert.equal(r.status, 0);
+    const build = r.calls.filter((l) => l.startsWith('build'));
+    assert.equal(build.length, 1);
+    assert.match(build[0]!, / -t drill-studio:[0-9a-f]{40} -t drill-studio:latest /);
+    assert.equal(r.calls.some((l) => l.includes('worldgen-studio:')), false);
+    assert.match(r.calls.filter((l) => l.startsWith('run -d'))[0]!, /drill-studio:[0-9a-f]{40}$/);
+  });
+});
+
