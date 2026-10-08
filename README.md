@@ -42,7 +42,7 @@ bun run live ../prod/prompts                                     # every prompt 
 
 ## Status of main
 
-`main` is `6e28ba99`, promotion 13 ([#135](https://github.com/jop8281/worldgen/pull/135)), and `stabilize/main` is the same commit. Its verdict runs are green twice: [37767399613](https://github.com/jop8281/worldgen/actions/runs/37767399613) and [37767403670](https://github.com/jop8281/worldgen/actions/runs/37767403670). CI runs Bun only, with the full test suite and the end-to-end check ([#124](https://github.com/jop8281/worldgen/pull/124), [#134](https://github.com/jop8281/worldgen/pull/134); A-379, A-381). Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
+The release is promotion 13, `6e28ba99` ([#135](https://github.com/jop8281/worldgen/pull/135)). Commits on `main` after it change only this README. Its verdict runs are green twice: [37767399613](https://github.com/jop8281/worldgen/actions/runs/37767399613) and [37767403670](https://github.com/jop8281/worldgen/actions/runs/37767403670). CI runs Bun only, with the full test suite and the end-to-end check ([#124](https://github.com/jop8281/worldgen/pull/124), [#134](https://github.com/jop8281/worldgen/pull/134); A-379, A-381). Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
 
 | What | Where | PRs |
 |---|---|---|
