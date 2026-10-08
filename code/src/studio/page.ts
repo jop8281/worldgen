@@ -149,7 +149,7 @@ a { margin-right: 0.5rem; }
 <h3>Analytics<span id="analytics-meta" class="meta">episodes by world, task and agent model; a success is an engine score of 1 with a reply and known cost</span></h3>
 <div id="analytics-table"></div>
 </section>
-<section>
+<section id="spend">
 <h2>Spend<span id="spend-meta" class="meta">costs --json, cached up to 30 s</span></h2>
 <p><button id="spend-refresh" type="button">refresh</button></p>
 <div id="spend-body"></div>
@@ -212,6 +212,9 @@ a { margin-right: 0.5rem; }
   fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
     return r.json().then(function (body) {
       authNote(r.status, body);
+      // Spend needs the admin role, so any other page neither shows it nor asks for it.
+      if (r.status === 200 && body.role === 'admin') refreshSpend();
+      else byId('spend').hidden = true;
       if (r.status !== 200) return;
       if (!body.signIn) {
         whoLine.textContent = body.name + ' (' + body.role + '), sign-in off';
@@ -800,7 +803,6 @@ a { margin-right: 0.5rem; }
   refreshEval();
   loadPlayWorlds();
   refreshEpisodes();
-  refreshSpend();
 }());
 </script>
 </body>
