@@ -592,6 +592,38 @@ describe('planSchemaFor', () => {
   });
 });
 
+describe('planSchemaFor asks a stateMix only of an entity whose states a state field holds (A-371, YOS-253)', () => {
+  const built: Plan = { ...plan, seed: { ...plan.seed, stateMix: { ticket: { open: 80, solved: 20 } } } };
+  const lifecycle = (representation: 'removal' | 'descriptive') => ({
+    name: 'agent_lifecycle', entity: 'agent', states: ['active', 'deleted'], rules: [], actions: [],
+    lifecycle: { representation, reason: representation === 'removal' ? 'a deleted agent is removed from the store' : 'active is a derived flag' },
+  });
+  const held = { name: 'agent_status', entity: 'agent', states: ['active', 'away'], rules: [], actions: [] };
+  const issues = (input: unknown): unknown[] => {
+    const r = planSchemaFor('description').safeParse(input);
+    return r.success ? [] : r.error.issues.map((i) => [i.path, i.message]);
+  };
+  const needsAgentMix = [['seed', 'stateMix', 'agent'], 'a plan to build needs seed.stateMix for workflow entity agent, whose states a state field holds: the percent of its rows in each planned state, summing to 100'];
+
+  it('parses an entity whose only workflow declares a removal or descriptive lifecycle, with no stateMix for it', () => {
+    assert.deepEqual(issues({ ...built, workflows: [...built.workflows, lifecycle('removal')] }), []);
+    assert.deepEqual(issues({ ...built, workflows: [...built.workflows, lifecycle('descriptive')] }), []);
+  });
+
+  it('still requires a stateMix for an entity once a workflow without a lifecycle puts its states in a state field', () => {
+    assert.deepEqual(issues({ ...built, workflows: [...built.workflows, held] }), [needsAgentMix]);
+    assert.deepEqual(issues({ ...built, workflows: [...built.workflows, lifecycle('removal'), held] }), [needsAgentMix]);
+    assert.deepEqual(issues(plan), [
+      [['seed', 'stateMix', 'ticket'], 'a plan to build needs seed.stateMix for workflow entity ticket, whose states a state field holds: the percent of its rows in each planned state, summing to 100'],
+    ]);
+  });
+
+  it('still accepts a stateMix that a plan gives a removal-lifecycle entity, as stripe-customers\' plan did', () => {
+    const given = { ...built, workflows: [...built.workflows, lifecycle('removal')], seed: { ...built.seed, stateMix: { ...built.seed.stateMix, agent: { active: 100 } } } };
+    assert.deepEqual(issues(given), []);
+  });
+});
+
 describe('task pressure in the plan (A-226, A-227)', () => {
   const withPressure = (pressure: NonNullable<Plan['tasks'][number]['pressure']>): unknown =>
     ({ ...plan, tasks: plan.tasks.map((t, i) => (i === 0 ? { ...t, pressure } : t)) });

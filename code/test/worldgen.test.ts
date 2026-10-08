@@ -2111,7 +2111,7 @@ describe('runWorldGen: a seed shortfall found at tasks goes back to seed with it
 
   it('rejects at the plan step a pressed state the plan holds in no state field, and the plan that drops it reaches done (YOS-253)', async () => {
     const removal = { name: 'customer_lifecycle', entity: 'customer', states: ['active', 'deleted'], rules: [], lifecycle: { representation: 'removal', reason: 'a deleted customer is removed from the store' }, actions: [] };
-    // As stripe-customers' plan did: the schema asks every workflow entity for a stateMix, so the removal one gets active: 100.
+    // As stripe-customers' plan did, it gives the removal entity a stateMix of active: 100, which A-371 no longer asks for.
     const unmeetable = {
       ...PLAN, workflows: [...PLAN.workflows, removal], seed: { ...PLAN.seed, stateMix: { ...PLAN.seed.stateMix, customer: { active: 100 } } },
       tasks: PLAN.tasks.map((t) => (t.id === 'escalate_acme' ? { ...t, pressure: { states: ['customer.active'] } } : t)),
