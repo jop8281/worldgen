@@ -8,7 +8,7 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import type { InputKind } from './input.ts';
 import { fixtureFed } from './input-coverage.ts';
-import { issue, machineOf, worldSchema, type CheckIssue, type IssuePath, type World, type WorldStats } from '#engine';
+import { issue, machineOf, routeKey, worldSchema, type CheckIssue, type IssuePath, type World, type WorldStats } from '#engine';
 
 /** How many percentage points a seeded state share may stray from `seed.stateMix`. */
 export const MIX_WITHIN = 10;
@@ -109,7 +109,13 @@ export const planSchema = planBase
       ctx.addIssue({ code: 'custom', path: ['acceptanceTests'], message: 'acceptance test ids must be unique' });
     }
     const known = new Set(plan.workflows.flatMap((w) => w.actions.map(actionKey)));
-    const enforcers = new Set([...known, ...plan.jobs.map((j) => j.name)]);
+    const jobs = new Set(plan.jobs.map((j) => j.name));
+    const enforcers = new Set([...known, ...jobs]);
+    const asJob = (key: string): string => `${key} is a job: a job runs on the clock, so list it only under jobs and in a rule's by, and let the test call the workflow action that sets up the job's rows through ctx.api, name that action in its actions, then reach the job with ctx.advance`;
+    plan.workflows.forEach((w, wi) => w.actions.forEach((a, ai) => {
+      const key = actionKey(a);
+      if (jobs.has(key)) ctx.addIssue({ code: 'custom', path: ['workflows', wi, 'actions', ai], message: `workflow ${w.name} lists ${key} in its actions, but ${asJob(key)}` });
+    }));
     /** The first rule that binds each acceptance test, so a later binding of the same test names it. */
     const bound = new Map<string, { readonly workflow: string; readonly rule: string }>();
     plan.workflows.forEach((w, wi) => w.rules.forEach((r, ri) => {
@@ -164,7 +170,8 @@ export const planSchema = planBase
         ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i], message: 'acceptance test id, intent, description and script must not be blank' });
       }
       for (const action of t.actions.map(actionKey)) {
-        if (!known.has(action)) ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i, 'actions'], message: `acceptance test ${t.id} names ${action}, which no workflow declares in its actions: add ${action} to the actions of the workflow it belongs to, or name an action a workflow declares` });
+        if (jobs.has(action)) ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i, 'actions'], message: `acceptance test ${t.id} names ${action} in its actions, but ${asJob(action)}` });
+        else if (!known.has(action)) ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i, 'actions'], message: `acceptance test ${t.id} names ${action}, which no workflow declares in its actions: add ${action} to the actions of the workflow it belongs to, or name an action a workflow declares` });
       }
     });
   });
@@ -384,7 +391,7 @@ export function seedPlanIssues(plan: Plan, stats: Pick<WorldStats, 'rows' | 'sta
   return [...seedRowIssues(plan, stats.rows, fed), ...mix];
 }
 
-/** Missing keys point into the plan; mismatched method/path contracts point at the world item to repair. */
+/** Missing keys point into the plan; mismatched method/path contracts point at the world item to repair. Param names do not count, as in `routeKey`. */
 export function planCoverage(plan: Plan, world: World): readonly CheckIssue[] {
   const missing = plannedItems(plan)
     .filter((p) => !Object.hasOwn(world[p.section], p.key))
@@ -393,13 +400,17 @@ export function planCoverage(plan: Plan, world: World): readonly CheckIssue[] {
   const mismatched = plan.routes.flatMap((r): CheckIssue[] => {
     const section = claimed.has(r.id) ? 'actions' : 'routes';
     const actual = Object.hasOwn(world[section], r.id) ? world[section][r.id] : undefined;
-    if (actual === undefined || (actual.method === r.method && actual.path === r.path)) return [];
+    if (actual === undefined || routeKey(actual.method, actual.path) === routeKey(r.method, r.path)) return [];
     const kind = section === 'actions' ? 'action' : 'route';
     return [issue('plan.not_covered', [section, r.id], {
       item: `${kind} "${r.id}" at ${r.method} ${r.path}`,
     }, `${actual.method} ${actual.path}`)];
   });
-  return [...missing, ...mismatched];
+  const planned = new Set(plan.workflows.flatMap((w) => w.actions.map(actionKey)));
+  const asActions = plan.jobs.flatMap((j, i): CheckIssue[] => (!planned.has(j.name) && Object.hasOwn(world.actions, j.name)
+    ? [issue('plan.job_as_action', ['plan', 'jobs', i], { job: j.name }, `actions.${j.name}`)]
+    : []));
+  return [...missing, ...mismatched, ...asActions];
 }
 
 /**

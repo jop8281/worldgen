@@ -39,7 +39,7 @@ function runner(fail: Fail, advance: (s: number) => void): Runner {
     if (fail === 'start' && isCreate(argv)) return { code: 1, stdout: '', stderr: 'quota exceeded' };
     if (fail === 'teardown' && isTeardown(argv)) return { code: 1, stdout: '', stderr: 'still busy' };
     if (isInstall(argv)) advance(60);
-    return { code: 0, stdout: argv.includes('-v') ? 'v22.1.0\n' : argv.join(' ').includes('bun-linux-') ? '1.4.2\n' : '', stderr: '' };
+    return { code: 0, stdout: argv.join(' ').includes('bun-linux-') ? '1.4.2\n' : '', stderr: '' };
   };
 }
 
@@ -54,7 +54,7 @@ function boatClient(fail: Fail, advance: (s: number) => void): BoatClient {
     },
     async exec(_id, command) {
       if (command.includes('bun install --frozen-lockfile')) advance(60);
-      return { exitCode: 0, stdout: command === 'node -v' ? 'v22.1.0\n' : command.includes('bun-linux-') ? '1.4.2\n' : '', stderr: '', timedOut: false };
+      return { exitCode: 0, stdout: command.includes('bun-linux-') ? '1.4.2\n' : '', stderr: '', timedOut: false };
     },
     start: async () => ({ processId: 1 }),
     writeFile: async () => {},

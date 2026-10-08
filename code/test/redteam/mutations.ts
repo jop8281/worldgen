@@ -61,6 +61,7 @@ export const NOT_WORLD_TRIGGERABLE: readonly IssueCode[] = [
   'plan.lifecycle_unrepresented',
   'plan.pressure_unreachable',
   'plan.rule_unanswered',
+  'plan.job_as_action',
   'plan.seed_mix_off',
   'plan.lifecycle_unrepresented',
   'edit.out_of_scope',

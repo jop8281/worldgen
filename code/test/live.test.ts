@@ -288,7 +288,7 @@ describe('runLive', () => {
   });
 });
 
-describe('npm run live', () => {
+describe('bun run live', () => {
   const live = (args: readonly string[]): { status: number | null; stdout: string; stderr: string } => {
     const r = spawnSync(process.execPath, ['src/cli/live.ts', ...args], { cwd: CODE_DIR, encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '' } });
     return { status: r.status, stdout: r.stdout, stderr: r.stderr };

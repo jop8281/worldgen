@@ -330,6 +330,7 @@ const ISSUE_EXAMPLES: { readonly [C in IssueCode]: CheckIssue } = {
   'plan.lifecycle_unrepresented': issue('plan.lifecycle_unrepresented', ['format'], { workflow: '<workflow>', entity: '<entity>', states: ['<state>'] }, '<found>'),
   'plan.pressure_unreachable': issue('plan.pressure_unreachable', ['format'], { task: '<task>', entity: '<entity>', state: '<state>', workflows: ['<workflow>'] }, '<found>'),
   'plan.rule_unanswered': issue('plan.rule_unanswered', ['format'], { workflow: '<workflow>', rule: '<rule>', by: ['<action or job>'] }, '<found>'),
+  'plan.job_as_action': issue('plan.job_as_action', ['format'], { job: '<job>' }, '<found>'),
   'task.difficulty_unproven': issue('task.difficulty_unproven', ['format'], { task: '<task>', rows: 1 }, '<found>'),
   'task.pressure_unmet': issue('task.pressure_unmet', ['format'], { task: '<task>', need: '<need>' }, '<found>'),
   'plan.fixture_changed': issue('plan.fixture_changed', ['format'], { entity: '<entity>', table: '<table>', problem: '<problem>' }, '<found>'),

@@ -1,5 +1,5 @@
 /**
- * runWorldGen in iterate mode (YOS-52), driven by a scripted fake Model. npm test never calls a real model.
+ * runWorldGen in iterate mode (YOS-52), driven by a scripted fake Model. bun run test never calls a real model.
  * The refunds cases iterate on a copy of the golden helpdesk (prod/worlds/helpdesk, never touched);
  * the stop cases use minimalWorld, which saves and checks in a fraction of the time.
  * Each script entry is one model call, in order: a reply (tool input), a ModelError to throw, or a
@@ -1085,7 +1085,7 @@ describe('runWorldGen iterate: a pressure claim on a world built before the pres
 
     assert.equal(result.kind, 'done');
     assert.deepEqual(attempts(events), [
-      ['plan', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'rejected'], ['tasks', 2, 'rejected'], ['plan', 1, 'accepted'], ['tasks', 3, 'accepted'],
+      ['plan', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'rejected'], ['tasks', 2, 'rejected'], ['plan', 1, 'accepted'], ['tasks', 1, 'accepted'],
     ]);
     const back = events.flatMap((e) => (e.t === 'backtracked' ? [[e.from, e.to, e.because.map((i) => `${i.code}@${i.path.join('/')}: ${i.found}`)] as const] : []));
     assert.deepEqual(back, [['tasks', 'plan', [`task.pressure_unmet@tasks/${HARD}: 130 task rows over 25-row pages, and the reference changed no row it reached only past the first page`]]]);

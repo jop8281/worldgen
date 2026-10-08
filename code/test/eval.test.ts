@@ -21,12 +21,13 @@ import {
   summarizePhase,
   type CaseDeps,
   type CaseRecord,
+  type Expect,
   type PhaseInput,
   type PhaseName,
   type Suite,
 } from '../src/worldgen/eval.ts';
 import { issue, type CheckIssue } from '../src/engine/issues.ts';
-import type { RunEvent } from '../src/worldgen/events.ts';
+import type { RunEvent, StopReason } from '../src/worldgen/events.ts';
 import { inputSchema } from '../src/worldgen/input.ts';
 import type { Job } from '../src/worldgen/run.ts';
 import type { StepId } from '../src/worldgen/stages.ts';
@@ -466,7 +467,7 @@ describe('renderSummary on literal events', () => {
             ms: 6000,
             costUsd: 0.05,
             worldWritten: false,
-            result: { kind: 'stopped', reason: { kind: 'attempts_exhausted', step: 'plan', attempts: 1, lastIssues: [] } },
+            result: { kind: 'stopped', reason: { kind: 'input_rejected', why: 'a real-time video codec is not a stateful API' } },
           },
         ]),
       ],
@@ -513,7 +514,7 @@ describe('renderSummary on literal events', () => {
         '| case | expect | result | stop reason | attempts per step | min | $ | verify | log | pass |',
         '|---|---|---|---|---|--:|--:|---|---|---|',
         '| helpdesk-sla | done | done | - | plan 1, model 2 | 1.5 | 0.75 | pass (3 tasks) | ok | yes |',
-        '| video-codec-impossible | stopped | stopped | attempts_exhausted at plan | plan 1 | 0.1 | 0.05 | - | ok | yes |',
+        '| video-codec-impossible | stopped | stopped | input_rejected | plan 1 | 0.1 | 0.05 | - | ok | yes |',
         '| helpdesk-add-refunds | done | stopped | change: no_progress at model | plan 1; change: model 2 | 2.0 | 2.25 | - | unlogged | no |',
         '| orders-csv | done | crashed | crashed: not implemented | - | unknown | unknown | - | ok | no |',
         '| bakery-vague | done | done | - | plan 1 | 0.5 | 0.30 | fail: task.noop_nonzero | unlogged | no |',
@@ -523,6 +524,8 @@ describe('renderSummary on literal events', () => {
         '**Median and p95:** 0.5 min (4 of 5 cases) and 2.0 min (4 of 5 cases); $0.30 (4 of 5 cases) and $2.25 (4 of 5 cases).',
         '',
         '**Pass rate:** 2/5 (40%), success and expected refusal over all 5 expected cases (0 not run).',
+        '',
+        '**Outcomes:** success = an `expect: done` case that ended done and passed verify; expected refusal = an input_rejected stop on an impossible case (A-384); product failure = the wrong verdict on the prompt: any other verdict stop, an impossible case that ended done, or a failed verify; infra failure = a crash, a machinery stop, a stop with no logged reason, an unverified done world or an unreadable case.json; not run = a suite case with no case output.',
         '',
         '## Unlogged',
         '',
@@ -637,6 +640,14 @@ describe('renderSummary on literal events', () => {
     assert.equal(renderSummary(meta, []).split('\n')[11], '**Pass rate:** 0/0, success and expected refusal over all 0 expected cases (0 not run).');
   });
 
+  it('ends the totals with a legend of what each of the five outcomes means (YOS-260, A-384)', () => {
+    assert.deepEqual(renderSummary(meta, []).split('\n').slice(12), [
+      '',
+      '**Outcomes:** success = an `expect: done` case that ended done and passed verify; expected refusal = an input_rejected stop on an impossible case (A-384); product failure = the wrong verdict on the prompt: any other verdict stop, an impossible case that ended done, or a failed verify; infra failure = a crash, a machinery stop, a stop with no logged reason, an unverified done world or an unreadable case.json; not run = a suite case with no case output.',
+      '',
+    ]);
+  });
+
   it('counts every case in one of five outcome classes, and passes only a success or an expected refusal (A-336)', () => {
     const machinery: CaseRecord = {
       id: 'stopped-by-overload',
@@ -674,9 +685,56 @@ describe('renderSummary on literal events', () => {
     );
     assert.equal(lines.find((l) => l.startsWith('**Pass rate:**')), '**Pass rate:** 2/8 (25%), success and expected refusal over all 8 expected cases (1 not run).');
   });
+
+  it('passes an expect: stopped case only on input_rejected: every other verdict stop is a product failure, every machinery stop an infra failure (A-384)', () => {
+    const endedBy = (expect: Expect, kind: StopReason['kind']): [string, boolean] => {
+      const row = summarizeCase({
+        id: `${expect}-${kind}`,
+        expect,
+        phases: [phase('create', 'stopped', null, [JSON.stringify({ ...AT, t: 'run_finished', ms: 1000, costUsd: 0.1, worldWritten: false, result: { kind: 'stopped', reason: { kind } } })])],
+        verify: { kind: 'not_run' },
+      });
+      return [row.outcome, row.pass];
+    };
+    const kinds: StopReason['kind'][] = [
+      'input_rejected',
+      'attempts_exhausted',
+      'no_progress',
+      'backtrack_limit',
+      'budget_exhausted',
+      'spend_cap',
+      'time_exhausted',
+      'stage_time_exhausted',
+      'cost_unenforceable',
+      'model_error',
+      'judge_error',
+      'infra_unavailable',
+      'transport_stalled',
+      'cancelled',
+    ];
+    assert.deepEqual(
+      kinds.map((kind) => [kind, endedBy('stopped', kind), endedBy('done', kind)]),
+      [
+        ['input_rejected', ['expected refusal', true], ['product failure', false]],
+        ['attempts_exhausted', ['product failure', false], ['product failure', false]],
+        ['no_progress', ['product failure', false], ['product failure', false]],
+        ['backtrack_limit', ['product failure', false], ['product failure', false]],
+        ['budget_exhausted', ['product failure', false], ['product failure', false]],
+        ['spend_cap', ['product failure', false], ['product failure', false]],
+        ['time_exhausted', ['product failure', false], ['product failure', false]],
+        ['stage_time_exhausted', ['product failure', false], ['product failure', false]],
+        ['cost_unenforceable', ['infra failure', false], ['infra failure', false]],
+        ['model_error', ['infra failure', false], ['infra failure', false]],
+        ['judge_error', ['infra failure', false], ['infra failure', false]],
+        ['infra_unavailable', ['infra failure', false], ['infra failure', false]],
+        ['transport_stalled', ['infra failure', false], ['infra failure', false]],
+        ['cancelled', ['infra failure', false], ['infra failure', false]],
+      ],
+    );
+  });
 });
 
-describe('cli: npm run eval', () => {
+describe('cli: bun run eval', () => {
   it('dry-runs the description cases of the real suite with no model call and writes nothing', async () => {
     const out = path.join(await mkdtemp(path.join(tmpdir(), 'eval-out-')), 'run');
     const r = cli(['--dry-run', '--only', 'helpdesk-sla,video-codec-impossible,helpdesk-add-refunds', '--out-dir', out]);

@@ -1,8 +1,8 @@
-# The stress suite: the rehearsal cases `npm run eval` runs (from code/).
+# The stress suite: the rehearsal cases `bun run eval` runs (from code/).
 # Each case is { id, input, change?, expect?, note? }. `input` parses with inputSchema in
 # code/src/worldgen/input.ts, the same union the worldgen CLI parses. File paths resolve
 # against this file's directory. `change` runs as an iterate job on the saved world.
-# `expect: stopped` marks a prompt WorldGen should refuse; it passes on an honest stop.
+# `expect: stopped` marks a prompt WorldGen should refuse; only an input_rejected stop counts as an expected refusal (A-384).
 # `tags` group cases for `--tag`: the input kind (description, openapi, csv), `iterate`, `vague`, `impossible`, `known`,
 # and `cheap` (a small input or an expected early stop).
 # The unseen bank in research/rehearsal-prompts.md stays out of this file so it stays unseen.
@@ -22,7 +22,7 @@ cases:
     tags: [description, impossible, cheap]
     input: { kind: description, text: "A real-time video codec" }
     expect: stopped
-    note: Impossible. Encoding frames is computation, not stateful software an agent operates through an API; an honest stop with REPORT.md saying why.
+    note: Impossible. Encoding frames is computation, not stateful software an agent operates through an API; an input_rejected stop with REPORT.md saying why.
 
   - id: library-holds
     tags: [description]
@@ -240,10 +240,10 @@ cases:
     tags: [description, impossible, cheap]
     input: { kind: description, text: "A system that tells each customer which lottery numbers will win next week" }
     expect: stopped
-    note: Impossible. Forecast accuracy is not world state a deterministic engine can serve or grade; an honest stop with REPORT.md saying why.
+    note: Impossible. Forecast accuracy is not world state a deterministic engine can serve or grade; an input_rejected stop with REPORT.md saying why.
 
   - id: live-market-feed-impossible
     tags: [description, impossible, cheap]
     input: { kind: description, text: "A trading terminal that streams live exchange quotes and routes real orders to the exchange" }
     expect: stopped
-    note: Impossible. It needs a live external feed and wall-clock behaviour, which conflict with the engine's virtual clock and fixed seed; an honest stop.
+    note: Impossible. It needs a live external feed and wall-clock behaviour, which conflict with the engine's virtual clock and fixed seed; an input_rejected stop.

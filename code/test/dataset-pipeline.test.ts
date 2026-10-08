@@ -98,6 +98,10 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(exportedAt >= 0 && stoppedAt > exportedAt, true, logs.join('\n'));
     assert.equal(backend.events.at(-1), 'down');
     assert.equal(backend.events.filter((e) => e === 'down').length, 1);
+
+    // Every one-liner runs on the sandbox's pinned Bun; the VM needs no Node (A-385).
+    assert.deepEqual([...new Set(backend.execs.filter((c) => c[1] === '-e').map((c) => c[0]))], ['/tmp/worldgen-bun/node_modules/.bin/bun']);
+    assert.equal(backend.execs.some((c) => c[0] === 'node'), false);
     assert.equal(backend.stopped(), true);
     // Only the world port was exposed; the admin port never was.
     assert.deepEqual(backend.exposed, [port]);

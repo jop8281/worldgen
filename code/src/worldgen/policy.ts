@@ -8,8 +8,9 @@
  *   An issue is its code, path and `found` with quoted values masked, so another failing field is progress.
  * - Backtrack targets come from issue owners (ISSUES[code].owner and SECTION_OWNER),
  *   never from a guess.
- * - A backtrack resets the target step's attempts, so it gets its full repair budget again, and starts a new
- *   stretch: every step's seen issue sets are cleared. `maxBacktracks` bounds how often that can happen.
+ * - A backtrack resets the attempts of its target and of every later step, so each step it reruns gets its full repair
+ *   budget again (YOS-258), and starts a new stretch: every step's seen issue sets are cleared. `maxBacktracks` bounds
+ *   how often that can happen, and the time and budget caps still hold across the whole run.
  * - The budget stops further calls, never a finished world: an accepted last step is kept even
  *   when its own call crossed `maxCostUsd`, and the overspend is reported on the decision.
  */
@@ -376,17 +377,24 @@ export function record(ledger: Ledger, step: StepId, costUsd: number, issueSet: 
 }
 
 /**
- * Account one backtrack to `to`: +1 backtrack, and `to` starts over with zero attempts and zero stall retries, so the
- * step that must repair an upstream error gets its full `maxAttempts`. `record` takes no flag for it, so the
- * loop calls this when it follows a `backtrack` decision. Seen issue sets are cleared for every step: the
- * rerun changes the world the later steps answer against, so a set seen before it is not a repeat (A-124).
+ * Account one backtrack to `to`: +1 backtrack, and `to` and every later step start over with zero attempts and zero
+ * stall retries. The loop reruns them all, so each gets its full `maxAttempts` per visit (YOS-258); earlier steps keep
+ * theirs. `record` takes no flag for it, so the loop calls this when it follows a `backtrack` decision. Seen issue sets
+ * are cleared for every step: the rerun changes the world the later steps answer against, so a set seen before it is
+ * not a repeat (A-124).
  */
 export function recordBacktrack(ledger: Ledger, to: StepId): Ledger {
+  const attempts: Record<StepId, number> = { ...ledger.attempts };
+  const stallRetries: Record<StepId, number> = { ...ledger.stallRetries };
+  for (const step of STEP_ORDER.slice(rank(to))) {
+    attempts[step] = 0;
+    stallRetries[step] = 0;
+  }
   return {
     ...ledger,
     backtracks: ledger.backtracks + 1,
-    attempts: { ...ledger.attempts, [to]: 0 },
-    stallRetries: { ...ledger.stallRetries, [to]: 0 },
+    attempts,
+    stallRetries,
     seenIssueSets: { plan: [], model: [], workflow: [], seed: [], tasks: [] },
   };
 }
