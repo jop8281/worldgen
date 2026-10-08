@@ -1283,3 +1283,68 @@ describe('studio page accessibility (YOS-187)', () => {
     assert.equal((html.match(/\.setAttribute\('aria-label'/g) ?? []).length, 1);
   });
 });
+
+describe('studio page error states, narrow tables and focus (YOS-209)', () => {
+  const html = studioPage();
+  const script = /<script>([\s\S]*)<\/script>/.exec(html)![1]!;
+  const MAP = `  var PROBLEM = {
+    signedOut: 'You are signed out. Sign in again with your studio token.',
+    forbidden: "Your role can't see this. Ask an admin for access.",
+    sensitive: 'Hidden because this world has sensitive fields. Ask an admin to open it.',
+    notFound: 'Not found. It may have been removed; refresh the list and try again.',
+    server: 'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
+    network: 'The studio did not answer. Check that it is still running, then try again.',
+    refused: 'The studio refused this request. Check what you entered and try again.'
+  };`;
+
+  it('says what went wrong and what to do from one message map', () => {
+    assert.equal(script.includes(MAP), true);
+  });
+
+  it('maps each failure to its line: signed out, role, sensitive world, not found, studio failure, no answer, and an explained refusal', () => {
+    const fn = /\n  function problemText[\s\S]*?\n  \}\n/.exec(script)![0];
+    const problemText = new Function(`${MAP}\n${fn}\nreturn problemText;`)() as (status: number, code: string, message: string) => string;
+    assert.deepEqual([
+      problemText(401, 'auth.required', 'GET /api/worlds needs sign-in'),
+      problemText(401, 'auth.invalid', 'that token is not a studio user'),
+      problemText(403, 'auth.forbidden', 'POST /api/worlds/:name/serve needs operator'),
+      problemText(403, 'report.sensitive', 'helpdesk has sensitive fields, so only an admin may read its report'),
+      problemText(403, 'plan.sensitive', 'x'),
+      problemText(403, 'export.sensitive', 'x'),
+      problemText(404, 'world.unknown', 'no world gone'),
+      problemText(500, 'http.500', ''),
+      problemText(503, 'job.unrecorded', 'The studio could not write .studio-runs.json, so it did not start the job'),
+      problemText(0, 'network', ''),
+      problemText(422, 'iterate.no_world', 'helpdesk has no world.yaml to iterate'),
+      problemText(400, 'http.400', ''),
+    ], [
+      'You are signed out. Sign in again with your studio token.',
+      'You are signed out. Sign in again with your studio token.',
+      "Your role can't see this. Ask an admin for access.",
+      'Hidden because this world has sensitive fields. Ask an admin to open it.',
+      'Hidden because this world has sensitive fields. Ask an admin to open it.',
+      'Hidden because this world has sensitive fields. Ask an admin to open it.',
+      'Not found. It may have been removed; refresh the list and try again.',
+      'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
+      'The studio failed on its side. Try again, and check the studio log if it keeps failing. The studio said: The studio could not write .studio-runs.json, so it did not start the job',
+      'The studio did not answer. Check that it is still running, then try again.',
+      'helpdesk has no world.yaml to iterate',
+      'The studio refused this request. Check what you entered and try again.',
+    ]);
+  });
+
+  it('never shows a raw error body or a bare exception, and every request resolves to a body', () => {
+    assert.deepEqual([
+      script.includes("error.code + ': '"), script.includes("'unreachable: '"), script.includes('HTTP \' + status'),
+      (script.match(/\.then\(answered\)/g) ?? []).length, (script.match(/\.then\(answered, unanswered\)/g) ?? []).length,
+    ], [false, false, false, 0, 3]);
+  });
+
+  it('scrolls every table inside its own container and rings the focused control', () => {
+    for (const rule of ['.scroll { max-width: 100%; overflow-x: auto; }', 'min-width: 6rem; padding: 0.15rem 0.5rem;', 'max-width: 100%; padding: 0.15rem 0.4rem; }', ':focus-visible { outline: 2px solid #1a5fd0; outline-offset: 2px; }', 'overflow-wrap: anywhere; padding: 1rem 1.25rem 3rem; }']) {
+      assert.equal(html.includes(rule), true, rule);
+    }
+    assert.equal(script.includes("wrap.className = 'scroll';\n    wrap.tabIndex = 0;\n    wrap.appendChild(table);\n    return wrap;"), true);
+    assert.equal((script.match(/document\.createElement\('table'\)/g) ?? []).length, 1);
+  });
+});
