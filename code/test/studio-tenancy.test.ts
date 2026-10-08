@@ -562,3 +562,36 @@ describe('studio tenancy: work an admin starts with ?tenant= is that tenant\'s (
     assert.deepEqual(byGina.body, byAdmin.body);
   });
 });
+
+describe('studio tenancy: ?tenant= below admin, and in the audit (A-367)', () => {
+  it('ignores an operator\'s ?tenant=, so it cannot start an episode or a proof on another tenant\'s world', async () => {
+    const f = await fixture();
+    await mkdir(path.join(f.worldsDir, 'acme', 'gen-acme-only'), { recursive: true });
+    const verifies: string[][] = [];
+    const counting: Runner = async (argv, o) => {
+      if (argv[2] === 'verify') verifies.push([...argv]);
+      return runner(argv, o);
+    };
+    const base = await start(f, { runner: counting });
+    const episode = await call(base, 'POST', '/api/episodes?tenant=acme', GINA, { world: 'gen-acme-only', task: 't1', agent: 'noop' });
+    const proof = await call(base, 'POST', '/api/worlds/gen-acme-only/proof?tenant=acme', GINA);
+    const unknown = { error: { code: 'world.unknown', message: `No world gen-acme-only under ${f.worldsDir}` } };
+    assert.deepEqual([episode.status, episode.body, proof.status, proof.body], [404, unknown, 404, unknown]);
+    assert.deepEqual([f.spawned.length, verifies.length], [0, 0]);
+  });
+
+  it('records the tenant an admin acted for with ?tenant=, and that tenant\'s audit lists the line', async () => {
+    const f = await fixture();
+    await mkdir(path.join(f.worldsDir, 'globex', 'gen-globex-only'), { recursive: true });
+    const base = await start(f);
+    await call(base, 'POST', '/api/episodes?tenant=globex', ADA, { world: 'gen-globex-only', task: 't1', agent: 'noop' });
+    await call(base, 'POST', '/api/generate', OTTO, gen('acme-run'));
+    const lines = async (q = ''): Promise<unknown[]> => ((await call(base, 'GET', `/api/audit${q}`, ADA)).body['entries'] as Json[]).map(({ at, ...rest }) => (typeof at === 'string' ? rest : { at }));
+    const ada = { user: 'ada', role: 'admin', tenant: 'ops', forTenant: 'globex', method: 'POST', path: '/api/episodes', status: 200 };
+    const otto = { user: 'otto', role: 'operator', tenant: 'acme', method: 'POST', path: '/api/generate', status: 200 };
+    assert.deepEqual(await lines(), [ada, otto]);
+    assert.deepEqual(await lines('?tenant=globex'), [ada]);
+    assert.deepEqual(await lines('?tenant=ops'), [ada]);
+    assert.deepEqual(await lines('?tenant=acme'), [otto]);
+  });
+});
