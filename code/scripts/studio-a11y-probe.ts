@@ -28,6 +28,7 @@ const FORBIDDEN = "Your role can't see this. Ask an admin for access.";
 const SENSITIVE = 'Hidden because this world has sensitive fields. Ask an admin to open it.';
 const SERVER = 'The studio failed on its side. Try again, and check the studio log if it keeps failing.';
 const NETWORK = 'The studio did not answer. Check that it is still running, then try again.';
+const RESET_CONFIRM = 'Type the world name exactly to confirm the reset.';
 
 let studio: ChildProcess | undefined;
 let chrome: ChildProcess | undefined;
@@ -202,14 +203,26 @@ async function main(): Promise<void> {
     await ev(`document.querySelector('#runs-table').scrollIntoView({block:'center'}),true`);
     return ok ? undefined : `runs '${await ev(text('#runs-table'))}', episodes '${await ev(text('#episodes-table'))}'`;
   });
-  await step('k-signed-out-401', async () => {
+  await step('k-reset-refused', async () => {
+    const helpdeskButton = (label: string) => `(()=>{const r=[...document.querySelectorAll('#worlds-table tr')].find(r=>r.cells[0].textContent==='helpdesk');const b=r&&[...r.querySelectorAll('button')].find(x=>x.textContent===${JSON.stringify(label)});b?.click();return !!b})()`;
+    await ev(helpdeskButton('serve'));
+    if (!(await until(`[...document.querySelectorAll('#worlds-table tr')].some(r=>r.cells[0].textContent==='helpdesk'&&r.textContent.includes('stop'))`, 15000))) return 'helpdesk never served';
+    await ev(`(()=>{document.querySelector('#explorer-world').value='helpdesk';document.querySelector('#reset-confirm').value='';document.querySelector('#reset-send').click();return true})()`);
+    const said = await until(`${text('#console-result')}===${JSON.stringify(RESET_CONFIRM)}`, 10000);
+    await ev(`document.querySelector('#console-meta').scrollIntoView({block:'start'}),true`);
+    const line = await ev(text('#console-result'));
+    await ev(helpdeskButton('stop'));
+    if (!(await until(`[...document.querySelectorAll('#worlds-table tr')].some(r=>r.cells[0].textContent==='helpdesk'&&r.textContent.includes('serve'))`, 15000))) return 'helpdesk never stopped';
+    return said ? undefined : `reset with an empty box said '${line}'`;
+  });
+  await step('l-signed-out-401', async () => {
     await ev(`sessionStorage.setItem('studio-token','not-a-studio-token'),true`);
     await cdp('Page.reload');
     if (!(await until(`${text('#auth-error')}===${JSON.stringify(SIGNED_OUT)}&&!document.querySelector('#signin-form').hidden`, 10000))) return `auth line '${await ev(text('#auth-error'))}'`;
     await ev(`window.scrollTo(0,0),true`);
     return (await until(`${text('#worlds-table')}===${JSON.stringify(SIGNED_OUT)}`, 5000)) ? undefined : `worlds panel '${await ev(text('#worlds-table'))}'`;
   });
-  await step('l-viewer-403', async () => {
+  await step('m-viewer-403', async () => {
     await ev(`sessionStorage.setItem('studio-token',${JSON.stringify(VIEWER_TOKEN)}),true`);
     await cdp('Page.reload');
     if (!(await until(`${text('#who')}.includes('(viewer)')&&document.querySelectorAll('#worlds-table tr').length>1`, 10000))) return `not signed in as the viewer: ${await ev(text('#who'))}`;

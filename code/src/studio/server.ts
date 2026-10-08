@@ -1807,7 +1807,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   async function readEvents(run: Job): Promise<unknown[]> {
     const file = await eventsFileOf(run);
-    if (file === null) return [];
+    return file === null ? [] : eventsIn(file);
+  }
+
+  /** The events an events.jsonl holds, none when it cannot be read. */
+  async function eventsIn(file: string): Promise<unknown[]> {
     const text = await readFile(file, 'utf8').catch(() => '');
     const out: unknown[] = [];
     for (const line of text.split('\n')) {
@@ -1819,6 +1823,24 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
     }
     return out;
+  }
+
+  /**
+   * What a past run's own events say of it, for a run no capsule.json covers: run_started's model and transport, and the
+   * last run_finished's ms, cost and result. A fact the run never logged stays null.
+   */
+  function runFactsOf(all: readonly unknown[]): { model: string | null; transport: string | null; costUsd: number | null; ms: number | null; outcome: 'done' | 'stopped' | null } {
+    const events = all.filter(isObject);
+    const started = events.find((e) => e['t'] === 'run_started');
+    const finished = [...events].reverse().find((e) => e['t'] === 'run_finished');
+    const result = finished !== undefined && isObject(finished['result']) ? finished['result']['kind'] : undefined;
+    const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+    const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    return {
+      model: text(started?.['model']), transport: text(started?.['transport']),
+      costUsd: num(finished?.['costUsd']), ms: num(finished?.['ms']),
+      outcome: result === 'done' || result === 'stopped' ? result : null,
+    };
   }
 
   function totalsOf(events: readonly unknown[]): { ms: number; costUsd: number } | null {
@@ -1900,19 +1922,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         const capsule = await readCapsule(dir);
         const hasReport = await file(path.join(dir, 'REPORT.md'));
         for (const runId of await dirsOf(path.join(dir, 'runs'))) {
-          if (!await file(path.join(dir, 'runs', runId, 'events.jsonl'))) continue;
-          const mine = capsule !== null && capsule.runId === runId;
-          out.push({
-            name,
-            tenant: shelf.tenant,
-            runId,
-            model: mine ? capsule.model : null,
-            transport: mine ? capsule.transport : null,
-            costUsd: mine ? capsule.costUsd : null,
-            ms: mine ? capsule.ms : null,
-            outcome: mine ? (capsule.worldId !== null ? 'done' : 'stopped') : null,
-            hasReport,
-          });
+          const events = path.join(dir, 'runs', runId, 'events.jsonl');
+          if (!await file(events)) continue;
+          // The capsule speaks for the run that wrote it; any other run speaks through its own events.
+          const facts = capsule !== null && capsule.runId === runId
+            ? { model: capsule.model, transport: capsule.transport, costUsd: capsule.costUsd, ms: capsule.ms, outcome: capsule.worldId !== null ? 'done' as const : 'stopped' as const }
+            : runFactsOf(await eventsIn(events));
+          out.push({ name, tenant: shelf.tenant, runId, ...facts, hasReport });
         }
       }
     }
