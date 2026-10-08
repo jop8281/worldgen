@@ -40,7 +40,7 @@ Times are the rehearsal's measured page times. The minutes are talk time. Each s
 | 11 to 12 | 10. A noop episode (`11-noop-episode`) | Agent `noop`, then `run episode` | One episode on `assign_newest_acme_ticket`. The free noop agent replies "No action taken.", and the engine scores the end state 0 at $0.0000. The seed and end state hashes match, because nothing changed. The engine grades the end state, not the reply. The episode records no model, and Analytics files it under `noop (no model)`. | 6.1 s |
 | 12 to 13 | 11. Spend (`12-spend`) | `refresh` under Spend | Today's LLM and sandbox spend, by day, and the caps (each says when it is unset). Spend needs the admin role. | instant |
 | 13 to 14 | 12. Clean up (`13-stop-helpdesk`, `14-reload`) | `stop` on helpdesk, then reload the page | The served count returns to 0, and the reload shows the same state, still signed in. | 0.3 s |
-| 14 to 15 | 13. Another tenant (`16-other-tenant`) | `Sign out`, then paste bob's token and `Sign in` | The bar reads `bob (operator)`. His Episodes list reads `0 episode run(s)`: ada's run and the rehearsal's acme run are absent, because each tenant sees only its own jobs. The worlds stay shared. | instant |
+| 14 to 15 | 13. Another tenant (`16-other-tenant`) | `Sign out`, then paste bob's token and `Sign in` | The bar reads `bob (operator)`. His Episodes list reads `0 episode run(s)`: ada's run and the rehearsal's acme run are absent, because each tenant sees only its own jobs. The worlds stay shared, and Spend is gone from his page: it needs the admin role. | instant |
 
 The rehearsal also checks one thing the talk does not click, as step `15-idempotent-retry`. Signed in as ana, it posts the same noop episode request twice with one `Idempotency-Key`. Both answers carry the same run id, and the second says `replayed: true`, so the studio started one episode. Generation runs share that code path, but a generation calls Sonnet, so the rehearsal retries the free episode instead. Measured 5.9 to 6.8 s, most of it the episode itself.
 
@@ -57,6 +57,5 @@ Generation runs → kind `description`, a one-line prompt, out slug, budget `3`,
 
 ## Known gaps
 
-- Signed in as an operator, the page shows `HTTP 403 auth.forbidden: GET /api/costs needs the admin role`, because the Spend panel loads for everyone. In step 13 it sits under bob's name, so say so when he signs in.
 - Opening a big generated world in the Explorer takes about 6 s.
 - Generation and cancellation were not rehearsed live: no model calls in this pass.
