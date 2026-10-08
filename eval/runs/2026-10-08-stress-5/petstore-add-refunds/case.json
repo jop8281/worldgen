@@ -1,0 +1,20 @@
+{
+  "id": "petstore-add-refunds",
+  "expect": "done",
+  "phases": [
+    {
+      "phase": "create",
+      "result": "done",
+      "error": null
+    },
+    {
+      "phase": "change",
+      "result": "done",
+      "error": null
+    }
+  ],
+  "verify": {
+    "kind": "pass",
+    "tasks": 4
+  }
+}
