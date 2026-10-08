@@ -369,6 +369,29 @@ function readBody(req: IncomingMessage, limit: number): Promise<Body> {
 /** The files a world export carries. Never runs/: its events and dumps are provenance for this machine, not the world (A-280). */
 const EXPORT_FILES = ['world.yaml', 'plan.yaml', 'REPORT.md', 'capsule.json'] as const;
 
+/**
+ * The variables a generate or iterate child gets from the studio's environment (A-372): what `worldgen` reads (the
+ * claude bin in cli/models.ts, the costs file and caps in costs/ledger.ts, the guard scale in engine/sandbox.ts) and
+ * what the claude CLI it spawns needs to find its login and config. The model credential joins by transport
+ * (`generationEnv`). Never BOAT_*, which worldgen never uses, and never ANTHROPIC_*: the child runs candidate-world
+ * snippets beside its environment.
+ */
+export const GENERATION_ENV = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME',
+  'WORLDGEN_CLAUDE_BIN', 'WORLDGEN_COSTS_FILE', 'WORLDGEN_MAX_DAILY_USD', 'WORLDGEN_MAX_TOTAL_USD', 'WORLDGEN_MAX_DAILY_LLM_USD',
+  'WORLDGEN_MAX_DAILY_SANDBOX_USD', 'WORLDGEN_GUARD_SCALE',
+] as const;
+
+/** A generate or iterate child's environment: GENERATION_ENV, TZ UTC, and its transport's credential, LLM_KEY for sdk or the claude CLI's OAuth token. */
+export function generationEnv(env: Readonly<Record<string, string | undefined>>, transport: 'claude-cli' | 'sdk' | undefined): Record<string, string> {
+  const out: Record<string, string> = { TZ: 'UTC' };
+  for (const key of [...GENERATION_ENV, transport === 'sdk' ? 'LLM_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN']) {
+    const value = env[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
 /** A zip of stored (uncompressed) entries: one local header per file, then the central directory and its end record. */
 function zipOf(entries: readonly { readonly name: string; readonly data: Buffer }[]): Buffer {
   const locals: Buffer[] = [];
@@ -942,7 +965,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   /** The check, proof and serve children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338, A-343). */
   const childEnv = (): Record<string, string> => isolatedEnv(opts.env ?? process.env);
-  /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
+  /** An episode is the model caller and runs its world in allowlisted children (A-347), so it gets the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
   const modelEnv = (): Record<string, string | undefined> => {
     const { WORLDGEN_STUDIO_TOKEN: _token, ...rest } = opts.env ?? process.env;
     return rest;
@@ -1484,7 +1507,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     let child: SpawnedChild;
     try {
-      child = opts.spawner(argv, { cwd: codeDir, env: modelEnv() });
+      // A generate or iterate child runs candidate-world snippets, so it gets only GENERATION_ENV (A-372).
+      child = opts.spawner(argv, { cwd: codeDir, env: start.kind === 'generate' ? generationEnv(opts.env ?? process.env, opts.transport) : modelEnv() });
     } catch (e) {
       // A start that never happened is finished, so its derived key cannot answer every later retry with a dead intent.
       job.phase = 'finished';
