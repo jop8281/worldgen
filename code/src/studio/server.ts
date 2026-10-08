@@ -29,6 +29,10 @@
  *   Origin (curl, scripts) passes the Origin check.
  * - Stops never leave zombies: SIGTERM, a short wait, SIGKILL, and the answer says which signal
  *   ended the child. A child that dies on its own removes its own record.
+ * - Hardened (YOS-234): every answer carries the security headers, a state-changing POST that
+ *   arrives on a non-loopback Host from a non-loopback Origin is refused (`studio.csrf_origin`),
+ *   each POST route has a token bucket (429 `studio.rate_limited`), and generation runs and
+ *   episodes are capped at four each (429 `generate.concurrent_limit`, `episode.concurrent_limit`).
  */
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -118,6 +122,12 @@ export type StudioOptions = {
   readonly users?: readonly StudioUser[] | undefined;
   /** The one public origin the studio is also reached at, such as http://127.0.0.1:9000 for a published container port or https://studio.example.com behind a proxy. */
   readonly origin?: string | undefined;
+  /** The per-route rate limit on state-changing requests. Default 60 per minute, bursts of 60 (YOS-234). */
+  readonly rateLimit?: RateLimitOptions | undefined;
+  /** Most generation runs at once. Default 4 (YOS-234). */
+  readonly maxConcurrentRuns?: number | undefined;
+  /** Most agent episodes at once. Default 4 (YOS-234). */
+  readonly maxConcurrentEpisodes?: number | undefined;
 };
 
 export interface StudioServer {
@@ -173,6 +183,81 @@ type Reply =
   | { readonly status: number; readonly body: Buffer; readonly type: 'application/zip'; readonly filename: string };
 
 const fail = (status: number, code: string, message: string, headers?: Readonly<Record<string, string>>): Reply => ({ status, body: { error: { code, message } }, ...(headers === undefined ? {} : { headers }) });
+
+// ---- web hardening (YOS-234) ------------------------------------------------------------------
+
+/** Whether a hostname is loopback: 127.0.0.0/8, localhost or ::1. The loopback posture the CLI documents. */
+function isLoopbackHost(hostname: string): boolean {
+  let h = hostname.trim().toLowerCase();
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  if (h === 'localhost' || h === '::1') return true;
+  return /^127\.\d{1,3}(\.\d{1,3}){2}$/.test(h);
+}
+
+/** The host part of a Host header, without its port; '' when absent or unparsable. */
+function hostOfHeader(value: string | string[] | undefined): string {
+  if (value === undefined) return '';
+  const raw = Array.isArray(value) ? (value[0] ?? '') : value;
+  let h = raw.trim().toLowerCase();
+  if (h.startsWith('[')) {
+    const close = h.indexOf(']');
+    return close > 0 ? h.slice(0, close + 1) : h;
+  }
+  const colon = h.lastIndexOf(':');
+  return colon > 0 ? h.slice(0, colon) : h;
+}
+
+/** Whether an Origin header names a loopback origin, such as http://127.0.0.1:8787 or http://localhost:8787. */
+function isLoopbackOrigin(origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false; // Origin: null, and anything unparsable, is not a loopback origin
+  }
+  return (url.protocol === 'http:' || url.protocol === 'https:') && isLoopbackHost(url.hostname);
+}
+
+/**
+ * The CSRF/Origin guard: a state-changing POST that arrives on a non-loopback Host from a
+ * non-loopback Origin is refused. Loopback is the only documented posture (cli/studio.ts:
+ * bind 0.0.0.0 only inside a container whose port is published on the host's loopback), so a
+ * browser POST through a non-loopback Host with a foreign Origin never changes state. Requests
+ * with no Origin (curl, same-machine scripts) and loopback origins such as the page's own pass.
+ */
+function csrfRefusal(req: IncomingMessage): Reply | null {
+  if (req.method !== 'POST') return null;
+  const host = hostOfHeader(req.headers.host);
+  if (host === '' || isLoopbackHost(host)) return null;
+  const originRaw = req.headers.origin;
+  const origin = Array.isArray(originRaw) ? originRaw.find((o): o is string => typeof o === 'string') : originRaw;
+  if (typeof origin !== 'string') return null;
+  if (isLoopbackOrigin(origin)) return null;
+  return fail(403, 'studio.csrf_origin', `cross-origin POST refused: Host ${host} is not loopback and Origin ${origin} is not a loopback origin; the studio takes state changes over loopback only`);
+}
+
+type RateLimitOptions = { readonly capacity: number; readonly refillPerSecond: number };
+/** 60 state-changing requests per route per minute: a burst of 60, refilled one token a second. */
+const RATE_LIMIT: RateLimitOptions = { capacity: 60, refillPerSecond: 1 };
+/** Most generation runs and agent episodes the studio runs at once. */
+const MAX_CONCURRENT_RUNS = 4;
+const MAX_CONCURRENT_EPISODES = 4;
+
+/** A token bucket: `capacity` burst, refilled at `refillPerSecond` tokens a second. take() fails once empty. */
+function tokenBucket(capacity: number, refillPerSecond: number): { take: () => boolean } {
+  let tokens = capacity;
+  let at = Date.now();
+  return {
+    take(): boolean {
+      const now = Date.now();
+      tokens = Math.min(capacity, tokens + ((now - at) / 1000) * refillPerSecond);
+      at = now;
+      if (tokens < 1) return false;
+      tokens -= 1;
+      return true;
+    },
+  };
+}
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -282,9 +367,18 @@ type Caller =
 const roleRank = (role: StudioRole): number => STUDIO_ROLES.indexOf(role);
 const sha256 = (text: string): Buffer => createHash('sha256').update(text).digest();
 
+/** The security headers every answer carries, page, JSON and zip alike (YOS-234). */
+const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  'x-frame-options': 'DENY',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
+};
+
 function write(res: ServerResponse, reply: Reply): void {
   if (reply.type !== undefined) {
     res.writeHead(reply.status, {
+      ...SECURITY_HEADERS,
       'content-type': reply.type,
       'content-length': typeof reply.body === 'string' ? Buffer.byteLength(reply.body) : reply.body.length,
       ...(reply.type === 'application/zip' ? { 'content-disposition': `attachment; filename="${reply.filename}"` } : {}),
@@ -293,7 +387,7 @@ function write(res: ServerResponse, reply: Reply): void {
     return;
   }
   const text = JSON.stringify(reply.body ?? null);
-  res.writeHead(reply.status, { ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
+  res.writeHead(reply.status, { ...SECURITY_HEADERS, ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
   res.end(text);
 }
 
@@ -496,6 +590,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   void persist();
   let costsCache: { at: number; value: unknown } | null = null;
   let costsInFlight: Promise<unknown> | null = null;
+  /** One token bucket per POST route pattern (YOS-234); GETs poll and never draw from one. */
+  const rateBuckets = new Map<string, { take: () => boolean }>();
+  const limit = opts.rateLimit ?? RATE_LIMIT;
 
   // ---- handlers ---------------------------------------------------------------------------
 
@@ -748,6 +845,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   async function generate(body: unknown): Promise<Reply> {
+    const runsCap = opts.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS;
+    const active = [...runs.values()].filter((r) => r.running).length;
+    if (active >= runsCap) {
+      return fail(429, 'generate.concurrent_limit', `${active} generation runs are already active; the studio runs at most ${runsCap} at once, so stop one first`);
+    }
     if (!isObject(body)) return fail(400, 'generate.body', 'the body must be a JSON object');
     const kind = body['kind'];
     if (kind !== 'description' && kind !== 'openapi' && kind !== 'csv') {
@@ -1037,6 +1139,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   /** Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. */
   async function startEpisode(body: unknown): Promise<Reply> {
+    const episodesCap = opts.maxConcurrentEpisodes ?? MAX_CONCURRENT_EPISODES;
+    const active = [...episodes.values()].filter((e) => e.running).length;
+    if (active >= episodesCap) {
+      return fail(429, 'episode.concurrent_limit', `${active} agent episodes are already active; the studio runs at most ${episodesCap} at once, so stop one first`);
+    }
     if (!isObject(body)) return fail(400, 'episode.body', 'body must be {"world": ..., "task": ..., "agent": "noop" | "sonnet"}');
     const world = typeof body['world'] === 'string' ? body['world'] : '';
     const w = await worldDirOf(world);
@@ -1216,6 +1323,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const ownOrigins = new Set<string>();
 
   const onStudio = async (req: IncomingMessage, who: Caller): Promise<Reply> => {
+    // YOS-234 CSRF guard first: a state-changing POST on a non-loopback Host from a non-loopback
+    // Origin is refused here. The own-names checks below (host.forbidden, origin.forbidden) then
+    // answer to the studio's own names, and the bearer sign-in decides the caller.
+    const csrf = csrfRefusal(req);
+    if (csrf !== null) return csrf;
     const method = req.method ?? '';
     const rawHost = req.headers.host;
     let hostName: string | undefined;
@@ -1252,6 +1364,17 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       if (roleRank(who.role) < roleRank(need)) {
         return fail(403, 'auth.forbidden', `${what} needs the ${need} role; ${who.name} is ${who.role === 'viewer' ? 'a' : 'an'} ${who.role}`);
+      }
+    }
+    if (method === 'POST') {
+      const key = `POST /${hit.route.parts.join('/')}`;
+      let bucket = rateBuckets.get(key);
+      if (bucket === undefined) {
+        bucket = tokenBucket(limit.capacity, limit.refillPerSecond);
+        rateBuckets.set(key, bucket);
+      }
+      if (!bucket.take()) {
+        return fail(429, 'studio.rate_limited', `Too many ${key} requests: the studio allows a burst of ${limit.capacity}, refilled ${limit.refillPerSecond} per second`);
       }
     }
     const body = hit.route.method === 'POST' ? await readBody(req) : { ok: true as const, value: undefined };

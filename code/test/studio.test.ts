@@ -548,6 +548,7 @@ describe('studio', () => {
       await writeFile(path.join(dir, 'events.jsonl'), `${JSON.stringify(E1)}\n`);
       const r = await json(base, 'GET', `/api/generate/${runId}`);
       assert.deepEqual(r.body, { running: true, state: 'running', events: [E1], totals: null });
+      lastSpawn().handle.exitWith(0);
       spawnPlan = () => ({});
     });
 
@@ -602,6 +603,9 @@ describe('studio', () => {
         'bun', 'src/cli/worldgen.ts', '--csv', path.join(inputsDir, 'orders.csv'), path.join(inputsDir, 'customers.csv'),
         '--out', path.join(worldsDir, 'gen-ords'),
       ]);
+      // Every run here is fake and never exits on its own, so the four records stay `running`
+      // and would fill the concurrent-run cap (YOS-234); finish them like the run did.
+      for (const one of spawned.slice(-4)) one.handle.exitWith(0);
     });
 
     it('lists the inputs a generation can read, and the paths a spec declares for --only (A-312)', async () => {
