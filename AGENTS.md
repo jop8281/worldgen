@@ -107,6 +107,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `studio/runstore.ts` | The studio's generation runs on disk (`.studio-runs.json` in the worlds dir): saved on start and exit, reloaded on start, where a live process is adopted and a dead unfinished one is interrupted (A-329). Process checks are injected. |
 | `studio/explorer.ts` | The World Explorer's view of a checked world: wid, entities and references, routes, jobs, and tasks as an agent is told them. Pure; no snippet or task source. |
 | `studio/server.ts` | The studio server: worlds, explorer, rollout, the API console, generation runs, eval and spend, and the Agent Playground (episode children, the engine proof). Owns sign-in: the roles each route needs (viewer, operator, admin), bearer-token checks, and the audit line every POST writes (A-322..A-325). Loopback unless users are configured. |
+| `studio/watch.ts` | Studio health signals (YOS-237): the traffic counter behind `GET /api/health` (answers since start and in the last 300 s, health polls not counted, bounded memory), the parts of `/api/health` and `/api/costs` the watcher reads, and `studioAlerts()`: `studio.down`, `studio.5xx_rate`, `spend.cap_share` and `spend.unchecked`. Unknown spend never reads as $0. Pure. |
 | `cli/sandbox.ts` | Argument parsing for `bun run sandbox`: up, exec, down, discover, track, capture-usage, reconcile-create, reconcile-usage. No logic. |
 | `cli/worldplay.ts` | Argument parsing for the engine CLI: check, serve, verify, grade, docs. No logic. |
 | `cli/eval-analysis-files.ts` | Reads the current eval case paths for analysis, never hidden history as another case. |
@@ -120,6 +121,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `cli/models.ts` | The shared wiring for CLIs: transport choice, metering into the ledger, the example world, and writing `REPORT.md`. |
 | `cli/episode.ts` | Argument parsing and wiring for `bun run episode`: one local agent episode for the studio's Agent Playground. The work is in `dataset/local.ts`. No logic. |
 | `cli/studio.ts` | Argument parsing and wiring for `bun run studio`: the operator web app, and its users from `--users <file>` or `WORLDGEN_STUDIO_TOKEN`. No logic. |
+| `cli/studio-watch.ts` | Argument parsing, the two GETs and the exit status for `bun run studio-watch`: one check of a running Studio, OK lines and exit 0, or one `ALERT <code>: <why>` line per problem and exit 1. The token comes only from `WORLDGEN_STUDIO_TOKEN`, goes only to `GET /api/costs` as a bearer header, and is never printed. The rules are in `studio/watch.ts`. No logic. |
 | `lib/never.ts` | `assertNever` for exhaustive switches. |
 
 `cli/worldgen.ts` sits with the other CLIs and imports `cli/models.ts`. Its iterate mode (`--world`) loads a checked existing world, plans the change, reruns affected stages through the preservation gate, and saves a semantic Changes report. Stops preserve the previous world and plan.
@@ -174,6 +176,7 @@ bun run dataset --help                            # one graded solver episode pe
                                                   # The sandbox serves the public bundle only; a separate verifier child process
                                                   # (cli/verifier.ts) grades each recorded trace against the private world.
 bun run studio [--port 8787] [--users <file>] [--worlds-dir <dir>] [--repo-root <dir>]   # the operator web app: worlds dashboard, rollout, generation runs, eval, spend and the Agent Playground; sign-in when users are given
+bun run studio-watch -- http://127.0.0.1:8787       # one check of a running Studio: OK lines and exit 0, or ALERT lines and exit 1; schedule it every 5 minutes
 ../scripts/live.sh --env-only                        # the live-run env check; drop --env-only and pass <slug> "<description>" to run
 
 bun run worldgen "A helpdesk with SLA tiers and on-call escalation" --out ../prod/worlds/gen-<slug>

@@ -296,12 +296,17 @@ describe('studio', () => {
   });
 
   describe('health', () => {
-    it('GET /api/health is ready with the build, the runtime and the world count', async () => {
+    it('GET /api/health is ready with the build, the runtime, the world count and the traffic so far', async () => {
       const r = await call(base, 'GET', '/api/health');
       assert.equal(r.status, 200);
       const listed = (JSON.parse((await call(base, 'GET', '/api/worlds')).text) as { worlds: unknown[] }).worlds.length;
       const bun = process.versions['bun'];
-      assert.deepEqual(JSON.parse(r.text), { ok: true, build: 'test-sha', runtime: bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`, worlds: listed });
+      // The first test of the suite: no answer has been counted yet, and health polls never are. Counts after real
+      // traffic, on an injected clock, are in test/studio-watch.test.ts.
+      const { traffic, ...rest } = JSON.parse(r.text) as { traffic: { since: string } };
+      assert.deepEqual(rest, { ok: true, build: 'test-sha', runtime: bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`, worlds: listed });
+      assert.equal(new Date(traffic.since).toISOString(), traffic.since);
+      assert.deepEqual({ ...traffic, since: 'ISO' }, { since: 'ISO', requests: 0, errors5xx: 0, windowSeconds: 300, window: { requests: 0, errors5xx: 0 } });
     });
   });
 
