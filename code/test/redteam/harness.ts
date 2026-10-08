@@ -18,7 +18,6 @@ import { existsSync } from 'node:fs';
  */
 import { spawn } from 'node:child_process';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -636,35 +635,6 @@ export function runCli(args: readonly string[], o: { timeoutMs?: number } = {}):
   });
 }
 
-function portFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const srv = createServer();
-    srv.once('error', () => resolve(false));
-    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
-  });
-}
-
-function ephemeralPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      const port = typeof addr === 'object' && addr ? addr.port : 0;
-      srv.close(() => resolve(port));
-    });
-  });
-}
-
-/** A port P with P and P+1 both free. */
-export async function freePortPair(): Promise<number> {
-  for (let i = 0; i < 50; i++) {
-    const p = await ephemeralPort();
-    if (p > 0 && p < 65535 && (await portFree(p + 1))) return p;
-  }
-  throw new Error('no free port pair found');
-}
-
 export type HttpResult = { readonly status: number; readonly body: unknown; readonly text: string; readonly headers: Headers };
 
 export type JsonClient = {
@@ -707,7 +677,9 @@ export function jsonClient(base: string): JsonClient {
 }
 
 export type Server = {
+  /** The world port and the admin port serve reported once both were bound. */
   readonly port: number;
+  readonly adminPort: number;
   readonly base: string;
   readonly admin: string;
   readonly api: JsonClient;
@@ -729,12 +701,27 @@ async function reachable(url: string): Promise<boolean> {
   }
 }
 
-/** Launch `world serve <dir> --port P` (admin on P+1) and wait until both ports answer. */
+/** The ports in serve's `{"listening":{"world":W,"admin":A}}` line, printed once both are bound (A-348), or null before it. */
+function listeningOf(out: string): { readonly world: number; readonly admin: number } | null {
+  for (const line of out.split('\n')) {
+    try {
+      const v: unknown = JSON.parse(line);
+      const l = typeof v === 'object' && v !== null ? (v as { listening?: { world?: unknown; admin?: unknown } }).listening : undefined;
+      if (Number.isInteger(l?.world) && Number.isInteger(l?.admin)) return { world: l?.world as number, admin: l?.admin as number };
+    } catch {
+      // not the listening line
+    }
+  }
+  return null;
+}
+
+/**
+ * Launch `world serve <dir> --port 0` and wait until the ports it reports both answer. The child binds both ports
+ * where the OS picks, so no other process can take one between a probe and the bind, as it could when this picked a
+ * free pair first (EADDRINUSE on the admin port, YOS-233).
+ */
 export async function startServer(worldDir: string, o: { timeoutMs?: number; extraArgs?: readonly string[] } = {}): Promise<Server> {
-  const port = await freePortPair();
-  const base = `http://127.0.0.1:${port}`;
-  const admin = `http://127.0.0.1:${port + 1}`;
-  const child = spawn(process.execPath, tsEntryArgs(CLI_PATH, ['serve', worldDir, '--port', String(port), ...(o.extraArgs ?? [])]), {
+  const child = spawn(process.execPath, tsEntryArgs(CLI_PATH, ['serve', worldDir, '--port', '0', ...(o.extraArgs ?? [])]), {
     cwd: CODE_DIR,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -755,10 +742,15 @@ export async function startServer(worldDir: string, o: { timeoutMs?: number; ext
     await exitedP;
     clearTimeout(t);
   };
+  const urls = (ports: { readonly world: number; readonly admin: number }) => ({ base: `http://127.0.0.1:${ports.world}`, admin: `http://127.0.0.1:${ports.admin}` });
   const deadline = Date.now() + (o.timeoutMs ?? SERVER_START_TIMEOUT_MS);
   while (Date.now() < deadline && !exited) {
-    if ((await reachable(`${base}/__redteam_ping`)) && (await reachable(`${admin}/_world/state`))) {
-      return { port, base, admin, api: jsonClient(base), adminApi: jsonClient(admin), output: () => out, stop };
+    const ports = listeningOf(out);
+    if (ports !== null) {
+      const { base, admin } = urls(ports);
+      if ((await reachable(`${base}/__redteam_ping`)) && (await reachable(`${admin}/_world/state`))) {
+        return { port: ports.world, adminPort: ports.admin, base, admin, api: jsonClient(base), adminApi: jsonClient(admin), output: () => out, stop };
+      }
     }
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -766,7 +758,9 @@ export async function startServer(worldDir: string, o: { timeoutMs?: number; ext
     ? `process exited before readiness, code=${child.exitCode}, signal=${child.signalCode}`
     : `readiness timed out after ${o.timeoutMs ?? SERVER_START_TIMEOUT_MS} ms`;
   await stop();
-  throw new Error(`world serve did not come up on ${base} and ${admin} (${failure}).\n${out.slice(-2000)}`);
+  const ports = listeningOf(out);
+  const where = ports === null ? 'before reporting its ports' : `on ${urls(ports).base} and ${urls(ports).admin}`;
+  throw new Error(`world serve did not come up ${where} (${failure}).\n${out.slice(-2000)}`);
 }
 
 /** startServer on a temp dir holding `world`, removing the dir on stop. */
