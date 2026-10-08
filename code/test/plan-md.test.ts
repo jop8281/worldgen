@@ -6,7 +6,7 @@
  * the iterate controls reuse minimalWorld, as test/worldgen-iterate.test.ts does.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -453,5 +453,27 @@ describe('runWorldGen writes plan.md beside plan.yaml (YOS-182)', () => {
     assert.equal(readFileSync(join(dir, 'plan.md'), 'utf8'), before.md);
     assert.equal(existsSync(join(dir, 'plan.yaml.tmp')), false);
     assert.equal(existsSync(join(dir, 'plan.md.tmp')), false);
+  });
+});
+
+describe('every generated prod world carries its plan.md (J84)', () => {
+  const WORLDS = join(import.meta.dirname, '../../prod/worlds');
+  const generated = readdirSync(WORLDS, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && e.name.startsWith('gen-') && existsSync(join(WORLDS, e.name, 'plan.yaml')))
+    .map((e) => e.name)
+    .sort();
+
+  it('parses every plan.yaml with the current plan schema', () => {
+    assert.deepEqual(generated.filter((name) => parsePlanYaml(readFileSync(join(WORLDS, name, 'plan.yaml'), 'utf8')) === null), []);
+  });
+
+  it('has a plan.md beside every plan.yaml, equal byte for byte to renderPlanMd of it', () => {
+    const missing = generated.filter((name) => !existsSync(join(WORLDS, name, 'plan.md')));
+    assert.deepEqual(missing, []);
+    for (const name of generated) {
+      const plan = parsePlanYaml(readFileSync(join(WORLDS, name, 'plan.yaml'), 'utf8'));
+      if (plan === null) continue;
+      assert.equal(readFileSync(join(WORLDS, name, 'plan.md'), 'utf8'), renderPlanMd(plan), `${name}/plan.md drifted from its plan.yaml: run bun scripts/render-plan-md.ts`);
+    }
   });
 });
