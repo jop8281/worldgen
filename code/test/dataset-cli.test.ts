@@ -10,6 +10,7 @@ import { PROMPT_VERSION } from '../src/dataset/schema.ts';
 import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { engineGrader } from '../src/dataset/verifier.ts';
 import type { SolverProposer } from '../src/dataset/solver.ts';
+import { GRADER_CANARY, saveCanaryWorld } from './helpers/world.ts';
 import { COMMIT, EASY_REPLY, HELPDESK_DIR, RUN_BUDGET, easyOnly, fakeBackend, helpdesk, randomPort, solveAll, tmp } from './dataset-kit.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
@@ -159,6 +160,21 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     return { code, out, err };
   };
 
+  it('uploads exactly the public form of the world through the production makeBundle default (A-377)', RUN_BUDGET, async () => {
+    const { dir, checked } = await saveCanaryWorld(tmp('canary'), 'canary-world');
+    const port = randomPort();
+    const backend = fakeBackend(checked, { port });
+    const err: string[] = [];
+    // No makeBundle here: the default in cli/dataset.ts is under test.
+    await main(required(tmp('cli-canary'), { world: dir }), KEYS, { out: () => {}, err: (l) => err.push(l), grader: engineGrader, runner: withPath, backend, nextTurn: async () => ({ action: 'finish', final_reply: 'Done.' }) as never, port });
+    const worldFiles = backend.uploaded.filter((f) => f.path.startsWith('worlds/'));
+    assert.deepEqual(worldFiles.map((f) => f.path.replace(/\/[^/]+\/world\.yaml$/, '/<world>/world.yaml')), ['worlds/<world>/world.yaml'], err.join('\n'));
+    const text = Buffer.from(worldFiles[0]!.data).toString('utf8');
+    assert.equal(text.includes(GRADER_CANARY), false);
+    assert.equal(/^\s*grader:/m.test(text), false);
+    assert.equal(backend.uploaded.some((f) => Buffer.from(f.data).includes(GRADER_CANARY)), false);
+  });
+
   it('defaults to Claude CLI without requiring an SDK key', RUN_BUDGET, async (t) => {
     const bin = path.join(tmp('claude-bin'), 'claude');
     writeFileSync(bin, `#!${process.execPath}\nprocess.stdin.resume(); process.stdin.on('end', () => process.stdout.write(JSON.stringify({ subtype: 'success', is_error: false, structured_output: { action: 'finish', final_reply: 'No changes made.' }, total_cost_usd: 0.0001, usage: { input_tokens: 100, output_tokens: 20 } })));\n`);
@@ -177,6 +193,11 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(r.code, 3, r.err.join('\n'));
     assert.equal(r.err.some((line) => line.includes('accepted 0 of 3 task(s)')), true);
     assert.equal(backend.stopped(), true);
+    // Every solver call is filed under the dataset run and the solver step (A-365, YOS-251), so `costs --by run` isolates it.
+    const ledger = readFileSync(env.WORLDGEN_COSTS_FILE, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { op?: string; runId?: string; step?: string; event?: { kind?: string; runId?: string; step?: string } });
+    assert.deepEqual(ledger.filter((l) => l.op === 'start_model').map((l) => [l.runId, l.step]), [['cli-run', 'solver'], ['cli-run', 'solver'], ['cli-run', 'solver']]);
+    assert.deepEqual(ledger.filter((l) => l.op === 'settle' && l.event?.kind === 'model_call').map((l) => [l.event?.runId, l.event?.step]),
+      [['cli-run', 'solver'], ['cli-run', 'solver'], ['cli-run', 'solver']]);
   });
 
   it('uses the SDK when explicitly requested even when the generation default is the Claude CLI', RUN_BUDGET, async (t) => {
@@ -301,6 +322,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(seen.length, 5 + 1 + 1);
     assert.equal(seen.every((q) => q.signal instanceof AbortSignal), true);
     assert.equal(seen.every((q) => q.tool.name === 'solver_turn'), true);
+    assert.deepEqual([...new Set(seen.map((q) => `${q.runId}/${q.step}`))], ['cli-run/solver']);
     const everything = seen.map((q) => `${q.system}\n${q.prompt}`).join('\n');
     for (const t of Object.values(w.tasks)) {
       assert.ok(t.grader !== undefined && t.solution !== undefined, 'the golden helpdesk is the private form');

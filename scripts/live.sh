@@ -15,6 +15,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE=run
 case "${1:-}" in
+  -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
   --env-only) MODE=env; shift ;;
   --dry-run) MODE=dry; shift ;;
 esac

@@ -156,6 +156,7 @@ Example: `{"type":"string","maxLength":5}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `maxLength` (integer, optional)
 - `pattern` (string, optional)
 - `format` ("email" | "url" | "phone", optional)
@@ -173,6 +174,7 @@ Example: `{"type":"text"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `default` (string, optional)
 
 ### int
@@ -187,6 +189,7 @@ Example: `{"type":"int","min":1,"max":3}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `min` (integer, optional)
 - `max` (integer, optional)
 - `default` (integer, optional)
@@ -203,6 +206,7 @@ Example: `{"type":"number"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `min` (number, optional)
 - `max` (number, optional)
 - `default` (number, optional)
@@ -219,6 +223,7 @@ Example: `{"type":"money","currency":"USD","min":0}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `currency` (string matching `^[A-Z]{3}$`, required): ISO 4217, fixed for the field
 - `min` (integer, optional)
 - `default` (integer, optional)
@@ -235,6 +240,7 @@ Example: `{"type":"bool"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `default` (boolean, optional)
 
 ### datetime
@@ -249,6 +255,7 @@ Example: `{"type":"datetime"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `default` ("now", optional)
 
 ### unix_time
@@ -263,6 +270,7 @@ Example: `{"type":"unix_time"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `default` ("now" | integer, optional)
 
 ### enum
@@ -277,6 +285,7 @@ Example: `{"type":"enum","values":["low","high"]}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `values` (list of string, required)
 - `default` (string, optional)
 
@@ -292,6 +301,7 @@ Example: `{"type":"ref","entity":"customer"}`
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `entity` (string matching `^[a-z][a-z0-9_]*$`, required): snake_case identifier
 - `onDelete` ("restrict" | "cascade" | "nullify", optional, default "restrict")
 
@@ -307,6 +317,7 @@ Example: `{"type":"state","states":["open","closed"],"initial":"open","transitio
 - `nullable` (boolean, optional, default false)
 - `unique` (boolean, optional, default false)
 - `readonly` (boolean, optional, default false): Standard create and update refuse this field. Only actions, jobs and seed set it.
+- `sensitive` (boolean, optional): The Studio shows a fixed mask instead of this field's value to any role below admin (A-356). The world API still returns it.
 - `states` (list of string matching `^[a-z][a-z0-9_]*$`, required)
 - `initial` (string matching `^[a-z][a-z0-9_]*$`, required): snake_case identifier
 - `transitions` (map of name to list of string matching `^[a-z][a-z0-9_]*$`, required): from-state to allowed to-states. The engine enforces it on every write.
@@ -514,6 +525,7 @@ Words in <angle brackets> stand for the details of one issue, and row counts and
 - `plan.state_missing` (error, owner entities): expected a state field of <entity> that declares <state>, a state of the planned workflow <workflow>. Hint: Add <state> to the state field of <entity> with a transition into it, or drop it from the workflow in the plan step.
 - `plan.state_field_missing` (error, owner entities): expected a state field on <entity> that declares the states of the planned workflow <workflow>: <state>. Hint: Give <entity> a field of type state with those states and transitions between them, or drop the states from the workflow in the plan step.
 - `plan.lifecycle_unrepresented` (error, owner plan): expected every state of <workflow> declared in a state field of <entity>, or an explicit lifecycle representation on the workflow. Hint: Declare these states in a state machine of <entity>, or add lifecycle: { representation: descriptive|removal, reason } to this workflow in the plan step.
+- `plan.pressure_unreachable` (error, owner plan): expected pressure states on <task> that a state field of <entity> holds. Hint: <entity>.<state> belongs only to <workflow>, whose declared lifecycle keeps it out of every state field, so no seed row can be in it. Drop <entity>.<state> from the pressure of <task>, or press a state of a workflow whose states a state field holds.
 - `plan.rule_unanswered` (error, owner actions): expected an action or job <action or job> that enforces the <workflow> rule: <rule>. Hint: Write <action or job> as a key in actions or jobs, or link the rule to what enforces it in the plan step.
 - `task.difficulty_unproven` (error, owner tasks): expected a hard task whose reference solution changes more than one row or reaches a row past the first list page. Hint: The reference for <task> changes 1 row and never pages. Make the task need several rows or a later page, or label it medium.
 - `task.pressure_unmet` (error, owner at_path): expected the pressure task <task> declares: <need>. Hint: The reference trace or the seed does not show it. Seed what the task needs, make the reference reach it, or drop the claim from the plan's pressure for <task>.

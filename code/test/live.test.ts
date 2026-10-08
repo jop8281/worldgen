@@ -9,7 +9,8 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { parseArgs, runLive, type LiveArgs, type LiveDeps, type RunSummary } from '../src/cli/live.ts';
+import { parseArgs, releaseCommit, runLive, type LiveArgs, type LiveDeps, type RunSummary } from '../src/cli/live.ts';
+import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { checkWorld, loadWorld } from '#engine';
 import { delivered, planIntake, renderLiveRun, type LiveCase, type LiveCheck, type LiveMeta, type LiveRow } from '../src/worldgen/live.ts';
 
@@ -92,6 +93,70 @@ describe('parseArgs', () => {
     const a = parseArgs(['p', '--only', '01-a, 02-b', '--max-minutes', '3']) as LiveArgs;
     assert.deepEqual(a.only, ['01-a', '02-b']);
     assert.deepEqual(a.overrides, { maxMinutes: 3 });
+  });
+
+  it('keeps an explicit --commit, and leaves it null for the checkout to name', () => {
+    assert.equal((parseArgs(['p', '--commit', 'v1.0-handin']) as LiveArgs).commit, 'v1.0-handin');
+    assert.equal((parseArgs(['p']) as LiveArgs).commit, null);
+  });
+});
+
+describe('releaseCommit', () => {
+  const HEAD = '4b3d2be4e6bd65344caf1c8ba1245e9ac7afd5f3';
+  /** A git that answers rev-parse with `head` and status with `status`, and records each call. */
+  const fakeGit = (head: { code: number; stdout: string }, status: string) => {
+    const calls: string[] = [];
+    const runner: Runner = async (argv, opts) => {
+      calls.push(`${argv.join(' ')} @ ${opts?.cwd}`);
+      return argv[1] === 'rev-parse' ? { ...head, stderr: '' } : { code: 0, stdout: status, stderr: '' };
+    };
+    return { runner, calls };
+  };
+  const cases: readonly { name: string; head: { code: number; stdout: string }; status: string; want: string }[] = [
+    { name: 'a clean checkout names HEAD', head: { code: 0, stdout: `${HEAD}\n` }, status: '', want: HEAD },
+    { name: 'changes the run makes itself keep it clean', head: { code: 0, stdout: `${HEAD}\n` }, status: '?? prod/worlds/gen-a/\0 M prod/LIVE-RUN.md\0?? prod/prompts/01-a.txt\0?? eval/runs/2026-10-08-live/\0', want: HEAD },
+    { name: 'a change anywhere else adds -dirty', head: { code: 0, stdout: `${HEAD}\n` }, status: ' M prod/LIVE-RUN.md\0 M code/src/cli/live.ts\0', want: `${HEAD}-dirty` },
+    { name: 'a rename out of a run path counts its old path', head: { code: 0, stdout: `${HEAD}\n` }, status: 'R  prod/worlds/gen-a/world.yaml\0code/world.yaml\0', want: `${HEAD}-dirty` },
+    { name: 'outside a repository it stays unknown', head: { code: 128, stdout: '' }, status: '', want: 'unknown' },
+  ];
+  for (const c of cases) {
+    it(c.name, async () => {
+      const git = fakeGit(c.head, c.status);
+      assert.equal(await releaseCommit(null, git.runner, '/repo'), c.want);
+    });
+  }
+
+  it('an explicit --commit wins, and git is never asked', async () => {
+    const git = fakeGit({ code: 0, stdout: `${HEAD}\n` }, ' M code/a.ts\0');
+    assert.equal(await releaseCommit('v1.0-handin', git.runner, '/repo'), 'v1.0-handin');
+    assert.deepEqual(git.calls, []);
+  });
+
+  it('without git it stays unknown', async () => {
+    const missing: Runner = async () => { throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }); };
+    assert.equal(await releaseCommit(null, missing, '/repo'), 'unknown');
+  });
+
+  it('asks the real git in a real checkout', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'live-commit-'));
+    try {
+      const git = (...args: string[]) => spawnSync('git', ['-c', 'user.name=Live test', '-c', 'user.email=live@example.invalid', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repo, encoding: 'utf8' });
+      git('init', '-q');
+      await mkdir(path.join(repo, 'code'), { recursive: true });
+      await writeFile(path.join(repo, 'code', 'a.ts'), 'export {};\n');
+      git('add', '.');
+      git('commit', '-qm', 'one');
+      const head = git('rev-parse', 'HEAD').stdout.trim();
+      assert.equal(await releaseCommit(null, nodeRunner, repo), head);
+      await mkdir(path.join(repo, 'prod', 'worlds', 'gen-a'), { recursive: true });
+      await writeFile(path.join(repo, 'prod', 'worlds', 'gen-a', 'world.yaml'), 'meta: {}\n');
+      await writeFile(path.join(repo, 'prod', 'LIVE-RUN.md'), '# Live run\n');
+      assert.equal(await releaseCommit(null, nodeRunner, repo), head);
+      await writeFile(path.join(repo, 'code', 'a.ts'), 'export const changed = 1;\n');
+      assert.equal(await releaseCommit(null, nodeRunner, repo), `${head}-dirty`);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 });
 

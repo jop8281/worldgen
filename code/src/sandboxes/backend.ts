@@ -6,7 +6,8 @@
  * never need the binaries. `upWorld()` is the one recipe on top: upload, check Node, install pinned Bun,
  * `bun install --frozen-lockfile`, start `worldplay serve` on that Bun detached, wait for the port, and expose the world port only.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { constants } from 'node:os';
 
 /** One file to place in a sandbox. `path` is relative and POSIX, under the sandbox workdir. */
@@ -204,6 +205,30 @@ export const nodeSpawn: Spawner = (argv, opts) => {
   });
   return { pid: child.pid, exited, kill: (signal) => child.kill(signal), output: () => text };
 };
+
+/** Linux keeps each process's start in /proc. A slim image has no ps, so there it is the only source. */
+const PROC = existsSync('/proc/self/stat');
+
+/**
+ * What the OS says the process at `pid` started as, a value no later process given that pid shares: on Linux the boot
+ * id and the start time in clock ticks from /proc, elsewhere `ps -o lstart=`. Null when the process is gone or the OS
+ * says nothing. The studio records it at spawn, so it never adopts or signals a reused pid (A-373).
+ */
+export function processStartOf(pid: number): string | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (PROC) {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      // starttime is field 22. The fields after the command name, which sits in parentheses and may hold spaces, start at field 3.
+      const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+      return start === undefined ? null : `${readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${start}`;
+    }
+    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2_000 }).trim();
+    return out === '' ? null : out;
+  } catch {
+    return null;
+  }
+}
 
 /** True for the error a Runner rejects with when the binary is not on PATH. */
 export function isMissingBinary(err: unknown): boolean {

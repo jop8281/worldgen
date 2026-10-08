@@ -445,10 +445,13 @@ describe('studio builder: the plan view (YOS-188)', () => {
   });
 
   it('answers 404 plan.missing without plan.yaml, 422 plan.invalid for one that is no plan, and 404 for another tenant\'s world', async () => {
-    const f = await fixture({ 'gen-badplan': 'revision: 1\n', 'acme/gen-acme-plan': PLAN_YAML });
+    const f = await fixture({ 'gen-badplan': 'revision: 1\n', 'acme/gen-acme-plan': PLAN_YAML, 'gen-planonly': PLAN_YAML });
     await mkdir(path.join(f.worldsDir, 'hand-only'), { recursive: true });
     await writeFile(path.join(f.worldsDir, 'hand-only', 'REPORT.md'), '# Hand-built\n');
+    // Each has a world with no sensitive field, so a viewer may read its plan (A-367); gen-planonly has none to tell.
+    for (const dir of ['hand-only', 'gen-badplan', 'acme/gen-acme-plan']) await writeWorld(path.join(f.worldsDir, dir), minimalWorld());
     const base = await start(f, { users: USERS });
+    assert.deepEqual(await answer(call(base, 'GET', '/api/worlds/gen-planonly/plan', ANN)), refusal(403, 'plan.sensitive', 'gen-planonly cannot be read to find its sensitive fields, so only an admin may read its plan'));
     assert.deepEqual(await answer(call(base, 'GET', '/api/worlds/hand-only/plan', ANN)), refusal(404, 'plan.missing', 'hand-only has no plan.yaml; only a generated world has a plan'));
     assert.deepEqual(await answer(call(base, 'GET', '/api/worlds/gen-badplan/plan', ANN)), refusal(422, 'plan.invalid', 'gen-badplan/plan.yaml does not parse as a WorldGen plan'));
     const own = await call(base, 'GET', '/api/worlds/gen-acme-plan/plan', ANN);

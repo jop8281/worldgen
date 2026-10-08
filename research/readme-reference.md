@@ -14,7 +14,7 @@ bun run worldplay serve ../prod/worlds/helpdesk --port 4000    # world on 4000, 
 
 - [scripts/demo.sh](../scripts/demo.sh) runs the engine end to end. [scripts/solve-demo.sh](../scripts/solve-demo.sh) solves a task through the world port alone, then grades through the admin port: 1.000 for the solve, below 1 for the decoy attempt.
 - `serve` gives the agent under test only the world port, with `GET /openapi.json`. The admin port serves `GET /_world/state`, `POST /_world/reset`, `GET /_world/log`, `POST /_world/clock` and `POST /_world/grade/<task>`.
-- One world on a Boat VM, with `BOAT_API_KEY`, a finite `WORLDGEN_MAX_DAILY_SANDBOX_USD` and `BOAT_USD_PER_COMPUTE_HOUR` exported. Only the world port is exposed:
+- One world on a Boat VM, with `BOAT_API_KEY`, a finite `WORLDGEN_MAX_DAILY_SANDBOX_USD` and `BOAT_USD_PER_COMPUTE_HOUR` exported. Only the world port is exposed. `up` uploads the public form of the world, which has no graders, so grading on the VM (`POST /_world/grade/<task>` on its admin port) needs `--private`:
 
 ```sh
 bun run sandbox up ../prod/worlds/helpdesk --backend boat --port 4317 --ttl 1800
@@ -66,7 +66,7 @@ Everything below is built and merged into the trunk. Each row names the PRs that
 | Engine demo and solve demo | `scripts/demo.sh`, `scripts/solve-demo.sh` | #38, #149, #328 |
 | Graded dataset export on Boat | `code/src/cli/dataset.ts` | #151 |
 | Design doc | `prod/design.md` | #42, #135, #266 |
-| Factory target contract: `factory.toml`, `factory-check.sh`, `REVIEW.md`, JUnit evidence and the `factory/integration` CI trigger (A-186) | `factory.toml`, `scripts/factory-check.sh`, `REVIEW.md` | #419, #434 |
+| Factory target contract: `factory.toml`, `factory-check.sh`, `REVIEW.md` and JUnit evidence (A-186); the retired `factory/integration` branch no longer triggers CI (YOS-210) | `factory.toml`, `scripts/factory-check.sh`, `REVIEW.md` | #419, #434 |
 | Generated worlds | `prod/worlds/gen-*` | one per world, in [All worlds](#all-worlds) |
 
 ## 60-second demo
@@ -214,7 +214,8 @@ Each command prints its usage with `--help`. The `bun run` commands run from `co
 ```sh
 bun run eval --dry-run                      # validate the rehearsal suite and its inputs; no model call
 bun run live --help                         # run WorldGen on every prompt in ../prod/prompts, then check and verify each world
-bun run sandbox --help                      # up <worldDir> --backend openshell|sbx|boat, exec <id>, down <id>; only the world port is exposed
+bun run sandbox --help                      # up <worldDir> --backend openshell|sbx|boat, exec <id>, down <id>; only the world port is exposed;
+                                            # the public form has no graders, so grading on the VM needs --private
 bun run dataset --help                      # one graded solver episode per task in a Boat sandbox
 ```
 

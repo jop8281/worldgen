@@ -33,6 +33,10 @@ const common = {
     .boolean()
     .default(false)
     .describe('Standard create and update refuse this field. Only actions, jobs and seed set it.'),
+  sensitive: z
+    .boolean()
+    .optional()
+    .describe('The Studio shows a fixed mask instead of this field\'s value to any role below admin (A-356). The world API still returns it.'),
 };
 
 type Check = { ok: true; value: Value } | { ok: false; expected: string };

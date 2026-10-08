@@ -468,6 +468,19 @@ describe('the solver turn over the Anthropic model', () => {
     assert.equal((p?.params['messages'] as unknown[]).length, 1);
   });
 
+  it('names the run and the solver step on every request, and only the step without a run (A-365, YOS-251)', async () => {
+    const seen: Parameters<SolverProposer['propose']>[0][] = [];
+    const proposer: SolverProposer = {
+      async propose(req) {
+        seen.push(req);
+        return { input: { action: 'finish', final_reply: 'done' }, advice: [], usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0 }, costUsd: 0, ms: 1 };
+      },
+    };
+    await solverTurn(proposer, 'ds-run-7')(await view(), new AbortController().signal);
+    await solverTurn(proposer)(await view(), new AbortController().signal);
+    assert.deepEqual(seen.map((q) => ['runId' in q ? q.runId : 'absent', q.step]), [['ds-run-7', 'solver'], ['absent', 'solver']]);
+  });
+
   it('sends nothing when the signal is already aborted', async () => {
     let calls = 0;
     const proposer: SolverProposer = { propose: async () => { calls += 1; throw new Error('unreachable'); } };

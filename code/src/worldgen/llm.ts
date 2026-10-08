@@ -11,7 +11,9 @@ import { z } from 'zod';
 import type { SpendEvent } from '../costs/ledger.ts';
 import type { CostBasis } from '../costs/basis.ts';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BUILTIN_PRICES, DEFAULT_CLAUDE_BIN, EFFORTS, isClaudeModelId, type Config, type Effort } from './config.ts';
 
 export type ProposeRequest = {
@@ -375,6 +377,12 @@ export const STALL_MS = 120_000;
 /** How long a child may ignore SIGTERM before SIGKILL, and how long it may linger after its result line. */
 export const KILL_GRACE_MS = 5_000;
 
+/**
+ * Linux's MAX_ARG_STRLEN: the most bytes one argv string may hold, its NUL included. macOS has no such cap, so a longer
+ * argument fails only on Linux, as `spawn E2BIG`. The system prompt is larger, so it goes in a file (A-378).
+ */
+export const MAX_ARG_BYTES = 131_072;
+
 /** Longest stderr kept from one run, and the longest tail quoted in an error. */
 const STDERR_KEEP = 64_000;
 const TAIL = 500;
@@ -504,15 +512,16 @@ export function spawnClaude(bin: string, args: readonly string[], stdin: string,
 spawnClaude satisfies SpawnClaude;
 
 /**
- * The CLI arguments for one call. The prompt is not among them: it goes on stdin.
+ * The CLI arguments for one call. The prompt is not among them: it goes on stdin. The system prompt is not either: it is
+ * read from `systemFile`, since it is over the MAX_ARG_BYTES Linux allows one argument (A-378).
  * `--output-format stream-json` with `--verbose --include-partial-messages` prints a line every few seconds even while
  * the model thinks, so a silent stdout means a stalled call; its last line is the same result object `json` printed.
  * `--json-schema` makes the reply a `structured_output` validated against the tool's input schema,
- * `--system-prompt` replaces Claude Code's own prompt, and `--tools ""`, `--safe-mode`,
+ * `--system-prompt-file` replaces Claude Code's own prompt, and `--tools ""`, `--safe-mode`,
  * `--strict-mcp-config` and `--disable-slash-commands` leave the model no tools, MCP servers,
  * skills, hooks or CLAUDE.md. `--bare` is not used: it ignores the logged-in session.
  */
-export function claudeArgs(model: string, req: ProposeRequest): string[] {
+export function claudeArgs(model: string, req: ProposeRequest, systemFile: string): string[] {
   if (req.maxCostUsd !== undefined && (!Number.isFinite(req.maxCostUsd) || req.maxCostUsd <= 0)) throw new ModelError('model cost budget must be a positive finite number of USD', undefined, { kind: 'not_started' });
   // The CLI's validator has no draft 2020-12 meta-schema, and z.toJSONSchema always declares it.
   const { $schema: _, ...schema }: { $schema?: unknown } = req.tool.inputSchema;
@@ -522,7 +531,7 @@ export function claudeArgs(model: string, req: ProposeRequest): string[] {
     '--model', model,
     ...(req.maxCostUsd === undefined ? [] : ['--max-budget-usd', String(req.maxCostUsd)]),
     ...(req.effort === undefined ? [] : ['--effort', req.effort]),
-    '--system-prompt', req.system,
+    '--system-prompt-file', systemFile,
     '--json-schema', JSON.stringify(schema),
     '--tools', '',
     '--safe-mode',
@@ -649,6 +658,20 @@ function cliUsage(u: unknown): Usage {
   };
 }
 
+/** Writes one call's system prompt to a new private temp dir (0700, the file 0600), for `--system-prompt-file`. */
+function systemFileOf(system: string): { readonly dir: string; readonly file: string } {
+  let dir: string | undefined;
+  try {
+    dir = mkdtempSync(join(tmpdir(), 'worldgen-claude-'));
+    const file = join(dir, 'system.md');
+    writeFileSync(file, system, { mode: 0o600 });
+    return { dir, file };
+  } catch (e) {
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+    throw new ModelError(`cannot write the system prompt file for claude -p: ${e instanceof Error ? e.message : String(e)}`, undefined, { kind: 'not_started' });
+  }
+}
+
 /**
  * Model calls through the claude CLI under the user's logged-in session (U-11). `spawn` is the
  * test seam. Cost is the CLI's `total_cost_usd`; when it is missing, cost falls back to `prices`,
@@ -668,11 +691,19 @@ export function claudeCliModel(config: Config, spawnCli: SpawnClaude = spawnClau
       const started = now();
       let out: SpawnResult;
       const shareMs = req.timeoutMs ?? timeoutMs;
+      const system = systemFileOf(req.system);
       try {
-        out = await spawnCli(bin, claudeArgs(model, { ...req, maxCostUsd: budgetUsd }), req.prompt, { timeoutMs: shareMs, idleMs: STALL_MS, ...(req.signal === undefined ? {} : { signal: req.signal }) });
-      } catch (e) {
-        const notStarted = notStartedFailureSchema.safeParse(e).success;
-        throw new ModelError(`cannot run the claude CLI "${bin}": ${e instanceof Error ? e.message : String(e)}. Set claudeBin in worldgen.config.json to the real binary`, undefined, notStarted ? { kind: 'not_started' } : { kind: 'unknown' });
+        const args = claudeArgs(model, { ...req, maxCostUsd: budgetUsd }, system.file);
+        const over = args.findIndex((a) => Buffer.byteLength(a) >= MAX_ARG_BYTES);
+        if (over >= 0) throw new ModelError(`claude -p argument ${args[over - 1] ?? ''} is ${Buffer.byteLength(args[over] ?? '')} bytes, and Linux refuses one of ${MAX_ARG_BYTES} or more`, undefined, { kind: 'not_started' });
+        try {
+          out = await spawnCli(bin, args, req.prompt, { timeoutMs: shareMs, idleMs: STALL_MS, ...(req.signal === undefined ? {} : { signal: req.signal }) });
+        } catch (e) {
+          const notStarted = notStartedFailureSchema.safeParse(e).success;
+          throw new ModelError(`cannot run the claude CLI "${bin}": ${e instanceof Error ? e.message : String(e)}. Set claudeBin in worldgen.config.json to the real binary`, undefined, notStarted ? { kind: 'not_started' } : { kind: 'unknown' });
+        }
+      } finally {
+        rmSync(system.dir, { recursive: true, force: true });
       }
       const ms = now() - started;
       // A result line is a finished, billed call whatever stopped the process after it.

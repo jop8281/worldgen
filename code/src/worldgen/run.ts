@@ -39,7 +39,7 @@ import { ITERATE_PLAN_BRIEF, applyPlanPatch, changedSections, iteratePlanBlocks,
 import { FIDELITY_FLOOR, fidelityGate, fidelityScore, parseFidelityReference } from './fidelity.ts';
 import { blockingIssues, checkJudgeable, infraIssues, preservationIssues, requestScopeIssues, unplannedChanges } from './judge.ts';
 import { CallStalled, ModelError, StepShareExpired, estimateCallUsd, type CallProgress, type Model, type Proposal, type ProposeRequest, type Usage } from './llm.ts';
-import { frozenTests, parsePlanYaml, planSchemaFor, renderPlanYaml, type Plan, type planSchema } from './plan.ts';
+import { frozenTests, parsePlanYaml, planSchemaFor, pressurePlanIssues, renderPlanYaml, type Plan, type planSchema } from './plan.ts';
 import { renderPlanMd } from './plan-md.ts';
 import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
 import { renderReport } from './report.ts';
@@ -121,7 +121,53 @@ type OkReport = Extract<CheckReport, { ok: true }>;
  * issues a later step found that this step owns (a backtrack). With `rerunBy`, this step's answer was
  * rejected for issues an earlier step owned, and that step has run again since. `previous` is the answer to show.
  */
-export type Feedback = { readonly issues: readonly CheckIssue[]; readonly previous: unknown; readonly from?: StepId; readonly rerunBy?: StepId };
+export type Feedback = {
+  readonly issues: readonly CheckIssue[];
+  readonly previous: unknown;
+  readonly from?: StepId;
+  readonly rerunBy?: StepId;
+  /** On a retry after two or more attempts, every attempt of this step so far (YOS-246, A-364). */
+  readonly history?: readonly TriedAttempt[];
+  /** The attempt `previous` is when it is not the latest: the best full one so far. */
+  readonly bestOf?: number;
+};
+
+/** One rejected attempt of the step being retried: its own issues, and the owned items it left out that an earlier attempt wrote. */
+export type TriedAttempt = { readonly n: number; readonly input: unknown; readonly issues: readonly CheckIssue[]; readonly left: readonly string[] };
+
+/** How many of an earlier attempt's issues its history line names. */
+const HISTORY_ISSUES = 8;
+
+function historyLine(t: TriedAttempt): string {
+  const named = t.issues.slice(0, HISTORY_ISSUES).map((i) => `${i.code} at ${i.path.join('.')}`);
+  const more = t.issues.length > HISTORY_ISSUES ? [`and ${t.issues.length - HISTORY_ISSUES} more`] : [];
+  const left = t.left.length > 0 ? `, which left ${t.left.join(', ')} untouched` : '';
+  return `- attempt ${t.n}${left}: ${named.length === 0 ? 'no issue reported' : [...named, ...more].join('; ')}`;
+}
+
+/**
+ * The attempt to build on: the one with the fewest own issues among those that left no owned item out, the latest on
+ * a tie. The first attempt leaves nothing out, so there is always one.
+ */
+function bestAttempt(tried: readonly TriedAttempt[]): TriedAttempt | undefined {
+  let best: TriedAttempt | undefined;
+  for (const t of tried) if (t.left.length === 0 && (best === undefined || t.issues.length <= best.issues.length)) best = t;
+  return best ?? tried.at(-1);
+}
+
+/** The owned items an edit writes, as `section.key`. A plan answer is always whole, so it writes none here. */
+function touchedItems(step: StepId, input: unknown): ReadonlySet<string> {
+  const out = new Set<string>();
+  if (step === 'plan' || !isRecord(input)) return out;
+  for (const section of writesOf(step)) {
+    for (const op of EDIT_OPS) {
+      const part = isRecord(input[op]) ? input[op][section] : undefined;
+      const keys = Array.isArray(part) ? part.filter((k): k is string => typeof k === 'string') : isRecord(part) ? Object.keys(part) : [];
+      for (const k of keys) out.add(`${section}.${k}`);
+    }
+  }
+  return out;
+}
 
 /** One judged attempt. Only an accepted attempt carries a value. */
 type Judged<T> =
@@ -215,7 +261,12 @@ function promptSection(title: string, lines: readonly string[]): string[] {
 /** `again` asks for the next answer: in full by default, as a patch on the iterate plan step (A-345). */
 function feedbackBlock(feedback: Feedback | null, again = 'Answer again in full'): string[] {
   if (feedback === null) return [];
-  const previous = feedback.previous === undefined ? [] : ['', 'Your previous answer:', '', '```json', JSON.stringify(feedback.previous, null, 2), '```'];
+  const label = feedback.bestOf === undefined ? 'Your previous answer:' : `Your best answer so far (attempt ${feedback.bestOf}):`;
+  const previous = feedback.previous === undefined ? [] : ['', label, '', '```json', JSON.stringify(feedback.previous, null, 2), '```'];
+  const history = feedback.history === undefined || feedback.history.length < 2 ? [] : [
+    '', '## Earlier attempts in this step', '', 'Every attempt was judged against the world above, as your next answer will be.', '',
+    ...feedback.history.map(historyLine),
+  ];
   const head = feedback.rerunBy !== undefined
     ? ['## Your previous answer was rejected for issues an earlier step owned', '',
       `It was not applied. Since then the ${feedback.rerunBy} step has run again, and every step between it and this one has run again or been rechecked, so the world above may have changed. ${again}, keep what was right, and fix what the issues below still show.`]
@@ -227,6 +278,7 @@ function feedbackBlock(feedback: Feedback | null, again = 'Answer again in full'
     '',
     ...head,
     ...previous,
+    ...history,
     '',
     'Issues:',
     '',
@@ -360,7 +412,10 @@ function judgePlan(schema: PlanSchema, input: unknown, approved: Plan | null, di
       const problem = issue('schema.invalid', ['plan', 'revision'], { message: `revision must be greater than the approved revision ${approved.revision}` }, String(parsed.data.revision));
       return { ok: false, outcome: { kind: 'invalid_output', issues: [problem] }, issues: [problem] };
     }
-    const conflicts = digest === undefined ? [] : [...fixturePlanIssues(parsed.data, digest), ...operationPlanIssues(parsed.data, digest)];
+    const conflicts = [
+      ...pressurePlanIssues(parsed.data),
+      ...(digest === undefined ? [] : [...fixturePlanIssues(parsed.data, digest), ...operationPlanIssues(parsed.data, digest)]),
+    ];
     if (conflicts.length > 0) return { ok: false, outcome: { kind: 'rejected', issues: conflicts }, issues: conflicts };
     return { ok: true, outcome: { kind: 'accepted', warnings: 0 }, value: parsed.data };
   }
@@ -738,6 +793,9 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
     let feedback = carried;
     let escalated = false;
     let lastCount: number | undefined;
+    const tried: TriedAttempt[] = [];
+    /** Every owned item an attempt of this step has written: a later answer that leaves one out is partial. */
+    const covered = new Set<string>();
     for (;;) {
       const choice = stepModel(config, step, escalated);
       const asked = { system: systemFor(step), ...ask(feedback) };
@@ -876,10 +934,23 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
             emit({ ...at(), t: 'stall_retry', step, n, idleMs: judged.outcome.idleMs, remainingMs: remainingMs(config, ledger, now()) });
             break;
           }
-          // An attempt that leaves at least as many issues as the one before it makes no headway. From then on the step escalates.
-          if (lastCount !== undefined && issues.length >= lastCount) escalated = true;
-          lastCount = issues.length;
-          feedback = { issues: ownIssues(issues, step, world), previous: proposal?.input };
+          {
+            const touched = touchedItems(step, proposal?.input);
+            const left = proposal === null ? [] : [...covered].filter((k) => !touched.has(k)).sort();
+            // An attempt that leaves at least as many issues as the one before it makes no headway, and from then on the
+            // step escalates. A partial answer is judged without what it left out, so its rise is not counted (A-364).
+            if (left.length === 0) {
+              if (lastCount !== undefined && issues.length >= lastCount) escalated = true;
+              lastCount = issues.length;
+            }
+            for (const k of touched) covered.add(k);
+            const own = ownIssues(issues, step, world);
+            if (proposal !== null) tried.push({ n: made, input: proposal.input, issues: own, left });
+            const best = bestAttempt(tried);
+            feedback = best === undefined
+              ? { issues: own, previous: proposal?.input }
+              : { issues: best.issues, previous: best.input, history: tried, ...(best.n === made ? {} : { bestOf: best.n }) };
+          }
           break;
         case 'backtrack':
           return { kind: 'backtrack', to: decision.to, because: issues, previous: proposal?.input };

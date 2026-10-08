@@ -67,13 +67,15 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
+import { bodyBelowAdmin, CHILD_TEXT_WITHHELD, episodeBelowAdmin, mergeSensitivity, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { parsePlanYaml } from '../worldgen/plan.ts';
 import { renderPlanMd } from '../worldgen/plan-md.ts';
 import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
+import { worldArtifactPath } from '../dataset/store.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, recoveryOf, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
+import { adoptedChild, archiveRuns, DEFAULT_TENANT, loadRunsToWrite, osProcesses, recoveryOf, RUN_STORE_FILE, sameProcess, saveRuns, stderrLine, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
 import { MAX_UPLOAD_BYTES, MAX_UPLOADS, openapiPaths, parseUpload, uploadFileOf, uploadIdOf, uploadPartsOf, UPLOADS_DIR, type Upload, type UploadKind } from './uploads.ts';
 import { trafficCounter } from './watch.ts';
@@ -86,6 +88,8 @@ export type StudioUser = { readonly name: string; readonly role: StudioRole; rea
 
 /** The audit log of POST requests, in the worlds dir. */
 export const AUDIT_FILE = '.studio-audit.jsonl';
+/** The audit file before the last rotation (A-375). */
+export const AUDIT_ROTATED_FILE = '.studio-audit.1.jsonl';
 
 /** A tenant name becomes a directory under the worlds dir, so it is one plain lowercase segment, never a `gen-<slug>` dir of the default tenant. */
 const TENANT = /^(?!gen-)[a-z0-9][a-z0-9-]{0,62}$/;
@@ -147,8 +151,10 @@ export type StudioOptions = {
   readonly runStopWaitMs?: number | undefined;
   /** The model transport every worldgen it starts uses (`--transport`); the CLI default when absent. A container has no claude CLI, so it uses sdk (A-326). */
   readonly transport?: 'claude-cli' | 'sdk' | undefined;
-  /** Looks at and signals runs a previous studio started. Defaults to the OS (process.kill). */
+  /** Looks at and signals runs a previous studio started. Defaults to the OS (process.kill, and /proc or ps for a pid's start). */
   readonly processes?: Processes | undefined;
+  /** Where the studio writes a one-line notice, such as a damaged job registry it kept aside (A-373). Defaults to stderr. */
+  readonly log?: ((line: string) => void) | undefined;
   /** Who may sign in. Empty or absent is open mode: everyone is the admin `local`, and the host must be loopback. */
   readonly users?: readonly StudioUser[] | undefined;
   /** The one public origin the studio is also reached at, such as http://127.0.0.1:9000 for a published container port or https://studio.example.com behind a proxy. */
@@ -169,6 +175,20 @@ export type StudioOptions = {
   readonly maxConcurrentRuns?: number | undefined;
   /** Most unfinished agent episodes at once. Default 4. */
   readonly maxConcurrentEpisodes?: number | undefined;
+  /** Most worlds served at once in all, and per tenant. Defaults 32 and 8 (A-375). */
+  readonly maxServices?: number | undefined;
+  readonly maxServicesPerTenant?: number | undefined;
+  /** Check and proof children: at most `size` at once, `queue` more waiting, each at most `waitMs`. Default 4, 16, 30 s (A-375). */
+  readonly childSlots?: { readonly size: number; readonly queue: number; readonly waitMs: number } | undefined;
+  /** How long the API console and a reset wait for a world. Default CALL_TIMEOUT_MS. */
+  readonly callTimeoutMs?: number | undefined;
+  /** The audit file size that rotates it to .studio-audit.1.jsonl. Default 64 MiB (A-375). */
+  readonly auditMaxBytes?: number | undefined;
+  /** Finished jobs the registry keeps; older ones move to .studio-runs.archive.jsonl. Default 200 (A-376). */
+  readonly maxFinishedJobs?: number | undefined;
+  /** Entries a shelf may hold before generate and iterate are refused, and episode dirs before an episode is. Defaults 200 and 500 (A-376). */
+  readonly maxShelfDirs?: number | undefined;
+  readonly maxEpisodeDirs?: number | undefined;
 };
 
 export type RateLimit = { readonly capacity: number; readonly refillPerSecond: number };
@@ -177,6 +197,48 @@ const DEFAULT_RATE_LIMIT: RateLimit = { capacity: 60, refillPerSecond: 1 };
 const DEFAULT_AUTH_THROTTLE: RateLimit = { capacity: 10, refillPerSecond: 1 / 6 };
 const DEFAULT_MAX_JOBS = 4;
 const MAX_BUCKETS = 1024;
+/** Most worlds served at once, in all and per tenant (A-375). */
+const DEFAULT_MAX_SERVICES = 32;
+const DEFAULT_MAX_SERVICES_PER_TENANT = 8;
+/** Check and proof children: at most 4 at once, 16 more waiting, each waiting at most 30 s (A-375). */
+const DEFAULT_CHILD_SLOTS = { size: 4, queue: 16, waitMs: 30_000 } as const;
+/** How long a request may take to arrive in full, and its headers. The runtimes' defaults are 300 s and 60 s (A-375). */
+const REQUEST_TIMEOUT_MS = 30_000;
+const HEADERS_TIMEOUT_MS = 10_000;
+/** Longest request path an audit line records, and the audit file size that rotates it (A-375). */
+const MAX_AUDIT_PATH_CHARS = 256;
+const DEFAULT_AUDIT_MAX_BYTES = 67_108_864;
+/** Finished jobs the registry keeps before it archives the oldest, and the dir counts past which new work is refused (A-376). */
+const DEFAULT_MAX_FINISHED_JOBS = 200;
+const DEFAULT_MAX_SHELF_DIRS = 200;
+const DEFAULT_MAX_EPISODE_DIRS = 500;
+
+/** Token buckets by key, oldest inserted dropped beyond MAX_BUCKETS, on the clock `now`. */
+export function bucketsOf(limit: RateLimit, now: () => number) {
+  const buckets = new Map<string, { tokens: number; at: number }>();
+  const refilled = (key: string): { tokens: number; at: number } => {
+    const t = now();
+    const b = buckets.get(key) ?? { tokens: limit.capacity, at: t };
+    b.tokens = Math.min(limit.capacity, b.tokens + Math.max(0, t - b.at) / 1000 * limit.refillPerSecond);
+    b.at = t;
+    if (!buckets.has(key)) {
+      buckets.set(key, b);
+      if (buckets.size > MAX_BUCKETS) buckets.delete(buckets.keys().next().value!);
+    }
+    return b;
+  };
+  return {
+    /** Whole seconds until one token is there (at least 1), or 0 when there is one. */
+    wait(key: string): number {
+      const b = refilled(key);
+      return b.tokens >= 1 ? 0 : Math.max(1, Math.ceil((1 - b.tokens) / limit.refillPerSecond));
+    },
+    draw(key: string): void {
+      const b = refilled(key);
+      b.tokens = Math.max(0, b.tokens - 1);
+    },
+  };
+}
 
 /** Sent on every answer. The page is one offline document with inline script and style and relative fetches only. */
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
@@ -186,9 +248,14 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
 };
 
+/** One route the studio answers, as its router holds it: what the route-policy test checks every route against. */
+export type StudioRoute = { readonly method: 'GET' | 'POST'; readonly path: string; readonly need: StudioRole | 'public' };
+
 export interface StudioServer {
   readonly url: string;
   readonly port: number;
+  /** Every route the router answers, in its order: `/api/worlds/:name/report` and the role it needs. */
+  readonly routes: readonly StudioRoute[];
   /**
    * Drops the port and open connections, stops every served world (SIGTERM, then SIGKILL) and every running check, and
    * resolves once each is gone. A generation run or an episode gets SIGTERM, its own clean stop, and finishes billing
@@ -267,6 +334,13 @@ const EVENT_TAIL = 100;
 /** How far into a summary.md the pass-rate line may sit before the list shows a preview instead. */
 const SUMMARY_SCAN_LINES = 200;
 const KEBAB = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+/** Longest generate outSlug and episode task id, in characters (A-375). */
+const MAX_NAME_CHARS = 64;
+/** Largest budget and run time a generate may ask for (A-375); worldgen.config.json's defaults are $5 and 15 min. */
+const MAX_GENERATE_BUDGET_USD = 20;
+const MAX_GENERATE_MINUTES = 60;
+/** Largest turns, budget and run time an episode may ask for (A-375); the episode CLI's defaults are 12, $0.5 and 5 min. */
+const MAX_EPISODE_LIMITS = { maxTurns: 200, budgetUsd: 10, maxMinutes: 60 } as const;
 /** Methods the API console may send to a world port. */
 const CALL_METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 /** How long the API console waits for a world port to answer. */
@@ -328,20 +402,29 @@ type Body = { ok: true; value: unknown } | { ok: false; status: 400 | 413; code:
 /** Reads the whole body, at most `limit` bytes. Empty is undefined; anything else must be JSON. */
 function readBody(req: IncomingMessage, limit: number): Promise<Body> {
   return new Promise((resolve, reject) => {
+    // A body past the limit is answered at once and never drained: it could be endless (A-375).
+    const declared = Number(req.headers['content-length']);
+    const tooLarge = (size: string): Body => ({ ok: false, status: 413, code: 'body.too_large', message: `Request body is ${size} bytes; the most is ${limit}` });
+    if (Number.isFinite(declared) && declared > limit) {
+      resolve(tooLarge(String(declared)));
+      return;
+    }
     const chunks: Buffer[] = [];
     let size = 0;
+    let over = false;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size <= limit) chunks.push(chunk);
+      else if (!over) {
+        over = true;
+        resolve(tooLarge(`over ${limit}`));
+      }
     });
     req.on('error', reject);
     req.on('end', () => setImmediate(() => {
+      if (over) return;
       if (req.socket.destroyed || !req.socket.writable) {
         reject(new ConnectionClosed());
-        return;
-      }
-      if (size > limit) {
-        resolve({ ok: false, status: 413, code: 'body.too_large', message: `Request body is ${size} bytes; the most is ${limit}` });
         return;
       }
       const text = Buffer.concat(chunks).toString('utf8');
@@ -361,6 +444,29 @@ function readBody(req: IncomingMessage, limit: number): Promise<Body> {
 
 /** The files a world export carries. Never runs/: its events and dumps are provenance for this machine, not the world (A-280). */
 const EXPORT_FILES = ['world.yaml', 'plan.yaml', 'REPORT.md', 'capsule.json'] as const;
+
+/**
+ * The variables a generate or iterate child gets from the studio's environment (A-372): what `worldgen` reads (the
+ * claude bin in cli/models.ts, the costs file and caps in costs/ledger.ts, the guard scale in engine/sandbox.ts) and
+ * what the claude CLI it spawns needs to find its login and config. The model credential joins by transport
+ * (`generationEnv`). Never BOAT_*, which worldgen never uses, and never ANTHROPIC_*: the child runs candidate-world
+ * snippets beside its environment.
+ */
+export const GENERATION_ENV = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME',
+  'WORLDGEN_CLAUDE_BIN', 'WORLDGEN_COSTS_FILE', 'WORLDGEN_MAX_DAILY_USD', 'WORLDGEN_MAX_TOTAL_USD', 'WORLDGEN_MAX_DAILY_LLM_USD',
+  'WORLDGEN_MAX_DAILY_SANDBOX_USD', 'WORLDGEN_GUARD_SCALE',
+] as const;
+
+/** A generate or iterate child's environment: GENERATION_ENV, TZ UTC, and its transport's credential, LLM_KEY for sdk or the claude CLI's OAuth token. */
+export function generationEnv(env: Readonly<Record<string, string | undefined>>, transport: 'claude-cli' | 'sdk' | undefined): Record<string, string> {
+  const out: Record<string, string> = { TZ: 'UTC' };
+  for (const key of [...GENERATION_ENV, transport === 'sdk' ? 'LLM_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN']) {
+    const value = env[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
 
 /** A zip of stored (uncompressed) entries: one local header per file, then the central directory and its end record. */
 function zipOf(entries: readonly { readonly name: string; readonly data: Buffer }[]): Buffer {
@@ -467,6 +573,22 @@ type Route =
   | { readonly method: 'GET' | 'POST'; readonly need: StudioRole; readonly parts: readonly string[]; readonly run: Handler; readonly maxBody?: number };
 
 /** The capsule.json of one world dir, parsed, or null when absent or foreign. */
+/**
+ * The sensitive fields of the world an episode ran on: the copy frozen in its run's out dir at prepare time, never a world
+ * looked up by name now, which may since be another. Null when the copy is missing or unreadable (A-356).
+ */
+async function episodeSensitivity(episode: unknown, out: string): Promise<Sensitivity> {
+  const version = isObject(episode) ? episode['world_version'] : undefined;
+  if (typeof version !== 'string' || !/^[0-9a-f]{64}$/.test(version)) return null;
+  return sensitivityOf(path.dirname(path.join(out, worldArtifactPath(version))));
+}
+
+/** The sensitive fields of the world at `dir`, or null when its world.yaml cannot be read, so the caller fails closed (A-356). */
+async function sensitivityOf(dir: string): Promise<Sensitivity> {
+  const loaded = await loadWorld(dir);
+  return loaded.ok ? sensitiveOf(loaded.value) : null;
+}
+
 async function readCapsule(dir: string): Promise<RunCapsule | null> {
   const text = await readFile(path.join(dir, CAPSULE_FILE), 'utf8').catch(() => null);
   if (text === null) return null;
@@ -623,11 +745,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     lease: Lease | null;
     recovery: Recovery | undefined;
     pid: number | null;
+    processStart: string | null | undefined;
     exitCode: number | null;
     child: SpawnedChild | null;
   };
 
-  const services = new Map<string, { record: ServiceRecord; dir: string; child: SpawnedChild }>();
+  type Service = { record: ServiceRecord; dir: string; child: SpawnedChild; sensitive: Sensitivity };
+  const services = new Map<string, Service>();
   /** Ids of the services a reset is running on, so a second reset of one waits for the first. */
   const resetting = new Set<string>();
   /** `<tenant> <world dir>` of each `worldplay serve` that has not reported its ports yet. */
@@ -662,68 +786,114 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const processes = opts.processes ?? osProcesses;
   const leaseMs = opts.leaseMs ?? LEASE_MS;
   const now = opts.now ?? Date.now;
-  /** Token buckets by key, oldest inserted dropped beyond MAX_BUCKETS. Time is the injected clock. */
-  const bucketsOf = (limit: RateLimit) => {
-    const buckets = new Map<string, { tokens: number; at: number }>();
-    const refilled = (key: string): { tokens: number; at: number } => {
-      const t = now();
-      const b = buckets.get(key) ?? { tokens: limit.capacity, at: t };
-      b.tokens = Math.min(limit.capacity, b.tokens + Math.max(0, t - b.at) / 1000 * limit.refillPerSecond);
-      b.at = t;
-      if (!buckets.has(key)) {
-        buckets.set(key, b);
-        if (buckets.size > MAX_BUCKETS) buckets.delete(buckets.keys().next().value!);
-      }
-      return b;
-    };
-    return {
-      /** Whole seconds until one token is there (at least 1), or 0 when there is one. */
-      wait(key: string): number {
-        const b = refilled(key);
-        return b.tokens >= 1 ? 0 : Math.max(1, Math.ceil((1 - b.tokens) / limit.refillPerSecond));
-      },
-      draw(key: string): void {
-        const b = refilled(key);
-        b.tokens = Math.max(0, b.tokens - 1);
-      },
-    };
-  };
+  const keepDamaged = { now, log: opts.log ?? stderrLine };
   const me = `studio-${process.pid}-${randomBytes(4).toString('hex')}`;
   const leaseFrom = (at: number): Lease => ({ holder: me, expiresAt: new Date(at + leaseMs).toISOString() });
   const rateLimit = opts.rateLimit ?? DEFAULT_RATE_LIMIT;
-  const postBuckets = bucketsOf(rateLimit);
+  const postBuckets = bucketsOf(rateLimit, now);
   const authLimit = opts.authThrottle ?? DEFAULT_AUTH_THROTTLE;
-  const failedSignIns = bucketsOf(authLimit);
+  const failedSignIns = bucketsOf(authLimit, now);
   const maxJobs = { generate: opts.maxConcurrentRuns ?? DEFAULT_MAX_JOBS, episode: opts.maxConcurrentEpisodes ?? DEFAULT_MAX_JOBS };
+  const maxServices = opts.maxServices ?? DEFAULT_MAX_SERVICES;
+  const maxServicesPerTenant = opts.maxServicesPerTenant ?? DEFAULT_MAX_SERVICES_PER_TENANT;
+  const callTimeoutMs = opts.callTimeoutMs ?? CALL_TIMEOUT_MS;
+  const slots = opts.childSlots ?? DEFAULT_CHILD_SLOTS;
+  /** Check and proof children running, and the requests waiting for one of their slots, oldest first (A-375). */
+  let slotsTaken = 0;
+  const slotQueue: { readonly wake: (got: boolean) => void }[] = [];
+  /** Runs `job` in a check-and-proof slot, waiting up to slots.waitMs in a queue of slots.queue; null when there is no room. */
+  async function inSlot<T>(job: () => Promise<T>): Promise<T | null> {
+    if (slotsTaken < slots.size) slotsTaken += 1;
+    else {
+      if (slotQueue.length >= slots.queue) return null;
+      const got = await new Promise<boolean>((resolve) => {
+        const entry = { wake: (handed: boolean): void => { clearTimeout(timer); resolve(handed); } };
+        const timer = setTimeout(() => {
+          slotQueue.splice(slotQueue.indexOf(entry), 1);
+          resolve(false);
+        }, slots.waitMs);
+        slotQueue.push(entry);
+      });
+      if (!got) return null;
+    }
+    try {
+      return await job();
+    } finally {
+      // A freed slot passes straight to the oldest waiter, so slotsTaken never goes past slots.size.
+      const next = slotQueue.shift();
+      if (next !== undefined) next.wake(true);
+      else slotsTaken -= 1;
+    }
+  }
+  const busy = (): Reply => fail(429, 'studio.busy', `The studio runs at most ${slots.size} world checks and proofs at once, and ${slots.queue} more may wait ${slots.waitMs / 1000} s; try again shortly`, { 'retry-after': '5' });
   const holds = (job: Job): boolean => job.lease?.holder === me;
   /** Set by close(): from then on the registry is never written. */
   let closed = false;
   const storedOf = (job: Job): StoredRun => ({
     runId: job.runId, kind: job.kind, tenant: job.tenant, key: job.key, fingerprint: job.fingerprint, phase: job.phase, lease: job.lease,
     ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
-    outDir: job.outDir, pid: job.pid, knownRuns: [...job.knownRuns], startedAt: job.startedAt, exitCode: job.exitCode,
+    outDir: job.outDir, pid: job.pid, ...(job.processStart === undefined ? {} : { processStart: job.processStart }),
+    knownRuns: [...job.knownRuns], startedAt: job.startedAt, exitCode: job.exitCode,
     ...(job.episode === undefined ? {} : { episode: job.episode }),
     ...(job.iterate === undefined ? {} : { iterate: job.iterate }),
   });
   const jobOf = (stored: StoredRun): Job => ({
     runId: stored.runId, kind: stored.kind, tenant: stored.tenant, key: stored.key, fingerprint: stored.fingerprint, outDir: stored.outDir,
     knownRuns: new Set(stored.knownRuns), startedAt: stored.startedAt, episode: stored.episode, iterate: stored.iterate, phase: stored.phase,
-    lease: stored.lease, recovery: stored.recovery, pid: stored.pid, exitCode: stored.exitCode, child: null,
+    lease: stored.lease, recovery: stored.recovery, pid: stored.pid, processStart: stored.processStart, exitCode: stored.exitCode, child: null,
   });
   // One write at a time, in order, so the file on disk is always the latest whole registry. True when it was written.
   let persisting: Promise<boolean> = Promise.resolve(true);
+  const maxFinishedJobs = opts.maxFinishedJobs ?? DEFAULT_MAX_FINISHED_JOBS;
+  /** Run ids moved to the archive, or being moved: never written to the registry again. */
+  const archived = new Set<string>();
   const persist = (): Promise<boolean> => {
     if (closed) return Promise.resolve(false);
+    // Finished jobs past maxFinishedJobs move, oldest first, to the append-only archive, so the registry stays small
+    // and no history is lost (A-376).
+    const finished = [...jobs.values()].filter((j) => j.phase === 'finished' && !archived.has(j.runId)).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    const moving = finished.slice(0, Math.max(0, finished.length - maxFinishedJobs)).map(storedOf);
+    for (const r of moving) archived.add(r.runId);
     const snapshot = [...jobs.values()].map(storedOf);
-    persisting = persisting.then(() => saveRuns(worldsDir, snapshot)).then(() => true, () => false);
+    persisting = persisting.then(async () => {
+      // The archive is written first: a crash between the two writes leaves a job in both files, never in neither.
+      const moved = moving.length === 0 || await archiveRuns(worldsDir, moving).then(() => true, () => false);
+      if (!moved) for (const r of moving) archived.delete(r.runId);
+      await saveRuns(worldsDir, snapshot.filter((r) => !archived.has(r.runId)));
+      if (moved) for (const r of moving) jobs.delete(r.runId);
+    }).then(() => true, () => false);
     return persisting;
+  };
+  const maxShelfDirs = opts.maxShelfDirs ?? DEFAULT_MAX_SHELF_DIRS;
+  const maxEpisodeDirs = opts.maxEpisodeDirs ?? DEFAULT_MAX_EPISODE_DIRS;
+  /**
+   * 429 when `dir` already holds `most` entries (dot files aside): generate, iterate and episodes each add a dir, and
+   * the studio never removes one, since a stopped run keeps it as evidence (A-359). An operator cleans up (A-376).
+   */
+  const dirsFull = async (dir: string, most: number, code: string, what: string): Promise<Reply | null> => {
+    const n = (await readdir(dir).catch((): string[] => [])).filter((e) => !e.startsWith('.')).length;
+    return n >= most ? fail(429, code, `${what} holds ${n} dirs, and the studio adds none past ${most}; an operator removes old ones first`) : null;
   };
   // The audit log: one line per POST, appended one at a time in order. A failed append never fails the reply (fail-open).
   const auditPath = path.join(worldsDir, AUDIT_FILE);
   let auditing: Promise<void> = Promise.resolve();
   let unwritten = 0;
+  const auditMaxBytes = opts.auditMaxBytes ?? DEFAULT_AUDIT_MAX_BYTES;
+  /** The audit file's size as this studio last knew it; read once, then counted. */
+  let auditBytes: number | null = null;
   const audit = (entry: Record<string, unknown>): Promise<void> => {
-    auditing = auditing.then(() => appendFile(auditPath, `${JSON.stringify(entry)}\n`)).catch(() => {
+    auditing = auditing.then(async () => {
+      const line = `${JSON.stringify(entry)}\n`;
+      const bytes = Buffer.byteLength(line);
+      auditBytes ??= await stat(auditPath).then((s) => s.size, () => 0);
+      // Past the cap the file becomes .studio-audit.1.jsonl, replacing the one before, so the log keeps at most two files (A-375).
+      if (auditBytes > 0 && auditBytes + bytes > auditMaxBytes) {
+        await rename(auditPath, path.join(worldsDir, AUDIT_ROTATED_FILE));
+        auditBytes = 0;
+      }
+      await appendFile(auditPath, line);
+      auditBytes += bytes;
+    }).catch(() => {
       unwritten += 1;
     });
     return auditing;
@@ -737,7 +907,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     for (const line of filter === null ? lines.slice(-AUDIT_TAIL) : lines) {
       try {
         const entry: unknown = JSON.parse(line);
-        if (filter === null || (isObject(entry) && entry['tenant'] === filter)) entries.push(entry);
+        // A tenant's lines include the work an admin did for it with ?tenant= (A-367).
+        if (filter === null || (isObject(entry) && (entry['tenant'] === filter || entry['forTenant'] === filter))) entries.push(entry);
       } catch {
         // a damaged line is skipped, not fatal
       }
@@ -784,7 +955,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       case 'resume':
         job.lease = leaseFrom(at);
         job.recovery = { at: when, from: decision.from, outcome: 'resumed' };
-        watch(job, adoptedChild(decision.pid, processes));
+        watch(job, adoptedChild(decision.pid, job.processStart, processes));
         return true;
       case 'stop':
         job.recovery = { at: when, from: decision.from, outcome: 'stopped', reason: decision.reason };
@@ -806,8 +977,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     renewing = true;
     try {
       await persisting;
-      const onDisk = new Map((await loadRuns(worldsDir)).map((stored) => [stored.runId, stored]));
-      if (closed) return;
+      // A damaged file that cannot be kept aside skips the tick; it must not reject a timer callback.
+      const read = await loadRunsToWrite(worldsDir, keepDamaged).catch(() => null);
+      if (read === null || closed) return;
+      const onDisk = new Map(read.map((stored) => [stored.runId, stored]));
       const at = now();
       let changed = false;
       for (const job of jobs.values()) {
@@ -821,6 +994,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
           job.lease = disk.lease;
           job.recovery = disk.recovery;
           job.pid = disk.pid;
+          job.processStart = disk.processStart;
           job.exitCode = disk.exitCode;
           job.child = null;
         }
@@ -833,7 +1007,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   };
   // Jobs a previous studio left (A-329, A-335) are recovered by the lease rules; none is started again. A finished
   // one is listed as it was, and a dead run keeps its <out>.partial evidence and REPORT (A-293).
-  for (const stored of await loadRuns(worldsDir)) jobs.set(stored.runId, jobOf(stored));
+  for (const stored of await loadRunsToWrite(worldsDir, keepDamaged)) jobs.set(stored.runId, jobOf(stored));
   const loadedAt = now();
   for (const job of jobs.values()) recover(job, loadedAt);
   await persist();
@@ -911,13 +1085,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { worlds: list } };
   }
 
-  const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly body: Record<string, unknown> }>();
+  /** Each explored world's answer, valid or invalid, until its world.yaml changes, so revisiting it spawns nothing (A-375). */
+  const checkedWorlds = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly reply: Reply }>();
   /** Checks in flight, by world dir and world.yaml version: a repeated request joins the running child instead of starting another. */
   const checking = new Map<string, Promise<Reply>>();
 
   /** The check, proof and serve children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338, A-343). */
   const childEnv = (): Record<string, string> => isolatedEnv(opts.env ?? process.env);
-  /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
+  /** An episode is the model caller and runs its world in allowlisted children (A-347), so it gets the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
   const modelEnv = (): Record<string, string | undefined> => {
     const { WORLDGEN_STUDIO_TOKEN: _token, ...rest } = opts.env ?? process.env;
     return rest;
@@ -925,7 +1100,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const checkTimeoutMs = opts.checkTimeoutMs ?? 300_000;
   const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
 
-  /** <name>.zip of the world's own files (EXPORT_FILES that exist), refused like the report when REPORT.md leaks task source. */
+  /** <name>.zip of the world's own files (EXPORT_FILES that exist), private world.yaml included, so the route is admin-only (A-374); refused like the report when REPORT.md leaks task source. */
   async function worldExport(p: Params, who: User, filter: string | null): Promise<Reply> {
     const name = p['name'] ?? '';
     const w = await worldDirOf(name, who, filter);
@@ -943,7 +1118,19 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   async function worldReport(p: Params, who: User, filter: string | null): Promise<Reply> {
     const w = await worldDirOf(p['name'] ?? '', who, filter);
-    return w.ok ? reportOf(p['name'] ?? '', w.dir) : w.reply;
+    if (!w.ok) return w.reply;
+    return await sensitiveRefusal(who, w.dir, p['name'] ?? '', 'report') ?? reportOf(p['name'] ?? '', w.dir);
+  }
+
+  /**
+   * A 403 for a role below admin when the world at `dir` has a sensitive field or cannot be read: its REPORT.md and plan
+   * quote issue hints and run text that can hold seed values, as its export holds the seed (A-356, A-367). Null otherwise.
+   */
+  async function sensitiveRefusal(who: User, dir: string, name: string, what: 'report' | 'plan'): Promise<Reply | null> {
+    if (who.role === 'admin') return null;
+    const sensitive = await sensitivityOf(dir);
+    if (sensitive !== null && sensitive.size === 0) return null;
+    return fail(403, `${what}.sensitive`, `${name} ${sensitive === null ? 'cannot be read to find its sensitive fields' : 'has sensitive fields'}, so only an admin may read its ${what}`);
   }
 
   /** REPORT.md and capsule.json of a resolved world dir, refused when the report embeds private task source. */
@@ -969,6 +1156,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const name = p['name'] ?? '';
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
+    const refused = await sensitiveRefusal(who, w.dir, name, 'plan');
+    if (refused !== null) return refused;
     const yaml = await readFile(path.join(w.dir, 'plan.yaml'), 'utf8').catch(() => null);
     if (yaml === null) return fail(404, 'plan.missing', `${name} has no plan.yaml; only a generated world has a plan`);
     const plan = parsePlanYaml(yaml);
@@ -998,13 +1187,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     // The check verifies every task, about 9 s on a big world, so an explored world is kept until its world.yaml changes.
     const yaml = await stat(path.join(dir, 'world.yaml')).catch(() => null);
     const cached = checkedWorlds.get(dir);
-    if (yaml !== null && cached !== undefined && cached.mtimeMs === yaml.mtimeMs && cached.size === yaml.size) {
-      return { status: 200, body: cached.body };
-    }
+    if (yaml !== null && cached !== undefined && cached.mtimeMs === yaml.mtimeMs && cached.size === yaml.size) return cached.reply;
     const key = `${dir}\n${yaml?.mtimeMs}\n${yaml?.size}`;
     const running = checking.get(key);
     if (running !== undefined) return running;
-    const reply = checkInChild(dir, name, yaml).finally(() => checking.delete(key));
+    const reply = inSlot(() => checkInChild(dir, name, yaml)).then((r) => r ?? busy()).finally(() => checking.delete(key));
     checking.set(key, reply);
     return reply;
   }
@@ -1016,7 +1203,12 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     } catch {
       return fail(502, 'check.failed', 'the check process could not start');
     }
-    if (res.code === 3) return fail(422, 'world.invalid', lastLine(res.stderr).slice(0, 300));
+    if (res.code === 3) {
+      // An invalid world is invalid until its world.yaml changes, so its answer is kept like a valid one's.
+      const invalid = fail(422, 'world.invalid', lastLine(res.stderr).slice(0, 300));
+      if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, reply: invalid });
+      return invalid;
+    }
     if (res.code !== 0) return fail(502, 'check.failed', `the check process failed (exit ${res.code}): ${lastLine(res.stderr).slice(0, 200) || 'no output'}`);
     let body: unknown;
     try {
@@ -1025,13 +1217,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       body = null;
     }
     if (!isObject(body)) return fail(502, 'check.unreadable', 'the check process answered something that is not a JSON object');
-    if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, body });
-    return { status: 200, body };
+    const checked: Reply = { status: 200, body };
+    if (yaml !== null) checkedWorlds.set(dir, { mtimeMs: yaml.mtimeMs, size: yaml.size, reply: checked });
+    return checked;
   }
 
   /** The API console: one request to the world port of a service this studio started, and the world's real answer. */
   /** A service `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
-  const serviceOf = (id: string, who: User, filter: string | null): { record: ServiceRecord; dir: string; child: SpawnedChild } | undefined => {
+  const serviceOf = (id: string, who: User, filter: string | null): Service | undefined => {
     const hit = services.get(id);
     return hit !== undefined && visible(hit.record.tenant, who, filter) ? hit : undefined;
   };
@@ -1062,7 +1255,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     try {
       // A service is recorded only once its world reported it listens (A-348), so a refused call is the world's real answer.
       res = await fetch(url, {
-        method, redirect: 'manual', signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        method, redirect: 'manual', signal: AbortSignal.timeout(callTimeoutMs),
         ...(payload === undefined ? {} : { body: JSON.stringify(payload), headers: { 'content-type': 'application/json' } }),
       });
     } catch (e) {
@@ -1070,13 +1263,16 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     const bytes = Buffer.from(await res.arrayBuffer());
     const truncated = bytes.length > MAX_CALL_BYTES;
+    const text = bytes.subarray(0, MAX_CALL_BYTES).toString('utf8');
     return {
       status: 200,
       body: {
         service: hit.record.id, world: hit.record.name, worldPort: hit.record.worldPort,
         request: { method, path: `${url.pathname}${url.search}`, body: payload ?? null },
         status: res.status, contentType: res.headers.get('content-type'), ms: Date.now() - started,
-        body: bytes.subarray(0, MAX_CALL_BYTES).toString('utf8'), truncated,
+        // A sensitive field's value never reaches a role below admin (A-356).
+        // Masked by the world as served and as it is now, so a field marked sensitive since the serve is masked too.
+        body: who.role === 'admin' ? text : bodyBelowAdmin(text, mergeSensitivity([hit.sensitive, await sensitivityOf(hit.dir)])), truncated,
       },
     };
   }
@@ -1107,6 +1303,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
     const dir = w.dir;
+    // A world whose definition cannot be read now relays withheld bodies to roles below admin, never unmasked ones.
+    const sensitive = await sensitivityOf(dir);
     // An admin serving with ?tenant=t serves the world for t, so t's own operators see and stop it.
     const owner = filter ?? who.tenant;
     const startKey = `${owner} ${dir}`;
@@ -1116,6 +1314,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     for (const s of services.values()) {
       if (s.dir === dir && visible(s.record.tenant, who, filter)) return fail(409, 'world.already_serving', `${name} is already served on port ${s.record.worldPort}; stop it first`);
     }
+    // Every served world is a bun process with two ports, so their count is capped in all and per tenant (A-375).
+    if (services.size + starting.size >= maxServices) return fail(429, 'serve.concurrent_limit', `the studio serves at most ${maxServices} worlds at once; stop one first`);
+    const servedBy = [...services.values()].filter((s) => s.record.tenant === owner).length + [...starting].filter((k) => k.startsWith(`${owner} `)).length;
+    if (servedBy >= maxServicesPerTenant) return fail(429, 'serve.concurrent_limit', `a tenant serves at most ${maxServicesPerTenant} worlds at once; stop one first`);
     const wanted = isObject(body) ? body['port'] : undefined;
     let port = 0;
     if (wanted !== undefined && who.role === 'admin') {
@@ -1150,7 +1352,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     if (report.kind === 'exited') {
       const said = child.output().trim().split('\n').pop()?.trim() ?? '';
-      return fail(502, 'serve.failed', `worldplay serve for ${name} exited ${report.code ?? 'by a signal'} before it listened${said === '' ? '' : `: ${said}`}`);
+      // The line can quote the world's source, a check failure on a task's grader included, so only an admin reads it (A-377).
+      const shown = said === '' || who.role === 'admin' ? said : CHILD_TEXT_WITHHELD;
+      return fail(502, 'serve.failed', `worldplay serve for ${name} exited ${report.code ?? 'by a signal'} before it listened${shown === '' ? '' : `: ${shown}`}`);
     }
     if (report.kind === 'timeout') {
       await signalAndWait(child, ['SIGTERM', 'SIGKILL']);
@@ -1161,7 +1365,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     let id = `svc-${randomBytes(4).toString('hex')}`;
     while (services.has(id)) id = `svc-${randomBytes(4).toString('hex')}`;
     const record: ServiceRecord = { id, name, tenant: owner, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
-    services.set(id, { record, dir, child });
+    services.set(id, { record, dir, child, sensitive });
     void child.exited.then(() => {
       services.delete(id);
     });
@@ -1184,7 +1388,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (resetting.has(hit.record.id)) return fail(409, 'reset.busy', `a reset of ${name} is already running; wait for its answer`);
     resetting.add(hit.record.id);
     const admin = `http://127.0.0.1:${hit.record.adminPort}`;
-    const signal = (): AbortSignal => AbortSignal.timeout(CALL_TIMEOUT_MS);
+    const signal = (): AbortSignal => AbortSignal.timeout(callTimeoutMs);
     try {
       const reset = await fetch(`${admin}/_world/reset`, { method: 'POST', redirect: 'manual', signal: signal() });
       if (!reset.ok) return fail(502, 'reset.failed', `the admin port of ${name} answered ${reset.status} to the reset`);
@@ -1359,6 +1563,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
      * spawn that threw does, and answers 500 with `code` and the error's message.
      */
     readonly prepare?: { readonly code: string; readonly run: (job: Job) => Promise<void> } | undefined;
+    /** The dir cap that refuses this start, read before startJob and answered after a replay, so a replay still answers (A-376). */
+    readonly full?: Reply | null | undefined;
   };
 
   /** The answer to a start, the same for the first request and each replay of it. */
@@ -1373,7 +1579,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   });
 
   /** A running job another studio holds whose process is gone: recovery stops it once that lease runs out. */
-  const ownerGone = (job: Job): boolean => !holds(job) && job.phase === 'running' && job.pid !== null && !processes.alive(job.pid);
+  const ownerGone = (job: Job): boolean => !holds(job) && job.phase === 'running' && job.pid !== null && !sameProcess(processes, job.pid, job.processStart);
 
   /**
    * Starts a job once per key (A-335). A client key names one job forever; a derived key matches only an unfinished
@@ -1394,6 +1600,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       if (prior.fingerprint === fingerprint) return startAnswer(prior, true);
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (job ${prior.runId})`);
     }
+    if (start.full !== undefined && start.full !== null) return start.full;
     // Counted after the lookup, so a replay answers first. Intents and jobs another studio leases count. Still no await.
     // The cap is global because it protects the machine. The refusal states no count, since the count holds other tenants' jobs.
     const active = [...jobs.values()].filter((j) => j.kind === start.kind && j.phase !== 'finished').length;
@@ -1408,7 +1615,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const { outDir, argv, iterate } = start.launch(runId);
     const job: Job = {
       runId, kind: start.kind, tenant: start.tenant, key, fingerprint, outDir, knownRuns: start.knownRuns, startedAt: new Date().toISOString(),
-      episode: start.episode, iterate, phase: 'intent', lease: leaseFrom(now()), recovery: undefined, pid: null, exitCode: null, child: null,
+      episode: start.episode, iterate, phase: 'intent', lease: leaseFrom(now()), recovery: undefined, pid: null, processStart: undefined, exitCode: null, child: null,
     };
     jobs.set(runId, job);
     const recorded = await persist();
@@ -1433,7 +1640,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     let child: SpawnedChild;
     try {
-      child = opts.spawner(argv, { cwd: codeDir, env: modelEnv() });
+      // A generate or iterate child runs candidate-world snippets, so it gets only GENERATION_ENV (A-372).
+      child = opts.spawner(argv, { cwd: codeDir, env: start.kind === 'generate' ? generationEnv(opts.env ?? process.env, opts.transport) : modelEnv() });
     } catch (e) {
       // A start that never happened is finished, so its derived key cannot answer every later retry with a dead intent.
       job.phase = 'finished';
@@ -1444,6 +1652,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     job.phase = 'running';
     job.pid = child.pid ?? null;
+    // What the OS says this pid started as, so a later studio adopts or signals it only while it is still this child (A-373).
+    job.processStart = job.pid === null ? null : processes.startOf(job.pid);
     watch(job, child);
     await persist();
     return startAnswer(job, false);
@@ -1456,24 +1666,25 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       return fail(400, 'generate.kind', 'kind must be one of description, openapi or csv');
     }
     const slug = body['outSlug'];
-    if (typeof slug !== 'string' || !KEBAB.test(slug)) {
-      return fail(400, 'generate.slug', 'outSlug must be kebab-case: lowercase letters, digits and dashes, such as orders-demo');
+    if (typeof slug !== 'string' || !KEBAB.test(slug) || slug.length > MAX_NAME_CHARS) {
+      return fail(400, 'generate.slug', `outSlug must be kebab-case of at most ${MAX_NAME_CHARS} characters: lowercase letters, digits and dashes, such as orders-demo`);
     }
     const rawText = body['text'];
     if (rawText !== undefined && typeof rawText !== 'string') return fail(400, 'generate.text', 'text must be a string: the description, or the spec or csv path(s)');
     if (kind === 'description' && typeof rawText !== 'string') return fail(400, 'generate.text', 'a description needs text');
     const text = rawText ?? '';
     const budget = body['budgetUsd'];
-    if (budget !== undefined && (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0)) {
-      return fail(400, 'generate.budget', 'budgetUsd must be a positive number');
+    if (budget !== undefined && (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0 || budget > MAX_GENERATE_BUDGET_USD)) {
+      return fail(400, 'generate.budget', `budgetUsd must be a positive number of at most ${MAX_GENERATE_BUDGET_USD}`);
     }
     const minutes = body['maxMinutes'];
-    if (minutes !== undefined && (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes <= 0)) {
-      return fail(400, 'generate.minutes', 'maxMinutes must be a positive integer');
+    if (minutes !== undefined && (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes <= 0 || minutes > MAX_GENERATE_MINUTES)) {
+      return fail(400, 'generate.minutes', `maxMinutes must be a positive integer of at most ${MAX_GENERATE_MINUTES}`);
     }
     const flags = [...(budget === undefined ? [] : ['--budget-usd', String(budget)]), ...(minutes === undefined ? [] : ['--max-minutes', String(minutes)])];
     // `default` keeps the old layout, so open mode and the token admin write where they always did.
     const outDir = path.join(writeRootOf(who.tenant), `gen-${slug}`);
+    const full = await dirsFull(writeRootOf(who.tenant), maxShelfDirs, 'shelf.full', 'This shelf');
     let args: string[];
     // A description goes after `--`, so one that starts with - is text, never an option.
     let description: string | null = null;
@@ -1540,7 +1751,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const head = ['bun', 'src/cli/worldgen.ts', ...args];
     const tail = description === null ? [] : ['--', description];
     const request = [...head, ...tail];
-    return startJob({ kind: 'generate', tenant: who.tenant, rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...head, ...transport, ...tail] }) });
+    return startJob({ full, kind: 'generate', tenant: who.tenant, rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...head, ...transport, ...tail] }) });
   }
 
   /**
@@ -1563,8 +1774,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const root = owner === DEFAULT_TENANT ? worldsDir : shelfOf(owner).root;
     await mkdir(root, { recursive: true });
     const taken = new Set(await readdir(root).catch((): string[] => []));
+    const full = await dirsFull(root, maxShelfDirs, 'shelf.full', 'This shelf');
     const transport = opts.transport === undefined ? [] : ['--transport', opts.transport];
     return startJob({
+      full,
       kind: 'generate',
       tenant: owner,
       rawKey: ctx.key,
@@ -1635,7 +1848,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   async function readEvents(run: Job): Promise<unknown[]> {
     const file = await eventsFileOf(run);
-    if (file === null) return [];
+    return file === null ? [] : eventsIn(file);
+  }
+
+  /** The events an events.jsonl holds, none when it cannot be read. */
+  async function eventsIn(file: string): Promise<unknown[]> {
     const text = await readFile(file, 'utf8').catch(() => '');
     const out: unknown[] = [];
     for (const line of text.split('\n')) {
@@ -1647,6 +1864,24 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
     }
     return out;
+  }
+
+  /**
+   * What a past run's own events say of it, for a run no capsule.json covers: run_started's model and transport, and the
+   * last run_finished's ms, cost and result. A fact the run never logged stays null.
+   */
+  function runFactsOf(all: readonly unknown[]): { model: string | null; transport: string | null; costUsd: number | null; ms: number | null; outcome: 'done' | 'stopped' | null } {
+    const events = all.filter(isObject);
+    const started = events.find((e) => e['t'] === 'run_started');
+    const finished = [...events].reverse().find((e) => e['t'] === 'run_finished');
+    const result = finished !== undefined && isObject(finished['result']) ? finished['result']['kind'] : undefined;
+    const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+    const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    return {
+      model: text(started?.['model']), transport: text(started?.['transport']),
+      costUsd: num(finished?.['costUsd']), ms: num(finished?.['ms']),
+      outcome: result === 'done' || result === 'stopped' ? result : null,
+    };
   }
 
   function totalsOf(events: readonly unknown[]): { ms: number; costUsd: number } | null {
@@ -1686,13 +1921,21 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (run === undefined) return fail(404, 'run.unknown', `No run ${p['runId'] ?? ''}`);
     const events = await readEvents(run);
     const running = run.phase !== 'finished';
+    const tail = events.slice(-EVENT_TAIL);
+    // Issue text and error messages can quote seed values or model output, so below admin they show only for a run whose
+    // saved world has no sensitive field; the out dir holds a world only once the run is done, so a run with none fails
+    // closed (A-367). The child's own output can quote world or task source, as an episode's can, so below admin it is
+    // withheld whatever the world's sensitivity (A-374, A-377).
+    const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await sensitivityOf(run.outDir);
+    const output = run.child?.output() ?? '';
+    const said = who.role === 'admin' || output.trim() === '' ? output : CHILD_TEXT_WITHHELD;
     return {
       status: 200,
       body: {
         running,
-        ...stateOf(running, run.exitCode, events, run.child?.output() ?? '', run.recovery),
+        ...stateOf(running, run.exitCode, events, said, run.recovery),
         ...(running ? {} : { exitCode: run.exitCode }),
-        events: events.slice(-EVENT_TAIL),
+        events: runEventsBelowAdmin(tail, sensitive),
         totals: totalsOf(events),
         job: jobView(run),
         ...(run.iterate === undefined ? {} : { iterate: { ...run.iterate, published: !running && await file(path.join(run.outDir, 'world.yaml')) } }),
@@ -1721,19 +1964,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         const capsule = await readCapsule(dir);
         const hasReport = await file(path.join(dir, 'REPORT.md'));
         for (const runId of await dirsOf(path.join(dir, 'runs'))) {
-          if (!await file(path.join(dir, 'runs', runId, 'events.jsonl'))) continue;
-          const mine = capsule !== null && capsule.runId === runId;
-          out.push({
-            name,
-            tenant: shelf.tenant,
-            runId,
-            model: mine ? capsule.model : null,
-            transport: mine ? capsule.transport : null,
-            costUsd: mine ? capsule.costUsd : null,
-            ms: mine ? capsule.ms : null,
-            outcome: mine ? (capsule.worldId !== null ? 'done' : 'stopped') : null,
-            hasReport,
-          });
+          const events = path.join(dir, 'runs', runId, 'events.jsonl');
+          if (!await file(events)) continue;
+          // The capsule speaks for the run that wrote it; any other run speaks through its own events.
+          const facts = capsule !== null && capsule.runId === runId
+            ? { model: capsule.model, transport: capsule.transport, costUsd: capsule.costUsd, ms: capsule.ms, outcome: capsule.worldId !== null ? 'done' as const : 'stopped' as const }
+            : runFactsOf(await eventsIn(events));
+          out.push({ name, tenant: shelf.tenant, runId, ...facts, hasReport });
         }
       }
     }
@@ -1827,13 +2064,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!clientKey.ok) return clientKey.reply;
     const fingerprint = fingerprintOf('proof', [w.dir]);
     const key = clientKey.key ?? `derived:${fingerprint}`;
-    const slot = `${who.tenant} ${key}`;
+    // The key space is the world's tenant's, as the world was resolved for it.
+    const slot = `${ctx.filter ?? who.tenant} ${key}`;
     const known = proofsDone.get(slot) ?? proofsRunning.get(slot);
     if (known !== undefined) {
       if (known.fingerprint === fingerprint) return known.reply;
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (the proof of another world)`);
     }
-    const reply = proveWorld(w.dir, p['name'] ?? '');
+    const reply = inSlot(() => proveWorld(w.dir, p['name'] ?? '')).then((r) => r ?? busy());
     proofsRunning.set(slot, { fingerprint, reply });
     try {
       const done = await reply;
@@ -1868,28 +2106,36 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { world: name, verified: res.code === 0, tasks } };
   }
 
-  /** Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. */
+  /**
+   * Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. An admin's `?tenant=` names
+   * the world's shelf and the job's tenant, as for serve and iterate, so the transcript of a tenant's world stays its own.
+   */
   async function startEpisode(body: unknown, who: User, ctx: Ctx): Promise<Reply> {
     if (!isObject(body)) return fail(400, 'episode.body', 'body must be {"world": ..., "task": ..., "agent": "noop" | "sonnet"}');
     const world = typeof body['world'] === 'string' ? body['world'] : '';
     const w = await worldDirOf(world, who, ctx.filter);
     if (!w.ok) return w.reply;
     const task = body['task'];
-    if (typeof task !== 'string' || !KEBAB.test(task.replace(/_/g, '-'))) return fail(400, 'episode.task', 'task must be a task id of the world');
+    if (typeof task !== 'string' || !KEBAB.test(task.replace(/_/g, '-')) || task.length > MAX_NAME_CHARS) return fail(400, 'episode.task', 'task must be a task id of the world');
     const agent = body['agent'] ?? 'noop';
     if (agent !== 'noop' && agent !== 'sonnet') return fail(400, 'episode.agent', 'agent must be noop or sonnet');
     const flags: string[] = [];
     for (const [key, flag] of [['maxTurns', '--max-turns'], ['budgetUsd', '--budget-usd'], ['maxMinutes', '--max-minutes']] as const) {
       const v = body[key];
       if (v === undefined) continue;
-      if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return fail(400, 'episode.limits', `${key} must be a positive number`);
+      const most = MAX_EPISODE_LIMITS[key];
+      if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > most || (key === 'maxTurns' && !Number.isInteger(v))) {
+        return fail(400, 'episode.limits', `${key} must be a positive ${key === 'maxTurns' ? 'integer' : 'number'} of at most ${most}`);
+      }
       flags.push(flag, String(v));
     }
     const sha = await engineCommit();
     if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory and no build sha is set, so the episode would have no engine identity');
+    const full = await dirsFull(episodesDir, maxEpisodeDirs, 'episode.dirs_full', 'eval/episodes');
     return startJob({
+      full,
       kind: 'episode',
-      tenant: who.tenant,
+      tenant: ctx.filter ?? who.tenant,
       rawKey: ctx.key,
       request: ['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--agent', agent, ...flags],
       label: agent,
@@ -1934,8 +2180,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const run = isEpisode(job) ? job : undefined;
     const out = run?.outDir ?? path.join(episodesDir, runId);
     if (run === undefined && !await isDir(out)) return unknown;
-    const episode = await exportedEpisode(out, runId);
-    const output = run?.child?.output() ?? '';
+    const exported = await exportedEpisode(out, runId);
+    // Tool results hold the world's answers, so a role below admin sees them masked like the console's (A-356).
+    const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await episodeSensitivity(exported, out);
+    const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, sensitive);
+    // The child's last lines can quote a world answer or task source, so only an admin reads them, whatever the world (A-377).
+    const raw = run?.child?.output() ?? '';
+    const output = who.role === 'admin' || raw.trim() === '' ? raw : CHILD_TEXT_WITHHELD;
     const running = run !== undefined && run.phase !== 'finished';
     return {
       status: 200,
@@ -2012,7 +2263,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds'], run: (_p, _b, who, ctx) => worlds(who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'report'], run: (p, _b, who, ctx) => worldReport(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'plan'], run: (p, _b, who, ctx) => worldPlan(p, who, ctx.filter) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'export'], run: (p, _b, who, ctx) => worldExport(p, who, ctx.filter) },
+    // The export zips the private world.yaml, every grader, solution, decoy and alternative included (A-374).
+    { method: 'GET', need: 'admin', parts: ['api', 'worlds', ':name', 'export'], run: (p, _b, who, ctx) => worldExport(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'explorer'], run: (p, _b, who, ctx) => explorer(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b, who, ctx) => serveWorld(p, b, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'iterate'], run: (p, b, who, ctx) => iterateWorld(p, b, who, ctx) },
@@ -2030,8 +2282,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId', 'events'], run: (p, _b, who, ctx) => runStatus(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'generate', ':runId', 'stop'], run: (p, _b, who, ctx) => stopRun(p, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'runs'], run: (_p, _b, who, ctx) => listRuns(who, ctx.filter) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'eval'], run: () => listEval() },
-    { method: 'GET', need: 'viewer', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
+    // An eval run is the operator's rehearsal of the repo, no tenant's: its summary quotes crash lines and issue hints,
+    // which can hold an eval world's seed values, so only an admin reads it (A-370).
+    { method: 'GET', need: 'admin', parts: ['api', 'eval'], run: () => listEval() },
+    { method: 'GET', need: 'admin', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
     { method: 'GET', need: 'admin', parts: ['api', 'costs'], run: () => costs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'tasks'], run: (p, _b, who, ctx) => worldTasks(p, who, ctx.filter) },
     { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p, _b, who, ctx) => worldProof(p, who, ctx) },
@@ -2128,12 +2382,19 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     // An admin's ?tenant=, read only after sign-in and the throttle, so a malformed one cannot tell a guesser that a token
     // is an admin's. No other role narrows.
-    const at = (req.url ?? '').indexOf('?');
-    const filter = who.role === 'admin' ? new URLSearchParams(at < 0 ? '' : (req.url ?? '').slice(at + 1)).get('tenant') : null;
+    const filter = adminFilterOf(req, who);
     if (filter !== null && !TENANT.test(filter)) return fail(400, 'tenant.invalid', `?tenant=${filter} is refused: ${TENANT_RULE}`);
     const body = route.method === 'POST' ? await readBody(req, route.maxBody ?? MAX_BODY_BYTES) : { ok: true as const, value: undefined };
-    if (!body.ok) return fail(body.status, body.code, body.message);
+    // A 413 closes its connection, so the rest of a body past the limit is never read (A-375).
+    if (!body.ok) return fail(body.status, body.code, body.message, body.status === 413 ? { connection: 'close' } : undefined);
     return route.run(hit.params, body.value, who, { key: req.headers['idempotency-key'], filter });
+  };
+
+  /** The `?tenant=` of an admin's request, or null for any other caller or none given. */
+  const adminFilterOf = (req: IncomingMessage, who: Caller): string | null => {
+    if (who.kind !== 'user' || who.role !== 'admin') return null;
+    const at = (req.url ?? '').indexOf('?');
+    return new URLSearchParams(at < 0 ? '' : (req.url ?? '').slice(at + 1)).get('tenant');
   };
 
   const answer = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -2153,18 +2414,22 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!(req.method === 'GET' && segments.length === 2 && segments[0] === 'api' && segments[1] === 'health')) traffic.record(now(), reply.status);
     if (req.method === 'POST') {
       const error = isObject(reply.body) && isObject(reply.body['error']) ? reply.body['error']['code'] : undefined;
+      // The tenant an admin acted for with ?tenant=, beside the admin's own, so the audit names whose work it was.
+      const actedFor = adminFilterOf(req, who);
       await audit({
         at: new Date().toISOString(),
         user: who.kind === 'user' ? who.name : null,
         role: who.kind === 'user' ? who.role : null,
         tenant: who.kind === 'user' ? who.tenant : null,
+        ...(actedFor !== null && TENANT.test(actedFor) ? { forTenant: actedFor } : {}),
         method: 'POST',
-        path: (req.url ?? '/').split('?')[0],
+        path: ((req.url ?? '/').split('?')[0] ?? '/').slice(0, MAX_AUDIT_PATH_CHARS),
         status: reply.status,
         ...(typeof error === 'string' ? { code: error } : {}),
       });
     }
     try {
+      if (reply.status === 413) res.once('finish', () => req.destroy());
       write(res, reply);
     } catch {
       res.destroy();
@@ -2174,6 +2439,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const server: Server = createHttpServer((req, res) => {
     void answer(req, res);
   });
+  // A slow or endless request holds a socket for the runtimes' default 300 s; the studio cuts it at 30 s (A-375).
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
 
   const port = await new Promise<number>((resolve, reject) => {
     server.once('error', reject);
@@ -2205,6 +2473,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   return {
     url: `http://${host.includes(':') ? `[${host}]` : host}:${port}`,
     port,
+    routes: routes.map((r) => ({ method: r.method, path: `/${r.parts.join('/')}`, need: r.need })),
     close() {
       closing ??= (async () => {
         // Each job this studio holds is stopped by the close, so it is recorded as stopped in the last write, its lease
