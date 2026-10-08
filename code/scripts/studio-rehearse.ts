@@ -139,6 +139,9 @@ const section = (n: number) => `section:nth-of-type(${n})`;
 /** Picks `world` in the Agent Playground, waits until its tasks have loaded (loading clears the proof table), then asks for the engine proof. */
 const proof = (world: string) => `(async()=>{const s=document.querySelector('#play-world');s.value=${JSON.stringify(world)};s.dispatchEvent(new Event('change'));const first=(await (await fetch('/api/worlds/'+${JSON.stringify(world)}+'/tasks',${AUTH})).json()).tasks[0].id;for(let i=0;i<100&&document.querySelector('#play-task').value!==first;i++)await new Promise(r=>setTimeout(r,100));document.querySelector('#play-proof').click();return true})()`;
 const signedOut = `!!document.querySelector('#signin-form')&&!document.querySelector('#signin-form').hidden`;
+/** Navigates after marking the old document, so a wait that adds `fresh` cannot pass on the page being replaced. */
+const navigate = (to: string) => `(window.__old=true, ${to}, true)`;
+const fresh = `!window.__old`;
 const typeToken = (name: Name) => `(()=>{document.querySelector('#signin-token').value=${JSON.stringify(token(name))};document.querySelector('#signin-form').requestSubmit();return true})()`;
 const signedInAs = (name: Name) => `document.querySelector('#who')?.textContent===${JSON.stringify(`${name} (${USERS.find((u) => u.name === name)!.role})`)}`;
 /** Signs out through the page, then signs `name` in through its token form; false when either half never shows. */
@@ -155,7 +158,7 @@ const retry = (key: string) => `(async()=>{const h={authorization:'Bearer '+sess
 await ev(`location.href=${JSON.stringify(STUDIO)}, true`);
 await until(signedOut);
 await step('00-sign-in', 'Sign in: the studio asks for a token, then names who is signed in and offers Sign out', typeToken('ada'), `${signedInAs('ada')}&&document.querySelectorAll('tr').length>5`, 'header');
-await step('01-dashboard', 'Worlds: every world with its kind, tasks, wid, model, cost and attempts', `location.href=${JSON.stringify(STUDIO)}, true`, `${signedInAs('ada')}&&document.querySelectorAll('tr').length>5`);
+await step('01-dashboard', 'Worlds: every world with its kind, tasks, wid, model, cost and attempts', navigate(`location.href=${JSON.stringify(STUDIO)}`), `${fresh}&&${signedInAs('ada')}&&document.querySelectorAll('tr').length>5`);
 await step('02-serve-helpdesk', 'Serve helpdesk: it runs on its own world port; the admin port stays private', rowBtn('helpdesk', 'serve'), `${row('helpdesk')}?.innerText.includes('stop')`, 'table');
 await step('03-explorer-helpdesk', 'Explorer: entities and references, routes and actions, jobs, and tasks as an agent is told them', explore('helpdesk'), `document.body.innerText.includes('ticket_event')&&document.body.innerText.includes('escalate_breached')`, section(2));
 await step('04-console-get', 'API console: a real GET on the world port, answered 200 with three open tickets', consoleSend('GET', '/tickets?status=open&limit=3'), `/HTTP 200 /.test(document.body.innerText)&&document.body.innerText.includes('tkt_')`, '#console-meta');
@@ -169,7 +172,7 @@ await step('11-noop-episode', 'Agent Playground: a free noop agent on the first 
 const adaRun = String(await ev(`(document.querySelector('#episode-view h3')?.textContent??'').replace(/^episode /,'').replace(/ \\(running\\)$/,'')`) ?? '');
 await step('12-spend', 'Spend: today and all-time LLM and sandbox cost, by day, and the caps', click('#spend-refresh'), `/llm/.test(document.querySelector(${JSON.stringify(section(6))})?.innerText??'')`, section(6));
 await step('13-stop-helpdesk', 'Clean up: stop the served world', `(()=>{const b=[...${row('helpdesk')}.querySelectorAll('button')].find(b=>/^stop/i.test(b.textContent.trim()));b?.click();return !!b})()`, `${row('helpdesk')}?.innerText.includes('serve')`, 'table');
-await step('14-reload', 'Reload: the same state, nothing left running', `location.reload(), true`, `document.querySelectorAll('tr').length>5&&!${row('helpdesk')}?.innerText.includes('stop')`);
+await step('14-reload', 'Reload: the same state, nothing left running', navigate('location.reload()'), `${fresh}&&${signedInAs('ada')}&&document.querySelectorAll('tr').length>5&&!${row('helpdesk')}?.innerText.includes('stop')`);
 
 const anaIn = await switchTo('ana');
 await step('15-idempotent-retry', 'ana (acme) retries one job request: two POSTs with one Idempotency-Key start one noop episode, and the second answer replays the first', anaIn ? retry(`rehearse-${randomBytes(4).toString('hex')}`) : 'false', `typeof window.__retry==='string'&&window.__retry.startsWith('same ')`, '#episodes-meta', 90000);
