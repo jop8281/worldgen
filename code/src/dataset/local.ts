@@ -59,8 +59,8 @@ export type LocalEpisodeOptions = {
   readonly out: string;
   readonly runId: string;
   readonly engineCommit: string;
-  /** The model `nextTurn` calls, recorded on the episode. */
-  readonly model: string;
+  /** The model `nextTurn` calls, recorded on the episode, or null when it calls none, as the noop agent does. */
+  readonly model: string | null;
   readonly nextTurn: NextTurn;
   readonly maxTurns: number;
   readonly budgetUsd: number;

@@ -8,9 +8,13 @@
  */
 import { isCompleteSuccess, type Episode } from '../dataset/schema.ts';
 
+/** The group label for episodes whose agent called no model. No Claude model id can equal it. */
+export const NO_MODEL = 'noop (no model)';
+
 export type EpisodeGroup = {
   readonly world: string;
   readonly task: string;
+  /** The agent's Claude model, or NO_MODEL when it called none. */
   readonly model: string;
   readonly runs: number;
   readonly successes: number;
@@ -41,7 +45,7 @@ function causeOf(e: Episode): string {
 export function summarizeEpisodes(episodes: readonly Episode[]): readonly EpisodeGroup[] {
   const groups = new Map<string, Episode[]>();
   for (const e of episodes) {
-    const key = JSON.stringify([e.world_id, e.task_id, e.model]);
+    const key = JSON.stringify([e.world_id, e.task_id, e.model ?? NO_MODEL]);
     groups.set(key, [...(groups.get(key) ?? []), e]);
   }
   return [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([key, list]) => {
