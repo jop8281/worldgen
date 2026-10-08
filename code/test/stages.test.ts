@@ -233,6 +233,12 @@ describe('PLAN_BRIEF rule forms and lifecycle (YOS-155)', () => {
     }
   });
 
+  it('asks a stateMix only of an entity a state field holds, and none of one whose every workflow declares a lifecycle (A-371)', () => {
+    for (const w of ['a stateMix giving, per workflow entity whose states a state field holds,', 'none for an entity whose every workflow declares a removal or descriptive lifecycle']) {
+      assert.ok(PLAN_BRIEF.includes(w), `plan brief lacks "${w}"`);
+    }
+  });
+
   it('the workflow brief makes a rule with by pass the frozen acceptance test it binds', () => {
     assert.ok(STAGES.workflow.brief.includes('must pass the frozen acceptance test it binds'), STAGES.workflow.brief);
     assert.ok(STAGES.workflow.brief.includes('must make that scenario pass'), STAGES.workflow.brief);

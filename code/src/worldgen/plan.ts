@@ -33,7 +33,7 @@ const planBase = z.object({
     rowsPerEntity: z.record(z.string(), z.number().int()),
     mix: z.string(),
     stateMix: z.record(z.string(), z.record(z.string(), z.number().min(0).max(100))).optional()
-      .describe(`for each workflow entity, the percent of its seeded rows in each workflow state, summing to 100, such as { ticket: { open: 60, closed: 40 } }; the built seed must land within ${MIX_WITHIN} points of each`),
+      .describe(`for each workflow entity whose states a state field holds, the percent of its seeded rows in each workflow state, summing to 100, such as { ticket: { open: 60, closed: 40 } }; the built seed must land within ${MIX_WITHIN} points of each. Leave out an entity whose every workflow declares a lifecycle, since no state field holds its states`),
   }),
   open_questions: z
     .array(z.object({ question: z.string(), default_answer: z.string() }))
@@ -181,8 +181,10 @@ export function untestedActions(plan: Plan): readonly string[] {
 /**
  * planSchema plus the rules of a plan that builds a new world: its acceptance tests exist before
  * implementation and cover every workflow action, a description plan asks at least one open
- * question, every plan records at least one assumption (A-180), and every workflow entity has a
- * planned stateMix that the seed step is then judged against (A-183). Refusals have no such rules.
+ * question, every plan records at least one assumption (A-180), and every workflow entity whose
+ * states a state field holds has a planned stateMix that the seed step is then judged against
+ * (A-183). An entity whose every workflow declares a lifecycle has no state field to mix, so it owes
+ * none (A-371). Refusals have no such rules.
  */
 export function planSchemaFor(inputKind: InputKind) {
   return planSchema.superRefine((plan, ctx) => {
@@ -200,9 +202,9 @@ export function planSchemaFor(inputKind: InputKind) {
         message: 'a plan built from a description needs at least one open question with the default answer taken: ask what a human would be asked',
       });
     }
-    for (const entity of new Set(plan.workflows.map((w) => w.entity))) {
+    for (const entity of new Set(plan.workflows.filter((w) => w.lifecycle === undefined).map((w) => w.entity))) {
       if (!Object.hasOwn(plan.seed.stateMix ?? {}, entity)) {
-        ctx.addIssue({ code: 'custom', path: ['seed', 'stateMix', entity], message: `a plan to build needs seed.stateMix for workflow entity ${entity}: the percent of its rows in each planned state, summing to 100` });
+        ctx.addIssue({ code: 'custom', path: ['seed', 'stateMix', entity], message: `a plan to build needs seed.stateMix for workflow entity ${entity}, whose states a state field holds: the percent of its rows in each planned state, summing to 100` });
       }
     }
     if (plan.assumptions.length === 0) {
