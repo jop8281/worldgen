@@ -42,7 +42,7 @@ bun run live ../prod/prompts                                     # every prompt 
 
 ## Status of main
 
-`main` is `50cec32f`, promotion 11 ([#121](https://github.com/jop8281/worldgen/pull/121)) of `stabilize/main` `e7b181f5`. Its verdict runs are green twice: [37755807208](https://github.com/jop8281/worldgen/actions/runs/37755807208) and [37755810973](https://github.com/jop8281/worldgen/actions/runs/37755810973). CI now runs Bun and e2e only ([#124](https://github.com/jop8281/worldgen/pull/124), A-379). Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
+`main` is `6e28ba99`, promotion 13 ([#135](https://github.com/jop8281/worldgen/pull/135)), and `stabilize/main` is the same commit. Its verdict runs are green twice: [37767399613](https://github.com/jop8281/worldgen/actions/runs/37767399613) and [37767403670](https://github.com/jop8281/worldgen/actions/runs/37767403670). CI runs Bun only, with the full test suite and the end-to-end check ([#124](https://github.com/jop8281/worldgen/pull/124), [#134](https://github.com/jop8281/worldgen/pull/134); A-379, A-381). Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
 
 | What | Where | PRs |
 |---|---|---|
@@ -88,7 +88,9 @@ stress-4 ran the 29-case `stress` suite once on main `4b3d2be4`, at $3 and 12 mi
 | Time per run, over 31 runs | p50 5.1 min, p95 10.3 min, max 11.5 min |
 | Spend | $26.71 settled, plus one cancelled call whose final billing is unknown |
 
-stress-5 reran the six stress-4 product failures on `acb23bbb` and `d761c213` ([#91](https://github.com/jop8281/worldgen/pull/91)): 5 of 6 now pass, and all 6 got past the step where they had stopped. The 7 runs, 6 creates and 1 change, took 29.9 min summed and $6.96. stripe-customers stopped at the tasks step on a new defect, YOS-253, which [#97](https://github.com/jop8281/worldgen/pull/97) fixes; it has not been rerun since. Its source is [eval/runs/2026-10-08-stress-5/summary.md](eval/runs/2026-10-08-stress-5/summary.md).
+stress-5 reran the six stress-4 product failures on `acb23bbb` and `d761c213` ([#91](https://github.com/jop8281/worldgen/pull/91)): 5 of 6 now pass, and all 6 got past the step where they had stopped. The 7 runs, 6 creates and 1 change, took 29.9 min summed and $6.96. stripe-customers stopped at the tasks step on a new defect, YOS-253, which [#97](https://github.com/jop8281/worldgen/pull/97) fixes. Its source is [eval/runs/2026-10-08-stress-5/summary.md](eval/runs/2026-10-08-stress-5/summary.md).
+
+stress-6 reran the whole 29-case suite on `42ab9ca9` with the same settings ([#129](https://github.com/jop8281/worldgen/pull/129)): 27 of 29 (93%), 24 succeeded and 3 impossible inputs were refused. Per case, p50 was 4.5 min, p95 8.2 min and the max 8.8 min, and the suite cost $25.32. stripe-customers now finishes. The two stops, bookmarks and stripe-charges, are tracked as YOS-257 and YOS-258. Its source is [eval/runs/2026-10-08-stress-6/summary.md](eval/runs/2026-10-08-stress-6/summary.md).
 
 ### The live-run dress rehearsal
 
