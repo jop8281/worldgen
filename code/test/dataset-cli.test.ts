@@ -10,6 +10,7 @@ import { PROMPT_VERSION } from '../src/dataset/schema.ts';
 import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { engineGrader } from '../src/dataset/verifier.ts';
 import type { SolverProposer } from '../src/dataset/solver.ts';
+import { GRADER_CANARY, saveCanaryWorld } from './helpers/world.ts';
 import { COMMIT, EASY_REPLY, HELPDESK_DIR, RUN_BUDGET, easyOnly, fakeBackend, helpdesk, randomPort, solveAll, tmp } from './dataset-kit.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
@@ -158,6 +159,21 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(process.listenerCount('SIGINT'), before, 'the CLI left a signal handler behind');
     return { code, out, err };
   };
+
+  it('uploads exactly the public form of the world through the production makeBundle default (A-377)', RUN_BUDGET, async () => {
+    const { dir, checked } = await saveCanaryWorld(tmp('canary'), 'canary-world');
+    const port = randomPort();
+    const backend = fakeBackend(checked, { port });
+    const err: string[] = [];
+    // No makeBundle here: the default in cli/dataset.ts is under test.
+    await main(required(tmp('cli-canary'), { world: dir }), KEYS, { out: () => {}, err: (l) => err.push(l), grader: engineGrader, runner: withPath, backend, nextTurn: async () => ({ action: 'finish', final_reply: 'Done.' }) as never, port });
+    const worldFiles = backend.uploaded.filter((f) => f.path.startsWith('worlds/'));
+    assert.deepEqual(worldFiles.map((f) => f.path.replace(/\/[^/]+\/world\.yaml$/, '/<world>/world.yaml')), ['worlds/<world>/world.yaml'], err.join('\n'));
+    const text = Buffer.from(worldFiles[0]!.data).toString('utf8');
+    assert.equal(text.includes(GRADER_CANARY), false);
+    assert.equal(/^\s*grader:/m.test(text), false);
+    assert.equal(backend.uploaded.some((f) => Buffer.from(f.data).includes(GRADER_CANARY)), false);
+  });
 
   it('defaults to Claude CLI without requiring an SDK key', RUN_BUDGET, async (t) => {
     const bin = path.join(tmp('claude-bin'), 'claude');

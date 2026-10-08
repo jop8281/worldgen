@@ -555,9 +555,12 @@ for (const w of WORLDS) {
   describe(`http ${N}`, () => {
     // Inside the describe, so each world's serve process is reaped when its tests end, not when the file does.
     after(() => server.stop());
-    it(`G-41 world port serves a fresh seed and admin answers on port+1 ${N}`, http(), async () => {
+    // The harness serves with --port 0, so the admin port is the one serve reported, not the world port + 1; the +1
+    // default for an explicit --port is pinned in test/http.test.ts (R2) (YOS-233).
+    it(`G-41 world port serves a fresh seed and admin answers on the admin port serve reported ${N}`, http(), async () => {
       const live = await server.get();
-      assert.equal(new URL(live.s.admin).port, String(live.s.port + 1));
+      assert.deepEqual([new URL(live.s.base).port, new URL(live.s.admin).port], [String(live.s.port), String(live.s.adminPort)]);
+      assert.notEqual(live.s.adminPort, live.s.port);
       const st = obj(live.fresh);
       if (info.clockStart !== null) assert.equal(Date.parse(String(st['now'])), Date.parse(info.clockStart), 'fresh now is not meta.clock.start');
       if (info.isBase) {
@@ -665,7 +668,7 @@ for (const w of WORLDS) {
     it(`G-42 absolute-form targets and Host headers naming the admin port are refused ${N}`, http(), async () => {
       const live = await server.get();
       await dirty(live);
-      const adminHost = `127.0.0.1:${live.s.port + 1}`;
+      const adminHost = `127.0.0.1:${live.s.adminPort}`;
       const cases = [
         ...adminCases(info, 'absolute-form', (rest) => [`http://${adminHost}/_world/${rest}`, `http://127.0.0.1:${live.s.port}/_world/${rest}`, `http://localhost/_world/${rest}`], NOT_FOUND_OR_MALFORMED),
         ...adminCases(info, 'host header', (rest) => [`/_world/${rest}`]).map((c): Case => ({ ...c, o: { ...c.o, headers: { host: adminHost } } })),

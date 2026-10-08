@@ -2,15 +2,18 @@
  * The studio's jobs (generation runs and agent episodes), kept on disk so neither a restart nor a retried request loses
  * or duplicates one (YOS-191 A-329, YOS-231 A-335). One JSON file in the worlds directory, the volume a container
  * keeps. Written whole through a temp file and a rename, so a crash mid-write leaves the previous registry, never half
- * of one. The loader reads only the final name, so a temp file a crash left behind is never read.
+ * of one. The loader reads only the final name, so a temp file a crash left behind is never read. One studio writes a
+ * worlds dir's registry (A-373); a file a writer cannot read whole is kept aside before anything replaces it.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { SpawnedChild } from '../sandboxes/backend.ts';
+import { processStartOf, type SpawnedChild } from '../sandboxes/backend.ts';
 
 /** The registry's file name in the worlds directory. A file, so the worlds table (directories only) never lists it. */
 export const RUN_STORE_FILE = '.studio-runs.json';
+/** Finished jobs moved out of the registry, one JSON line each, appended and never rewritten (A-376). */
+export const RUN_ARCHIVE_FILE = '.studio-runs.archive.jsonl';
 
 export type JobKind = 'generate' | 'episode';
 /** The tenant of open mode, of the WORLDGEN_STUDIO_TOKEN admin, and of a record written before tenants existed. */
@@ -41,6 +44,11 @@ export type StoredRun = {
   readonly recovery?: Recovery | undefined;
   readonly outDir: string;
   readonly pid: number | null;
+  /**
+   * What the OS said `pid` started as when the studio spawned it (`Processes.startOf`), so a reused pid is told apart
+   * (A-373). Absent on a record kept before it existed, and null when the OS said nothing; then liveness alone decides.
+   */
+  readonly processStart?: string | null | undefined;
   readonly knownRuns: readonly string[];
   readonly startedAt: string;
   /** Null while the process runs; its exit code once the studio saw it end. */
@@ -62,6 +70,7 @@ const sharedFields = {
 
 const storedRunSchema = z.object({
   ...sharedFields,
+  processStart: z.string().nullable().optional(),
   kind: z.enum(['generate', 'episode']),
   tenant: z.string().default(DEFAULT_TENANT),
   key: z.string(),
@@ -93,6 +102,8 @@ function storedRunOf(value: unknown): StoredRun | null {
 /** How the studio looks at and signals a process it did not spawn itself. Injected so tests run no real process. */
 export type Processes = {
   alive(pid: number): boolean;
+  /** What the process at `pid` started as: a value a reused pid does not share. Null when the OS says nothing. */
+  startOf(pid: number): string | null;
   kill(pid: number, signal: NodeJS.Signals): boolean;
 };
 
@@ -106,6 +117,7 @@ export const osProcesses: Processes = {
       return false;
     }
   },
+  startOf: processStartOf,
   kill(pid, signal) {
     try {
       return process.kill(pid, signal);
@@ -114,6 +126,16 @@ export const osProcesses: Processes = {
     }
   },
 };
+
+/**
+ * Whether `pid` is still the process a job recorded: alive and, when the job kept its start, started as recorded. A pid
+ * the OS gave to another process since is not, so it is never adopted or signalled (A-373). A job that kept no start
+ * is judged by liveness alone, as before.
+ */
+export function sameProcess(processes: Processes, pid: number, started: string | null | undefined): boolean {
+  if (!processes.alive(pid)) return false;
+  return started === undefined || started === null || processes.startOf(pid) === started;
+}
 
 /**
  * What the lease rules (A-335) do with an unfinished job at `at`: leave it while it is finished, held by `holder` or
@@ -127,12 +149,12 @@ export type RecoveryDecision =
   | { readonly kind: 'resume'; readonly from: string; readonly pid: number }
   | { readonly kind: 'stop'; readonly from: string; readonly reason: RecoveryStop };
 
-export function recoveryOf(job: Pick<StoredRun, 'phase' | 'lease' | 'pid'>, at: number, holder: string | null, processes: Processes): RecoveryDecision {
+export function recoveryOf(job: Pick<StoredRun, 'phase' | 'lease' | 'pid' | 'processStart'>, at: number, holder: string | null, processes: Processes): RecoveryDecision {
   if (job.phase === 'finished') return { kind: 'leave', why: 'finished' };
   if (holder !== null && job.lease?.holder === holder) return { kind: 'leave', why: 'held' };
   if (job.lease !== null && Date.parse(job.lease.expiresAt) > at) return { kind: 'leave', why: 'lease_live' };
   const from = job.lease?.holder ?? 'legacy';
-  if (job.phase === 'running' && job.pid !== null && processes.alive(job.pid)) return { kind: 'resume', from, pid: job.pid };
+  if (job.phase === 'running' && job.pid !== null && sameProcess(processes, job.pid, job.processStart)) return { kind: 'resume', from, pid: job.pid };
   return { kind: 'stop', from, reason: job.phase === 'intent' ? 'start_unconfirmed' : 'process_gone' };
 }
 
@@ -141,15 +163,59 @@ export function stoppedRun(run: StoredRun, decision: Extract<RecoveryDecision, {
   return { ...run, phase: 'finished', lease: null, recovery: { at: new Date(at).toISOString(), from: decision.from, outcome: 'stopped', reason: decision.reason } };
 }
 
-export async function loadRuns(worldsDir: string): Promise<StoredRun[]> {
+/** The registry as read: the records it could read, and what kept it from being read whole, or null when nothing did. */
+export type RegistryRead = { readonly runs: StoredRun[]; readonly damage: string | null };
+
+/**
+ * Damage is in what the file says. A file that cannot be opened at all, such as a directory in its place, yields no
+ * records and no damage, as before: a save then fails, and the studio refuses a job it cannot record.
+ */
+export async function readRuns(worldsDir: string): Promise<RegistryRead> {
   const text = await readFile(path.join(worldsDir, RUN_STORE_FILE), 'utf8').catch(() => null);
-  if (text === null) return [];
+  if (text === null) return { runs: [], damage: null };
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed.flatMap((r) => storedRunOf(r) ?? []) : [];
+    parsed = JSON.parse(text);
   } catch {
-    return [];
+    return { runs: [], damage: 'is not valid JSON' };
   }
+  if (!Array.isArray(parsed)) return { runs: [], damage: 'is not a list of jobs' };
+  const runs = parsed.flatMap((r) => storedRunOf(r) ?? []);
+  const bad = parsed.length - runs.length;
+  return { runs, damage: bad === 0 ? null : `holds ${bad} unreadable record${bad === 1 ? '' : 's'}` };
+}
+
+/** The readable records, for a reader that never writes the registry: a dry run, a test. */
+export async function loadRuns(worldsDir: string): Promise<StoredRun[]> {
+  return (await readRuns(worldsDir)).runs;
+}
+
+/** What a writer needs to keep a damaged registry: the clock its name is stamped by, and where its one line goes. */
+export type KeepDamaged = { readonly now: () => number; readonly log: (line: string) => void };
+
+/** One line on stderr: where the studio and reconcile-jobs say they kept a damaged registry, unless a caller says otherwise. */
+export const stderrLine = (line: string): void => {
+  process.stderr.write(`${line}\n`);
+};
+
+/**
+ * The registry for a writer, whose next save replaces the file. A file it cannot read whole is first renamed to
+ * `.studio-runs.json.corrupt-<stamp>`, and `log` gets one line saying so, so no save ever overwrites job history it
+ * could not read (A-373). The readable records come back, none when nothing could be read.
+ */
+export async function loadRunsToWrite(worldsDir: string, keep: KeepDamaged): Promise<StoredRun[]> {
+  const read = await readRuns(worldsDir);
+  if (read.damage === null) return read.runs;
+  const kept = `${RUN_STORE_FILE}.corrupt-${new Date(keep.now()).toISOString().replace(/[-:.]/g, '')}`;
+  await rename(path.join(worldsDir, RUN_STORE_FILE), path.join(worldsDir, kept));
+  keep.log(`${RUN_STORE_FILE} ${read.damage}: kept as ${kept}, ${read.runs.length} readable job${read.runs.length === 1 ? '' : 's'} loaded`);
+  return read.runs;
+}
+
+/** Appends finished jobs to the archive beside the registry. The archive only grows, so no job history is ever dropped (A-376). */
+export async function archiveRuns(worldsDir: string, runs: readonly StoredRun[]): Promise<void> {
+  await mkdir(worldsDir, { recursive: true });
+  await appendFile(path.join(worldsDir, RUN_ARCHIVE_FILE), runs.map((r) => `${JSON.stringify(r)}\n`).join(''));
 }
 
 export async function saveRuns(worldsDir: string, runs: readonly StoredRun[]): Promise<void> {
@@ -165,11 +231,11 @@ export async function saveRuns(worldsDir: string, runs: readonly StoredRun[]): P
  * A child handle for a run a previous studio started. Its exit is seen by polling, because only the parent that
  * spawned a process can wait on it; its output is whatever that studio captured, which is gone, so it is empty.
  */
-export function adoptedChild(pid: number, processes: Processes, pollMs = 1_000): SpawnedChild {
+export function adoptedChild(pid: number, started: string | null | undefined, processes: Processes, pollMs = 1_000): SpawnedChild {
   let timer: ReturnType<typeof setInterval> | undefined;
   const exited = new Promise<number | null>((resolve) => {
     const check = (): void => {
-      if (processes.alive(pid)) return;
+      if (sameProcess(processes, pid, started)) return;
       if (timer !== undefined) clearInterval(timer);
       resolve(null);
     };
@@ -177,5 +243,6 @@ export function adoptedChild(pid: number, processes: Processes, pollMs = 1_000):
     timer.unref?.();
     check();
   });
-  return { pid, exited, kill: (signal) => processes.kill(pid, signal), output: () => '' };
+  // Signalled only while it is still the process the job recorded: a reused pid belongs to someone else (A-373).
+  return { pid, exited, kill: (signal) => sameProcess(processes, pid, started) && processes.kill(pid, signal), output: () => '' };
 }

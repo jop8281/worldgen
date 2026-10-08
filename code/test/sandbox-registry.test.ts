@@ -11,7 +11,8 @@ import { after, before, describe, it } from 'node:test';
 import { BoatError, type BoatClient, type BoatInspection } from '../src/boat/client.ts';
 import { ledgerPath, openLedger } from '../src/costs/ledger.ts';
 import { accountFor } from '../src/costs/pricing.ts';
-import { SandboxError } from '../src/sandboxes/backend.ts';
+import { SandboxError, nodeRunner } from '../src/sandboxes/backend.ts';
+import { GRADER_CANARY, saveCanaryWorld } from './helpers/world.ts';
 import { backendFor, discoverBoat, reconcileCreate, downDetached, execDetached, loadRecord, recordsDir, saveRecord, upDetached } from '../src/sandboxes/registry.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
@@ -28,8 +29,9 @@ after(async () => {
 
 type Call = readonly unknown[];
 
-function fakeClient(): { client: BoatClient; calls: Call[] } {
+function fakeClient(): { client: BoatClient; calls: Call[]; writes: Map<string, string> } {
   const calls: Call[] = [];
+  const writes = new Map<string, string>();
   const client: BoatClient = {
     async create(o) {
       calls.push(['create', o]);
@@ -46,7 +48,7 @@ function fakeClient(): { client: BoatClient; calls: Call[] } {
       calls.push(['start', id, command]);
       return { processId: 1 };
     },
-    async writeFile() {},
+    async writeFile(_id, f) { writes.set(f.path, Buffer.from(f.content, 'base64').toString('utf8')); },
     async expose(id, port, isPublic) {
       calls.push(['expose', id, port, isPublic]);
       return { url: `https://sb-9-${port}.boat.test` };
@@ -58,10 +60,10 @@ function fakeClient(): { client: BoatClient; calls: Call[] } {
       calls.push(['waitStopped', id]);
     },
   };
-  return { client, calls };
+  return { client, calls, writes };
 }
 
-const envFor = (dir: string): Record<string, string> => ({ BOAT_API_KEY: KEY, WORLDGEN_BOAT_ORG: 'org_test', BOAT_USD_PER_COMPUTE_HOUR: '1', WORLDGEN_MAX_DAILY_SANDBOX_USD: '1', WORLDGEN_COSTS_FILE: path.join(dir, 'costs.jsonl') });
+const envFor = (dir: string): Record<string, string> => ({ PATH: process.env['PATH'] ?? '', BOAT_API_KEY: KEY, WORLDGEN_BOAT_ORG: 'org_test', BOAT_USD_PER_COMPUTE_HOUR: '1', WORLDGEN_MAX_DAILY_SANDBOX_USD: '1', WORLDGEN_COSTS_FILE: path.join(dir, 'costs.jsonl') });
 
 describe('backendFor boat', () => {
   it('archives an observed VM without a handoff record or usable caps while retaining unknown exposure', async () => {
@@ -401,11 +403,29 @@ describe('upDetached and downDetached on boat', () => {
     assert.deepEqual([openLedger(file).totals().seconds, openLedger(file).totals().usd, openLedger(file).read().reservations.length], [3600, 0.5, 0]);
   });
 
+  it('uploads the public form of the world by default, and the private world only with private: true (A-377)', async () => {
+    const { dir: worldDir } = await saveCanaryWorld(await mkdtemp(path.join(tmp, 'canary-')), 'canary-world');
+    const run = async (extra: { private?: boolean }): Promise<Map<string, string>> => {
+      const env = envFor(await mkdtemp(path.join(tmp, 'canary-env-')));
+      const { client, writes } = fakeClient();
+      const deps = { env, runner: nodeRunner, backendOptions: { boatClient: client, flushOnExit: false }, reach: async () => ({ ok: true as const }) };
+      await upDetached({ kind: 'boat', codeDir: CODE_DIR, worldDir, port: 4000, name: 'canary', ...extra }, deps);
+      return writes;
+    };
+    const pub = await run({});
+    const world = [...pub.entries()].find(([p]) => p.endsWith('worlds/canary-world/world.yaml'));
+    assert.ok(world, 'the world file is uploaded under worlds/canary-world');
+    assert.equal([...pub.values()].some((c) => c.includes(GRADER_CANARY)), false);
+    assert.equal(/^\s*grader:/m.test(world[1]), false);
+    const priv = await run({ private: true });
+    assert.equal([...priv.values()].some((c) => c.includes(GRADER_CANARY)), true);
+  });
+
   it('serves the world on a small VM, exposes only the world port publicly, and records the lifetime once at down', async () => {
     const dir = await mkdtemp(path.join(tmp, 'a-'));
     const env = envFor(dir);
     const { client, calls } = fakeClient();
-    const deps = { env, backendOptions: { boatClient: client, flushOnExit: false }, reach: async () => ({ ok: true as const }) };
+    const deps = { env, runner: nodeRunner, backendOptions: { boatClient: client, flushOnExit: false }, reach: async () => ({ ok: true as const }) };
 
     const rec = await upDetached({ kind: 'boat', codeDir: CODE_DIR, worldDir: WORLD_DIR, port: 4000, name: 'helpdesk-a1' }, deps);
     assert.equal(rec.id, 'sb_9');
@@ -613,6 +633,15 @@ describe('npm run sandbox', () => {
       const r = await run(args, {});
       assert.deepEqual([args.join(' '), r.code, r.stdout.split('\n')[0], r.stderr], [args.join(' '), 0, 'usage:', '']);
     }
+  });
+
+  it('says in its usage that the public form has no graders, so grading on the VM needs --private (A-377)', async () => {
+    const lines = (await run(['--help'], {})).stdout.split('\n');
+    assert.deepEqual(lines.filter((l) => /graders|--private/.test(l) && !l.startsWith('  bun run sandbox')), [
+      'up uploads the public form of the world: no grader, solution or decoy source reaches the VM, so it has no graders.',
+      'Grading on the VM (POST /_world/grade/<task> on its admin port) needs --private.',
+      '--private uploads the private world instead, for debugging or grading a world on the VM, and warns.',
+    ]);
   });
 
   it('leaves a --help after exec -- to the command it runs', async () => {

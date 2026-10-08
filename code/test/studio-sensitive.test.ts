@@ -11,9 +11,9 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { checkWorld, saveWorld, serve, worldSchema, type World, type WorldServer } from '#engine';
 import type { Runner, SpawnedChild, Spawner } from '../src/sandboxes/backend.ts';
-import { runLocalEpisode } from '../src/dataset/local.ts';
+import { finishAtOnce, runLocalEpisode } from '../src/dataset/local.ts';
 import { redactor } from '../src/dataset/schema.ts';
-import { SENSITIVE_MASK, SENSITIVE_WITHHELD, SENSITIVITY_UNREAD, episodeBelowAdmin, maskSensitive, maskSensitiveText, runEventsBelowAdmin, sensitiveOf } from '../src/studio/explorer.ts';
+import { CHILD_TEXT_WITHHELD, SENSITIVE_MASK, SENSITIVE_WITHHELD, SENSITIVITY_UNREAD, TASK_TEXT_WITHHELD, episodeBelowAdmin, maskSensitive, maskSensitiveText, runEventsBelowAdmin, sensitiveOf } from '../src/studio/explorer.ts';
 import { AUDIT_FILE, studioServer, type StudioServer, type StudioUser } from '../src/studio/server.ts';
 import { scripted } from './dataset-kit.ts';
 import { minimalWorld } from './helpers/world.ts';
@@ -224,9 +224,9 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
     assert.equal(JSON.stringify(r.body).includes('enterprise'), false);
   });
 
-  it('exports a world with a sensitive field only to an admin', async () => {
+  it('exports a world with a sensitive field only to an admin, as every export is (A-374)', async () => {
     const refused = await get(studio.url, '/api/worlds/helpdesk/export', OPERATOR);
-    assert.deepEqual([refused.status, (refused.body?.['error'] as { code?: string } | undefined)?.code], [403, 'export.sensitive']);
+    assert.deepEqual([refused.status, (refused.body?.['error'] as { code?: string } | undefined)?.code], [403, 'auth.forbidden']);
     assert.equal((await get(studio.url, '/api/worlds/helpdesk/export', VIEWER)).status, 403);
     assert.equal((await get(studio.url, '/api/worlds/helpdesk/export', ADMIN)).status, 200);
   });
@@ -299,6 +299,38 @@ const RUN_EVENTS_WITHHELD = [
   { t: 'backtracked', from: 'seed', to: 'model', because: [TIER_WITHHELD] },
   { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'no_progress', step: 'seed', repeatedIssueSet: RUN_WITHHELD, lastIssues: [TIER_WITHHELD] } } },
 ];
+
+describe('task source in run events stays with an admin, pure (YOS-208, A-374)', () => {
+  const CANARY = 'RUN_GRADER_CANARY_9b2d';
+  const TASK_ISSUE = { code: 'snippet.compile_error', severity: 'error', path: ['tasks', 'refund_order', 'grader'], expected: 'a function', found: `(ctx) => { /* ${CANARY} */`, hint: `check ${CANARY}` };
+  const TASK_WITHHELD = { ...TASK_ISSUE, found: TASK_TEXT_WITHHELD, hint: TASK_TEXT_WITHHELD };
+  const EVENTS = [
+    { t: 'attempt', step: 'tasks', n: 1, outcome: { kind: 'rejected', issues: [TASK_ISSUE] } },
+    { t: 'advice', step: 'tasks', text: `the grader checks ${CANARY}` },
+    { t: 'attempt', step: 'tasks', n: 2, outcome: { kind: 'model_error', message: `bad JSON near ${CANARY}` } },
+    { t: 'attempt', step: 'seed', n: 1, outcome: { kind: 'rejected', issues: [TASK_ISSUE] } },
+    { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'no_progress', step: 'tasks', repeatedIssueSet: `snippet.compile_error@tasks/refund_order/grader: ${CANARY}`, lastIssues: [TASK_ISSUE] } } },
+  ];
+
+  it('withholds every text that can quote task source below admin, even when the world has no sensitive field', () => {
+    const shown = runEventsBelowAdmin([...EVENTS, ...RUN_EVENTS], sensitiveOf(minimalWorld()));
+    assert.equal(JSON.stringify(shown).includes(CANARY), false);
+    assert.deepEqual(shown, [
+      { t: 'attempt', step: 'tasks', n: 1, outcome: { kind: 'rejected', issues: [TASK_WITHHELD] } },
+      { t: 'advice', step: 'tasks', text: TASK_TEXT_WITHHELD },
+      { t: 'attempt', step: 'tasks', n: 2, outcome: { kind: 'model_error', message: TASK_TEXT_WITHHELD } },
+      { t: 'attempt', step: 'seed', n: 1, outcome: { kind: 'rejected', issues: [TASK_WITHHELD] } },
+      { t: 'run_finished', result: { kind: 'stopped', reason: { kind: 'no_progress', step: 'tasks', repeatedIssueSet: TASK_TEXT_WITHHELD, lastIssues: [TASK_WITHHELD] } } },
+      ...RUN_EVENTS,
+    ]);
+  });
+
+  it('withholds it the same way when the world is sensitive, and the seed texts as A-367 does', () => {
+    const shown = runEventsBelowAdmin([...EVENTS, ...RUN_EVENTS], sensitiveOf(sensitiveWorld()));
+    assert.equal(JSON.stringify(shown).includes(CANARY), false);
+    assert.deepEqual(shown.slice(EVENTS.length), RUN_EVENTS_WITHHELD);
+  });
+});
 
 describe('sensitive fields: refusals and run events, pure (YOS-252, A-367)', () => {
   const status = sensitiveOf(statusSensitiveWorld());
@@ -463,7 +495,70 @@ describe('sensitive fields: a generation run\'s events (A-367)', () => {
     await endLast('worldgen: error: seed row 0 tier "platinum" broke\n', 1, p);
     const reason = async (token: string): Promise<unknown> => (await get(studio.url, p, token)).body?.['reason'];
     assert.equal(await reason(ADMIN), 'the worldgen process exited 1 before it logged run_finished: worldgen: error: seed row 0 tier "platinum" broke');
-    assert.equal(await reason(VIEWER), `the worldgen process exited 1 before it logged run_finished: ${RUN_WITHHELD}`);
+    assert.equal(await reason(VIEWER), `the worldgen process exited 1 before it logged run_finished: ${CHILD_TEXT_WITHHELD}`);
+  });
+
+  it('withholds a failed run\'s output below admin even when its saved world has no sensitive field (A-374, A-377)', async () => {
+    const CANARY = 'RUN_OUTPUT_CANARY_8e2d';
+    const begun = await post(studio.url, '/api/generate', OPERATOR, { kind: 'description', text: 'A tiny helpdesk', outSlug: 'plain-run' });
+    assert.equal(begun.status, 200, JSON.stringify(begun.body));
+    // A saved world with no sensitive field: the case that showed the child's last line to a viewer.
+    const plain = checkWorld(minimalWorld());
+    assert.ok(plain.ok);
+    await saveWorld(String(begun.body['outDir']), plain.world);
+    const p = `/api/generate/${String(begun.body['runId'])}`;
+    const line = `worldgen: tasks.resolve_password_ticket.grader: (ctx) => { /* ${CANARY} */`;
+    await endLast(`${line}\n`, 1, p);
+    const body = async (token: string): Promise<Record<string, unknown> | null> => (await get(studio.url, p, token)).body;
+    assert.equal((await body(ADMIN))?.['reason'], `the worldgen process exited 1 before it logged run_finished: ${line}`);
+    for (const token of [OPERATOR, VIEWER]) {
+      const seen = await body(token);
+      assert.equal(seen?.['reason'], `the worldgen process exited 1 before it logged run_finished: ${CHILD_TEXT_WITHHELD}`);
+      assert.equal(JSON.stringify(seen).includes(CANARY), false);
+    }
+  });
+
+  it('withholds a failed episode\'s output below admin even when its exported world has no sensitive field (YOS-208)', async () => {
+    const CANARY = 'EPISODE_OUTPUT_CANARY_3c7a';
+    const plain = checkWorld(minimalWorld());
+    assert.ok(plain.ok);
+    await saveWorld(path.join(worldsDir, 'plain-ep'), plain.world);
+    const begun = await post(studio.url, '/api/episodes', OPERATOR, { world: 'plain-ep', task: 'resolve_password_ticket', agent: 'noop' });
+    assert.equal(begun.status, 200, JSON.stringify(begun.body));
+    const runId = String(begun.body['runId']);
+    // A real export of the plain world, so its sensitivity is known and empty: the case that showed the output to a viewer.
+    await runLocalEpisode({
+      worldDir: path.join(worldsDir, 'plain-ep'), taskId: 'resolve_password_ticket', out: path.join(root, 'eval', 'episodes', runId), runId,
+      engineCommit: 'abcdef1', model: null, nextTurn: finishAtOnce, maxTurns: 3, budgetUsd: 0.01, maxMinutes: 2, redact: redactor([]),
+    });
+    const p = `/api/episodes/${runId}`;
+    const line = `episode: tasks.resolve_password_ticket.grader: (ctx) => { /* ${CANARY} */`;
+    await endLast(`${line}\n`, 1, p);
+    const failure = async (token: string): Promise<unknown> => (await get(studio.url, p, token)).body?.['failure'];
+    assert.deepEqual(await failure(ADMIN), [line]);
+    assert.deepEqual(await failure(OPERATOR), [CHILD_TEXT_WITHHELD]);
+    assert.deepEqual(await failure(VIEWER), [CHILD_TEXT_WITHHELD]);
+  });
+
+  it('withholds a serve failure\'s last line below admin, and shows it to an admin (YOS-208)', async () => {
+    const CANARY = 'SERVE_FAILED_CANARY_8d2f';
+    const plain = checkWorld(minimalWorld());
+    assert.ok(plain.ok);
+    await saveWorld(path.join(worldsDir, 'plain-serve'), plain.world);
+    const line = `serve: tasks.resolve_password_ticket.grader: (ctx) => { /* ${CANARY} */`;
+    const failingServe = async (token: string): Promise<{ status: number; body: Record<string, unknown> }> => {
+      const before = kids.length;
+      const pending = post(studio.url, '/api/worlds/plain-serve/serve', token, {});
+      for (let i = 0; i < 200 && kids.length === before; i++) await new Promise((r) => setTimeout(r, 10));
+      const kid = kids[kids.length - 1]!;
+      kid.said = `${line}\n`;
+      kid.exit(1);
+      return pending;
+    };
+    const asOperator = await failingServe(OPERATOR);
+    assert.deepEqual([asOperator.status, asOperator.body['error']], [502, { code: 'serve.failed', message: `worldplay serve for plain-serve exited 1 before it listened: ${CHILD_TEXT_WITHHELD}` }]);
+    const asAdmin = await failingServe(ADMIN);
+    assert.deepEqual([asAdmin.status, asAdmin.body['error']], [502, { code: 'serve.failed', message: `worldplay serve for plain-serve exited 1 before it listened: ${line}` }]);
   });
 
   it('withholds a failed episode\'s last output lines from a viewer when it exported nothing to judge by, and shows them to an admin', async () => {
@@ -474,6 +569,6 @@ describe('sensitive fields: a generation run\'s events (A-367)', () => {
     await endLast('episode: GET /customers answered {"tier":"platinum"}\n', 1, p);
     const failure = async (token: string): Promise<unknown> => (await get(studio.url, p, token)).body?.['failure'];
     assert.deepEqual(await failure(ADMIN), ['episode: GET /customers answered {"tier":"platinum"}']);
-    assert.deepEqual(await failure(VIEWER), [RUN_WITHHELD]);
+    assert.deepEqual(await failure(VIEWER), [CHILD_TEXT_WITHHELD]);
   });
 });

@@ -427,13 +427,14 @@ describe('studio', () => {
   });
 
   describe('past runs', () => {
-    it('lists every run dir with the capsule facts of the run that wrote it', async () => {
+    it('lists every run dir with the capsule facts of the run that wrote it, and another run\'s facts from its own events (YOS-193)', async () => {
       const r = await json(base, 'GET', '/api/runs');
       assert.equal(r.status, 200);
+      // gen-canary's capsule is another run's, so its run reads run_started's model and transport, and logged no run_finished.
       assert.deepEqual(r.body, {
         runs: [
           { name: 'gen-alpha', tenant: null, runId: 'run_20261007T181329Z_old1111', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, ms: 24000, outcome: 'done', hasReport: true },
-          { name: 'gen-canary', tenant: null, runId: 'run_20261007T000000Z_canary01', model: null, transport: null, costUsd: null, ms: null, outcome: null, hasReport: true },
+          { name: 'gen-canary', tenant: null, runId: 'run_20261007T000000Z_canary01', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: null, ms: null, outcome: null, hasReport: true },
         ],
       });
     });
@@ -871,7 +872,11 @@ describe('studio', () => {
       try {
         const listed = (JSON.parse((await call(base, 'GET', '/api/worlds')).text) as { worlds: { name: string }[] }).worlds.map((w) => w.name);
         assert.equal(listed.includes('gen-stopped-zeta'), false);
-        assert.match((await call(base, 'GET', '/api/runs')).text, /gen-stopped-zeta/);
+        // No capsule, so its outcome, ms and cost come from its run_finished (YOS-193).
+        const runs = (JSON.parse((await call(base, 'GET', '/api/runs')).text) as { runs: Json[] }).runs;
+        assert.deepEqual(runs.find((x) => x['name'] === 'gen-stopped-zeta'), {
+          name: 'gen-stopped-zeta', tenant: null, runId: 'run_stop', model: null, transport: null, costUsd: 0, ms: 1, outcome: 'stopped', hasReport: true,
+        });
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
@@ -1189,6 +1194,7 @@ describe('studio runs across a restart (YOS-191, A-329)', () => {
   const signals: [number, string][] = [];
   const processes = {
     alive: (pid: number) => live.has(pid),
+    startOf: (pid: number) => (live.has(pid) ? `start-${pid}` : null),
     kill: (pid: number, signal: NodeJS.Signals) => {
       signals.push([pid, signal]);
       return live.has(pid);
@@ -1280,5 +1286,78 @@ describe('studio page accessibility (YOS-187)', () => {
     const created = [...html.matchAll(/createElement\('(input|select|textarea)'\)/g)];
     assert.equal(created.length, 1);
     assert.equal((html.match(/\.setAttribute\('aria-label'/g) ?? []).length, 1);
+  });
+});
+
+describe('studio page error states, narrow tables and focus (YOS-209)', () => {
+  const html = studioPage();
+  const script = /<script>([\s\S]*)<\/script>/.exec(html)![1]!;
+  const MAP = `  var PROBLEM = {
+    signedOut: 'You are signed out. Sign in again with your studio token.',
+    forbidden: "Your role can't see this. Ask an admin for access.",
+    sensitive: 'Hidden because this world has sensitive fields. Ask an admin to open it.',
+    notFound: 'Not found. It may have been removed; refresh the list and try again.',
+    server: 'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
+    network: 'The studio did not answer. Check that it is still running, then try again.',
+    refused: 'The studio refused this request. Check what you entered and try again.',
+    resetConfirm: 'Type the world name exactly to confirm the reset.'
+  };`;
+
+  it('says what went wrong and what to do from one message map', () => {
+    assert.equal(script.includes(MAP), true);
+  });
+
+  it('maps each failure to its line: signed out, role, sensitive world, not found, studio failure, no answer, and an explained refusal', () => {
+    const fn = /\n  function problemText[\s\S]*?\n  \}\n/.exec(script)![0];
+    const problemText = new Function(`${MAP}\n${fn}\nreturn problemText;`)() as (status: number, code: string, message: string) => string;
+    assert.deepEqual([
+      problemText(401, 'auth.required', 'GET /api/worlds needs sign-in'),
+      problemText(401, 'auth.invalid', 'that token is not a studio user'),
+      problemText(403, 'auth.forbidden', 'POST /api/worlds/:name/serve needs operator'),
+      problemText(403, 'report.sensitive', 'helpdesk has sensitive fields, so only an admin may read its report'),
+      problemText(403, 'plan.sensitive', 'x'),
+      problemText(403, 'export.sensitive', 'x'),
+      problemText(404, 'world.unknown', 'no world gone'),
+      problemText(500, 'http.500', ''),
+      problemText(503, 'job.unrecorded', 'The studio could not write .studio-runs.json, so it did not start the job'),
+      problemText(0, 'network', ''),
+      problemText(422, 'iterate.no_world', 'helpdesk has no world.yaml to iterate'),
+      problemText(400, 'http.400', ''),
+      problemText(400, 'reset.confirm', 'a reset throws away every change to helpdesk\'s state; send {"confirm": "helpdesk"} to go ahead'),
+    ], [
+      'You are signed out. Sign in again with your studio token.',
+      'You are signed out. Sign in again with your studio token.',
+      "Your role can't see this. Ask an admin for access.",
+      'Hidden because this world has sensitive fields. Ask an admin to open it.',
+      'Hidden because this world has sensitive fields. Ask an admin to open it.',
+      'Hidden because this world has sensitive fields. Ask an admin to open it.',
+      'Not found. It may have been removed; refresh the list and try again.',
+      'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
+      'The studio failed on its side. Try again, and check the studio log if it keeps failing. The studio said: The studio could not write .studio-runs.json, so it did not start the job',
+      'The studio did not answer. Check that it is still running, then try again.',
+      'helpdesk has no world.yaml to iterate',
+      'The studio refused this request. Check what you entered and try again.',
+      'Type the world name exactly to confirm the reset.',
+    ]);
+  });
+
+  it('shows a fact a past run never logged as not recorded, never null, and an unknown cost as unknown (YOS-193)', () => {
+    assert.equal(script.includes("function recorded(v) { return v === null || v === undefined ? 'not recorded' : v; }"), true);
+    assert.equal(script.includes("{ world: r.name, 'run id': r.runId, model: recorded(r.model), transport: recorded(r.transport), cost: usd(r.costUsd), ms: recorded(r.ms), outcome: recorded(r.outcome) }"), true);
+  });
+
+  it('never shows a raw error body or a bare exception, and every request resolves to a body', () => {
+    assert.deepEqual([
+      script.includes("error.code + ': '"), script.includes("'unreachable: '"), script.includes('HTTP \' + status'),
+      (script.match(/\.then\(answered\)/g) ?? []).length, (script.match(/\.then\(answered, unanswered\)/g) ?? []).length,
+    ], [false, false, false, 0, 3]);
+  });
+
+  it('scrolls every table inside its own container and rings the focused control', () => {
+    for (const rule of ['.scroll { max-width: 100%; overflow-x: auto; }', 'min-width: 6rem; padding: 0.15rem 0.5rem;', 'max-width: 100%; padding: 0.15rem 0.4rem; }', ':focus-visible { outline: 2px solid #1a5fd0; outline-offset: 2px; }', 'overflow-wrap: anywhere; padding: 1rem 1.25rem 3rem; }']) {
+      assert.equal(html.includes(rule), true, rule);
+    }
+    assert.equal(script.includes("wrap.className = 'scroll';\n    wrap.tabIndex = 0;\n    wrap.appendChild(table);\n    return wrap;"), true);
+    assert.equal((script.match(/document\.createElement\('table'\)/g) ?? []).length, 1);
   });
 });

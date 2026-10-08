@@ -175,6 +175,10 @@ export function mergeSensitivity(all: readonly Sensitivity[]): Sensitivity {
 }
 
 /** What a role below admin sees in place of a run's free text that can quote seed values or model output (A-367). */
+/** What a role below admin sees in place of run text that can quote a task's grader, solution or decoy (A-374). */
+export const TASK_TEXT_WITHHELD = "[withheld: it can quote a task's grader, solution or decoy, which only an admin may see]";
+/** What a role below admin sees in place of a child's output, which can quote world or task source (A-377). */
+export const CHILD_TEXT_WITHHELD = "[withheld: a child's output can quote world or task source, which only an admin may see]";
 export const RUN_TEXT_WITHHELD = "[withheld: it can quote seed values, and the run's world has a sensitive field or saved none to tell]";
 
 const isIssue = (v: Readonly<Record<string, unknown>>): boolean =>
@@ -183,21 +187,33 @@ const isIssue = (v: Readonly<Record<string, unknown>>): boolean =>
 const MESSAGE_KINDS: ReadonlySet<unknown> = new Set(['model_error', 'judge_error', 'crashed']);
 
 /**
- * A generation run's events as a role below admin sees them (A-367). An issue's found and hint can quote a seed value
- * or a test's message, a no_progress stop's repeated issue set holds the found texts, and a model error, judge error or
- * crash message can quote model output, so all of them are withheld unless the run's saved world has no sensitive
- * field. A run that saved no world, or whose world is unread, fails closed.
+ * A generation run's events as a role below admin sees them (A-367, A-374). Any text that can quote a task's grader,
+ * solution or decoy is always withheld: an issue on a `tasks.*` path, and in any event or stop reason of the tasks
+ * step, every issue's found and hint, advice, model, judge and crash messages and the repeated issue set. Otherwise an
+ * issue's found and hint can quote a seed value or a test's message, a no_progress stop's repeated issue set holds
+ * the found texts, and a model error, judge error or crash message can quote model output, so all of them are withheld
+ * unless the run's saved world has no sensitive field. A run that saved no world, or whose world is unread, fails closed.
  */
 export function runEventsBelowAdmin(events: readonly unknown[], sensitive: Sensitivity): unknown[] {
-  if (sensitive !== null && sensitive.size === 0) return [...events];
-  const walk = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(walk);
+  const open = sensitive !== null && sensitive.size === 0;
+  const walk = (v: unknown, tasks: boolean): unknown => {
+    if (Array.isArray(v)) return v.map((x) => walk(x, tasks));
     if (!obj(v)) return v;
-    if (isIssue(v)) return { ...v, found: RUN_TEXT_WITHHELD, ...(typeof v['hint'] === 'string' ? { hint: RUN_TEXT_WITHHELD } : {}) };
-    const freeText = (k: string, x: unknown): boolean => typeof x === 'string' && (k === 'repeatedIssueSet' || (k === 'message' && MESSAGE_KINDS.has(v['kind'])));
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, freeText(k, x) ? RUN_TEXT_WITHHELD : walk(x)]));
+    const inTasks = tasks || v['step'] === 'tasks';
+    if (isIssue(v)) {
+      const text = inTasks || (v['path'] as readonly unknown[])[0] === 'tasks' ? TASK_TEXT_WITHHELD : open ? null : RUN_TEXT_WITHHELD;
+      return text === null ? v : { ...v, found: text, ...(typeof v['hint'] === 'string' ? { hint: text } : {}) };
+    }
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => {
+      const message = k === 'message' && MESSAGE_KINDS.has(v['kind']);
+      const advice = k === 'text' && v['t'] === 'advice';
+      if (typeof x === 'string' && inTasks && (k === 'repeatedIssueSet' || message || advice)) return [k, TASK_TEXT_WITHHELD];
+      if (typeof x === 'string' && k === 'repeatedIssueSet' && x.includes('@tasks/')) return [k, TASK_TEXT_WITHHELD];
+      if (typeof x === 'string' && !open && (k === 'repeatedIssueSet' || message)) return [k, RUN_TEXT_WITHHELD];
+      return [k, walk(x, inTasks)];
+    }));
   };
-  return events.map(walk);
+  return events.map((e) => walk(e, false));
 }
 
 /**

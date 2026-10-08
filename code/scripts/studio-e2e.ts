@@ -288,7 +288,7 @@ for (const plan of PLANS) {
   await page.ev(explore(w));
   await page.until(explored(w));
   const viewer = await pressReset(w);
-  const vicCalls = await record(page, `${w}-viewer-refused`, 'vic', w, 'vic, a viewer in the same tenant, types the name and presses reset: 403', 'header', { signedIn: vicIn, forbidden: viewer.includes('403 auth.forbidden') }, null, 300);
+  const vicCalls = await record(page, `${w}-viewer-refused`, 'vic', w, 'vic, a viewer in the same tenant, types the name and presses reset: 403', 'header', { signedIn: vicIn, forbidden: viewer.includes("Your role can't see this. Ask an admin for access.") }, null, 300);
   const afterViewer = await stateHash(svc.adminPort);
   steps[steps.length - 1]!.stateHash = afterViewer;
   steps[steps.length - 1]!.checks['status403'] = vicCalls.some((c) => c.path === `/api/services/${svc.id}/reset` && c.status === 403);

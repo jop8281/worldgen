@@ -3,9 +3,9 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { describe, it } from 'node:test';
 import { BUILTIN_PRICES, configSchema, loadConfig } from '../src/worldgen/config.ts';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
-  anthropicModel, CallStalled, claudeArgs, claudeCliModel, costOf, ModelError, spawnClaude,
+  anthropicModel, CallStalled, claudeArgs, claudeCliModel, costOf, MAX_ARG_BYTES, ModelError, spawnClaude,
   StepShareExpired, streamProgress, type MessagesClient, type ProposeRequest, type SpawnClaude, type SpawnResult,
 } from '../src/worldgen/llm.ts';
 
@@ -511,13 +511,13 @@ describe('per-call timeout', () => {
 });
 
 describe('claudeArgs', () => {
-  it('builds the claude -p flags with the schema inline and no prompt', () => {
-    assert.deepEqual(claudeArgs('claude-sonnet-5-5', { ...req, effort: 'high' }), [
+  it('builds the claude -p flags with the schema inline, the system prompt in a file and no prompt', () => {
+    assert.deepEqual(claudeArgs('claude-sonnet-5-5', { ...req, effort: 'high' }, '/tmp/worldgen-claude-x/system.md'), [
       '-p',
       '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--model', 'claude-sonnet-5-5',
       '--effort', 'high',
-      '--system-prompt', 'sys',
+      '--system-prompt-file', '/tmp/worldgen-claude-x/system.md',
       '--json-schema', '{"type":"object"}',
       '--tools', '',
       '--safe-mode',
@@ -529,12 +529,12 @@ describe('claudeArgs', () => {
 
   it('drops $schema, which the claude CLI rejects, and keeps the rest of the schema', () => {
     const tool = { ...req.tool, inputSchema: { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object' } };
-    const args = claudeArgs('m', { ...req, tool });
+    const args = claudeArgs('m', { ...req, tool }, 'system.md');
     assert.equal(args[args.indexOf('--json-schema') + 1], '{"type":"object"}');
   });
 
   it('omits --effort when the request has none', () => {
-    assert.equal(claudeArgs('m', req).includes('--effort'), false);
+    assert.equal(claudeArgs('m', req, 'system.md').includes('--effort'), false);
   });
 });
 
@@ -554,8 +554,11 @@ describe('claudeCliModel', () => {
     assert.equal(seen[0]?.bin, 'claude');
     assert.equal(seen[0]?.stdin, 'make a world');
     assert.deepEqual(seen[0]?.limits, { timeoutMs: 120_000, idleMs: 120_000 });
-    assert.deepEqual(seen[0]?.args, claudeArgs('claude-sonnet-5-5', { ...req, effort: 'low', maxCostUsd: cliConfig.maxCostUsd }));
-    assert.equal(seen[0]?.args.includes('make a world'), false);
+    const args = seen[0]?.args ?? [];
+    const systemFile = args[args.indexOf('--system-prompt-file') + 1] ?? '';
+    assert.deepEqual(args, claudeArgs('claude-sonnet-5-5', { ...req, effort: 'low', maxCostUsd: cliConfig.maxCostUsd }, systemFile));
+    assert.equal(args.includes('make a world'), false);
+    assert.equal(args.includes('sys'), false);
     assert.equal(seen[0]?.args.includes('--bare'), false);
   });
 
@@ -790,6 +793,18 @@ describe('claudeCliModel', () => {
     );
     assert.equal(seen.length, 0);
   });
+
+  it('refuses an argument Linux would refuse with E2BIG before spawning, on every platform (A-378)', async () => {
+    const seen: SpawnCall[] = [];
+    const tool = { ...req.tool, inputSchema: { type: 'object', description: 'd'.repeat(131_072) } };
+    await assert.rejects(
+      claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker()).propose({ ...req, tool }),
+      (e: unknown) => e instanceof ModelError && e.billing.kind === 'not_started' &&
+        e.message === 'claude -p argument --json-schema is 131106 bytes, and Linux refuses one of 131072 or more',
+    );
+    assert.equal(seen.length, 0);
+    assert.equal(MAX_ARG_BYTES, 131_072);
+  });
 });
 
 describe('spawnClaude with a stand-in binary (no model, no network)', () => {
@@ -812,7 +827,7 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
     "process.stdin.on('data', (d) => { input += d; });",
     "process.stdin.on('end', () => {",
     "  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'noted',",
-    "    structured_output: { argv: process.argv.slice(2), stdin: input }, total_cost_usd: 0.5,",
+    "    structured_output: { argv: process.argv.slice(2), stdin: input, system: require('node:fs').readFileSync(process.argv[process.argv.indexOf('--system-prompt-file') + 1], 'utf8') }, total_cost_usd: 0.5,",
     '    usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 } }));',
     '});',
   ].join('\n'));
@@ -821,10 +836,40 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
     const c = configSchema.parse({ model: 'claude-sonnet-5-5', maxCostUsd: 5, claudeBin: echo });
     const prompt = 'line one\nline "two" with $HOME and `ticks`';
     const p = await claudeCliModel(c, spawnClaude, ticker()).propose({ ...req, prompt, effort: 'medium' });
-    assert.deepEqual(p.input, { argv: claudeArgs('claude-sonnet-5-5', { ...req, effort: 'medium', maxCostUsd: cliConfig.maxCostUsd }), stdin: prompt });
+    const argv = (p.input as { argv: string[] }).argv;
+    const systemFile = argv[argv.indexOf('--system-prompt-file') + 1] ?? '';
+    assert.deepEqual(p.input, { argv: claudeArgs('claude-sonnet-5-5', { ...req, effort: 'medium', maxCostUsd: cliConfig.maxCostUsd }, systemFile), stdin: prompt, system: 'sys' });
     assert.deepEqual(p.advice, ['noted']);
     assert.deepEqual(p.usage, { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4, cacheWrite1hTokens: 0 });
     assert.equal(p.costUsd, 0.5);
+  });
+
+  it('passes a 240000-byte prompt and a 222000-byte system prompt intact, with neither in argv (A-378)', async () => {
+    // Linux refuses any argv string of 131072 bytes or more with E2BIG; macOS does not, so this checks argv itself.
+    const probe = bin('claude-big', [
+      "const fs = require('node:fs');",
+      "const file = process.argv[process.argv.indexOf('--system-prompt-file') + 1];",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (d) => { input += d; });",
+      "process.stdin.on('end', () => {",
+      "  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.5,",
+      "    structured_output: { file, mode: fs.statSync(file).mode & 0o777, dirMode: fs.statSync(require('node:path').dirname(file)).mode & 0o777,",
+      "      system: fs.readFileSync(file, 'utf8'), stdin: input, longestArg: Math.max(...process.argv.slice(2).map((a) => Buffer.byteLength(a))) },",
+      '    usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 } }));',
+      '});',
+    ].join('\n'));
+    const prompt = 'make a world, café\n'.repeat(12_000);
+    const system = 'You are WorldGen. Écrivez un monde.\n'.repeat(6_000);
+    assert.deepEqual([Buffer.byteLength(prompt), Buffer.byteLength(system)], [240_000, 222_000]);
+    const c = configSchema.parse({ model: 'claude-sonnet-5-5', maxCostUsd: 5, claudeBin: probe });
+    const p = await claudeCliModel(c, spawnClaude, ticker()).propose({ ...req, prompt, system });
+    const got = p.input as { file: string; mode: number; dirMode: number; system: string; stdin: string; longestArg: number };
+    assert.equal(got.stdin === prompt, true);
+    assert.equal(got.system === system, true);
+    assert.deepEqual([got.mode, got.dirMode], [0o600, 0o700]);
+    assert.ok(got.longestArg < 1024, `longest argument ${got.longestArg} bytes`);
+    assert.deepEqual([existsSync(got.file), existsSync(dirname(got.file))], [false, false]);
   });
 
   it('runs the CLI from the OS temp dir, not the repo', async () => {
