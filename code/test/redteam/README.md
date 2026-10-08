@@ -22,12 +22,12 @@ The suite is written without looking at the engine's implementation.
 
 ```sh
 cd code
-npm test                                          # whole suite. Stubbed capabilities skip, todo tests do not fail the run
-npm run check                                     # typecheck + tests. Must stay green on the stubbed engine
-REDTEAM_STRICT=1 npm test                         # nothing skips. Every stubbed capability fails loudly
-REDTEAM_SEED=42 REDTEAM_ITER=300 npm test         # another seed, and more iterations for the fuzz and property tests
-node --import tsx --test --test-name-pattern 'G-07' test/redteam-*.test.ts   # one guarantee
-node --import tsx --test test/redteam-atomic.test.ts                         # one file
+bun run test                                      # whole suite. Stubbed capabilities skip, todo tests do not fail the run
+bun run check                                     # typecheck + tests. Must stay green on the stubbed engine
+REDTEAM_STRICT=1 bun run test                     # nothing skips. Every stubbed capability fails loudly
+REDTEAM_SEED=42 REDTEAM_ITER=300 bun run test     # another seed, and more iterations for the fuzz and property tests
+bun test -t 'G-07' test/redteam-*.test.ts                                    # one guarantee
+bun test test/redteam-atomic.test.ts                                         # one file
 ```
 
 - `REDTEAM_SEED` is the PRNG seed (default 1), and `REDTEAM_ITER` the iteration count (default 25).
@@ -71,7 +71,7 @@ Every red test is exactly one of the five kinds below.
 | **Engine bug** | The test's assertion follows from a contract row, and a landed unit breaks it | Mark the test `{ todo: 'ENGINE-BUG EB-<file>-<n>: <short>' }`, so it still runs. Add an entry to `research/redteam-findings.md`, with the test name, the failing assertion, the minimal repro, the guarantee and its doc citation, and the suspected owning unit. Do not weaken the assertion. |
 | **Test bug** | The assertion is not backed by any contract source, or the expected literal is wrong by hand derivation | Fix the test only when the contract supports the fix, and cite the row in the change. If the contract is silent, the question is a spec gap, not a test bug. |
 | **Spec gap** | The contract and its sources do not decide what the right answer is | Write it up in `research/spec-calls/redteam-<topic>.md`, giving the question, the options, a recommendation and the tests it unlocks. Mark the test `{ todo: 'RT-nn' }` and add the RT row to the contract. Never edit `research/decisions.md` from the suite. |
-| **Flake** | The same seed passes and fails on different runs | Treat it as a determinism bug (G-06, G-18, G-20) until shown otherwise. Rerun the same seed 20 times with `for i in $(seq 20); do REDTEAM_SEED=<s> node --import tsx --test --test-name-pattern '<id>' test/redteam-<file>.test.ts || break; done`. If it is still intermittent, report it as an engine bug together with the run count. Never paper over it with retries. |
+| **Flake** | The same seed passes and fails on different runs | Treat it as a determinism bug (G-06, G-18, G-20) until shown otherwise. Rerun the same seed 20 times with `for i in $(seq 20); do REDTEAM_SEED=<s> bun test -t '<id>' test/redteam-<file>.test.ts || break; done`. If it is still intermittent, report it as an engine bug together with the run count. Never paper over it with retries. |
 
 ## Coverage matrix
 

@@ -31,7 +31,7 @@ function worldgen(args: readonly string[], env: Record<string, string> = scratch
 
 function cli(entry: string, args: readonly string[], env: Record<string, string>, timeoutMs?: number): Ran {
   const limit = timeoutMs === undefined ? {} : { timeout: timeoutMs, killSignal: 'SIGKILL' as const };
-  const r = spawnSync(process.execPath, ['--import', 'tsx', entry, ...args], { cwd: CODE_DIR, encoding: 'utf8', env, ...limit });
+  const r = spawnSync(process.execPath, [entry, ...args], { cwd: CODE_DIR, encoding: 'utf8', env, ...limit });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -199,7 +199,7 @@ describe('worldgen CLI: a run that stops', () => {
 describe('worldgen CLI: exit', () => {
   it('exits once the run returns, even with a handle still open, and flushes stdout first', () => {
     // The interval stands in for a lingering handle such as an abandoned claude child's pipes.
-    const r = spawnSync(process.execPath, ['--import', 'tsx', 'test/helpers/linger-cli.ts', '--help'], {
+    const r = spawnSync(process.execPath, ['test/helpers/linger-cli.ts', '--help'], {
       cwd: CODE_DIR, encoding: 'utf8', env: scratch().env, timeout: 10_000, killSignal: 'SIGKILL',
     });
     assert.equal(r.error, undefined);
@@ -214,7 +214,7 @@ describe('worldgen CLI: exit', () => {
     const out = path.join(home, 'gen-refunds');
     const r = spawnSync(
       process.execPath,
-      ['--import', 'tsx', 'test/helpers/linger-cli.ts', '--openapi', path.join(home, 'missing.openapi.yaml'), '--transport', 'sdk', '--out', out],
+      ['test/helpers/linger-cli.ts', '--openapi', path.join(home, 'missing.openapi.yaml'), '--transport', 'sdk', '--out', out],
       { cwd: CODE_DIR, encoding: 'utf8', env: { ...env, LLM_KEY: 'test-key-never-sent' }, timeout: 10_000, killSignal: 'SIGKILL' },
     );
     assert.equal(r.error, undefined);

@@ -14,7 +14,6 @@ import { stopOnSignals, studioServer, type SignalHost } from '../src/studio/serv
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const REPO_ROOT = path.resolve(CODE_DIR, '..');
 const HELPDESK = path.join(REPO_ROOT, 'prod', 'worlds', 'helpdesk');
-const TSX = process.versions.bun === undefined ? ['--import', 'tsx'] : [];
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 /** A worlds dir holding a copy of helpdesk. */
@@ -138,7 +137,7 @@ describe('the studio process', () => {
   it('SIGTERM stops the world it serves, waits for it, then exits 0', async () => {
     const { root, worlds } = worldsDir();
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'WORLDGEN_STUDIO_TOKEN'));
-    const studio = spawn(process.execPath, [...TSX, 'src/cli/studio.ts', '--port', '0', '--worlds-dir', worlds], { cwd: CODE_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const studio = spawn(process.execPath, ['src/cli/studio.ts', '--port', '0', '--worlds-dir', worlds], { cwd: CODE_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] });
     const exited = new Promise<number | null>((resolve) => studio.once('exit', (code) => resolve(code)));
     let said = '';
     studio.stderr.setEncoding('utf8').on('data', (s: string) => (said += s));

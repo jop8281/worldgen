@@ -2,7 +2,7 @@
  * Hardens four gen-clinic-appointments graders with exact-field ctx.guardChanges allowances and adds one
  * correct-fix-then-collateral decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: the guard is inserted once and decoys are matched by their `why`.
- * Usage: npx tsx scripts/archive/harden-gen-clinic-appointments.ts [worldDir] [--decoys-only]
+ * Usage: bun scripts/archive/harden-gen-clinic-appointments.ts [worldDir] [--decoys-only]
  * --decoys-only adds the decoys to the old graders and prints the check verdict without saving.
  */
 import path from 'node:path';

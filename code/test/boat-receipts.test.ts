@@ -116,8 +116,7 @@ describe('durable Boat usage receipts', () => {
     const { dir, journal } = fixture();
     const script = join(dir, 'capture.mjs');
     writeFileSync(script, `import {openBoatReceipts} from ${JSON.stringify(new URL('../src/costs/boat-receipts.ts', import.meta.url).href)};\nopenBoatReceipts(process.argv[2],()=>Date.parse('2026-10-07T01:00:00Z')).capture({...${JSON.stringify(base)},inspectionAccount:process.argv[3]});\n`);
-    const runtime = process.versions['bun'] === undefined ? ['--import', 'tsx'] : [];
-    const children = [account, other].map(key => spawn(process.execPath, [...runtime, script, journal.path, key], { cwd: new URL('..', import.meta.url), stdio: ['ignore', 'ignore', 'pipe'] }));
+    const children = [account, other].map(key => spawn(process.execPath, [script, journal.path, key], { cwd: new URL('..', import.meta.url), stdio: ['ignore', 'ignore', 'pipe'] }));
     try {
       await Promise.all(children.map(child => new Promise<void>((resolve, reject) => {
         let err = '';
@@ -133,8 +132,7 @@ describe('durable Boat usage receipts', () => {
   it('shows captured evidence separately in the actual costs CLI and requires a day for capture', () => {
     const { file, journal } = fixture();
     journal.capture(base);
-    const runtime = process.versions['bun'] === undefined ? ['--import', 'tsx'] : [];
-    const cli = (...args: string[]) => spawnSync(process.execPath, [...runtime, 'src/cli/costs.ts', '--file', file, ...args], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: { PATH: process.env['PATH'] } });
+    const cli = (...args: string[]) => spawnSync(process.execPath, ['src/cli/costs.ts', '--file', file, ...args], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: { PATH: process.env['PATH'] } });
     const json = cli('--json');
     assert.equal(json.status, 0);
     const out = JSON.parse(json.stdout);
@@ -143,7 +141,7 @@ describe('durable Boat usage receipts', () => {
     assert.equal(text.status, 0);
     assert.equal(text.stdout.includes('list-price estimates, separate from settled spend'), true);
     assert.equal(text.stdout.includes('1200 billable seconds (size multiplier already applied)'), true);
-    const missing = spawnSync(process.execPath, [...runtime, 'src/cli/sandbox.ts', 'capture-usage'], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: {} });
+    const missing = spawnSync(process.execPath, ['src/cli/sandbox.ts', 'capture-usage'], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: {} });
     assert.equal(missing.status, 2);
     assert.equal(missing.stderr.startsWith('capture-usage requires --day YYYY-MM-DD'), true);
   });

@@ -83,8 +83,7 @@ describe('observed Boat exposure', () => {
     const { dir, file, ledger } = fixture();
     const script = join(dir, 'observe.mjs');
     writeFileSync(script, `import {openLedger} from ${JSON.stringify(new URL('../src/costs/ledger.ts', import.meta.url).href)};\nconsole.log(openLedger(process.argv[2]).observeSandbox({account:process.argv[3],sandboxId:'sb_shared',caps:{maxTotalUsd:1}}));\n`);
-    const runtime = process.versions['bun'] === undefined ? ['--import', 'tsx'] : [];
-    const children = [account, other].map(key => spawn(process.execPath, [...runtime, script, file, key], { cwd: new URL('..', import.meta.url), stdio: ['ignore', 'pipe', 'pipe'] }));
+    const children = [account, other].map(key => spawn(process.execPath, [script, file, key], { cwd: new URL('..', import.meta.url), stdio: ['ignore', 'pipe', 'pipe'] }));
     try {
       const ids = await Promise.all(children.map(child => new Promise<string>((resolve, reject) => {
         let out = ''; let err = '';
@@ -103,8 +102,7 @@ describe('observed Boat exposure', () => {
   it('prints observation provenance without inventing a VM start time or a payer', () => {
     const { ledger, file } = fixture();
     const id = ledger.observeSandbox({ account, sandboxId: 'sb_diagnostic', caps: {} });
-    const runtime = process.versions['bun'] === undefined ? ['--import', 'tsx'] : [];
-    const cli = (...args: string[]) => spawnSync(process.execPath, [...runtime, 'src/cli/costs.ts', '--file', file, ...args], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: { PATH: process.env['PATH'] } });
+    const cli = (...args: string[]) => spawnSync(process.execPath, ['src/cli/costs.ts', '--file', file, ...args], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: { PATH: process.env['PATH'] } });
     const json = cli('--json', '--since', '2099-01-01');
     assert.equal(json.status, 0);
     assert.deepEqual(JSON.parse(json.stdout).pending, [{ id, kind: 'sandbox', provider: 'boat', account, startedAt: null, origin: 'inventory', accountBasis: 'inspection_key', observedAt: '2026-10-06T23:59:00.000Z', runId: null, model: null, step: null, sandboxId: 'sb_diagnostic', boundUsd: null, remainingUsd: null }]);
@@ -112,7 +110,7 @@ describe('observed Boat exposure', () => {
     assert.equal(text.status, 0);
     assert.equal(text.stdout.includes('observed 2026-10-06T23:59:00.000Z'), true);
     assert.equal(text.stdout.includes('inventory observation; inspection key, payer unverified'), true);
-    const invalid = spawnSync(process.execPath, [...runtime, 'src/cli/sandbox.ts', 'track', '--day', '2026-10-06'], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: {} });
+    const invalid = spawnSync(process.execPath, ['src/cli/sandbox.ts', 'track', '--day', '2026-10-06'], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: {} });
     assert.equal(invalid.status, 2);
     assert.equal(invalid.stderr.startsWith('track accepts --org <wallet> once'), true);
   });

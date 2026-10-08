@@ -8,10 +8,10 @@ import { checkWorld, createRuntime, renderWorldYaml, type Runtime, type World } 
 import { bareWorld, minimalWorld, withStubTasks } from './helpers/world.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
-const CLI = ['--import', 'tsx', 'src/cli/worldplay.ts'];
+const CLI = ['src/cli/worldplay.ts'];
 
 function run(...args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const r = spawnSync('node', [...CLI, ...args], { cwd: CODE_DIR, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [...CLI, ...args], { cwd: CODE_DIR, encoding: 'utf8' });
   // The task worlds page by default and seed few rows, so the engine's paging lint warns on stderr.
   // Those lines are not what these tests are about.
   const stderr = r.stderr.split('\n').filter((l) => !/^world\.yaml:\d+: warning seed\.too_few_rows_for_paging /.test(l)).join('\n');
@@ -431,7 +431,7 @@ describe('world grade', () => {
 
 /** Starts `worldplay serve` and resolves with its two printed URLs once both lines are out. */
 function startServe(args: string[], env: NodeJS.ProcessEnv = {}): { urls: Promise<{ world: string; admin: string }>; exit: Promise<number | null>; stop: () => void; output: () => string } {
-  const child = spawn('node', [...CLI, 'serve', ...args], { cwd: CODE_DIR, env: { ...process.env, WORLDPLAY_HOST: undefined, WORLDPLAY_ADMIN_HOST: undefined, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [...CLI, 'serve', ...args], { cwd: CODE_DIR, env: { ...process.env, WORLDPLAY_HOST: undefined, WORLDPLAY_ADMIN_HOST: undefined, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   let err = '';
   const exit = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)));

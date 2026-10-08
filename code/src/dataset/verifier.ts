@@ -132,7 +132,7 @@ function verdictOf(text: string): GradeResult | null {
 }
 
 export type ChildGraderOptions = {
-  /** Where the code package lives: `node_modules/.bin/tsx` and `src/cli/verifier.ts`. */
+  /** Where the code package lives: `src/cli/verifier.ts`. */
   readonly codeDir: string;
   /** The dataset run's output directory: request files and the ledger go under `<out>/private/verifier/`. */
   readonly out: string;
@@ -140,7 +140,7 @@ export type ChildGraderOptions = {
   readonly runner?: Runner;
   /** How long the child may run. Default 300000 ms. */
   readonly timeoutMs?: number;
-  /** The command that runs a TypeScript file. Default tsx under codeDir; the Studio image has only bun. */
+  /** The command that runs a TypeScript file. Default the Bun running this process (A-381). */
   readonly launcher?: readonly string[];
   /** The source the child's allowlisted environment is built from. Default process.env. */
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -155,7 +155,7 @@ export type ChildGraderOptions = {
  */
 export function childGrader(o: ChildGraderOptions): (held: HeldWorld) => EpisodeGrader {
   const runner = o.runner ?? nodeRunner;
-  const launcher = o.launcher ?? [path.join(o.codeDir, 'node_modules', '.bin', 'tsx')];
+  const launcher = o.launcher ?? [process.execPath];
   const requestsDir = path.join(o.out, 'private', 'verifier', 'requests');
   const ledger = path.join(o.out, 'private', 'verifier', 'submissions.jsonl');
   return (held) => async (sub) => {

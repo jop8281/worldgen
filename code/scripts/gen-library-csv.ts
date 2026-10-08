@@ -3,7 +3,7 @@
  * Seeded, so every run writes the same bytes. Loans reference books by isbn, loans still open at AS_OF never
  * exceed copies per isbn (past loans are not checked against each other), due_at is borrowed_at plus 21 days,
  * and fine_cents is 25 cents per started day past due_at, counted to returned_at or to AS_OF for an open loan.
- * Usage: npx tsx scripts/gen-library-csv.ts [outDir], where outDir already exists.
+ * Usage: bun scripts/gen-library-csv.ts [outDir], where outDir already exists.
  */
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';

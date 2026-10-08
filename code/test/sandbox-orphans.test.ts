@@ -41,7 +41,7 @@ describe('snippet processes die with their parent', () => {
     let spawned = 0;
     await Promise.all(
       Array.from({ length: PARENTS }, async (_, i) => {
-        const parent = spawn(process.execPath, ['--import', 'tsx', HELPER, 'idle'], { stdio: 'ignore' });
+        const parent = spawn(process.execPath, [HELPER, 'idle'], { stdio: 'ignore' });
         await sleep(300 + (i * SIGKILL_WINDOW_MS) / PARENTS);
         const kids = childrenOf(parent.pid!);
         spawned += kids.length;

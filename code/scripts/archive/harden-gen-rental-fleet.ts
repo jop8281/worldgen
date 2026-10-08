@@ -2,7 +2,7 @@
  * Pins the exact fields two gen-rental-fleet graders may see changed (ctx.guardChanges) and adds one
  * correct-fix-then-collateral decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: the grader edit is a replace of a known old text or a no-op, decoys match by `why`.
- * Usage: npx tsx scripts/archive/harden-gen-rental-fleet.ts [worldDir]
+ * Usage: bun scripts/archive/harden-gen-rental-fleet.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';

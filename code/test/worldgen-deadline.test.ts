@@ -17,7 +17,7 @@ const CODE_DIR = path.resolve(import.meta.dirname, '..');
 describe('the run deadline bounds judging', () => {
   for (const variant of ['capped', 'uncapped'] as const) {
     it(`a ${variant} ctx.changes spinner in a grader stops the run at the deadline with time_exhausted`, () => {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', 'test/helpers/deadline-repro.ts', variant], { cwd: CODE_DIR, encoding: 'utf8', timeout: 45_000, killSignal: 'SIGKILL' });
+      const r = spawnSync(process.execPath, ['test/helpers/deadline-repro.ts', variant], { cwd: CODE_DIR, encoding: 'utf8', timeout: 45_000, killSignal: 'SIGKILL' });
       assert.equal(r.error, undefined, `the run did not finish in 45 s; it printed:\n${r.stdout}${r.stderr}`);
       assert.equal(r.status, 0, r.stderr);
       const out = JSON.parse(r.stdout.trim().split('\n').at(-1) ?? '') as Record<string, unknown>;
@@ -54,7 +54,7 @@ describe('the run deadline bounds judging', () => {
   ] as const;
   for (const c of ITERATE) {
     it(`${c.variant}: a spinner seed in the existing world stops the iterate run at the deadline with time_exhausted`, () => {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', 'test/helpers/deadline-repro.ts', c.variant], { cwd: CODE_DIR, encoding: 'utf8', timeout: 45_000, killSignal: 'SIGKILL' });
+      const r = spawnSync(process.execPath, ['test/helpers/deadline-repro.ts', c.variant], { cwd: CODE_DIR, encoding: 'utf8', timeout: 45_000, killSignal: 'SIGKILL' });
       assert.equal(r.error, undefined, `the run did not finish in 45 s; it printed:\n${r.stdout}${r.stderr}`);
       assert.equal(r.status, 0, r.stderr);
       const out = JSON.parse(r.stdout.trim().split('\n').at(-1) ?? '') as Record<string, unknown>;

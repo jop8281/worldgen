@@ -757,7 +757,7 @@ describe('meteredSandbox', () => {
 describe('costs CLI', () => {
   const capsOff = { WORLDGEN_MAX_DAILY_USD: '', WORLDGEN_MAX_TOTAL_USD: '', WORLDGEN_MAX_DAILY_LLM_USD: '', WORLDGEN_MAX_DAILY_SANDBOX_USD: '' };
   const runCli = (file: string, ...args: string[]) =>
-    spawnSync('node', ['--import', 'tsx', 'src/cli/costs.ts', ...args], {
+    spawnSync(process.execPath, ['src/cli/costs.ts', ...args], {
       cwd: CODE_DIR,
       encoding: 'utf8',
       env: { ...process.env, WORLDGEN_COSTS_FILE: file, ...capsOff },
@@ -831,7 +831,7 @@ describe('costs CLI', () => {
 
   it('groups by kind and shows a meter cap with what it leaves', () => {
     const file = seeded();
-    const r = spawnSync('node', ['--import', 'tsx', 'src/cli/costs.ts', '--by', 'kind'], {
+    const r = spawnSync(process.execPath, ['src/cli/costs.ts', '--by', 'kind'], {
       cwd: CODE_DIR,
       encoding: 'utf8',
       env: { ...process.env, WORLDGEN_COSTS_FILE: file, ...capsOff, WORLDGEN_MAX_DAILY_LLM_USD: '2' },

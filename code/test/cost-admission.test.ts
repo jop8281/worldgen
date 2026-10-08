@@ -160,7 +160,7 @@ describe('persistent cost admission', () => {
     const claim = kind === 'sandbox' ? `reserve(${JSON.stringify(input())})` : `startModel(${JSON.stringify({ provider: 'anthropic', account, caps: { maxTotalUsd: 1 } })})`;
     writeFileSync(script, `import {openLedger} from ${JSON.stringify(module)};\nprocess.stdout.write('ready\\n');\nprocess.stdin.once('data',()=>{try {openLedger(process.argv[2]).${claim}; console.log('admitted');} catch(e) {if(e.name!=='SpendCapError' && !e.message.includes('active spending obligation is unknown')) throw e;console.log('denied');} process.stdin.destroy();});\n`);
     const workers = [0, 1].map(() => {
-      const child = spawn(process.execPath, ['--import', 'tsx', script, file], { cwd: new URL('..', import.meta.url), stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [script, file], { cwd: new URL('..', import.meta.url), stdio: ['pipe', 'pipe', 'pipe'] });
       let output = ''; let error = '';
       let ready: () => void = () => {};
       const started = new Promise<void>(resolve => { ready = resolve; });

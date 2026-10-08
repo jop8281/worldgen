@@ -314,7 +314,7 @@ describe('the verifier child process', () => {
     recorded = (await recordEasyOverPublic(prep.world)).recorded;
   });
 
-  const tsx = path.join(CODE_DIR, 'node_modules', '.bin', 'tsx');
+  const tsx = process.execPath;
   const submission = (task: string, trace: readonly TraceCall[], state: StateDump) => ({ submission: task, task: EASY, trace, state });
 
   it('one child grades a recorded trace, records the submission, and keeps the evidence private', async () => {

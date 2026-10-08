@@ -19,8 +19,7 @@ import { parseDailyCap, parseHealth, studioAlerts, trafficCounter, type Alert, t
 const T = Date.parse('2026-10-07T12:00:00.000Z');
 const SPAWN_BUDGET = { timeout: 20_000 };
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
-const RUNTIME = process.versions['bun'] === undefined ? ['--import', 'tsx'] : [];
-const RUNTIME_NAME = process.versions['bun'] === undefined ? `node ${process.versions.node}` : `bun ${process.versions['bun']}`;
+const RUNTIME_NAME = `bun ${process.versions['bun']}`;
 
 describe('trafficCounter', () => {
   it('keeps totals and drops 10 s buckets older than the 300 s window', () => {
@@ -208,7 +207,7 @@ type Ran = { code: number | null; stdout: string; stderr: string };
 /** Runs studio-watch in a child with exactly PATH plus `env`. */
 function watch(args: readonly string[], env: Record<string, string> = {}): Promise<Ran> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [...RUNTIME, 'src/cli/studio-watch.ts', ...args], { cwd: CODE_DIR, env: { PATH: process.env['PATH'] ?? '', ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['src/cli/studio-watch.ts', ...args], { cwd: CODE_DIR, env: { PATH: process.env['PATH'] ?? '', ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d: Buffer) => {

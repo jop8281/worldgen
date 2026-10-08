@@ -15,13 +15,12 @@ const WORLD = path.resolve(CODE, '../prod/worlds/helpdesk');
 const DOCS = path.resolve(CODE, '../prod/world-format.md');
 /** A step that runs longer than this fails, so a hang never stalls CI. Set E2E_STEP_MS to change it. */
 const STEP_MS = Number(process.env.E2E_STEP_MS) > 0 ? Number(process.env.E2E_STEP_MS) : 10 * 60_000;
-/** The runner that started this script, so `bun run e2e` drives every step with bun. */
-const BUN = process.versions.bun !== undefined;
-const NPM = BUN ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm';
+/** The Bun that started this script drives every step (A-381). E2E_RUNNER swaps in a stand-in, which only the deadline test does. */
+const NPM = process.env.E2E_RUNNER ?? process.execPath;
 
-/** `run <script> <args>` for the current runner. npm needs `--` before script args, bun takes them as is. */
+/** `bun run <script> <args>`: bun takes script args as is. */
 function runArgs(script: string, args: readonly string[] = []): string[] {
-  return BUN ? ['run', '--silent', script, ...args] : ['run', '-s', script, ...(args.length > 0 ? ['--', ...args] : [])];
+  return ['run', '--silent', script, ...args];
 }
 
 type Status = 'PASS' | 'FAIL' | 'SKIP';
@@ -224,9 +223,9 @@ async function main(): Promise<number> {
 
   const docs = await npm('docs');
   const diff = await runCommand('git', ['diff', '--exit-code', '--stat', '--', DOCS], { cwd: CODE, timeoutMs: STEP_MS });
-  if (docs.kind === 'failed' || docs.code !== 0) record('docs are fresh', 'FAIL', `npm run docs ${docs.kind === 'failed' ? docs.reason : `exit ${docs.code}`}: ${lastLines(docs.out)}`);
+  if (docs.kind === 'failed' || docs.code !== 0) record('docs are fresh', 'FAIL', `bun run docs ${docs.kind === 'failed' ? docs.reason : `exit ${docs.code}`}: ${lastLines(docs.out)}`);
   else if (diff.kind === 'failed') record('docs are fresh', 'FAIL', diff.reason);
-  else if (diff.code !== 0) record('docs are fresh', 'FAIL', `npm run docs changed prod/world-format.md: ${diff.out.trim()}`);
+  else if (diff.code !== 0) record('docs are fresh', 'FAIL', `bun run docs changed prod/world-format.md: ${diff.out.trim()}`);
   else record('docs are fresh', 'PASS');
 
   const width = Math.max(...rows.map((r) => r.step.length));

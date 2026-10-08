@@ -324,7 +324,7 @@ describe('run faults', () => {
       "const codes = srcs.map((s) => { const c = h.compile('job', s, ['x']); try { c.run({}); return 'no fault'; } catch (e) { return e.issue.code; } });",
       "setTimeout(() => { console.log(codes.join(',')); if (process.argv.includes('host')) Promise.reject(new Error('host boom')); }, 20);",
     ].join('\n');
-    const child = (arg: string) => spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, arg], { encoding: 'utf8', cwd: CODE_DIR });
+    const child = (arg: string) => spawnSync(process.execPath, ['--input-type=module', '-e', script, arg], { encoding: 'utf8', cwd: CODE_DIR });
     const quiet = child('none');
     assert.deepEqual([quiet.status, quiet.stdout.trim()], [0, 'snippet.promise_returned,snippet.promise_returned']);
     const loud = child('host');

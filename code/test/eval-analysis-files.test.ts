@@ -32,7 +32,7 @@ describe('offline eval evidence reader', () => {
 
       const suite = path.join(root, 'suite.yaml');
       await writeFile(suite, 'name: sample\ncases:\n  - id: alpha\n    input: { kind: description, text: Sample }\n  - id: gamma\n    input: { kind: description, text: Missing }\n');
-      const child = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/analyze-eval.ts', suite, root], { cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8', timeout: 20_000 });
+      const child = spawnSync(process.execPath, ['scripts/analyze-eval.ts', suite, root], { cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8', timeout: 20_000 });
       assert.equal(child.error, undefined, child.stderr);
       assert.equal(child.status, 1, child.stderr);
       const cli = JSON.parse(child.stdout);
@@ -90,7 +90,7 @@ describe('offline eval evidence reader', () => {
       await writeFile(path.join(root, 'alpha/events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n'));
       const suite = path.join(root, 'suite.yaml');
       await writeFile(suite, 'name: sample\ncases:\n  - id: alpha\n    input: { kind: description, text: Sample }\n    expect: stopped\n');
-      const run = (args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', 'scripts/analyze-eval.ts', ...args], { cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8', timeout: 20_000 });
+      const run = (args: string[]) => spawnSync(process.execPath, ['scripts/analyze-eval.ts', ...args], { cwd: path.resolve(import.meta.dirname, '..'), encoding: 'utf8', timeout: 20_000 });
       const complete = run([suite, root]);
       assert.equal(complete.error, undefined);
       assert.equal(complete.status, 0, complete.stderr);

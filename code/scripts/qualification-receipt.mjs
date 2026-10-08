@@ -222,7 +222,7 @@ export function main(args) {
       writeFileSync(path.join(evidence, snapshot), bytes, { mode: 0o600 });
       return { name, kind: kindOf(path.join(worldsDir, name)), sha256: hash(bytes), snapshot };
     });
-    const files = ['code/package.json', 'code/bun.lock', 'code/package-lock.json', ...names.map(n => `prod/worlds/${n}/world.yaml`)];
+    const files = ['code/package.json', 'code/bun.lock', ...names.map(n => `prod/worlds/${n}/world.yaml`)];
     save(path.join(evidence, 'source.json'), { sha, worlds, files: hashFiles(clone, files) });
     const controller = read(regular(evidence, 'metadata.json')).controller;
     console.error(JSON.stringify({ type: 'qualification_runtime', head: sha, selected: controller.selectedRuntime, executable: process.execPath, version: process.version, bun: process.versions.bun ?? null, node: process.versions.node ?? null }));

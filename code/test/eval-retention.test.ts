@@ -215,7 +215,7 @@ describe('eval attempt retention', () => {
     const runDir = await directory(t);
     const expected = await previous(runDir);
     const helper = new URL('../src/cli/eval-retention.ts', import.meta.url).href;
-    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import { writeFile } from 'node:fs/promises';
       import { withEvalAttempt } from ${JSON.stringify(helper)};
       await withEvalAttempt(process.argv[1], 'repair', async (layout) => {
