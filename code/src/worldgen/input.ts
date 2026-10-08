@@ -257,6 +257,10 @@ export function parseInputArgs(argv: readonly string[]): Input {
   let fidelity: string | null = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
+    if (a === '--') {
+      words.push(...argv.slice(i + 1).filter((w) => w.trim() !== ''));
+      break;
+    }
     if (a === '--openapi') {
       const v = argv[++i];
       if (v === undefined || v.startsWith('--')) throw new Error('--openapi needs a file');
