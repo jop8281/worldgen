@@ -38,10 +38,10 @@ const LLM = 'src/worldgen/llm.ts';
 
 const toPosix = (p: string): string => p.split(path.sep).join('/');
 
-/** Each import of each file under src/, with paths relative to root. */
-function srcImports(program: ts.Program, root: string): { from: string; target: string | undefined; ref: ImportRef }[] {
+/** Each import of each file under `dirs` (src/ by default), with paths relative to root. */
+function srcImports(program: ts.Program, root: string, dirs: readonly string[] = ['src']): { from: string; target: string | undefined; ref: ImportRef }[] {
   const out: { from: string; target: string | undefined; ref: ImportRef }[] = [];
-  for (const sf of sourceFilesUnder(program, root, 'src')) {
+  for (const sf of dirs.flatMap((dir) => sourceFilesUnder(program, root, dir))) {
     const from = toPosix(path.relative(root, sf.fileName));
     for (const ref of importsOf(program, sf)) {
       // An unresolved relative import still names a path, so a deep import of a missing file counts.
@@ -167,6 +167,29 @@ const boatSdkConfinement: Rule = (program, root) =>
     .map(({ from, ref }) => fmt(from, ref))
     .sort();
 
+/** The raw Boat backend factory: a VM made through it bypasses backendFor and the spend meter. */
+const BOAT_BACKEND = 'src/sandboxes/boat.ts';
+const BOAT_FACTORY = 'boatBackend';
+/** TypeScript outside src/ that can still reach Boat, relative to the code root: the package's scripts and the repo-root scripts. */
+const SCRIPT_DIRS = ['scripts', '../scripts'];
+
+/**
+ * Only sandboxes/registry.ts imports the raw Boat backend, so every Boat VM, a script's too, is made through backendFor and
+ * its meter. It scans src/ and SCRIPT_DIRS, and follows re-export chains. A type or a constant of boat.ts passes: only the
+ * factory makes a VM.
+ */
+const boatBackendConfinement: Rule = (program, root) =>
+  srcImports(program, root, ['src', ...SCRIPT_DIRS])
+    .filter(({ from, target, ref }) => {
+      if (from === 'src/sandboxes/registry.ts' || from === BOAT_BACKEND || target === undefined || ref.typeOnly) return false;
+      const factory = (names: Names): boolean => names === 'all' || names.has(BOAT_FACTORY);
+      if (target === BOAT_BACKEND) return factory(namesOf(ref));
+      return reexportHits(program, root, path.join(root, target), namesOf(ref), false, () => false)
+        .some((hit) => hit.file === BOAT_BACKEND && !hit.typeOnly && factory(hit.names));
+    })
+    .map(({ from, ref }) => fmt(from, ref))
+    .sort();
+
 /** Only sandbox.ts imports node:vm. */
 const vmConfinement: Rule = (program, root) =>
   srcImports(program, root)
@@ -241,6 +264,22 @@ const modelConfinement: Rule = (program, root) => [...sdkImports(program, root),
 
 let realProgram: ts.Program | undefined;
 const real = (): ts.Program => (realProgram ??= programFromTree(CODE_ROOT));
+/** The .ts files under a dir of the code root, none when it does not exist. */
+const tsFilesIn = (dir: string): string[] => {
+  try {
+    return readdirSync(path.join(CODE_ROOT, dir), { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts') && !f.split(path.sep).includes('node_modules'))
+      .map((f) => path.join(CODE_ROOT, dir, f));
+  } catch {
+    return [];
+  }
+};
+let scriptsProgram: ts.Program | undefined;
+/** src/ plus SCRIPT_DIRS, read from disk with code/tsconfig.json's options: tsconfig includes no script dir. */
+const realWithScripts = (): ts.Program => (scriptsProgram ??= ts.createProgram({
+  rootNames: [...real().getRootFileNames().filter((f) => toPosix(path.relative(CODE_ROOT, f)).startsWith('src/')), ...SCRIPT_DIRS.flatMap(tsFilesIn)],
+  options: real().getCompilerOptions(),
+}));
 const relFiles = (program: ts.Program, root: string): string[] =>
   sourceFilesUnder(program, root, 'src').map((sf) => toPosix(path.relative(root, sf.fileName))).sort();
 
@@ -643,6 +682,39 @@ describe('rule: only boat/client.ts imports @boatdev/sdk', () => {
       'src/engine/http.ts -> @boatdev/sdk',
       'src/sandboxes/boat.ts -> @boatdev/sdk',
       'src/worldgen/run.ts -> @boatdev/sdk',
+    ]);
+  });
+});
+
+describe('rule: only sandboxes/registry.ts imports the raw Boat backend', () => {
+  it('passes on the real source tree and its scripts, and the scan reaches code/scripts', () => {
+    const program = realWithScripts();
+    assert.equal(sourceFilesUnder(program, CODE_ROOT, 'scripts').some((sf) => toPosix(sf.fileName).endsWith('/code/scripts/boat-ci.ts')), true);
+    assert.deepEqual(boatBackendConfinement(program, CODE_ROOT), []);
+  });
+
+  it('fires on the factory outside registry.ts, in src and in both script dirs, directly or through a re-export, in a fixture', () => {
+    const boat = "export type BoatDeps = { readonly n: number };\nexport const BOAT_WORKDIR = '/tmp/worldgen';\nexport function boatBackend(): number { return 1; }\n";
+    const program = programFromFiles({
+      'src/sandboxes/boat.ts': boat,
+      'src/sandboxes/registry.ts': "import { boatBackend } from './boat.ts';\nexport const a = boatBackend;\n",
+      'scripts/boat-ci.ts': "import { boatBackend } from '../src/sandboxes/boat.ts';\nexport const a = boatBackend;\n",
+      'src/cli/sandbox.ts': "import * as boat from '../sandboxes/boat.ts';\nexport const a = boat;\n",
+      'src/dataset/pipeline.ts': "export const load = () => import('../sandboxes/boat.ts');\n",
+      'src/sandboxes/index.ts': "export { boatBackend } from './boat.ts';\n",
+      'scripts/via-index.ts': "import { boatBackend } from '../src/sandboxes/index.ts';\nexport const a = boatBackend;\n",
+      '../scripts/root-tool.ts': "import { boatBackend } from '../virtual/src/sandboxes/boat.ts';\nexport const a = boatBackend;\n",
+      'src/worldgen/typed.ts': "import type { BoatDeps } from '../sandboxes/boat.ts';\nexport type D = BoatDeps;\n",
+      'scripts/constant.ts': "import { BOAT_WORKDIR } from '../src/sandboxes/boat.ts';\nexport const a = BOAT_WORKDIR;\n",
+      'test/boat.test.ts': "import { boatBackend } from '../src/sandboxes/boat.ts';\nexport const a = boatBackend;\n",
+    });
+    assert.deepEqual(boatBackendConfinement(program, VIRTUAL_ROOT), [
+      '../scripts/root-tool.ts -> ../virtual/src/sandboxes/boat.ts',
+      'scripts/boat-ci.ts -> ../src/sandboxes/boat.ts',
+      'scripts/via-index.ts -> ../src/sandboxes/index.ts',
+      'src/cli/sandbox.ts -> ../sandboxes/boat.ts',
+      'src/dataset/pipeline.ts -> ../sandboxes/boat.ts',
+      'src/sandboxes/index.ts -> ./boat.ts',
     ]);
   });
 });
