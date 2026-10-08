@@ -416,7 +416,8 @@ export type CaseRow = {
   readonly verify: string;
   readonly fidelity: FidelityResult | null;
   readonly logged: boolean;
-  /** `expect: done` passes when the case ends done and verify passes; `expect: stopped` passes on a stop that is a verdict on the prompt. */
+  readonly outcome: RunOutcome;
+  /** A success or an expected refusal. */
   readonly pass: boolean;
   readonly phases: readonly PhaseSummary[];
 };
@@ -462,6 +463,24 @@ const STOP_IS_VERDICT: Record<StopReason['kind'], boolean> = {
 };
 const MACHINERY_STOPS = new Set<string>(Object.entries(STOP_IS_VERDICT).flatMap(([kind, verdict]) => (verdict ? [] : [kind])));
 
+/**
+ * What a suite case's end says (A-336), in the order summary.md counts them. A success or an expected refusal is a
+ * pass. A product failure is the wrong verdict on the prompt. An infra failure is a crash, a machinery stop, a done
+ * world the harness never verified, or an unreadable case.json, and is never a pass. Not run is a suite case with
+ * no case output.
+ */
+export const OUTCOMES = ['success', 'expected refusal', 'product failure', 'infra failure', 'not run'] as const;
+export type Outcome = (typeof OUTCOMES)[number];
+type RunOutcome = Exclude<Outcome, 'not run'>;
+
+function outcomeOf(expect: Expect, status: PhaseStatus, stopKind: string | null, verify: VerifyResult): RunOutcome {
+  if (status === 'crashed' || (status === 'stopped' && stopKind !== null && MACHINERY_STOPS.has(stopKind))) return 'infra failure';
+  if (expect === 'stopped') return status === 'stopped' ? 'expected refusal' : 'product failure';
+  if (status === 'stopped') return 'product failure';
+  if (verify.kind === 'not_run') return 'infra failure';
+  return verify.kind === 'pass' ? 'success' : 'product failure';
+}
+
 export function summarizeCase(r: CaseRecord): CaseRow {
   const phases = r.phases.map(summarizePhase);
   const last = phases[phases.length - 1];
@@ -470,10 +489,7 @@ export function summarizeCase(r: CaseRecord): CaseRow {
   const attemptParts = phases
     .filter((p) => p.attempts.length > 0)
     .map((p) => `${prefix(p.phase)}${p.attempts.map(([step, n]) => `${step} ${n}`).join(', ')}`);
-  const pass =
-    r.expect === 'done'
-      ? status === 'done' && r.verify.kind === 'pass'
-      : status === 'stopped' && last !== undefined && (last.stopKind === null || !MACHINERY_STOPS.has(last.stopKind));
+  const outcome = outcomeOf(r.expect, status, last?.stopKind ?? null, r.verify);
   return {
     id: r.id,
     expect: r.expect,
@@ -486,7 +502,8 @@ export function summarizeCase(r: CaseRecord): CaseRow {
     verify: verifyCell(r.verify),
     fidelity: r.fidelity ?? null,
     logged: phases.length > 0 && phases.every((p) => p.logProblems.length === 0),
-    pass,
+    outcome,
+    pass: outcome === 'success' || outcome === 'expected refusal',
     phases,
   };
 }
@@ -556,16 +573,18 @@ function knownTotal(values: readonly (number | null)[], show: (n: number) => str
 }
 
 /**
- * summary.md: one row per expected suite case, missing and invalid ones included, totals and pass rate over every
- * expected case, top issue triage, then why each case is missing, invalid, unlogged or crashed. Unknown time or cost
- * prints as unknown, never 0.
+ * summary.md: one row per expected suite case, missing and invalid ones included, totals by outcome class, the pass
+ * rate over the cases that ran, top issue triage, then why each case is missing, invalid, unlogged or crashed. Unknown
+ * time or cost prints as unknown, never 0.
  */
 export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[]): string {
   const rows = entries.flatMap((e) => (e.kind === 'record' ? [summarizeCase(e.record)] : []));
   const absent = entries.flatMap((e) => (e.kind === 'record' ? [] : [e]));
   const expected = entries.length;
-  const count = (s: PhaseStatus): number => rows.filter((r) => r.status === s).length;
+  const outcomes: readonly Outcome[] = [...rows.map((r) => r.outcome), ...absent.map((a): Outcome => (a.kind === 'missing' ? 'not run' : 'infra failure'))];
+  const count = (o: Outcome): number => outcomes.filter((x) => x === o).length;
   const passed = rows.filter((r) => r.pass).length;
+  const ran = expected - count('not run');
   const unlogged = rows.filter((r) => !r.logged).length;
   const unknownCostCalls = rows.reduce((s, r) => s + r.unknownCostCalls, 0);
   const showFidelity = rows.some((r) => r.fidelity !== null);
@@ -586,15 +605,14 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
       return `| ${[a.id, a.expect, a.kind, '-', '-', 'unknown', 'unknown', '-', ...mid, '-', 'no'].map(cell).join(' | ')} |`;
     }),
     '',
-    `**Totals:** ${expected} expected cases: ${count('done')} done, ${count('stopped')} stopped, ${count('crashed')} crashed, ` +
-      `${absent.filter((a) => a.kind === 'missing').length} missing, ${absent.filter((a) => a.kind === 'invalid').length} invalid; ` +
+    `**Totals:** ${expected} expected cases: ${OUTCOMES.map((o) => `${count(o)} ${o}`).join(', ')}; ` +
       `${knownTotal(rows.map((r) => r.ms), (n) => `${minutes(n)} min`, expected)}; ${knownTotal(rows.map((r) => r.costUsd), (n) => `$${usd(n)}`, expected)}` +
       `${unknownCostCalls > 0 ? ` + unknown billing for ${unknownCostCalls} call(s)` : ''}; ${unlogged} unlogged.`,
     '',
     `**Median and p95:** ${percentile(rows.map((r) => r.ms), 50, (n) => `${minutes(n)} min`, expected)} and ${percentile(rows.map((r) => r.ms), 95, (n) => `${minutes(n)} min`, expected)}; ` +
       `${percentile(rows.map((r) => r.costUsd), 50, (n) => `$${usd(n)}`, expected)} and ${percentile(rows.map((r) => r.costUsd), 95, (n) => `$${usd(n)}`, expected)}.`,
     '',
-    `**Pass rate:** ${passed}/${expected}${expected === 0 ? '' : ` (${Math.round((100 * passed) / expected)}%)`}.`,
+    `**Pass rate:** ${passed}/${ran}${ran === 0 ? '' : ` (${Math.round((100 * passed) / ran)}%)`}, success and expected refusal over the ${ran} cases that ran (${count('not run')} not run).`,
   ];
   if (absent.length > 0) {
     out.push('', '## Missing or invalid', '', ...absent.map((a) => `- \`${a.id}\`: ${a.kind === 'missing' ? 'no case.json in the run directory' : `case.json is invalid: ${cell(a.why)}`}`));
