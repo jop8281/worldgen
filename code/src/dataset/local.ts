@@ -158,7 +158,10 @@ export async function runLocalEpisode(o: LocalEpisodeOptions): Promise<LocalEpis
     return { episode, export: exported };
   } finally {
     child.kill('SIGTERM');
-    if ((await Promise.race([child.exited.then(() => true), sleep(5000).then(() => false)])) === false) child.kill('SIGKILL');
+    // A pending timer would hold the episode CLI open after the child is gone, so it is cleared.
+    const force = setTimeout(() => child.kill('SIGKILL'), 5000);
+    await child.exited;
+    clearTimeout(force);
   }
 }
 
