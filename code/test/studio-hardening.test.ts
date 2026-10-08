@@ -97,7 +97,7 @@ const headersOf = (a: Answer): string[] => ['x-frame-options', 'x-content-type-o
 const SECURE = ['DENY', 'nosniff', 'no-referrer', CSP];
 
 const USERS: readonly StudioUser[] = [
-  { name: 'ada', role: 'admin', tokenSha256: '86a038a189a3a7d826a98a2a8c1a67489e27c884c7017932b8c70ada02636069' },
+  { name: 'ada', role: 'admin', tenant: 'default', tokenSha256: '86a038a189a3a7d826a98a2a8c1a67489e27c884c7017932b8c70ada02636069' },
 ];
 const ADMIN = { authorization: 'Bearer admin-token-a1' };
 const WRONG = { authorization: 'Bearer wrong-token' };
@@ -171,7 +171,7 @@ describe('studio hardening: job caps (A-339)', () => {
     const second = await call(studio.url, 'POST', '/api/generate', gen('two'));
     assert.equal(second.status, 429);
     assert.equal(second.headers.get('retry-after'), null);
-    assert.deepEqual(second.body, { error: { code: 'generate.concurrent_limit', message: '1 generation runs are already active; the studio runs at most 1 at once, so stop one first' } });
+    assert.deepEqual(second.body, { error: { code: 'generate.concurrent_limit', message: 'the studio runs at most 1 generation runs at once; wait for one to finish' } });
     s.spawned[0]!.exitWith(0);
     await s.spawned[0]!.exited;
     await sleep(100);
@@ -209,7 +209,7 @@ describe('studio hardening: job caps (A-339)', () => {
     const body = { world: 'w1', task: 't1', agent: 'noop' };
     assert.equal((await call(studio.url, 'POST', '/api/episodes', body)).status, 200);
     const second = await call(studio.url, 'POST', '/api/episodes', { ...body, task: 't2' });
-    assert.deepEqual(second.body, { error: { code: 'episode.concurrent_limit', message: '1 agent episodes are already active; the studio runs at most 1 at once, so stop one first' } });
+    assert.deepEqual(second.body, { error: { code: 'episode.concurrent_limit', message: 'the studio runs at most 1 agent episodes at once; wait for one to finish' } });
     assert.equal(second.status, 429);
     assert.equal((await call(studio.url, 'POST', '/api/generate', gen('run-ok'))).status, 200);
   });

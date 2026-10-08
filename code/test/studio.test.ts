@@ -358,6 +358,7 @@ describe('studio', () => {
         worlds: [
           {
             name: 'gen-alpha',
+            tenant: null,
             generated: true,
             taskCount: 3,
             capsule: { wid: `wid_${'b'.repeat(64)}`, model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, attempts: 2 },
@@ -365,14 +366,15 @@ describe('studio', () => {
           },
           {
             name: 'gen-canary',
+            tenant: null,
             generated: true,
             taskCount: 3,
             capsule: { wid: null, model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, attempts: 2 },
             reportExists: true,
           },
-          { name: 'gen-leak', generated: false, taskCount: 3, reportExists: true },
-          { name: 'hand-beta', generated: false, taskCount: 3, reportExists: false },
-          { name: 'no-world-gamma', generated: true, taskCount: null, invalid: 'schema.invalid', reportExists: false },
+          { name: 'gen-leak', tenant: null, generated: false, taskCount: 3, reportExists: true },
+          { name: 'hand-beta', tenant: null, generated: false, taskCount: 3, reportExists: false },
+          { name: 'no-world-gamma', tenant: null, generated: true, taskCount: null, invalid: 'schema.invalid', reportExists: false },
         ],
       });
     });
@@ -426,8 +428,8 @@ describe('studio', () => {
       assert.equal(r.status, 200);
       assert.deepEqual(r.body, {
         runs: [
-          { name: 'gen-alpha', runId: 'run_20261007T181329Z_old1111', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, ms: 24000, outcome: 'done', hasReport: true },
-          { name: 'gen-canary', runId: 'run_20261007T000000Z_canary01', model: null, transport: null, costUsd: null, ms: null, outcome: null, hasReport: true },
+          { name: 'gen-alpha', tenant: null, runId: 'run_20261007T181329Z_old1111', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, ms: 24000, outcome: 'done', hasReport: true },
+          { name: 'gen-canary', tenant: null, runId: 'run_20261007T000000Z_canary01', model: null, transport: null, costUsd: null, ms: null, outcome: null, hasReport: true },
         ],
       });
     });
@@ -438,7 +440,7 @@ describe('studio', () => {
       const r = await json(base, 'POST', '/api/worlds/gen-alpha/serve', { port: 4123 });
       assert.equal(r.status, 200);
       const rec = r.body;
-      assert.match(String(rec['id']), /^svc-[1-9][0-9]*$/);
+      assert.match(String(rec['id']), /^svc-[0-9a-f]{8}$/);
       assert.equal(rec['name'], 'gen-alpha');
       assert.equal(rec['pid'], 43210);
       assert.equal(rec['worldPort'], 4123);
@@ -589,7 +591,7 @@ describe('studio', () => {
       const post = await json(base, 'POST', '/api/generate', { kind: 'description', text: 'A helpdesk with SLA tiers', outSlug: 'alpha' });
       assert.equal(post.status, 200);
       const runId = String(post.body['runId']);
-      assert.match(runId, /^\d{8}T\d{6}Z-alpha$/);
+      assert.match(runId, /^\d{8}T\d{6}Z-alpha-[0-9a-f]{6}$/);
       assert.equal(post.body['outDir'], path.join(worldsDir, 'gen-alpha'));
       assert.equal(post.body['running'], true);
       assert.deepEqual(lastSpawn().argv, ['bun', 'src/cli/worldgen.ts', 'A helpdesk with SLA tiers', '--out', path.join(worldsDir, 'gen-alpha')]);
@@ -1048,7 +1050,7 @@ describe('studio serve: only an admin pins a port (A-348)', () => {
     const { spawner, spawned } = fakeSpawner(() => ({ listening: { world: 45300, admin: 45301 } }));
     const runner: Runner = async () => ({ code: 0, stdout: '{}', stderr: '' });
     // sha256 of 'operator-token-o1'.
-    const users = [{ name: 'olga', role: 'operator' as const, tokenSha256: '0d8dc9deab36314a0e348de096f11795a300d35258412ffe048c9eecdabb8edd' }];
+    const users = [{ name: 'olga', role: 'operator' as const, tenant: 'default', tokenSha256: '0d8dc9deab36314a0e348de096f11795a300d35258412ffe048c9eecdabb8edd' }];
     const s = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, users, serveWaitMs: 1500 });
     try {
       const res = await fetch(`${s.url}/api/worlds/w/serve`, {

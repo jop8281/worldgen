@@ -13,6 +13,8 @@ import type { SpawnedChild } from '../sandboxes/backend.ts';
 export const RUN_STORE_FILE = '.studio-runs.json';
 
 export type JobKind = 'generate' | 'episode';
+/** The tenant of open mode, of the WORLDGEN_STUDIO_TOKEN admin, and of a record written before tenants existed. */
+export const DEFAULT_TENANT = 'default';
 /** Which studio may act on an unfinished job, and until when. Past `expiresAt` the holder counts as dead. */
 export type Lease = { readonly holder: string; readonly expiresAt: string };
 /** What a studio did with a job whose holder died. */
@@ -24,6 +26,8 @@ export type Recovery =
 export type StoredRun = {
   readonly runId: string;
   readonly kind: JobKind;
+  /** The tenant of the user who started it. Only that tenant and an admin see the job, and its key is looked up within it. */
+  readonly tenant: string;
   /** The Idempotency-Key header, or `derived:<sha256>` of the request when the client sent none. */
   readonly key: string;
   /** sha256 of the canonical request (kind + argv); a client key reused with another request is refused. */
@@ -55,6 +59,7 @@ const sharedFields = {
 const storedRunSchema = z.object({
   ...sharedFields,
   kind: z.enum(['generate', 'episode']),
+  tenant: z.string().default(DEFAULT_TENANT),
   key: z.string(),
   fingerprint: z.string(),
   phase: z.enum(['intent', 'running', 'finished']),
@@ -77,7 +82,7 @@ function storedRunOf(value: unknown): StoredRun | null {
   if (!legacy.success) return null;
   const { finished, ...run } = legacy.data;
   // An unfinished legacy record has no lease, so it counts as expired and the next studio recovers it.
-  return { ...run, kind: 'generate', key: `legacy:${run.runId}`, fingerprint: '', phase: finished ? 'finished' : 'running', lease: null };
+  return { ...run, kind: 'generate', tenant: DEFAULT_TENANT, key: `legacy:${run.runId}`, fingerprint: '', phase: finished ? 'finished' : 'running', lease: null };
 }
 
 /** How the studio looks at and signals a process it did not spawn itself. Injected so tests run no real process. */

@@ -305,7 +305,8 @@ describe('studio-watch', () => {
   });
 
   it('reads costs from a signed-in studio with WORLDGEN_STUDIO_TOKEN as the bearer, and never prints it', SPAWN_BUDGET, async () => {
-    const users: StudioUser[] = [{ name: 'vera', role: 'viewer', tokenSha256: createHash('sha256').update(TOKEN).digest('hex') }];
+    // The CLI makes WORLDGEN_STUDIO_TOKEN an admin of tenant default, and /api/costs is admin-only (A-344).
+    const users: StudioUser[] = [{ name: 'vera', role: 'admin', tenant: 'default', tokenSha256: createHash('sha256').update(TOKEN).digest('hex') }];
     await withStudio(costsJson({ cap: 'maxDailyUsd', capUsd: 10, spentUsd: 1, remainingUsd: 9 }), users, async (url) => {
       const signed = await watch([url], { WORLDGEN_STUDIO_TOKEN: TOKEN });
       assert.deepEqual(signed, {
