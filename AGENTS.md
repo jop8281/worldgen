@@ -16,18 +16,16 @@ Status on 2026-10-08, on stabilize/main: everything this file describes is built
 
 ## How work lands
 
-This is the workflow as of 2026-10-07. Linear and GitHub split the work, and one master session (worldgen-27) merges everything.
+This is the workflow as of 2026-10-08. Linear and GitHub split the work, and one master session merges everything.
 
-- **Linear tracks the work.** Team YOS, project WorldGen. An issue holds the acceptance, the owner, the status and the test results. Cite issues as YOS-n in branch names, PR text and decisions. Never open a GitHub issue.
-- **GitHub holds code and pull requests.** The repository is public. Never commit a secret, a key, a `.env` file or a log that holds one.
-- **Two branches.** `stabilize/main` is the integration branch, and every PR targets it. `main` moves only by a promotion PR from the master, after `scripts/qualify-main.sh` passes on the candidate. Examples are #383, #403 and #410.
-- **One job per session.** A session takes a job from the master, works in a fresh worktree under ~/wt/<job> cut from the latest `origin/stabilize/main`, and pushes a branch such as `dispatch/<job>`. It opens a PR to `stabilize/main` and replies to the master with "PR #n <sha>". Sessions never merge, and never push to `stabilize/main` or `main`.
-- **The master owns order.** It assigns decision numbers for `research/decisions.md`, so parallel PRs do not collide. It announces freezes. During a freeze, only fixes it asks for may land, and other PRs open as drafts.
-- **Rule 7, machine load.** Never run the full suite on the shared machine. Run only the test files that call what you changed, found by grep, under `nice -n 15` at concurrency 1 or 2.
-- **Rule 9, CI before merge.** Every PR needs a green `check` run of GitHub Actions on its head commit before the master merges it.
-- **Rule 10, CI only.** Verification runs in CI, not on the shared machine.
-- **When GitHub writes fail.** Base work on the local branch `stabilize-next` in the main checkout. Commit it to a local `dispatch/<job>` branch, and tell the master "LOCAL dispatch/<job> <sha>". The master merges locally and pushes when GitHub recovers.
-- **Consolidation mode, user order of 2026-10-07.** While it is on, it overrides rules 9 and 10. Sessions write code and docs and open PRs without unit-test runs or CI waits, and the master merges at once. The master announces when it ends.
+- **Linear tracks the work.** Team YOS, project WorldGen. An issue holds the acceptance, the owner, the status and the test results. Cite issues as YOS-n in branch names, PR text and decisions. Never open a GitHub issue. An issue moves to In Review when its PR merges. It moves to Done only after a promotion that contains the PR gets two green verdicts.
+- **GitHub holds code and pull requests.** The repository is jop8281/worldgen, and its root commit is 733538fd. It is public, so never commit a secret, a key, a `.env` file or a log that holds one. The earlier repository, jop8281/zozo123-genworld, was deleted on 2026-10-07. Its history survives only as refs/archive/old-origin/* in the main clone (YOS-230), and its PR numbers no longer resolve.
+- **One master.** The master is worldgen-f8, by the user's word on 2026-10-08. It alone merges into `stabilize/main` and promotes `main`. It assigns decision numbers for `research/decisions.md`, so parallel PRs do not collide. It announces freezes. During a freeze, only fixes it asks for may land, and other PRs open as drafts.
+- **One job per session.** A session takes one job from the master, works in a fresh worktree under ~/wt/<job> cut from the latest `origin/stabilize/main`, and pushes a branch such as `dispatch/<job>`. It opens a PR to `stabilize/main` titled "Part of YOS-n: ..." and replies to the master with "PR #n <sha>". A PR title never carries a bare id or a closing word. Sessions never merge, and never push to `stabilize/main` or `main`.
+- **Merge bar.** The master reviews the diff and the touched-test receipts. A high-blast-radius change also gets an independent verifier on another model before it merges. That covers auth and tenancy, Boat and spend, and anything that archives or deletes.
+- **Batches and promotion.** The master may land several verified PRs in order. `research/decisions.md` merges with git's union driver, set in the main clone's .git/info/attributes. After each batch, a promotion PR moves `main`. Two pinned verdict runs check it, on `verdict/<sha8>` and `verdict/<sha8>-b`, both started by workflow_dispatch. A promotion is accepted when both are green.
+- **The hand-in.** The hand-in is the tag v1.0-handin on 4b3d2be4. The tag never moves. Consolidation mode ended on 2026-10-08, and the freeze for the hand-in ended after the tag.
+- **Rule 7, machine load.** Never run the full suite on the shared machine. Run only the test files that call what you changed, found by grep, under `nice -n 15` at concurrency 1 or 2. A bare `bun test` command passes `--timeout 120000`, as `bun run test` does. Bun's 5 s default fails slow CLI tests and leaves their signal handlers behind.
 
 ## The four top-level directories
 
