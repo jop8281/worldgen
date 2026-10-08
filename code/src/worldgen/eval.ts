@@ -451,6 +451,7 @@ const STOP_IS_VERDICT: Record<StopReason['kind'], boolean> = {
   backtrack_limit: true,
   budget_exhausted: true,
   spend_cap: true,
+  cost_unenforceable: false,
   time_exhausted: true,
   stage_time_exhausted: true,
   model_error: false,

@@ -12,7 +12,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { assertNever } from '#lib/never';
 import type { CheckIssue } from '#engine';
-import { capReached, type CapName, type SpendEvent } from '../costs/ledger.ts';
+import { capReached, unenforceable, type CapName, type SpendEvent } from '../costs/ledger.ts';
 import type { Transport } from './config.ts';
 import type { InputKind } from './input.ts';
 import type { Usage } from './llm.ts';
@@ -27,6 +27,8 @@ export type StopReason =
   | { readonly kind: 'budget_exhausted'; readonly spentUsd: number; readonly limitUsd: number }
   /** The spend ledger, shared by every session, refused a call: `cap` was reached on `day` (UTC) or in all time. */
   | { readonly kind: 'spend_cap'; readonly cap: CapName; readonly capUsd: number; readonly spentUsd: number; readonly day: string }
+  /** The spend ledger refused a call before it was made: `cap` cannot be enforced while some spend, or open `claim`, has unknown cost. Nothing was spent. */
+  | { readonly kind: 'cost_unenforceable'; readonly cap: CapName; readonly claim: string | null }
   /** `refused` is set when preflight refused a call because it could not finish in the time left: the step, its estimate and the time left. Absent when the clock simply ran out. */
   | { readonly kind: 'time_exhausted'; readonly minutes: number; readonly refused?: { readonly step: StepId; readonly estimateMs: number; readonly remainingMs: number } }
   /** A call preflight refused, or the transport ended at its step share, because it would eat the time reserved for later steps. */
@@ -164,6 +166,8 @@ export function describeStop(reason: StopReason): string {
       return `budget_exhausted: this run spent $${reason.spentUsd.toFixed(4)} of its per-run budget maxCostUsd=$${reason.limitUsd.toFixed(2)}`;
     case 'spend_cap':
       return `spend_cap: ${capReached(reason.cap, reason.capUsd, reason.spentUsd, reason.day)}`;
+    case 'cost_unenforceable':
+      return `cost_unenforceable: ${unenforceable(reason.cap, reason.claim)}`;
     case 'time_exhausted':
       return reason.refused === undefined
         ? `time_exhausted: hit the ${reason.minutes}-minute limit`
