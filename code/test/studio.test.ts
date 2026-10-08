@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 import { checkWorld, saveWorld, serve, worldIdOf, type World, type WorldServer } from '#engine';
 import { nodeRunner, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../src/sandboxes/backend.ts';
+import { studioPage } from '../src/studio/page.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
 import { quietPort } from './helpers/ports.ts';
 import { minimalWorld } from './helpers/world.ts';
@@ -1156,5 +1157,47 @@ describe('studio runs across a restart (YOS-191, A-329)', () => {
     } finally {
       await c.close();
     }
+  });
+});
+
+describe('studio page accessibility (YOS-187)', () => {
+  const html = studioPage();
+  const tags = (name: string): { tag: string; at: number }[] =>
+    [...html.matchAll(new RegExp(`<${name}\\b[^>]*>`, 'g'))].map((m) => ({ tag: m[0], at: m.index ?? 0 }));
+  const labelledFor = new Set([...html.matchAll(/<label\s+for="([^"]+)"/g)].map((m) => m[1]));
+  const insideLabel = (at: number): boolean => {
+    const open = html.lastIndexOf('<label', at);
+    return open !== -1 && html.lastIndexOf('</label>', at) < open && html.indexOf('</label>', at) !== -1;
+  };
+
+  it('names every input, select and textarea', () => {
+    const controls = [...tags('input'), ...tags('select'), ...tags('textarea')];
+    assert.equal(controls.length, 18);
+    const unnamed = controls.filter((c) => {
+      const id = /\bid="([^"]+)"/.exec(c.tag)?.[1];
+      return !c.tag.includes('aria-label=') && !(id !== undefined && labelledFor.has(id)) && !insideLabel(c.at);
+    });
+    assert.deepEqual(unnamed.map((c) => c.tag), []);
+    assert.equal(html.includes('<input id="worlds-filter" type="search"'), true);
+  });
+
+  it('has one header, one main, a nav, and an h2 in every section', () => {
+    assert.equal(tags('header').length, 1);
+    assert.equal(tags('main').length, 1);
+    assert.equal(tags('nav').length, 1);
+    const sections = tags('section');
+    assert.equal(sections.length, 6);
+    const mainEnd = html.indexOf('</main>');
+    sections.forEach((s, i) => {
+      const end = Math.min(sections[i + 1]?.at ?? mainEnd, mainEnd);
+      assert.equal(html.slice(s.at, end).includes('<h2'), true, s.tag);
+      assert.equal(html.includes(`href="#${/id="([^"]+)"/.exec(s.tag)?.[1]}"`), true, s.tag);
+    });
+  });
+
+  it('gives every script-created input, select and textarea an aria-label', () => {
+    const created = [...html.matchAll(/createElement\('(input|select|textarea)'\)/g)];
+    assert.equal(created.length, 1);
+    assert.equal((html.match(/\.setAttribute\('aria-label'/g) ?? []).length, 1);
   });
 });
