@@ -627,10 +627,10 @@ describe('npm run sandbox', () => {
     assert.equal(r.stderr, 'BOAT_API_KEY is not set: create a key at https://boat.dev/dashboard?tab=api-keys and export it\n');
   });
 
-  it('is wired as bun run sandbox, and the SDK is pinned to ^1.5.0', async () => {
+  it('is wired as bun run sandbox, and the SDK is pinned to 1.6.0', async () => {
     const pkg: unknown = JSON.parse(await readFile(path.join(CODE_DIR, 'package.json'), 'utf8'));
     assert.equal(typeof pkg === 'object' && pkg !== null && 'scripts' in pkg ? (pkg as { scripts: Record<string, string> }).scripts['sandbox'] : undefined, 'bun src/cli/sandbox.ts');
-    assert.equal((pkg as { dependencies: Record<string, string> }).dependencies['@boatdev/sdk'], '^1.5.0');
+    assert.equal((pkg as { dependencies: Record<string, string> }).dependencies['@boatdev/sdk'], '1.6.0');
   });
 });
 
