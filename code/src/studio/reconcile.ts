@@ -3,13 +3,15 @@
  * `.studio-runs.json` whose lease ran out and whose process is gone. A studio applies the same rule when it starts
  * (`recoveryOf`, A-335); this applies it without starting one. A dry run reads the registry and the process table only.
  * `apply` stops each such job as a studio would, with an intent receipt before and an outcome receipt after, in a
- * journal beside the registry. A job with a live lease or a live process is never touched. The registry has no lock:
- * a studio that read it before the stop and writes after it undoes the stop, and the outcome then says so.
+ * journal beside the registry. A job with a live lease or a live process is never touched; a pid the OS gave to another
+ * process since the job recorded it is not live (A-373). The registry has no lock: a studio that read it before the stop
+ * and writes after it undoes the stop, and the outcome then says so. Before a write, a registry `apply` cannot read whole
+ * is kept aside, as a studio keeps it.
  */
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { loadRuns, recoveryOf, saveRuns, stoppedRun, type JobKind, type Processes, type RecoveryDecision, type StoredRun } from './runstore.ts';
+import { loadRuns, loadRunsToWrite, recoveryOf, saveRuns, stderrLine, stoppedRun, type JobKind, type Processes, type RecoveryDecision, type StoredRun } from './runstore.ts';
 
 /** The receipt journal's file name, beside the run registry in the worlds directory. */
 export const RECONCILE_JOURNAL = '.studio-reconcile.jsonl';
@@ -48,6 +50,8 @@ export type ReconcileJobsOptions = {
   readonly tenant?: string | undefined;
   readonly now: () => number;
   readonly processes: Processes;
+  /** Where `apply` says it kept a damaged registry aside. Defaults to stderr. */
+  readonly log?: ((line: string) => void) | undefined;
 };
 
 /** Whether the lease rules stopped this job, here or in a studio. A studio's close stopping its own job is not that (A-363). */
@@ -112,14 +116,19 @@ export async function reconcileJobs(opts: ReconcileJobsOptions) {
     const intent = open ?? await append(journal, { version: 1, runId: row.runId, kind: row.kind, tenant: row.tenant, reason: listed.reason, from: listed.from, action: 'stop_started', at: at() });
     if (open === undefined) receipts.push(intent);
     const facts = { version: 1, runId: row.runId, kind: row.kind, tenant: row.tenant, reason: intent.reason, from: intent.from } as const;
-    // Liveness is read first, so nothing but the decision runs between reading the registry and writing it back; a job a
-    // live studio recorded meanwhile survives, and one it resumed or finished meanwhile is left as it is.
+    // Liveness and the pid's start are read first, so nothing but the decision runs between reading the registry and
+    // writing it back; a job a live studio recorded meanwhile survives, and one it resumed or finished meanwhile is left as it is.
     const live = pid !== null && opts.processes.alive(pid);
-    const asOf: Processes = { alive: (p) => (p === pid ? live : opts.processes.alive(p)), kill: opts.processes.kill };
+    const started = pid !== null && live ? opts.processes.startOf(pid) : null;
+    const asOf: Processes = {
+      alive: (p) => (p === pid ? live : opts.processes.alive(p)),
+      startOf: (p) => (p === pid ? started : opts.processes.startOf(p)),
+      kill: opts.processes.kill,
+    };
     const at0 = opts.now();
     let outcome: z.input<typeof receiptSchema>;
     try {
-      const fresh = await loadRuns(opts.worldsDir);
+      const fresh = await loadRunsToWrite(opts.worldsDir, { now: opts.now, log: opts.log ?? stderrLine });
       const run = fresh.find((r) => r.runId === row.runId);
       const decision = run === undefined ? undefined : recoveryOf(run, at0, null, asOf);
       if (run === undefined || decision?.kind !== 'stop') {
