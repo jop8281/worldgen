@@ -153,13 +153,17 @@ export interface SpawnedChild {
   output(): string;
 }
 
-export type SpawnOpts = { readonly cwd?: string };
-/** Starts argv as a long-running child, no shell, stdio captured, environment inherited untouched. */
+export type SpawnOpts = {
+  readonly cwd?: string;
+  /** The child's whole environment, as in RunOpts. Unset, the child inherits this process's environment. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+};
+/** Starts argv as a long-running child, no shell, stdio captured, environment inherited unless opts.env replaces it. */
 export type Spawner = (argv: readonly string[], opts?: SpawnOpts) => SpawnedChild;
 
 /**
  * The production Spawner: `node:child_process` spawn, never through a shell, the environment
- * passed through untouched. The long-running sibling of nodeRunner: serve and studio children
+ * inherited unless opts.env replaces it. The long-running sibling of nodeRunner: serve and studio children
  * outlive the call that started them.
  */
 export const nodeSpawn: Spawner = (argv, opts) => {
@@ -169,6 +173,7 @@ export const nodeSpawn: Spawner = (argv, opts) => {
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     ...(opts?.cwd === undefined ? {} : { cwd: opts.cwd }),
+    ...(opts?.env === undefined ? {} : { env: opts.env }),
   });
   let text = '';
   child.stdout.setEncoding('utf8').on('data', (s: string) => (text += s));
@@ -399,4 +404,23 @@ export async function upWorld(backend: SandboxBackend, bundle: WorldBundle, opts
     }
     throw err;
   }
+}
+
+/** The environment of a child that runs a world's snippets: TZ, PATH and the guard scale, never a credential (A-338, A-343, A-347). */
+export function isolatedEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  return { TZ: 'UTC', PATH: env['PATH'] ?? '', ...(env['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: env['WORLDGEN_GUARD_SCALE'] }) };
+}
+
+/** The ports `worldplay serve` reports once both listen: its `{"listening":{"world":W,"admin":A}}` line, or null before it. */
+export function listeningPorts(output: string): { readonly world: number; readonly admin: number } | null {
+  for (const line of output.split('\n')) {
+    if (!line.startsWith('{"listening"')) continue;
+    try {
+      const l = (JSON.parse(line) as { listening?: { world?: unknown; admin?: unknown } } | null)?.listening;
+      if (l !== undefined && Number.isInteger(l.world) && Number.isInteger(l.admin)) return { world: l.world as number, admin: l.admin as number };
+    } catch {
+      // a line still being written
+    }
+  }
+  return null;
 }

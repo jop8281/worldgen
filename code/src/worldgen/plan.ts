@@ -223,7 +223,7 @@ export function planSchemaFor(inputKind: InputKind) {
  * longer lists and that plan.changes names exactly as `tests.<id>`.
  */
 export function frozenTests(plan: Plan, base: World['tests']): World['tests'] {
-  const named = new Set(plan.changes.map((c) => c.trim()));
+  const named = new Set(plan.changes.map(changeItem));
   return {
     ...Object.fromEntries(Object.entries(base).filter(([id]) => !named.has(`tests.${id}`))),
     ...Object.fromEntries(plan.acceptanceTests.map(({ id, description, script }) => [id, { description, script }])),

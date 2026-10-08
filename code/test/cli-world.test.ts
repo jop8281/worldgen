@@ -457,6 +457,9 @@ describe('world serve', () => {
       const { world, admin } = await s.urls;
       assert.match(world, /^http:\/\/127\.0\.0\.1:\d+$/);
       assert.match(admin, /^http:\/\/127\.0\.0\.1:\d+$/);
+      // Port 0 binds both ports where the OS picks, and the first line reports them for a parent to read (A-348).
+      const listening = JSON.parse(s.output().split('\n')[0] ?? '') as unknown;
+      assert.deepEqual(listening, { listening: { world: Number(new URL(world).port), admin: Number(new URL(admin).port) } });
       const tickets = await fetch(`${world}/tickets?limit=1`);
       assert.equal(tickets.status, 200);
       assert.deepEqual(((await tickets.json()) as { data: { id: string }[] }).data.map((t) => t.id), ['tkt_0001']);

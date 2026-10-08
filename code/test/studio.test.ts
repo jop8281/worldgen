@@ -9,14 +9,17 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
-import { createServer as createNetServer } from 'node:net';
 import { checkWorld, saveWorld, serve, worldIdOf, type World, type WorldServer } from '#engine';
-import type { RunResult, Runner, SpawnedChild, Spawner } from '../src/sandboxes/backend.ts';
+import { nodeRunner, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../src/sandboxes/backend.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
+import { quietPort } from './helpers/ports.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 // ---- transport: fetch against the loopback studio ----------------------------------------------
+
+const REAL_CODE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 type Json = { [k: string]: unknown };
 
@@ -45,13 +48,33 @@ function errorOf(body: Json): { code: unknown; message: unknown } | null {
 // ---- fakes: every child is recorded, none is real ------------------------------------------------
 
 /** What the next spawn answers: which signals it dies to, its pid, and what it does on start. */
-type ChildPlan = { diesOn?: readonly string[]; pid?: number; onSpawn?: (argv: readonly string[]) => void };
+/**
+ * What the next spawn answers: which signals it dies to, its pid, and what it does on start. A `worldplay serve` child
+ * prints its listening line as the real one does (A-348): the asked port and port + 1, or fake OS-picked ports for port 0,
+ * unless `listening` names other ports, is null for a child that never reports, or `exitsFirst` makes it exit first.
+ */
+type ChildPlan = {
+  diesOn?: readonly string[];
+  pid?: number;
+  onSpawn?: (argv: readonly string[]) => void;
+  listening?: { readonly world: number; readonly admin: number } | null;
+  exitsFirst?: { readonly code: number; readonly line: string };
+};
 
-function fakeChild(plan: ChildPlan = {}): { child: SpawnedChild; signals: string[]; exitWith: (code: number | null) => void } {
+let pickedPorts = 46000;
+/** The listening line a fake `worldplay serve` prints for this argv and plan, or '' for any other child. */
+function serveLine(argv: readonly string[], plan: ChildPlan): string {
+  if (argv[1] !== 'src/cli/worldplay.ts' || argv[2] !== 'serve' || plan.listening === null || plan.exitsFirst !== undefined) return '';
+  const asked = Number(argv[argv.indexOf('--port') + 1]);
+  const ports = plan.listening ?? (asked > 0 ? { world: asked, admin: asked + 1 } : { world: (pickedPorts += 2), admin: pickedPorts + 1 });
+  return `${JSON.stringify({ listening: ports })}\n`;
+}
+
+function fakeChild(plan: ChildPlan = {}, argv: readonly string[] = []): { child: SpawnedChild; signals: string[]; exitWith: (code: number | null) => void } {
   const signals: string[] = [];
   const diesOn = plan.diesOn ?? ['SIGTERM', 'SIGKILL'];
   let dead = false;
-  let text = '';
+  let text = serveLine(argv, plan);
   let settle: (code: number | null) => void = () => {};
   const exited = new Promise<number | null>((resolve) => {
     settle = resolve;
@@ -69,6 +92,12 @@ function fakeChild(plan: ChildPlan = {}): { child: SpawnedChild; signals: string
     },
     output: () => text,
   };
+  if (plan.exitsFirst !== undefined) {
+    const { code, line } = plan.exitsFirst;
+    text = `${line}\n`;
+    dead = true;
+    setImmediate(() => settle(code));
+  }
   return {
     child,
     signals,
@@ -86,7 +115,7 @@ function fakeSpawner(plan: () => ChildPlan): { spawner: Spawner; spawned: Spawne
   const spawned: SpawnedCall[] = [];
   const spawner: Spawner = (argv, opts) => {
     const one = plan();
-    const handle = fakeChild(one);
+    const handle = fakeChild(one, argv);
     spawned.push({ argv: [...argv], cwd: opts?.cwd, handle });
     one.onSpawn?.(argv);
     return handle.child;
@@ -278,10 +307,12 @@ describe('studio', () => {
     spawned = calls;
     const costsResult: RunResult = { code: 0, stdout: `${JSON.stringify(COSTS_JSON, null, 2)}\n`, stderr: '' };
     const runner: Runner = async (argv, opts) => {
+      // The Explorer's check child runs for real, in the real code dir; the fake root has none.
+      if (argv.includes('src/cli/studio-check.ts')) return nodeRunner(argv, { ...opts, cwd: REAL_CODE_DIR });
       costsCalls.push({ argv: [...argv], cwd: opts?.cwd });
       return costsResult;
     };
-    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, build: 'test-sha', startupGraceMs: 1500, runStopWaitMs: 1000, maxConcurrentRuns: 1000, maxConcurrentEpisodes: 1000 });
+    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, build: 'test-sha', serveWaitMs: 1500, runStopWaitMs: 1000, maxConcurrentRuns: 1000, maxConcurrentEpisodes: 1000 });
     base = server.url;
   });
 
@@ -291,12 +322,17 @@ describe('studio', () => {
   });
 
   describe('health', () => {
-    it('GET /api/health is ready with the build, the runtime and the world count', async () => {
+    it('GET /api/health is ready with the build, the runtime, the world count and the traffic so far', async () => {
       const r = await call(base, 'GET', '/api/health');
       assert.equal(r.status, 200);
       const listed = (JSON.parse((await call(base, 'GET', '/api/worlds')).text) as { worlds: unknown[] }).worlds.length;
       const bun = process.versions['bun'];
-      assert.deepEqual(JSON.parse(r.text), { ok: true, build: 'test-sha', runtime: bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`, worlds: listed });
+      // The first test of the suite: no answer has been counted yet, and health polls never are. Counts after real
+      // traffic, on an injected clock, are in test/studio-watch.test.ts.
+      const { traffic, ...rest } = JSON.parse(r.text) as { traffic: { since: string } };
+      assert.deepEqual(rest, { ok: true, build: 'test-sha', runtime: bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`, worlds: listed });
+      assert.equal(new Date(traffic.since).toISOString(), traffic.since);
+      assert.deepEqual({ ...traffic, since: 'ISO' }, { since: 'ISO', requests: 0, errors5xx: 0, windowSeconds: 300, window: { requests: 0, errors5xx: 0 } });
     });
   });
 
@@ -322,6 +358,7 @@ describe('studio', () => {
         worlds: [
           {
             name: 'gen-alpha',
+            tenant: null,
             generated: true,
             taskCount: 3,
             capsule: { wid: `wid_${'b'.repeat(64)}`, model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, attempts: 2 },
@@ -329,14 +366,15 @@ describe('studio', () => {
           },
           {
             name: 'gen-canary',
+            tenant: null,
             generated: true,
             taskCount: 3,
             capsule: { wid: null, model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, attempts: 2 },
             reportExists: true,
           },
-          { name: 'gen-leak', generated: false, taskCount: 3, reportExists: true },
-          { name: 'hand-beta', generated: false, taskCount: 3, reportExists: false },
-          { name: 'no-world-gamma', generated: true, taskCount: null, invalid: 'schema.invalid', reportExists: false },
+          { name: 'gen-leak', tenant: null, generated: false, taskCount: 3, reportExists: true },
+          { name: 'hand-beta', tenant: null, generated: false, taskCount: 3, reportExists: false },
+          { name: 'no-world-gamma', tenant: null, generated: true, taskCount: null, invalid: 'schema.invalid', reportExists: false },
         ],
       });
     });
@@ -390,8 +428,8 @@ describe('studio', () => {
       assert.equal(r.status, 200);
       assert.deepEqual(r.body, {
         runs: [
-          { name: 'gen-alpha', runId: 'run_20261007T181329Z_old1111', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, ms: 24000, outcome: 'done', hasReport: true },
-          { name: 'gen-canary', runId: 'run_20261007T000000Z_canary01', model: null, transport: null, costUsd: null, ms: null, outcome: null, hasReport: true },
+          { name: 'gen-alpha', tenant: null, runId: 'run_20261007T181329Z_old1111', model: 'claude-sonnet-5-5', transport: 'claude-cli', costUsd: 0.51, ms: 24000, outcome: 'done', hasReport: true },
+          { name: 'gen-canary', tenant: null, runId: 'run_20261007T000000Z_canary01', model: null, transport: null, costUsd: null, ms: null, outcome: null, hasReport: true },
         ],
       });
     });
@@ -402,7 +440,7 @@ describe('studio', () => {
       const r = await json(base, 'POST', '/api/worlds/gen-alpha/serve', { port: 4123 });
       assert.equal(r.status, 200);
       const rec = r.body;
-      assert.match(String(rec['id']), /^svc-[1-9][0-9]*$/);
+      assert.match(String(rec['id']), /^svc-[0-9a-f]{8}$/);
       assert.equal(rec['name'], 'gen-alpha');
       assert.equal(rec['pid'], 43210);
       assert.equal(rec['worldPort'], 4123);
@@ -439,18 +477,58 @@ describe('studio', () => {
       assert.deepEqual((await json(base, 'GET', '/api/services')).body, { services: [] });
     });
 
-    it('picks a free port when none is asked for', async () => {
+    it('serves on port 0 when none is asked for, and records the ports the child reports (A-348)', async () => {
+      spawnPlan = () => ({ listening: { world: 45678, admin: 45901 } });
       const r = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
       assert.equal(r.status, 200);
-      const port = r.body['worldPort'];
-      if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
-        assert.fail(`worldPort is ${String(port)}, not a free port`);
-      }
-      assert.equal(r.body['adminPort'], port + 1);
-      assert.deepEqual(lastSpawn().argv.slice(0, -2), ['bun', 'src/cli/worldplay.ts', 'serve', path.join(worldsDir, 'hand-beta')]);
-      assert.deepEqual(lastSpawn().argv.slice(-2), ['--port', String(port)]);
+      assert.deepEqual([r.body['worldPort'], r.body['adminPort']], [45678, 45901]);
+      assert.deepEqual(lastSpawn().argv, ['bun', 'src/cli/worldplay.ts', 'serve', path.join(worldsDir, 'hand-beta'), '--port', '0']);
       const id = String(r.body['id']);
       assert.deepEqual((await json(base, 'POST', `/api/services/${id}/stop`)).body, { id, stopped: true, signal: 'SIGTERM' });
+    });
+
+    it('answers 502 with the child\'s last line when worldplay serve exits before it listens', async () => {
+      spawnPlan = () => ({ exitsFirst: { code: 1, line: 'serve: listen EADDRINUSE: address already in use 127.0.0.1:4555' } });
+      const r = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
+      assert.deepEqual([r.status, r.body], [502, { error: { code: 'serve.failed', message: 'worldplay serve for hand-beta exited 1 before it listened: serve: listen EADDRINUSE: address already in use 127.0.0.1:4555' } }]);
+      assert.deepEqual((await json(base, 'GET', '/api/services')).body, { services: [] });
+    });
+
+    it('stops a child that reports no ports within serveWaitMs, and answers 504', async () => {
+      spawnPlan = () => ({ listening: null });
+      const r = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
+      assert.deepEqual([r.status, r.body], [504, { error: { code: 'serve.timeout', message: 'worldplay serve for hand-beta reported no listening ports within 1500 ms, so the studio stopped it' } }]);
+      assert.deepEqual(lastSpawn().handle.signals, ['SIGTERM']);
+      assert.deepEqual((await json(base, 'GET', '/api/services')).body, { services: [] });
+    });
+
+    it('refuses an admin port that a tracked service holds as its world or admin port', async () => {
+      spawnPlan = () => ({ listening: { world: 45100, admin: 45101 } });
+      const first = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
+      assert.equal(first.status, 200);
+      const id = String(first.body['id']);
+      try {
+        for (const port of [45100, 45101, 45099]) {
+          const r = await json(base, 'POST', '/api/worlds/gen-alpha/serve', { port });
+          assert.deepEqual([r.status, r.body], [409, { error: { code: 'serve.port_taken', message: `port ${port} or its admin port ${port + 1} belongs to hand-beta (${id})` } }], String(port));
+        }
+      } finally {
+        await json(base, 'POST', `/api/services/${id}/stop`);
+      }
+    });
+
+    it('refuses a call to a service whose child has exited', async () => {
+      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      assert.equal(served.status, 200);
+      const id = String(served.body['id']);
+      lastSpawn().handle.exitWith(0);
+      await new Promise((resolve) => setImmediate(resolve));
+      const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
+      assert.deepEqual([r.status, errorOf(r.body)?.code], [404, 'service.unknown']);
     });
 
     it('SIGKILLs a child that lingers past SIGTERM, and says so', async () => {
@@ -513,7 +591,7 @@ describe('studio', () => {
       const post = await json(base, 'POST', '/api/generate', { kind: 'description', text: 'A helpdesk with SLA tiers', outSlug: 'alpha' });
       assert.equal(post.status, 200);
       const runId = String(post.body['runId']);
-      assert.match(runId, /^\d{8}T\d{6}Z-alpha$/);
+      assert.match(runId, /^\d{8}T\d{6}Z-alpha-[0-9a-f]{6}$/);
       assert.equal(post.body['outDir'], path.join(worldsDir, 'gen-alpha'));
       assert.equal(post.body['running'], true);
       assert.deepEqual(lastSpawn().argv, ['bun', 'src/cli/worldgen.ts', 'A helpdesk with SLA tiers', '--out', path.join(worldsDir, 'gen-alpha')]);
@@ -898,8 +976,9 @@ describe('studio', () => {
       assert.ok(report.ok);
       await writeWorld(path.join(worldsDir, 'console-delta'), minimalWorld());
       world = await serve(report.world, { port: 0 });
+      spawnPlan = () => ({ listening: { world: world.port, admin: world.adminPort } });
+      const served = await json(base, 'POST', '/api/worlds/console-delta/serve', {});
       spawnPlan = () => ({});
-      const served = await json(base, 'POST', '/api/worlds/console-delta/serve', { port: world.port });
       assert.equal(served.status, 200, JSON.stringify(served.body));
       svc = String(served.body['id']);
     });
@@ -945,36 +1024,13 @@ describe('studio', () => {
       assert.equal((await json(base, 'POST', '/api/services/svc-none/call', { method: 'GET', path: '/customers' })).status, 404);
     });
 
-    it('retries a refused call while a just-served world starts listening, then answers the world (A-278)', async () => {
-      const report = checkWorld(minimalWorld());
-      assert.ok(report.ok);
-      const port = await new Promise<number>((resolve) => {
-        const probe = createNetServer().listen(0, '127.0.0.1', () => {
-          const a = probe.address();
-          probe.close(() => resolve(a !== null && typeof a === 'object' ? a.port : 0));
-        });
-      });
-      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', { port });
+    it('answers a real 502 at once when nothing listens on the world port, never a made-up success', async () => {
+      // The world port is one no port-0 bind can be handed (YOS-105), so nothing listens there for this test's life.
+      const port = await quietPort();
+      spawnPlan = () => ({ listening: { world: port, admin: port + 1 } });
+      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', {});
+      spawnPlan = () => ({});
       assert.equal(served.status, 200, JSON.stringify(served.body));
-      const id = String(served.body['id']);
-      const late = new Promise<Awaited<ReturnType<typeof serve>>>((resolve) => setTimeout(() => resolve(serve(report.world, { port })), 600));
-      try {
-        const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
-        assert.deepEqual([r.status, r.body['status']], [200, 200], JSON.stringify(r.body));
-      } finally {
-        await json(base, 'POST', `/api/services/${id}/stop`);
-        await (await late).close();
-      }
-    });
-
-    it('answers a real 502 when nothing listens on the world port, never a made-up success', async () => {
-      const port = await new Promise<number>((resolve) => {
-        const probe = createNetServer().listen(0, '127.0.0.1', () => {
-          const a = probe.address();
-          probe.close(() => resolve(a !== null && typeof a === 'object' ? a.port : 0));
-        });
-      });
-      const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', { port });
       const id = String(served.body['id']);
       try {
         const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
@@ -983,6 +1039,30 @@ describe('studio', () => {
         await json(base, 'POST', `/api/services/${id}/stop`);
       }
     });
+  });
+});
+
+describe('studio serve: only an admin pins a port (A-348)', () => {
+  it('serves an operator on port 0 whatever port the body names, and records the reported ports', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'studio-serve-'));
+    const worldsDir = path.join(root, 'prod', 'worlds');
+    await writeWorld(path.join(worldsDir, 'w'), minimalWorld());
+    const { spawner, spawned } = fakeSpawner(() => ({ listening: { world: 45300, admin: 45301 } }));
+    const runner: Runner = async () => ({ code: 0, stdout: '{}', stderr: '' });
+    // sha256 of 'operator-token-o1'.
+    const users = [{ name: 'olga', role: 'operator' as const, tenant: 'default', tokenSha256: '0d8dc9deab36314a0e348de096f11795a300d35258412ffe048c9eecdabb8edd' }];
+    const s = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, users, serveWaitMs: 1500 });
+    try {
+      const res = await fetch(`${s.url}/api/worlds/w/serve`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer operator-token-o1' }, body: JSON.stringify({ port: 4321 }),
+      });
+      const body = await res.json() as Json;
+      assert.deepEqual([res.status, body['worldPort'], body['adminPort']], [200, 45300, 45301]);
+      assert.deepEqual(spawned[0]?.argv.slice(-2), ['--port', '0']);
+    } finally {
+      await s.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
