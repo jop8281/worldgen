@@ -118,7 +118,7 @@ export async function main(argv: readonly string[], env: Env = process.env): Pro
     let nextTurn: NextTurn = finishAtOnce;
     if (args.agent === 'sonnet') {
       const config = await loadConfig(CONFIG_FILE, { maxOutputTokens: SOLVER_MAX_OUTPUT_TOKENS, model: DEFAULT_MODEL });
-      nextTurn = solverTurn(makeModel(config, env, args.transport ?? transportOf(config)));
+      nextTurn = solverTurn(makeModel(config, env, args.transport ?? transportOf(config)), args.runId);
     }
     const r = await runLocalEpisode({
       worldDir: args.world, taskId: args.task, out: args.out, runId: args.runId, engineCommit: args.engineCommit, model: AGENT_MODEL[args.agent], nextTurn,

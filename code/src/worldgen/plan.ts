@@ -33,7 +33,7 @@ const planBase = z.object({
     rowsPerEntity: z.record(z.string(), z.number().int()),
     mix: z.string(),
     stateMix: z.record(z.string(), z.record(z.string(), z.number().min(0).max(100))).optional()
-      .describe(`for each workflow entity, the percent of its seeded rows in each workflow state, summing to 100, such as { ticket: { open: 60, closed: 40 } }; the built seed must land within ${MIX_WITHIN} points of each`),
+      .describe(`for each workflow entity whose states a state field holds, the percent of its seeded rows in each workflow state, summing to 100, such as { ticket: { open: 60, closed: 40 } }; the built seed must land within ${MIX_WITHIN} points of each. Leave out an entity whose every workflow declares a lifecycle, since no state field holds its states`),
   }),
   open_questions: z
     .array(z.object({ question: z.string(), default_answer: z.string() }))
@@ -78,7 +78,7 @@ const workflowItem = z.object({ name: z.string(), entity: z.string(), states: z.
   actions: z.array(z.string()).describe('action keys exactly as in world.actions, such as resolve_ticket; a plan route with the same id is built as this action, not as a route') });
 const pressureItem = z.object({
   paging: z.string().optional().describe('entity whose list the reference must page past the first page to reach a target row'),
-  states: z.array(z.string()).optional().describe('entity.state values the task needs seeded rows in, such as ticket.pending'),
+  states: z.array(z.string()).optional().describe('entity.state values the task needs seeded rows in, such as ticket.pending; never a state only a workflow with a declared lifecycle names, since no state field holds it'),
   distractors: z.string().optional().describe('entity whose near-duplicate rows the reference must tell apart: a filtered list must return a row it leaves unchanged'),
 }).describe('what makes the task as hard as its label; the judge checks it against the reference trace and the seed (A-226, A-227)');
 const taskItem = z.object({ id: z.string(), difficulty: z.enum(['easy', 'medium', 'hard']), intent: z.string(), decoyIdea: z.string(), pressure: pressureItem.optional() });
@@ -181,8 +181,10 @@ export function untestedActions(plan: Plan): readonly string[] {
 /**
  * planSchema plus the rules of a plan that builds a new world: its acceptance tests exist before
  * implementation and cover every workflow action, a description plan asks at least one open
- * question, every plan records at least one assumption (A-180), and every workflow entity has a
- * planned stateMix that the seed step is then judged against (A-183). Refusals have no such rules.
+ * question, every plan records at least one assumption (A-180), and every workflow entity whose
+ * states a state field holds has a planned stateMix that the seed step is then judged against
+ * (A-183). An entity whose every workflow declares a lifecycle has no state field to mix, so it owes
+ * none (A-371). Refusals have no such rules.
  */
 export function planSchemaFor(inputKind: InputKind) {
   return planSchema.superRefine((plan, ctx) => {
@@ -200,9 +202,9 @@ export function planSchemaFor(inputKind: InputKind) {
         message: 'a plan built from a description needs at least one open question with the default answer taken: ask what a human would be asked',
       });
     }
-    for (const entity of new Set(plan.workflows.map((w) => w.entity))) {
+    for (const entity of new Set(plan.workflows.filter((w) => w.lifecycle === undefined).map((w) => w.entity))) {
       if (!Object.hasOwn(plan.seed.stateMix ?? {}, entity)) {
-        ctx.addIssue({ code: 'custom', path: ['seed', 'stateMix', entity], message: `a plan to build needs seed.stateMix for workflow entity ${entity}: the percent of its rows in each planned state, summing to 100` });
+        ctx.addIssue({ code: 'custom', path: ['seed', 'stateMix', entity], message: `a plan to build needs seed.stateMix for workflow entity ${entity}, whose states a state field holds: the percent of its rows in each planned state, summing to 100` });
       }
     }
     if (plan.assumptions.length === 0) {
@@ -331,6 +333,31 @@ export function workflowIssues(plan: Plan, world: World): readonly CheckIssue[] 
     });
     return [...states, ...rules];
   });
+}
+
+/**
+ * The workflows of a pressed `entity.state` that name the state, when every one of them declares a lifecycle: by
+ * the plan's own word no state field holds it, so no seed row can be in it (A-369). Empty when a workflow without
+ * a declared lifecycle names it, or when none does, which leaves the claim to the seed check.
+ */
+function lifecycleOnly(plan: Plan, pressed: string): Plan['workflows'] {
+  const [entity = '', state = ''] = pressed.split('.');
+  const naming = plan.workflows.filter((w) => w.entity === entity && w.states.includes(state));
+  return naming.some((w) => w.lifecycle === undefined) ? [] : naming;
+}
+
+/** Whether a pressed `entity.state` is one the plan's own lifecycle keeps out of every state field (A-369). */
+export const pressureUnreachable = (plan: Plan, pressed: string): boolean => lifecycleOnly(plan, pressed).length > 0;
+
+/** plan.pressure_unreachable for each pressed state no seed can meet. Only the plan can drop it, so it is the plan's to fix (A-369). */
+export function pressurePlanIssues(plan: Plan): readonly CheckIssue[] {
+  return plan.tasks.flatMap((t, ti) => (t.pressure?.states ?? []).flatMap((pressed, si) => {
+    const naming = lifecycleOnly(plan, pressed);
+    if (naming.length === 0) return [];
+    const [entity = '', state = ''] = pressed.split('.');
+    return [issue('plan.pressure_unreachable', ['plan', 'tasks', ti, 'pressure', 'states', si], { task: t.id, entity, state, workflows: naming.map((w) => w.name) },
+      `${pressed} is a state only of ${naming.map((w) => `${w.name} (lifecycle ${w.lifecycle?.representation})`).join(', ')}`)];
+  }));
 }
 
 /**

@@ -757,6 +757,29 @@ describe('runWorldGen create: OpenAPI request shape is judged at the step that b
     assert.equal(result.kind, 'done');
   });
 
+  it('replays YOS-241: an action field the spec requires, made required but with a default, is progress, and the next attempt hears why', async () => {
+    const spec = specFile({ '/tickets/{id}/resolve': { post: {
+      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' } } } } } },
+      responses: { '200': { description: 'resolved' } } } } });
+    const resolve = TARGET.actions['resolve_ticket']!;
+    const withReason = (reason: object) => ({ note: 'resolve takes a reason', upsert: { actions: { ...TARGET.actions, resolve_ticket: { ...resolve, input: { reason } } }, jobs: TARGET.jobs } });
+    // As the live run answered: the field optional, then required with a default. Before YOS-241 both read
+    // `fields reason`, so the second stopped the run as no_progress before a third workflow call.
+    const script: Script = [{ input: PLAN }, { input: EDITS.model }, { input: withReason({ type: 'string' }) },
+      { input: withReason({ type: 'string', required: true, default: 'none' }) }, new ModelError('the third workflow call')];
+    const { result, events, calls } = await run(script, { input: { kind: 'openapi', path: spec, only: [] }, digest: OPENAPI_DIGEST });
+    assert.deepEqual(steps(events), [['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'rejected'], ['workflow', 'rejected'], ['workflow', 'model_error']]);
+    const found = events.flatMap((e) => (e.t === 'attempt' && e.outcome.kind === 'rejected' ? [e.outcome.issues.map((i) => [i.code, i.path.join('.'), i.found])] : []));
+    const at = 'input.openapi.POST /tickets/{id}/resolve.request.reason';
+    assert.deepEqual(found, [
+      [['openapi.required_field_missing', at, 'reason is optional']],
+      [['openapi.required_field_missing', at, 'reason has a default, so a request may leave it out']],
+    ]);
+    assert.equal(calls[4]?.prompt.includes('reason has a default, so a request may leave it out'), true);
+    assert.equal(calls[4]?.prompt.includes('make it required with no default'), true);
+    assert.deepEqual(result.kind === 'stopped' ? result.reason : null, { kind: 'model_error', message: 'the third workflow call' });
+  });
+
   it('rejects a route whose request requires a field the spec leaves optional at the model step, not first at tasks', async () => {
     const spec = specFile({ '/customers': { post: {
       requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, tier: { type: 'string', enum: ['free', 'pro', 'enterprise'] } } } } } },
@@ -1497,6 +1520,48 @@ describe('runWorldGen create: model and effort per step', () => {
   });
 });
 
+describe('runWorldGen create: a retry sees the step\'s history (YOS-246, A-364)', () => {
+  /** CUSTOMERS without its last row: 14 of the planned 15. */
+  const SHORT = CUSTOMERS.replace("  { name: 'Massive Dynamic', tier: 'enterprise' },\n", '');
+  const config = configSchema.parse({ model: 'claude-sonnet-5-5', maxCostUsd: 5, stepModels: { seed: { effort: 'medium' } }, escalate: { effort: 'max' } });
+
+  it('keeps the best full seed when a retry answers in part, lists every earlier attempt, and does not escalate', async () => {
+    const nearlyRight = { note: 'customers and tickets', upsert: { seed: { ...TARGET.seed, customer: SHORT } } };
+    const customersOnly = { note: 'one more customer', upsert: { seed: { customer: CUSTOMERS } } };
+    const { result, events, calls } = await run([
+      { input: PLAN }, { input: EDITS.model }, { input: EDITS.workflow }, { input: nearlyRight }, { input: customersOnly }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { config });
+    assert.equal(result.kind, 'done');
+    assert.deepEqual(attempts(events).filter((a) => a[0] === 'seed'), [['seed', 1, 'rejected'], ['seed', 2, 'rejected'], ['seed', 3, 'accepted']]);
+    // Attempt 2 rose from no issue on ticket to one only because it left seed.ticket out: no escalation.
+    assert.deepEqual(calls.slice(3, 6).map((c) => c.effort), ['medium', 'medium', 'medium']);
+    const third = calls[5]?.prompt ?? '';
+    assert.equal(third.includes('Your best answer so far (attempt 1):'), true);
+    assert.equal(third.includes(JSON.stringify(SHORT)), true);
+    assert.equal(third.includes('"note": "one more customer"'), false);
+    assert.equal(third.includes('## Earlier attempts in this step'), true);
+    assert.equal(third.includes([
+      '- attempt 1: plan.seed_rows_short at plan.seed.rowsPerEntity.customer',
+      '- attempt 2, which left seed.ticket untouched: plan.seed_rows_short at plan.seed.rowsPerEntity.ticket',
+    ].join('\n')), true);
+  });
+
+  it('shows both earlier issue sets when a third answer could go back to the first (course-enrollments)', async () => {
+    const { result, events, calls } = await run([{ input: PLAN }, { input: BAD_ENTITY }, { input: BAD_FILTER }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }], { config });
+    assert.equal(result.kind, 'done');
+    assert.deepEqual(attempts(events).filter((a) => a[0] === 'model'), [['model', 1, 'rejected'], ['model', 2, 'rejected'], ['model', 3, 'accepted']]);
+    const third = calls[3]?.prompt ?? '';
+    assert.equal(third.includes('## Earlier attempts in this step'), true);
+    assert.equal(third.includes([
+      '- attempt 1: ref.unknown at routes.get_ticket.entity',
+      '- attempt 2: ref.unknown at routes.list_tickets.filters.0',
+    ].join('\n')), true);
+    // A tie keeps the latest answer, and two full answers with no fewer issues still escalate.
+    assert.equal(third.includes('Your previous answer:'), true);
+    assert.deepEqual(calls.slice(1, 4).map((c) => c.effort), [undefined, undefined, 'max']);
+  });
+});
+
 describe('stage briefs name what the judge checks (YOS-45)', () => {
   /** PLAN with a custom route the resolve_ticket action claims, its action annotated with its route as real plans write it. */
   const ACTION_ROUTE_PLAN = {
@@ -1511,6 +1576,16 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
     assert.deepEqual(listed(prompt, 'Required keys'), ['- entities.customer', '- entities.ticket', '- routes.list_tickets', '- routes.get_ticket', '- routes.list_customers']);
     assert.deepEqual(listed(prompt, 'Action routes'), ['- resolve_ticket']);
     assert.equal(STAGES.model.brief.includes('A plan route whose id is also a workflow action name is an action route'), true);
+  });
+
+  it('tells the model stage to type an imported date-only column as a string with a date pattern, and only then (YOS-247)', () => {
+    const fixtures = { enrollments: [{ student: 'S1', enrolled_on: '2026-08-28', paid_at: '2026-08-28T09:00:00Z' }, { student: 'S2', enrolled_on: '', paid_at: '2026-08-29T10:00:00Z' }] };
+    const dated = { ...emptyWorld('w', 'worldgen'), fixtures };
+    assert.deepEqual(listed(stagePrompt('model', plan, dated, null), 'Imported date-only columns'), [
+      '- enrollments.enrolled_on holds dates with no time, such as 2026-08-28: type its field string with pattern ^\\d{4}-\\d{2}-\\d{2}$, never datetime, so the imported values seed unchanged.',
+    ]);
+    assert.equal(stagePrompt('model', plan, emptyWorld('w', 'worldgen'), null).includes('## Imported date-only columns'), false);
+    assert.equal(stagePrompt('workflow', plan, dated, null).includes('## Imported date-only columns'), false);
   });
 
   it('plan coverage checks a claimed route as its action at the workflow stage, never as a route', () => {
@@ -2012,6 +2087,41 @@ describe('runWorldGen: a seed shortfall found at tasks goes back to seed with it
       '- escalate_acme, distractors ticket: call GET /tickets with one of its filters (customer, status, priority) so that it returns a ticket row the task leaves unchanged, and change at least one ticket row. With cursor too, the call still counts as a later page.',
     ]);
     assert.deepEqual(listed(calls[3]?.prompt ?? '', 'Pressure each task must show, every claim in every answer'), []);
+    assert.equal(result.kind, 'done');
+  });
+
+  // stress-5 stripe-customers: a create's seed step had no task yet, so its report failed and the seed needs never ran there.
+  it('rejects a create seed that misses a planned need at the seed step and retries it there with the issue (YOS-253)', async () => {
+    const paged = { ...PLAN, tasks: PLAN.tasks.map((t) => (t.id === 'resolve_password_ticket' ? { ...t, pressure: { paging: 'ticket' } } : t)) };
+    // The paging claim needs the changed row reached only past the first page: the password ticket is row 2, so pages of one.
+    const secondRow = "ctx.api('GET', '/tickets?limit=1&cursor=' + ctx.api('GET', '/tickets?limit=1').body.next_cursor)";
+    const LATER_PAGE_TASKS = { note: 'three graded tasks; the easy one finds its ticket on the second one-row page', upsert: { tasks: Object.fromEntries(Object.entries(TARGET.tasks).map(([id, t]) =>
+      [id, id === 'resolve_password_ticket' ? { ...t, solution: t.solution?.replace("ctx.api('GET', '/tickets')", secondRow) } : t])) } };
+    const { result, events, calls } = await run([
+      { input: paged }, { input: PAGE_12 }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: SEED_24 }, { input: LATER_PAGE_TASKS },
+    ]);
+    assert.deepEqual(steps(events), [
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'rejected'], ['seed', 'accepted'], ['tasks', 'accepted'],
+    ]);
+    const seedIssues = events.flatMap((e) => (e.t === 'attempt' && e.step === 'seed' && e.outcome.kind === 'rejected' ? e.outcome.issues : []));
+    assert.deepEqual(seedIssues.map((i) => [i.code, i.path, i.expected, i.found]), [['seed.too_few_rows_for_paging', ['seed', 'ticket'], 'more than 12 ticket rows', '12 rows']]);
+    assert.equal(calls[4]?.prompt.includes('more than 12 ticket rows'), true);
+    assert.equal(result.kind, 'done');
+  });
+
+  it('rejects at the plan step a pressed state the plan holds in no state field, and the plan that drops it reaches done (YOS-253)', async () => {
+    const removal = { name: 'customer_lifecycle', entity: 'customer', states: ['active', 'deleted'], rules: [], lifecycle: { representation: 'removal', reason: 'a deleted customer is removed from the store' }, actions: [] };
+    // As stripe-customers' plan did, it gives the removal entity a stateMix of active: 100, which A-371 no longer asks for.
+    const unmeetable = {
+      ...PLAN, workflows: [...PLAN.workflows, removal], seed: { ...PLAN.seed, stateMix: { ...PLAN.seed.stateMix, customer: { active: 100 } } },
+      tasks: PLAN.tasks.map((t) => (t.id === 'escalate_acme' ? { ...t, pressure: { states: ['customer.active'] } } : t)),
+    };
+    const { result, events, calls } = await run([{ input: unmeetable }, { input: PLAN }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }]);
+    const planIssues = events.flatMap((e) => (e.t === 'attempt' && e.step === 'plan' && e.outcome.kind === 'rejected' ? e.outcome.issues : []));
+    assert.deepEqual(planIssues.map((i) => [i.code, i.path, i.found]), [
+      ['plan.pressure_unreachable', ['plan', 'tasks', 2, 'pressure', 'states', 0], 'customer.active is a state only of customer_lifecycle (lifecycle removal)'],
+    ]);
+    assert.equal(calls[1]?.prompt.includes('Drop customer.active from the pressure of escalate_acme'), true);
     assert.equal(result.kind, 'done');
   });
 });
