@@ -182,7 +182,7 @@ describe('worldgen CLI: a run that stops', () => {
     assert.equal(r.status, 1);
     assert.ok(r.stderr.startsWith('stopped: input_rejected: '), r.stderr);
     assert.equal(r.stderr.trimEnd().split('\n').length, 1);
-    assert.equal(r.stdout.split('\n')[0], `worldgen: openapi input into ${out} (model claude-sonnet-5-5, transport sdk, budget $3.00, 15 min)`);
+    assert.equal(r.stdout.split('\n')[0], `worldgen: openapi input into ${out} (model claude-sonnet-5-5, transport sdk, budget $5.00, 15 min)`);
     assert.equal(readFileSync(path.join(partialDir(out), 'REPORT.md'), 'utf8').split('\n')[0], 'Stopped: input_rejected');
     assert.equal(existsSync(out), false);
     const runs = readdirSync(path.join(partialDir(out), 'runs'));
@@ -295,7 +295,7 @@ describe('worldgen CLI: a description to a finished world (M1)', () => {
     const lines = r.stdout.trimEnd().split('\n');
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stderr.includes('stopped:'), false, r.stderr);
-    assert.equal(lines[0], `worldgen: description input into ${out} (model claude-sonnet-5-5, transport claude-cli, budget $3.00, 15 min)`);
+    assert.equal(lines[0], `worldgen: description input into ${out} (model claude-sonnet-5-5, transport claude-cli, budget $5.00, 15 min)`);
     assert.ok(lines.at(-1)!.startsWith(`done: ${out} with 3 verified tasks, $0.6250, `), lines.at(-1));
 
     const loaded = await loadWorld(out);

@@ -4,7 +4,7 @@
   "transport": "claude-cli",
   "claudeBin": "claude",
   "apiKeyEnv": "LLM_KEY",
-  "maxCostUsd": 3,
+  "maxCostUsd": 5,
   "maxMinutes": 15,
   "maxBacktracks": 2,
   "steps": {
