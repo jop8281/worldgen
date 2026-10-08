@@ -1,6 +1,6 @@
 /**
  * Red-team: worldgen/llm.ts, SDK transport only (factory unit wg-llm), and the rule that
- * `npm test` never calls the real API.
+ * `bun run test` never calls the real API.
  *
  * Guarantees (one sentence each, with source):
  * WG-L01 claude-sonnet-5-5 costs $2 input, $10 output, $2.50 cache write and $0.20 cache read per million tokens. (config.ts BUILTIN_PRICES doc "Sonnet 5.5 lists $2 / $10")
@@ -12,7 +12,7 @@
  * WG-L07 With the client or fetch seam, the module never touches globalThis.fetch. (llm.ts AnthropicOptions "no SDK client is built and no network is touched"; "replaces the HTTP transport")
  * WG-L08 A missing key fails before any client exists or any request is made, and never falls back to the environment. (llm.ts AnthropicOptions "this module never reads the environment")
  * WG-L09 The key never appears in a ModelError message, whichever path raised it. (input.ts / llm.ts: tokens never reach events; ModelError mirrors RunEvent model_error)
- * WG-N01 No test file builds anthropicModel without a client or fetch seam (or a blank key that fails before the network), passes an environment value as apiKey, or loads .env. (AGENTS.md "npm test never calls the real API")
+ * WG-N01 No test file builds anthropicModel without a client or fetch seam (or a blank key that fails before the network), passes an environment value as apiKey, or loads .env. (AGENTS.md "`bun run test` never calls the real API")
  */
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';

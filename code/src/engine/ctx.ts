@@ -6,7 +6,7 @@
  * `Registry<Ctx>`, so a member present in one and missing in the other fails to compile.
  * The builders in api.ts, tasks.ts and check.ts return the interface, so a member
  * without an implementation also fails to compile. test/ctx.test.ts compiles the `sig`
- * strings against the interfaces, so a stale signature fails `npm test`.
+ * strings against the interfaces, so a stale signature fails `bun run test`.
  *
  * Invariants:
  * - `now()` is a function in every ctx and returns engine time as Iso.

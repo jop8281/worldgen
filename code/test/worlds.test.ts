@@ -10,7 +10,7 @@ const WORLDS = fileURLToPath(new URL('../../prod/worlds/', import.meta.url));
 const HELPDESK = path.join(WORLDS, 'helpdesk');
 
 /**
- * Each world directory, relative to prod/worlds. `generated/` holds `npm run worldgen` output one level down. A dot
+ * Each world directory, relative to prod/worlds. `generated/` holds `bun run worldgen` output one level down. A dot
  * dir is never a world: the studio stores uploads in `.uploads` (YOS-188). Nor is a `.partial` dir, a run that did not
  * finish (A-293, A-359).
  */

@@ -1,5 +1,5 @@
 /**
- * runWorldGen in create mode, driven by a scripted fake Model. npm test never calls a real model.
+ * runWorldGen in create mode, driven by a scripted fake Model. bun run test never calls a real model.
  * Each script entry is one model call, in order: a reply (tool input), a ModelError to throw, or a
  * function of the request. The target world, plan and stage edits are in test/helpers/scripted-world.ts,
  * shared with the CLI end-to-end test.

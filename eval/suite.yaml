@@ -1,4 +1,4 @@
-# The stress suite: the rehearsal cases `npm run eval` runs (from code/).
+# The stress suite: the rehearsal cases `bun run eval` runs (from code/).
 # Each case is { id, input, change?, expect?, note? }. `input` parses with inputSchema in
 # code/src/worldgen/input.ts, the same union the worldgen CLI parses. File paths resolve
 # against this file's directory. `change` runs as an iterate job on the saved world.

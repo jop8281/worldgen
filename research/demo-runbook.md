@@ -44,7 +44,7 @@ These are the 13 Partial rows of [spec-traceability.md](spec-traceability.md), o
 
 ## Before the talk
 
-1. Check out origin/main @ <SHA TBD by worldgen-27 at 10:15> in a clean tree, then run `cd code && bun install --frozen-lockfile`. Without Bun, run `npm ci`.
+1. Check out origin/main @ <SHA TBD by worldgen-27 at 10:15> in a clean tree, then run `cd code && bun install --frozen-lockfile`.
 2. From the repo root, run `scripts/demo-all.sh > ~/demo-known-good.log 2>&1`. Expect the last line `25 passed, 0 failed, <n>s`. Keep this log. It is the fallback for every step below.
 3. Close other WorldGen sessions. Under heavy load a snippet can hit its 2 s guard, and a job or a check then fails.
 4. Only if you will show `--live`, export `WORLDGEN_MAX_DAILY_USD` and `WORLDGEN_MAX_TOTAL_USD`, then run `scripts/live.sh --env-only`. Expect `env ok`.
@@ -87,7 +87,7 @@ Start `scripts/demo-all.sh 2>&1 | tee ~/demo.log` at minute 0. It finishes befor
 | 21 | gen-rental-fleet served, list route from its `/openapi.json`, first task graded | E9, G1 | `PASS GET /branches 200, untouched cancel_elena_reservation grades 0` | Same. |
 | 22 | `scripts/solve-demo.sh` | E17, E18, G1, G4 | `grade assign_newest_acme_ticket: score 1.000`, then a decoy at `0.000`, `order_available_pet` at `1.000`, then a decoy at `0.300` | Run `scripts/solve-demo.sh` alone. It needs `jq`. |
 | 23 | `eval --dry-run` | M4, D8 | `29 of 29 cases ready` | Show `eval/suite.yaml`. The `*-impossible` cases expect a stop with a reason. |
-| 24 | `worldgen --help` | D2, M1, M11 | `usage:` and the four input forms. The usage lines say `npm run worldgen --`, and `bun run worldgen` works the same. | Show the README section "Run WorldGen". |
+| 24 | `worldgen --help` | D2, M1, M11 | `usage:` and the four input forms. The usage lines say `bun run worldgen --`. | Show the README section "Run WorldGen". |
 | 25 | gen-library-loans `plan.yaml`, `REPORT.md` and `events.jsonl` | M2, W1, W4, W18, S6, M8, M9, M10, G3 | `{"result":"done","worldWritten":true,"costUsd":2.1728414,"ms":435872}` | Open `prod/worlds/gen-library-loans/REPORT.md` in an editor. |
 
 ## Run WorldGen live

@@ -12,8 +12,8 @@ The rubric has two layers:
 **Artifacts read.** For each run directory: `plan.yaml`, `REPORT.md` (or `FAILURE.md` on a stop), `world.yaml`, `runs/<runId>/events.jsonl`, and the output of the two engine commands below. The engine CLI is `worldplay` (A-52).
 
 ```sh
-npm run worldplay -- check  <dir> --json
-npm run worldplay -- verify <dir>
+bun run worldplay check  <dir> --json
+bun run worldplay verify <dir>
 ```
 
 ## 1. Gates
