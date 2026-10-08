@@ -42,7 +42,7 @@ bun run live ../prod/prompts                                     # every prompt 
 
 ## Status of main
 
-`main` is `50cec32f`, promotion 11 ([#121](https://github.com/jop8281/worldgen/pull/121)) of `stabilize/main` `e7b181f5`. Its verdict runs are pending: [37755807208](https://github.com/jop8281/worldgen/actions/runs/37755807208) and [37755810973](https://github.com/jop8281/worldgen/actions/runs/37755810973). Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
+`main` is `50cec32f`, promotion 11 ([#121](https://github.com/jop8281/worldgen/pull/121)) of `stabilize/main` `e7b181f5`. Its verdict runs are green twice: [37755807208](https://github.com/jop8281/worldgen/actions/runs/37755807208) and [37755810973](https://github.com/jop8281/worldgen/actions/runs/37755810973). CI now runs Bun and e2e only ([#124](https://github.com/jop8281/worldgen/pull/124), A-379). Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
 
 | What | Where | PRs |
 |---|---|---|
