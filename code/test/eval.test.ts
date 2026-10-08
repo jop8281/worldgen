@@ -734,7 +734,7 @@ describe('renderSummary on literal events', () => {
   });
 });
 
-describe('cli: npm run eval', () => {
+describe('cli: bun run eval', () => {
   it('dry-runs the description cases of the real suite with no model call and writes nothing', async () => {
     const out = path.join(await mkdtemp(path.join(tmpdir(), 'eval-out-')), 'run');
     const r = cli(['--dry-run', '--only', 'helpdesk-sla,video-codec-impossible,helpdesk-add-refunds', '--out-dir', out]);

@@ -1,5 +1,5 @@
 /**
- * runWorldGen in iterate mode (YOS-52), driven by a scripted fake Model. npm test never calls a real model.
+ * runWorldGen in iterate mode (YOS-52), driven by a scripted fake Model. bun run test never calls a real model.
  * The refunds cases iterate on a copy of the golden helpdesk (prod/worlds/helpdesk, never touched);
  * the stop cases use minimalWorld, which saves and checks in a fraction of the time.
  * Each script entry is one model call, in order: a reply (tool input), a ModelError to throw, or a
