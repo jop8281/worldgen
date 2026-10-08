@@ -86,6 +86,29 @@ describe('studio isolation: the check and proof children', () => {
     assert.deepEqual(proof.opts?.env, expected);
   });
 
+  it('starts one check child for concurrent requests to the same unchecked world', async () => {
+    let calls = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const runner: Runner = async () => {
+      calls += 1;
+      await gate;
+      return { code: 0, stdout: '{"wid":"wid_once"}\n', stderr: '' };
+    };
+    const s = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: noSpawner, runner, env: { PATH: '/usr/bin' } });
+    try {
+      const both = [fetch(`${s.url}/api/worlds/good/explorer`), fetch(`${s.url}/api/worlds/good/explorer`)];
+      while (calls === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      release();
+      const answers = await Promise.all(both.map(async (r) => [(await r).status, await (await r).json()]));
+      assert.deepEqual(answers, [[200, { wid: 'wid_once' }], [200, { wid: 'wid_once' }]]);
+      assert.equal(calls, 1);
+    } finally {
+      await s.close();
+    }
+  });
+
   it('keeps the API answering while a hanging world is checked', async () => {
     server = await studioServer({ port: 0, repoRoot: REPO_ROOT, worldsDir, spawner: noSpawner, runner: nodeRunner });
     const base = server.url;
