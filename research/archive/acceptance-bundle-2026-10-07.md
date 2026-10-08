@@ -47,23 +47,23 @@ An earlier QUALIFIED on `1bb94583` used the qualifier from before #373, which co
 
 ## Boat sandbox sweep
 
-On `stabilize/main` `33f158a7`, every one of the 25 worlds came up in a Boat sandbox and answered `/openapi.json` and a list route with 200. `gen-shipments` and `gen-library-loans` needed a retry when they ran in 3 parallel lanes. On `gen-orders` the admin-route probe on the world port got no HTTP response in 20 seconds (`000`), not the 404 the other worlds returned. The log is in [evidence/boat-sweep-2026-10-07.md](evidence/boat-sweep-2026-10-07.md).
+On `stabilize/main` `33f158a7`, every one of the 25 worlds came up in a Boat sandbox and answered `/openapi.json` and a list route with 200. `gen-shipments` and `gen-library-loans` needed a retry when they ran in 3 parallel lanes. On `gen-orders` the admin-route probe on the world port got no HTTP response in 20 seconds (`000`), not the 404 the other worlds returned. The log is in [evidence/boat-sweep-2026-10-07.md](../evidence/boat-sweep-2026-10-07.md).
 
 ## Live WorldGen runs (L1 to L3)
 
-Each case of [eval/live-segment.yaml](../eval/live-segment.yaml) ran with `claude-sonnet-5-5` over `claude -p`, `--budget-usd 3 --max-minutes 12`. Scores use [rehearsal-rubric.md](rehearsal-rubric.md). The runs used stabilize heads. `12e10fe` is the same tree as main `21dd0039`.
+Each case of [eval/live-segment.yaml](../../eval/live-segment.yaml) ran with `claude-sonnet-5-5` over `claude -p`, `--budget-usd 3 --max-minutes 12`. Scores use [rehearsal-rubric.md](../rehearsal-rubric.md). The runs used stabilize heads. `12e10fe` is the same tree as main `21dd0039`.
 
 | Case | stabilize head | Result | $ | Min | Score | Source |
 |---|---|---|--:|--:|---|---|
-| L1 box-office (description) | `862a3927` | done, verify 3 of 3 | 2.20 | 7.5 | 8/10 | [summary](../eval/runs/2026-10-07-live-segment/summary.md) |
+| L1 box-office (description) | `862a3927` | done, verify 3 of 3 | 2.20 | 7.5 | 8/10 | [summary](../../eval/runs/2026-10-07-live-segment/summary.md) |
 | L2 giftcards (OpenAPI) | `862a3927` | stopped, `no_progress` at workflow | 0.71 | 3.3 | fail | same summary. Fixed by #398 |
 | L2 giftcards, rerun 1 | `9e514791` | stopped, `backtrack_limit` at tasks | 2.43 | 8.9 | fail | not committed. Fixed by #408 |
-| L2 giftcards, rerun 2 | `12e10fe` | done, verify 3 of 3, `worldplay openapi` conforms | 1.88 | 7.6 | 10/10 | [summary](../eval/runs/2026-10-07-live-segment/giftcards-openapi-rerun2/summary.md) |
-| L3 gym-bookings (CSV) | `862a3927` | done, verify 4 of 4 | 1.83 | 8.0 | 8/10 | [summary](../eval/runs/2026-10-07-live-segment/summary.md) |
+| L2 giftcards, rerun 2 | `12e10fe` | done, verify 3 of 3, `worldplay openapi` conforms | 1.88 | 7.6 | 10/10 | [summary](../../eval/runs/2026-10-07-live-segment/giftcards-openapi-rerun2/summary.md) |
+| L3 gym-bookings (CSV) | `862a3927` | done, verify 4 of 4 | 1.83 | 8.0 | 8/10 | [summary](../../eval/runs/2026-10-07-live-segment/summary.md) |
 
 ## Stress run 2
 
-On main `3ff2c3a3`, 22 of 29 cases passed (75.9%), over 30 runs, 177.7 minutes and $34.65. The scorecard is [eval/runs/2026-10-07-stress-2/summary.md](../eval/runs/2026-10-07-stress-2/summary.md).
+On main `3ff2c3a3`, 22 of 29 cases passed (75.9%), over 30 runs, 177.7 minutes and $34.65. The scorecard is [eval/runs/2026-10-07-stress-2/summary.md](../../eval/runs/2026-10-07-stress-2/summary.md).
 
 ## GitHub Actions on main 21dd0039
 

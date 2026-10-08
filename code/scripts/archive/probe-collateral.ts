@@ -3,15 +3,15 @@
  * For every task of every world it replays the reference solution on a fresh runtime, picks a row the
  * solution wrote, makes ONE extra edit through the public update route to a writable field the solution
  * did not write, and grades the final state. hole=yes means the grader still gave 1.
- * Never saves a world. Usage: npx tsx scripts/probe-collateral.ts [worldDir ...] [--json]
+ * Never saves a world. Usage: npx tsx scripts/archive/probe-collateral.ts [worldDir ...] [--json]
  * Default: every directory under ../prod/worlds.
  */
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { checkWorld, gradeDump, loadWorld, type CheckedWorld, type Field, type Value } from '#engine';
-import { runtime, type CallRecord } from '../src/engine/api.ts';
-import { clientCtx } from '../src/engine/tasks.ts';
-import { createVmHost } from '../src/engine/sandbox.ts';
+import { runtime, type CallRecord } from '../../src/engine/api.ts';
+import { clientCtx } from '../../src/engine/tasks.ts';
+import { createVmHost } from '../../src/engine/sandbox.ts';
 
 type Verdict = 'yes' | 'no' | 'not_probeable';
 type Row = { world: string; task: string; hole: Verdict; evidence: string };
@@ -19,7 +19,7 @@ type Edit = { entity: string; id: string; field: string; value: Value };
 
 const args = process.argv.slice(2);
 const json = args.includes('--json');
-const PROD = path.resolve(import.meta.dirname, '../../prod/worlds');
+const PROD = path.resolve(import.meta.dirname, '../../../prod/worlds');
 const dirs = args.filter((a) => !a.startsWith('--')).map((a) => path.resolve(a));
 if (dirs.length === 0) dirs.push(...readdirSync(PROD, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(PROD, d.name)).sort());
 

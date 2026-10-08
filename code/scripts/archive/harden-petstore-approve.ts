@@ -3,12 +3,12 @@
  * (status and ship_date, the two fields approve_order writes) and adds a collateral decoy that approves every
  * cat order and then also approves a placed dog order. Saves through checkWorld and saveWorld.
  * Rerunning is safe: the grader is replaced and the decoy is matched by its `why`.
- * Usage: npx tsx scripts/harden-petstore-approve.ts [worldDir]
+ * Usage: npx tsx scripts/archive/harden-petstore-approve.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';
 
-const DIR = path.resolve(process.argv[2] ?? path.join(import.meta.dirname, '../../prod/worlds/gen-petstore'));
+const DIR = path.resolve(process.argv[2] ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-petstore'));
 const TASK = 'approve_placed_cat_orders';
 
 const grader = `(ctx) => {

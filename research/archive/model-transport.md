@@ -1,6 +1,6 @@
 # Model and transport: the evidence for YOS-107
 
-YOS-107 asks for three things to hold: every model call uses the pinned `claude-sonnet-5-5`, the calls go through `claude -p` by default with the SDK only when chosen, and nothing falls back silently from one to the other. The decision is A-66 in [decisions.md](decisions.md), which extends A-56. This note checks it against the code at `origin/stabilize/main` `05f5e63` and against the run events and spend ledger of 2026-10-07. Line numbers are in `code/src/`.
+YOS-107 asks for three things to hold: every model call uses the pinned `claude-sonnet-5-5`, the calls go through `claude -p` by default with the SDK only when chosen, and nothing falls back silently from one to the other. The decision is A-66 in [decisions.md](../decisions.md), which extends A-56. This note checks it against the code at `origin/stabilize/main` `05f5e63` and against the run events and spend ledger of 2026-10-07. Line numbers are in `code/src/`.
 
 ## The model is pinned
 

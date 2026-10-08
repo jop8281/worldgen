@@ -3,7 +3,7 @@
  * graders with exact-field ctx.guardChanges allowances, and adds one correct-fix-then-collateral
  * decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: graders are replaced and decoys are matched by their `why`.
- * Usage: npx tsx scripts/harden-gen-orders-customers.ts [worldDir] [--decoys-only]
+ * Usage: npx tsx scripts/archive/harden-gen-orders-customers.ts [worldDir] [--decoys-only]
  * --decoys-only adds the decoys to the old graders and prints the check verdict without saving.
  */
 import path from 'node:path';
@@ -11,7 +11,7 @@ import { checkWorld, loadWorld, saveWorld } from '#engine';
 
 const args = process.argv.slice(2);
 const decoysOnly = args.includes('--decoys-only');
-const DIR = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../prod/worlds/gen-orders-customers'));
+const DIR = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-orders-customers'));
 
 const graders: Record<string, string> = {
   ship_ada_paid_order: `(ctx) => {

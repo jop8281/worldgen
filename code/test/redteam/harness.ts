@@ -63,7 +63,7 @@ export const CLI_PATH = existsSync(join(CODE_DIR, 'src', 'cli', 'worldplay.ts'))
 // Capability probe
 
 /**
- * Every capability, and the factory unit (`key` in research/factory/backlog.json) that lands
+ * Every capability, and the factory unit (`key` in research/archive/factory/backlog.json) that lands
  * it. A capability whose unit has not landed skips with `unit <key> not landed: <cap> ...`.
  */
 export const CAPABILITY_UNITS = {

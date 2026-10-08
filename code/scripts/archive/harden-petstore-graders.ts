@@ -1,8 +1,8 @@
 /**
- * Hardens three gen-petstore graders (order_available_pet, cancel_wrong_mochi_order, order_all_rescue_dogs; same patterns as PR #271) with exact-field ctx.guardChanges allowances and adds one
+ * Rewrites three gen-petstore graders with exact-field ctx.guardChanges allowances and adds one
  * correct-fix-then-collateral decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: graders are replaced and decoys are matched by their `why`.
- * Usage: npx tsx scripts/harden-gen-petstore.ts [worldDir] [--decoys-only]
+ * Usage: npx tsx scripts/archive/harden-petstore-graders.ts [worldDir] [--decoys-only]
  * --decoys-only adds the decoys to the old graders and prints the check verdict without saving.
  */
 import path from 'node:path';
@@ -10,7 +10,7 @@ import { checkWorld, loadWorld, saveWorld } from '#engine';
 
 const args = process.argv.slice(2);
 const decoysOnly = args.includes('--decoys-only');
-const DIR = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../prod/worlds/gen-petstore'));
+const DIR = path.resolve(args.find((a) => !a.startsWith('--')) ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-petstore'));
 
 const ORDER_FIELDS = `['pet_id', 'quantity', 'ship_date', 'status', 'complete']`;
 

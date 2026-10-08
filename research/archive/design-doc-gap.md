@@ -66,7 +66,7 @@ Status: **built** means code and tests on `main`. **Partial** means some of it w
 | PDF deliverable | Status | Notes |
 |---|---|---|
 | Repo, one command per tool | partial | `worldplay check` works; `worldgen` has no CLI |
-| Short design doc in the repo | missing | `research/design-draft.md` is a draft; `prod/design.md` absent |
+| Short design doc in the repo | missing | `research/archive/design-draft.md` is a draft; `prod/design.md` absent |
 | Hand-built helpdesk with SLA tiers and on-call escalation | partial | entities and routes only; `actions`, `jobs`, `seed`, `tests`, `tasks` are `{}` |
 | Optional tau-bench domain import | missing | notes only (`research/tau2-retail-expected-behaviour.md`) |
 | Generated worlds with `REPORT.md` | missing | needs the run loop |

@@ -127,7 +127,7 @@ The fix does not by itself turn the three cases green, and no live rerun was mad
 
 ## Stress run 2
 
-On 2026-10-07 the full 29-case `stress` suite ran on main `3ff2c3a`, which had been promoted and qualified on Bun and Node. Four parallel lanes ran with $3 and 12 minutes per run. The scorecard, the comparison and every case's events are in [eval/runs/2026-10-07-stress-2/summary.md](../eval/runs/2026-10-07-stress-2/summary.md).
+On 2026-10-07 the full 29-case `stress` suite ran on main `3ff2c3a`, which had been promoted and qualified on Bun and Node. Four parallel lanes ran with $3 and 12 minutes per run. The scorecard, the comparison and every case's events are in [eval/runs/2026-10-07-stress-2/summary.md](../../eval/runs/2026-10-07-stress-2/summary.md).
 
 **Totals:** 29 cases, 19 done, 10 stopped (3 of them expected refusals), 0 crashed. **Pass rate:** 22/29 (75.9%). 30 runs, 177.7 min and $34.65 from the `run_finished` events. Per run, the time p50 is 6.4 min and the p90 8.9 min, with a maximum of 9.8. The cost p50 is $1.27 and the p90 $1.64.
 

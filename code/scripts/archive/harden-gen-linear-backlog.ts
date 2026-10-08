@@ -3,12 +3,12 @@
  * allowances and adds one correct-fix-then-edit-the-target decoy to each, then saves through checkWorld and saveWorld.
  * The decoy wraps the task's own reference solution, so it applies the correct writes first.
  * Rerunning is safe: the guard block is replaced in place and decoys are matched by their `why`.
- * Usage: npx tsx scripts/harden-gen-linear-backlog.ts [worldDir]
+ * Usage: npx tsx scripts/archive/harden-gen-linear-backlog.ts [worldDir]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';
 
-const DIR = path.resolve(process.argv[2] ?? path.join(import.meta.dirname, '../../prod/worlds/gen-linear-backlog'));
+const DIR = path.resolve(process.argv[2] ?? path.join(import.meta.dirname, '../../../prod/worlds/gen-linear-backlog'));
 
 const EVENT = `['issue_id', 'kind', 'from_value', 'to_value']`;
 const COMMENT = `['issue_id', 'body']`;
