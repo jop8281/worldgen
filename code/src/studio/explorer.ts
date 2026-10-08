@@ -92,3 +92,42 @@ export function explorerOf(dirName: string, world: CheckedWorld, seed: ExplorerS
     tasks: Object.entries(world.tasks).map(([id, t]) => ({ id, tid: taskIdOf(t), difficulty: t.difficulty, instruction: t.instruction })),
   };
 }
+
+/** The value the Studio shows in place of a sensitive field's value to any role below admin (A-356). */
+export const SENSITIVE_MASK = '[sensitive]';
+/** What the console answers in place of a body it cannot read as JSON while the world has sensitive fields. */
+export const SENSITIVE_WITHHELD = '[withheld: the response could not be read as JSON to mask its sensitive fields]';
+
+const obj = (v: unknown): v is Readonly<Record<string, unknown>> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Each entity's sensitive field names, keyed by its idPrefix, from a loaded world definition. A row id is `<idPrefix>_…`. */
+export function sensitiveOf(world: unknown): ReadonlyMap<string, ReadonlySet<string>> {
+  const out = new Map<string, ReadonlySet<string>>();
+  const entities = obj(world) && obj(world['entities']) ? world['entities'] : {};
+  for (const entity of Object.values(entities)) {
+    if (!obj(entity) || typeof entity['idPrefix'] !== 'string' || !obj(entity['fields'])) continue;
+    const names = Object.entries(entity['fields']).filter(([, def]) => obj(def) && def['sensitive'] === true).map(([name]) => name);
+    if (names.length > 0) out.set(entity['idPrefix'], new Set(names));
+  }
+  return out;
+}
+
+/** `value` with every sensitive field of every row it holds replaced by SENSITIVE_MASK. A row is an object whose `id` is `<idPrefix>_…`. */
+export function maskSensitive(value: unknown, sensitive: ReadonlyMap<string, ReadonlySet<string>>): unknown {
+  if (Array.isArray(value)) return value.map((v) => maskSensitive(v, sensitive));
+  if (!obj(value)) return value;
+  const id = value['id'];
+  const cut = typeof id === 'string' ? id.indexOf('_') : -1;
+  const fields = cut > 0 ? sensitive.get((id as string).slice(0, cut)) : undefined;
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fields?.has(k) === true ? SENSITIVE_MASK : maskSensitive(v, sensitive)]));
+}
+
+/** A world response body with its sensitive values masked, or SENSITIVE_WITHHELD when it is not JSON (a body cut at the size limit). */
+export function maskSensitiveText(text: string, sensitive: ReadonlyMap<string, ReadonlySet<string>>): string {
+  if (text === '') return text;
+  try {
+    return JSON.stringify(maskSensitive(JSON.parse(text), sensitive));
+  } catch {
+    return SENSITIVE_WITHHELD;
+  }
+}
