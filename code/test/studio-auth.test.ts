@@ -13,9 +13,9 @@ import type { Runner, SpawnedChild, Spawner } from '../src/sandboxes/backend.ts'
 import { AUDIT_FILE, parseUsersFile, studioServer, type StudioServer, type StudioUser } from '../src/studio/server.ts';
 
 const USERS: readonly StudioUser[] = [
-  { name: 'vera', role: 'viewer', tokenSha256: 'f314e5680966dbe2271774a44be7bb0ddbf8d03612d39be7a19a8d74e285ca2b' },
-  { name: 'olga', role: 'operator', tokenSha256: '0d8dc9deab36314a0e348de096f11795a300d35258412ffe048c9eecdabb8edd' },
-  { name: 'ada', role: 'admin', tokenSha256: '86a038a189a3a7d826a98a2a8c1a67489e27c884c7017932b8c70ada02636069' },
+  { name: 'vera', role: 'viewer', tenant: 'default', tokenSha256: 'f314e5680966dbe2271774a44be7bb0ddbf8d03612d39be7a19a8d74e285ca2b' },
+  { name: 'olga', role: 'operator', tenant: 'default', tokenSha256: '0d8dc9deab36314a0e348de096f11795a300d35258412ffe048c9eecdabb8edd' },
+  { name: 'ada', role: 'admin', tenant: 'default', tokenSha256: '86a038a189a3a7d826a98a2a8c1a67489e27c884c7017932b8c70ada02636069' },
 ];
 const VIEWER = 'viewer-token-v1';
 const OPERATOR = 'operator-token-o1';
@@ -84,7 +84,7 @@ describe('studio sign-in', () => {
   it('refuses a malformed digest and duplicate users at startup', async () => {
     const o = fakes();
     await assert.rejects(
-      studioServer({ port: 0, repoRoot: root, worldsDir, spawner: o.spawner, runner: o.runner, users: [{ name: 'x', role: 'admin', tokenSha256: 'abc' }] }),
+      studioServer({ port: 0, repoRoot: root, worldsDir, spawner: o.spawner, runner: o.runner, users: [{ name: 'x', role: 'admin', tenant: 'default', tokenSha256: 'abc' }] }),
       { message: 'studio user x: tokenSha256 must be 64 hex characters' },
     );
     const vera = USERS[0]!;
@@ -118,7 +118,7 @@ describe('studio sign-in', () => {
 
   it('lets a viewer read but not post or read the audit', async () => {
     assert.equal((await call(base, 'GET', '/api/worlds', { token: VIEWER })).status, 200);
-    assert.deepEqual((await call(base, 'GET', '/api/me', { token: VIEWER })).body, { name: 'vera', role: 'viewer', signIn: true });
+    assert.deepEqual((await call(base, 'GET', '/api/me', { token: VIEWER })).body, { name: 'vera', role: 'viewer', tenant: 'default', signIn: true });
     const post = await call(base, 'POST', '/api/generate', { token: VIEWER, body: GENERATE });
     assert.equal(post.status, 403);
     assert.deepEqual(errorOf(post), { code: 'auth.forbidden', message: 'POST /api/generate needs the operator role; vera is a viewer' });
@@ -143,10 +143,10 @@ describe('studio sign-in', () => {
     const { entries, unwritten } = r.body as { entries: Record<string, unknown>[]; unwritten: number };
     assert.equal(unwritten, 0);
     assert.deepEqual(entries.map(({ at, ...rest }) => (typeof at === 'string' ? rest : { at })), [
-      { user: null, role: null, method: 'POST', path: '/api/generate', status: 401, code: 'auth.required' },
-      { user: null, role: null, method: 'POST', path: '/api/generate', status: 401, code: 'auth.invalid' },
-      { user: 'vera', role: 'viewer', method: 'POST', path: '/api/generate', status: 403, code: 'auth.forbidden' },
-      { user: 'olga', role: 'operator', method: 'POST', path: '/api/generate', status: 200 },
+      { user: null, role: null, tenant: null, method: 'POST', path: '/api/generate', status: 401, code: 'auth.required' },
+      { user: null, role: null, tenant: null, method: 'POST', path: '/api/generate', status: 401, code: 'auth.invalid' },
+      { user: 'vera', role: 'viewer', tenant: 'default', method: 'POST', path: '/api/generate', status: 403, code: 'auth.forbidden' },
+      { user: 'olga', role: 'operator', tenant: 'default', method: 'POST', path: '/api/generate', status: 200 },
     ]);
     const raw = await readFile(path.join(worldsDir, AUDIT_FILE), 'utf8');
     for (const token of [VIEWER, OPERATOR, ADMIN]) assert.equal(raw.includes(token), false);
@@ -154,7 +154,7 @@ describe('studio sign-in', () => {
 
   it('accepts the Bearer scheme in any case', async () => {
     const res = await fetch(`${base}/api/me`, { headers: { authorization: `bEaReR ${ADMIN}` } });
-    assert.deepEqual(await res.json(), { name: 'ada', role: 'admin', signIn: true });
+    assert.deepEqual(await res.json(), { name: 'ada', role: 'admin', tenant: 'default', signIn: true });
   });
 });
 
@@ -166,13 +166,13 @@ describe('studio open mode', () => {
     const f = fakes();
     const server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner: f.spawner, runner: f.runner });
     try {
-      assert.deepEqual((await call(server.url, 'GET', '/api/me')).body, { name: 'local', role: 'admin', signIn: false });
+      assert.deepEqual((await call(server.url, 'GET', '/api/me')).body, { name: 'local', role: 'admin', tenant: 'default', signIn: false });
       const r = await call(server.url, 'POST', '/api/generate', { body: GENERATE });
       assert.equal(r.status, 200);
       assert.equal(f.spawned.length, 1);
       const { entries } = (await call(server.url, 'GET', '/api/audit')).body as { entries: Record<string, unknown>[] };
       assert.deepEqual(entries.map(({ at, ...rest }) => (typeof at === 'string' ? rest : { at })), [
-        { user: 'local', role: 'admin', method: 'POST', path: '/api/generate', status: 200 },
+        { user: 'local', role: 'admin', tenant: 'default', method: 'POST', path: '/api/generate', status: 200 },
       ]);
     } finally {
       await server.close();
@@ -185,15 +185,15 @@ describe('studio users file and CLI', () => {
   const digest = USERS[0]!.tokenSha256;
 
   it('parses a valid users file', () => {
-    assert.deepEqual(parseUsersFile(JSON.stringify({ users: [{ name: 'vera', role: 'viewer', token_sha256: digest }] })), [
-      { name: 'vera', role: 'viewer', tokenSha256: digest },
+    assert.deepEqual(parseUsersFile(JSON.stringify({ users: [{ name: 'vera', role: 'viewer', tenant: 'acme', token_sha256: digest }] })), [
+      { name: 'vera', role: 'viewer', tenant: 'acme', tokenSha256: digest },
     ]);
   });
 
   it('rejects a role outside the three, a non-hex digest and a non-JSON file', () => {
-    assert.throws(() => parseUsersFile(JSON.stringify({ users: [{ name: 'x', role: 'root', token_sha256: digest }] })), /users\.0\.role/);
+    assert.throws(() => parseUsersFile(JSON.stringify({ users: [{ name: 'x', role: 'root', tenant: 'acme', token_sha256: digest }] })), /users\.0\.role/);
     assert.throws(
-      () => parseUsersFile(JSON.stringify({ users: [{ name: 'x', role: 'admin', token_sha256: 'z'.repeat(64) }] })),
+      () => parseUsersFile(JSON.stringify({ users: [{ name: 'x', role: 'admin', tenant: 'acme', token_sha256: 'z'.repeat(64) }] })),
       { message: 'users.0.token_sha256: token_sha256 must be 64 lowercase hex characters' },
     );
     assert.throws(() => parseUsersFile('{'), { message: /^not valid JSON: / });
@@ -295,7 +295,7 @@ describe('studio answers only to its own names', () => {
   it('audits the refused POSTs with their codes', async () => {
     const r = await raw(server.port, 'GET', '/api/audit', { host: `127.0.0.1:${server.port}` });
     const { entries } = r.body as { entries: Record<string, unknown>[] };
-    const local = { user: 'local', role: 'admin', method: 'POST', path: '/api/generate' };
+    const local = { user: 'local', role: 'admin', tenant: 'default', method: 'POST', path: '/api/generate' };
     assert.deepEqual(stripAt(entries), [
       { ...local, status: 403, code: 'origin.forbidden' },
       { ...local, status: 403, code: 'origin.forbidden' },
@@ -329,7 +329,7 @@ describe('studio configured origin and wildcard bind', () => {
     try {
       const ok = await raw(server.port, 'GET', '/api/me', { host: `127.0.0.1:${server.port}`, authorization: `Bearer ${ADMIN}` });
       assert.equal(ok.status, 200);
-      assert.deepEqual(ok.body, { name: 'ada', role: 'admin', signIn: true });
+      assert.deepEqual(ok.body, { name: 'ada', role: 'admin', tenant: 'default', signIn: true });
       const bad = await raw(server.port, 'GET', '/api/me', { host: `evil.example:${server.port}` });
       assert.equal(bad.status, 403);
       assert.equal((errOf(bad) as { code: string }).code, 'host.forbidden');
@@ -347,7 +347,7 @@ describe('studio configured origin and wildcard bind', () => {
       assert.equal(server.url, `http://[::1]:${server.port}`);
       const res = await fetch(`${server.url}/api/me`);
       assert.equal(res.status, 200);
-      assert.deepEqual(await res.json(), { name: 'local', role: 'admin', signIn: false });
+      assert.deepEqual(await res.json(), { name: 'local', role: 'admin', tenant: 'default', signIn: false });
     } finally {
       await server.close();
       await rm(root, { recursive: true, force: true });

@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { nodeRunner, nodeSpawn } from '../sandboxes/backend.ts';
+import { DEFAULT_TENANT } from '../studio/runstore.ts';
 import { originOf, parseUsersFile, studioServer, type StudioUser } from '../studio/server.ts';
 
 const DEFAULT_PORT = 8787;
@@ -29,13 +30,15 @@ world's snippets (serve, the Explorer check, the proof) gets only TZ, PATH and t
 /_world route. Ctrl-C stops the studio; the studio SIGTERMs its tracked children.
 --host binds another interface. The studio starts worldgen runs, so it refuses to bind a
 non-loopback host unless sign-in is on: --users <file>, or WORLDGEN_STUDIO_TOKEN (one admin,
-named admin, whose token is that value). Give only one of the two.
+named admin in tenant default, whose token is that value). Give only one of the two.
 Sign-in: the page and its API take a bearer token (Authorization: Bearer <token>; the page keeps
 it in sessionStorage, never a cookie). Three roles, each able to do the ones before it: viewer
 (every read), operator (also starts and stops runs, services and episodes) and admin (also reads
 GET /api/audit, the log of every POST in <worlds-dir>/.studio-audit.jsonl). GET / and
 GET /api/health need no token. Without users the studio is open: every request is the admin local.
---users is a JSON file {"users": [{"name": "ada", "role": "admin", "token_sha256": "<64 hex>"}]}.
+--users is a JSON file {"users": [{"name": "ada", "role": "admin", "tenant": "acme", "token_sha256": "<64 hex>"}]}.
+A tenant isolates its runs, episodes, services and audit lines from other tenants, and its generations
+write into <worlds-dir>/<tenant>/; the worlds under <worlds-dir> stay shared, and an admin sees every tenant.
 Make a hash with: printf %s "$TOKEN" | shasum -a 256
 --transport (or WORLDGEN_TRANSPORT) is passed to every worldgen run; sdk reads LLM_KEY from the
 studio's own environment, which a container gets at run time (docker run -e LLM_KEY), never from the image.
@@ -90,7 +93,7 @@ function parse(argv: readonly string[]): Args | 'help' {
   const token = process.env['WORLDGEN_STUDIO_TOKEN'];
   if (token !== undefined && token !== '') {
     if (usersFile !== undefined) throw new UsageError('give --users or WORLDGEN_STUDIO_TOKEN, not both');
-    users = [{ name: 'admin', role: 'admin', tokenSha256: createHash('sha256').update(token).digest('hex') }];
+    users = [{ name: 'admin', role: 'admin', tenant: DEFAULT_TENANT, tokenSha256: createHash('sha256').update(token).digest('hex') }];
   }
   // Generation and episode children get this environment; none of them needs the studio's own credential.
   delete process.env['WORLDGEN_STUDIO_TOKEN'];
