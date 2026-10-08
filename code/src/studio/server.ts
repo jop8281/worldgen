@@ -67,7 +67,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
-import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, RUN_TEXT_WITHHELD, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
+import { bodyBelowAdmin, CHILD_TEXT_WITHHELD, episodeBelowAdmin, mergeSensitivity, RUN_TEXT_WITHHELD, runEventsBelowAdmin, sensitiveOf, type Sensitivity } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { parsePlanYaml } from '../worldgen/plan.ts';
 import { renderPlanMd } from '../worldgen/plan-md.ts';
@@ -1352,7 +1352,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     if (report.kind === 'exited') {
       const said = child.output().trim().split('\n').pop()?.trim() ?? '';
-      return fail(502, 'serve.failed', `worldplay serve for ${name} exited ${report.code ?? 'by a signal'} before it listened${said === '' ? '' : `: ${said}`}`);
+      // The line can quote the world's source, a check failure on a task's grader included, so only an admin reads it (A-377).
+      const shown = said === '' || who.role === 'admin' ? said : CHILD_TEXT_WITHHELD;
+      return fail(502, 'serve.failed', `worldplay serve for ${name} exited ${report.code ?? 'by a signal'} before it listened${shown === '' ? '' : `: ${shown}`}`);
     }
     if (report.kind === 'timeout') {
       await signalAndWait(child, ['SIGTERM', 'SIGKILL']);
@@ -2181,9 +2183,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     // Tool results hold the world's answers, so a role below admin sees them masked like the console's (A-356).
     const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await episodeSensitivity(exported, out);
     const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, sensitive);
-    // The child's last lines can quote a world answer, so they are withheld below admin like a run's (A-367).
+    // The child's last lines can quote a world answer or task source, so only an admin reads them, whatever the world (A-377).
     const raw = run?.child?.output() ?? '';
-    const output = (sensitive !== null && sensitive.size === 0) || raw.trim() === '' ? raw : RUN_TEXT_WITHHELD;
+    const output = who.role === 'admin' || raw.trim() === '' ? raw : CHILD_TEXT_WITHHELD;
     const running = run !== undefined && run.phase !== 'finished';
     return {
       status: 200,
