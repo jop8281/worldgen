@@ -216,6 +216,7 @@ a { margin-right: 0.5rem; }
   var PROBLEM = {
     signedOut: 'You are signed out. Sign in again with your studio token.',
     forbidden: "Your role can't see this. Ask an admin for access.",
+    forbiddenAction: "Your role can't do this. Ask an admin for access.",
     sensitive: 'Hidden because this world has sensitive fields. Ask an admin to open it.',
     notFound: 'Not found. It may have been removed; refresh the list and try again.',
     server: 'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
@@ -223,11 +224,14 @@ a { margin-right: 0.5rem; }
     refused: 'The studio refused this request. Check what you entered and try again.',
     resetConfirm: 'Type the world name exactly to confirm the reset.'
   };
-  /** The line a failed answer shows: one of PROBLEM by status and error code, or the studio's own words for a refusal it explained. */
-  function problemText(status, code, message) {
+  /**
+   * The line a failed answer shows: one of PROBLEM by status and error code, or the studio's own words for a refusal it
+   * explained. \`kind\` is what the call site asked for: 'read' (a list, a report) or 'action' (serve, reset, generate…).
+   */
+  function problemText(status, code, message, kind) {
     if (status === 0) return PROBLEM.network;
     if (status === 401) return PROBLEM.signedOut;
-    if (status === 403) return /[.]sensitive$/.test(code) ? PROBLEM.sensitive : PROBLEM.forbidden;
+    if (status === 403) return /[.]sensitive$/.test(code) ? PROBLEM.sensitive : (kind === 'action' ? PROBLEM.forbiddenAction : PROBLEM.forbidden);
     if (status === 404) return PROBLEM.notFound;
     if (status >= 500) return message ? PROBLEM.server + ' The studio said: ' + message : PROBLEM.server;
     // The API's own sentence for a reset without its name speaks of a JSON body; the page says what to type.
@@ -241,9 +245,9 @@ a { margin-right: 0.5rem; }
     signinForm.hidden = false;
     whoLine.textContent = 'not signed in';
   }
-  /** Every answer as a body. A failed one is { error: { code, message, status, text } }, where text is the line its panel shows. */
-  function answered(r) {
-    return r.text().then(function (text) {
+  /** Every answer to a \`kind\` request as a body. A failed one is { error: { code, message, status, text } }, where text is the line its panel shows. */
+  function answered(kind) {
+    return function (r) { return r.text().then(function (text) {
       var body = null;
       try { body = text === '' ? {} : JSON.parse(text); } catch (e) { body = null; }
       if (r.ok && body !== null) return body;
@@ -251,17 +255,19 @@ a { margin-right: 0.5rem; }
       var status = r.ok ? 502 : r.status;
       var err = body !== null && body.error ? body.error : {};
       var failure = { code: err.code || 'http.' + status, message: err.message || '', status: status };
-      failure.text = problemText(status, failure.code, failure.message);
+      failure.text = problemText(status, failure.code, failure.message, kind);
       if (status === 401) signedOutNote();
       return { error: failure };
-    });
+    }); };
   }
   /** A request that got no answer at all: the network or the studio is down. */
   function unanswered() { return { error: { code: 'network', message: '', status: 0, text: PROBLEM.network } }; }
-  function getJson(path) { return fetch(path, { headers: authHeaders({}) }).then(answered, unanswered); }
+  /** A read: GET a list, a report, a plan. */
+  function getJson(path) { return fetch(path, { headers: authHeaders({}) }).then(answered('read'), unanswered); }
+  /** An action: serve, stop, reset, generate, upload, a proof, an episode, a console call. */
   function post(path, body) {
     return fetch(path, { method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify(body) })
-      .then(answered, unanswered);
+      .then(answered('action'), unanswered);
   }
   /** Puts a failure's line in \`container\` in place of what it held, so a panel never sits empty or shows a raw body. */
   function showProblem(container, text) {
@@ -285,7 +291,7 @@ a { margin-right: 0.5rem; }
     return r.json().catch(function () { return {}; }).then(function (body) {
       if (r.status === 401) signedOutNote();
       else if (r.status !== 200) {
-        authError.textContent = problemText(r.status, body.error ? body.error.code : '', body.error ? body.error.message : '');
+        authError.textContent = problemText(r.status, body.error ? body.error.code : '', body.error ? body.error.message : '', 'read');
         authError.hidden = false;
       }
       // Spend and Eval need the admin role (A-370), so any other page neither shows them nor asks for them.
@@ -311,7 +317,7 @@ a { margin-right: 0.5rem; }
   /** Downloads a zip the header-less link cannot fetch: with the token, through an object URL. A refusal shows in the worlds note. */
   function downloadZip(path, filename) {
     fetch(path, { headers: authHeaders({}) }).then(function (r) {
-      if (!r.ok) return answered(r).then(function (body) { worldsNote(body.error.text); });
+      if (!r.ok) return answered('read')(r).then(function (body) { worldsNote(body.error.text); });
       worldsNote('');
       return r.blob().then(function (blob) {
         var url = URL.createObjectURL(blob);
@@ -633,7 +639,7 @@ a { margin-right: 0.5rem; }
       method: 'POST',
       headers: authHeaders({ 'content-type': 'application/json', 'idempotency-key': iterateKey }),
       body: JSON.stringify({ change: iterateChange.value })
-    }).then(answered, unanswered).then(function (r) {
+    }).then(answered('action'), unanswered).then(function (r) {
       if (r.error !== undefined) { iterateNote(r.error.text); return; }
       closeIterate();
       pollIterate(r.runId, name);

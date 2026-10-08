@@ -182,7 +182,8 @@ await until(signedOut);
 const text = (sel: string) => `(document.querySelector(${JSON.stringify(sel)})?.textContent??'')`;
 const typeInto = (sel: string, value: string, event = 'input') => `(()=>{const e=document.querySelector(${JSON.stringify(sel)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event(${JSON.stringify(event)}));return true})()`;
 const SENSITIVE = 'Hidden because this world has sensitive fields. Ask an admin to open it.';
-const FORBIDDEN = "Your role can't see this. Ask an admin for access.";
+/** A viewer's refused serve is an action, so its line says do (J113). */
+const FORBIDDEN = "Your role can't do this. Ask an admin for access.";
 // The talk (research/studio-demo-runbook.md), in its order. ada, the admin, walks it first.
 await step('01-sign-in', 'Sign in: the studio asks for a token, then names who is signed in and offers Sign out', typeToken('ada'), `${signedInAs('ada')}&&document.querySelectorAll('#worlds-table tr').length>5`, 'header');
 await step('02-dashboard', 'Worlds: every world with its kind, tasks, wid, model, cost and attempts, and serve, report, plan, export and iterate', navigate(`location.href=${JSON.stringify(STUDIO)}`), `${fresh}&&${signedInAs('ada')}&&document.querySelectorAll('#worlds-table tr').length>5`, '#sec-worlds');

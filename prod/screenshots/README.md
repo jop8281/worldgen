@@ -113,7 +113,7 @@ What to read with care:
 - **The two unsent actions (13, 15).** In 13 the spec is uploaded into the scratch copy, and `generate` is not pressed. In 15 the iterate form is filled, then cancelled. Either button would start a Sonnet run.
 - **The finished iterate (16).** It is gen-stripe-customers' committed REPORT.md, from its change-request run `run_20261007T165640Z_1022e845`. It is not a run made during this recording.
 - **The masked email (23).** ana's page shows `[sensitive]` for helpdesk's customer emails because she is not an admin. ada's console answers in 07 to 09 are an admin's, so they show every field.
-- **The viewer's refusal (27).** The page shows its one role line, "Your role can't see this. Ask an admin for access.", for a refused serve as well as a refused read.
+- **The viewer's refusal (27).** These frames were recorded before J113. At the time the page had one role line, "Your role can't see this. Ask an admin for access.", and showed it for a refused serve as well as a refused read. Since J113 a refused action (serve, stop, reset, generate, iterate, upload, an episode) reads "Your role can't do this. Ask an admin for access.", and a refused read keeps the see line. The runbook and the rehearsal now expect the do line for step 27.
 - **Two identical frames (04 and 22).** They are the same PNG, byte for byte. Once ada or ana serves helpdesk, the Worlds section reads the same for both, and the section does not name who is signed in. 21, the frame just before 22, shows that page is ana's.
 - **Episodes.** The noop episodes of 18 and 28 are written under `eval/episodes/` of the worktree that ran them, which git ignores.
 
