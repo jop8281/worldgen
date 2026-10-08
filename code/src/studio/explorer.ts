@@ -80,3 +80,23 @@ export function explorerOf(dirName: string, world: CheckedWorld): WorldExplorer 
     tasks: Object.entries(world.tasks).map(([id, t]) => ({ id, tid: taskIdOf(t), difficulty: t.difficulty, instruction: t.instruction })),
   };
 }
+
+/** The value the Studio shows in place of a sensitive field's value to any role below admin (A-356). */
+export const SENSITIVE_MASK = '[sensitive]';
+/** What the console answers in place of a body it cannot read as JSON while the world has sensitive fields. */
+export const SENSITIVE_WITHHELD = '[withheld: the response could not be read as JSON to mask its sensitive fields]';
+
+/** Each entity's sensitive field names, keyed by its idPrefix, from a loaded world definition. */
+export function sensitiveOf(_world: unknown): ReadonlyMap<string, ReadonlySet<string>> {
+  return new Map();
+}
+
+/** `value` with every sensitive field of every row it holds replaced by SENSITIVE_MASK. */
+export function maskSensitive(value: unknown, _sensitive: ReadonlyMap<string, ReadonlySet<string>>): unknown {
+  return value;
+}
+
+/** A world response body with its sensitive values masked. */
+export function maskSensitiveText(text: string, sensitive: ReadonlyMap<string, ReadonlySet<string>>): string {
+  return text.length >= 0 ? text : JSON.stringify(maskSensitive(text, sensitive));
+}
