@@ -15,8 +15,11 @@
  *   numbers through `location`, never from a stored or absolute URL.
  * - Rendered strings go through textContent, never innerHTML.
  * - Sign-in is a bearer token the page keeps in sessionStorage and sends as an Authorization header on every
- *   fetch. No cookie: a cookie would ride along to every served world on the host. A 401 or 403 shows in one
- *   error line; the server enforces roles, the page hides nothing.
+ *   fetch. No cookie: a cookie would ride along to every served world on the host. A 401 shows in the sign-in
+ *   line; the server enforces roles, the page hides nothing.
+ * - A failed answer shows in its own panel as one line from PROBLEM: what went wrong and what to do, never a raw
+ *   body and never an empty panel (YOS-209). Tables scroll inside their own container, so a 400px page never
+ *   scrolls sideways, and every control shows a focus ring.
  * - The studio port is the operator's own. A served world's ports are the agent's boundary and
  *   the page never fetches them: it offers links, and the Explorer's API console sends through
  *   the studio's call route, which reaches only the world port (A-268).
@@ -30,18 +33,21 @@ export function studioPage(): string {
 <title>WorldGen studio</title>
 <style>
 :root { color-scheme: light dark; }
-body { font: 15px/1.45 system-ui, sans-serif; margin: 0 auto; max-width: 72rem; padding: 1rem 1.25rem 3rem; }
+body { font: 15px/1.45 system-ui, sans-serif; margin: 0 auto; max-width: 72rem; overflow-wrap: anywhere; padding: 1rem 1.25rem 3rem; }
 h1 { font-size: 1.3rem; margin: 0; }
 h2 { border-bottom: 1px solid #8884; font-size: 1.05rem; margin: 1.6rem 0 0.4rem; padding-bottom: 0.2rem; }
 h3 { font-size: 0.95rem; margin: 1rem 0 0.3rem; }
 .meta { color: #888; font-size: 0.85rem; margin-left: 0.75rem; }
-table { border-collapse: collapse; margin: 0.3rem 0 1rem; max-width: 100%; }
-th, td { border: 1px solid #8884; padding: 0.15rem 0.5rem; text-align: left; vertical-align: top; }
+table { border-collapse: collapse; margin: 0.3rem 0 1rem; }
+.scroll { max-width: 100%; overflow-x: auto; }
+fieldset { min-width: 0; }
+th, td { border: 1px solid #8884; min-width: 6rem; padding: 0.15rem 0.5rem; text-align: left; vertical-align: top; }
 th { background: #8881; font-weight: 600; }
 td { font-family: ui-monospace, monospace; font-size: 0.85rem; max-width: 32rem; overflow-wrap: anywhere; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
-input, select, textarea { font: inherit; padding: 0.15rem 0.4rem; }
+input, select, textarea { box-sizing: border-box; font: inherit; max-width: 100%; padding: 0.15rem 0.4rem; }
+:focus-visible { outline: 2px solid #1a5fd0; outline-offset: 2px; }
 textarea { width: 100%; }
 form p { margin: 0.25rem 0; }
 pre { background: #8881; border: 1px solid #8884; margin: 0.3rem 0 1rem; max-height: 24rem; overflow: auto; padding: 0.5rem 0.75rem; white-space: pre-wrap; }
@@ -56,6 +62,8 @@ a { margin-right: 0.5rem; }
 #signin { margin: 0.5rem 0 0; }
 #signin form:not([hidden]) { display: inline; }
 #auth-error { color: #b00; margin: 0.25rem 0 0; }
+.problem { color: #b00; }
+@media (prefers-color-scheme: dark) { #auth-error, .problem { color: #ff8a8a; } :focus-visible { outline-color: #7fb0ff; } }
 </style>
 </head>
 <body>
@@ -84,6 +92,7 @@ a { margin-right: 0.5rem; }
 <section id="sec-worlds">
 <h2>Worlds<span id="worlds-meta" class="meta"></span></h2>
 <p><button id="worlds-refresh" type="button">refresh</button> <label>filter <input id="worlds-filter" type="search" autocomplete="off" placeholder="world name"></label></p>
+<p id="worlds-note" class="problem" aria-live="polite" hidden></p>
 <div id="worlds-table"></div>
 <form id="iterate-form" hidden>
 <p><label>change for <span id="iterate-world"></span> <textarea id="iterate-change" rows="3"></textarea></label></p>
@@ -203,24 +212,60 @@ a { margin-right: 0.5rem; }
     if (token) headers.authorization = 'Bearer ' + token;
     return headers;
   }
-  /** Shows a 401 or 403 in the error line (and the sign-in form on a 401); other answers clear nothing. */
-  function authNote(status, body) {
-    if (status !== 401 && status !== 403) return;
-    var err = body && body.error ? body.error : {};
-    authError.textContent = 'HTTP ' + status + ' ' + err.code + ': ' + err.message;
+  // ---- What a failed answer says: what went wrong and what to do, never a raw body (YOS-209) ----
+  var PROBLEM = {
+    signedOut: 'You are signed out. Sign in again with your studio token.',
+    forbidden: "Your role can't see this. Ask an admin for access.",
+    sensitive: 'Hidden because this world has sensitive fields. Ask an admin to open it.',
+    notFound: 'Not found. It may have been removed; refresh the list and try again.',
+    server: 'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
+    network: 'The studio did not answer. Check that it is still running, then try again.',
+    refused: 'The studio refused this request. Check what you entered and try again.'
+  };
+  /** The line a failed answer shows: one of PROBLEM by status and error code, or the studio's own words for a refusal it explained. */
+  function problemText(status, code, message) {
+    if (status === 0) return PROBLEM.network;
+    if (status === 401) return PROBLEM.signedOut;
+    if (status === 403) return /[.]sensitive$/.test(code) ? PROBLEM.sensitive : PROBLEM.forbidden;
+    if (status === 404) return PROBLEM.notFound;
+    if (status >= 500) return message ? PROBLEM.server + ' The studio said: ' + message : PROBLEM.server;
+    return message || PROBLEM.refused;
+  }
+  /** Signed out: the sign-in line says so and the form shows. */
+  function signedOutNote() {
+    authError.textContent = PROBLEM.signedOut;
     authError.hidden = false;
-    if (status === 401) {
-      signinForm.hidden = false;
-      whoLine.textContent = 'not signed in';
-    }
+    signinForm.hidden = false;
+    whoLine.textContent = 'not signed in';
   }
+  /** Every answer as a body. A failed one is { error: { code, message, status, text } }, where text is the line its panel shows. */
   function answered(r) {
-    return r.json().then(function (body) { authNote(r.status, body); return body; });
+    return r.text().then(function (text) {
+      var body = null;
+      try { body = text === '' ? {} : JSON.parse(text); } catch (e) { body = null; }
+      if (r.ok && body !== null) return body;
+      // A success the page cannot read is the studio's failure too.
+      var status = r.ok ? 502 : r.status;
+      var err = body !== null && body.error ? body.error : {};
+      var failure = { code: err.code || 'http.' + status, message: err.message || '', status: status };
+      failure.text = problemText(status, failure.code, failure.message);
+      if (status === 401) signedOutNote();
+      return { error: failure };
+    });
   }
-  function getJson(path) { return fetch(path, { headers: authHeaders({}) }).then(answered); }
+  /** A request that got no answer at all: the network or the studio is down. */
+  function unanswered() { return { error: { code: 'network', message: '', status: 0, text: PROBLEM.network } }; }
+  function getJson(path) { return fetch(path, { headers: authHeaders({}) }).then(answered, unanswered); }
   function post(path, body) {
     return fetch(path, { method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify(body) })
-      .then(answered);
+      .then(answered, unanswered);
+  }
+  /** Puts a failure's line in \`container\` in place of what it held, so a panel never sits empty or shows a raw body. */
+  function showProblem(container, text) {
+    clear(container);
+    var line = el('p', text);
+    line.className = 'problem';
+    container.appendChild(line);
   }
   signinForm.addEventListener('submit', function (ev) {
     ev.preventDefault();
@@ -234,8 +279,12 @@ a { margin-right: 0.5rem; }
     location.reload();
   });
   var signedIn = fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
-    return r.json().then(function (body) {
-      authNote(r.status, body);
+    return r.json().catch(function () { return {}; }).then(function (body) {
+      if (r.status === 401) signedOutNote();
+      else if (r.status !== 200) {
+        authError.textContent = problemText(r.status, body.error ? body.error.code : '', body.error ? body.error.message : '');
+        authError.hidden = false;
+      }
       // Spend and Eval need the admin role (A-370), so any other page neither shows them nor asks for them.
       if (r.status === 200 && body.role === 'admin') {
         refreshSpend();
@@ -255,11 +304,12 @@ a { margin-right: 0.5rem; }
       signoutBtn.hidden = false;
       return true;
     });
-  }, function (e) { whoLine.textContent = 'unreachable: ' + e; return false; });
-  /** Downloads a zip the header-less link cannot fetch: with the token, through an object URL. */
+  }, function () { whoLine.textContent = PROBLEM.network; return false; });
+  /** Downloads a zip the header-less link cannot fetch: with the token, through an object URL. A refusal shows in the worlds note. */
   function downloadZip(path, filename) {
     fetch(path, { headers: authHeaders({}) }).then(function (r) {
-      if (!r.ok) return answered(r);
+      if (!r.ok) return answered(r).then(function (body) { worldsNote(body.error.text); });
+      worldsNote('');
       return r.blob().then(function (blob) {
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
@@ -270,7 +320,7 @@ a { margin-right: 0.5rem; }
         document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
       });
-    }, function (e) { authError.textContent = 'export failed: ' + e; authError.hidden = false; });
+    }, function () { worldsNote(PROBLEM.network); });
   }
   function cell(value) {
     if (value === null || value === undefined) return 'null';
@@ -293,7 +343,12 @@ a { margin-right: 0.5rem; }
       }
       table.appendChild(tr);
     }
-    return table;
+    // The table scrolls inside its own container, so a narrow page never scrolls sideways; Tab reaches it to scroll by keys.
+    var wrap = document.createElement('div');
+    wrap.className = 'scroll';
+    wrap.tabIndex = 0;
+    wrap.appendChild(table);
+    return wrap;
   }
   function usd(n) {
     if (n === null || n === undefined) return 'unknown';
@@ -310,6 +365,12 @@ a { margin-right: 0.5rem; }
   var worldsFilter = byId('worlds-filter');
   var worldsBase = '';
   var worldsTotal = 0;
+  var worldsNoteLine = byId('worlds-note');
+  /** The line under the worlds filter that says why a serve, stop or export did not happen; empty hides it. */
+  function worldsNote(text) {
+    worldsNoteLine.textContent = text;
+    worldsNoteLine.hidden = text === '';
+  }
   /** Hides the rows whose world name lacks the filter text (case-insensitive); the meta shows shown of total while a filter is set. */
   function applyFilter() {
     var needle = worldsFilter.value.trim().toLowerCase();
@@ -346,10 +407,11 @@ a { margin-right: 0.5rem; }
     getJson('/api/worlds/' + encodeURIComponent(name) + '/report').then(function (body) {
       reportWorld = name;
       worldReport.hidden = false;
+      worldReport.className = body.error !== undefined ? 'problem' : '';
       worldReport.textContent = body.error !== undefined
-        ? body.error.code + ': ' + body.error.message
+        ? body.error.text
         : (body.report === null ? 'no REPORT.md for ' + name : body.report);
-    }, function (e) { worldReport.hidden = false; worldReport.textContent = 'unreachable: ' + e; });
+    });
   }
   // ---- The plan of a generated world: its assumptions, open questions, out of scope, and plan.md ----
   var worldPlan = byId('world-plan');
@@ -373,18 +435,26 @@ a { margin-right: 0.5rem; }
     getJson('/api/worlds/' + encodeURIComponent(name) + '/plan').then(function (body) {
       planWorld = name;
       clear(worldPlan);
-      if (body.error !== undefined) { worldPlan.appendChild(el('p', body.error.code + ': ' + body.error.message)); return; }
+      if (body.error !== undefined) { showProblem(worldPlan, body.error.text); return; }
       worldPlan.appendChild(el('h3', 'plan of ' + body.name));
       planList('assumptions', body.assumptions, function (a) { return a.decision + ' (why: ' + a.why + ')'; });
       planList('open questions', body.openQuestions, function (q) { return q.question + ' (default answer: ' + q.default_answer + ')'; });
       planList('out of scope', body.outOfScope, function (o) { return o.what + ' (why: ' + o.why + ')'; });
       worldPlan.appendChild(el('h3', 'plan.md'));
       worldPlan.appendChild(el('pre', body.planMd));
-    }, function (e) { clear(worldPlan); worldPlan.appendChild(el('p', 'unreachable: ' + e)); });
+    });
   }
   function refreshWorlds() {
     worldsMeta.textContent = 'loading…';
     return Promise.all([getJson('/api/worlds'), getJson('/api/services')]).then(function (pair) {
+      var failure = pair[0].error || pair[1].error;
+      if (failure !== undefined) {
+        worldsBase = '';
+        worldsTotal = 0;
+        worldsMeta.textContent = '';
+        showProblem(worldsTable, failure.text);
+        return;
+      }
       var worlds = pair[0].worlds || [];
       var services = pair[1].services || [];
       worldsTotal = worlds.length;
@@ -403,7 +473,11 @@ a { margin-right: 0.5rem; }
           var promise = svc === null
             ? post('/api/worlds/' + encodeURIComponent(w.name) + '/serve', {})
             : post('/api/services/' + encodeURIComponent(svc.id) + '/stop', {});
-          promise.then(refreshWorlds, function (e) { worldsMeta.textContent = 'unreachable: ' + e; });
+          promise.then(function (r) {
+            if (r.error !== undefined) { worldsNote(r.error.text); return; }
+            worldsNote('');
+            refreshWorlds();
+          });
         });
         actions.appendChild(serveBtn);
         if (svc !== null) {
@@ -449,7 +523,7 @@ a { margin-right: 0.5rem; }
       });
       worldsTable.appendChild(grid(['name', 'kind', 'tasks', 'wid', 'model', 'cost', 'attempts', 'actions'], rows));
       applyFilter();
-    }, function (e) { worldsMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   byId('worlds-refresh').addEventListener('click', refreshWorlds);
 
@@ -509,10 +583,10 @@ a { margin-right: 0.5rem; }
       iterateNote('done: ' + copy.world + ' is the changed copy of ' + name + '; loading its changes…');
       refreshWorlds();
       getJson('/api/worlds/' + encodeURIComponent(copy.world) + '/report').then(function (r) {
-        var changes = r.error !== undefined ? r.error.code + ': ' + r.error.message : (r.report === null ? null : changesOf(r.report));
+        var changes = r.error !== undefined ? r.error.text : (r.report === null ? null : changesOf(r.report));
         iterateNote('done: ' + copy.world + ' is the changed copy of ' + name);
         iterateStatus.appendChild(el('pre', changes === null ? 'its REPORT.md has no ## Changes section' : changes));
-      }, function (e) { iterateNote('unreachable: ' + e); });
+      });
       return;
     }
     var why = body.state === 'done'
@@ -532,11 +606,16 @@ a { margin-right: 0.5rem; }
     function once() {
       getJson('/api/generate/' + encodeURIComponent(runId) + '/events').then(function (body) {
         if (iterateRun !== runId) return;
-        if (body.error !== undefined) { stopIteratePoll(); iterateNote(body.error.code + ': ' + body.error.message); return; }
+        // A network or studio failure is retried on the next poll; any other failure ends the poll.
+        if (body.error !== undefined) {
+          if (body.error.status !== 0 && body.error.status < 500) stopIteratePoll();
+          iterateNote(body.error.text);
+          return;
+        }
         if (body.running) { showStages(body.events || []); return; }
         stopIteratePoll();
         finishIterate(body, name);
-      }, function (e) { if (iterateRun === runId) iterateNote('unreachable: ' + e); });
+      });
     }
     once();
     iterateTimer = window.setInterval(once, 2000);
@@ -549,11 +628,11 @@ a { margin-right: 0.5rem; }
       method: 'POST',
       headers: authHeaders({ 'content-type': 'application/json', 'idempotency-key': iterateKey }),
       body: JSON.stringify({ change: iterateChange.value })
-    }).then(answered).then(function (r) {
-      if (r.error !== undefined) { iterateNote(r.error.code + ': ' + r.error.message); return; }
+    }).then(answered, unanswered).then(function (r) {
+      if (r.error !== undefined) { iterateNote(r.error.text); return; }
       closeIterate();
       pollIterate(r.runId, name);
-    }, function (e) { iterateNote('unreachable: ' + e); });
+    });
   });
   byId('iterate-cancel').addEventListener('click', closeIterate);
 
@@ -586,7 +665,10 @@ a { margin-right: 0.5rem; }
       stopBtn.className = 'danger';
       stopBtn.textContent = 'stop';
       stopBtn.addEventListener('click', function () {
-        post('/api/generate/' + encodeURIComponent(liveRun) + '/stop', {}).then(pollLiveOnce, function (e) { runState('unreachable: ' + e); });
+        post('/api/generate/' + encodeURIComponent(liveRun) + '/stop', {}).then(function (r) {
+          if (r.error !== undefined) { runState(r.error.text); return; }
+          pollLiveOnce();
+        });
       });
       head.appendChild(stopBtn);
     }
@@ -608,6 +690,12 @@ a { margin-right: 0.5rem; }
   }
   function pollLiveOnce() {
     return getJson('/api/generate/' + encodeURIComponent(liveRun) + '/events').then(function (body) {
+      // A network or studio failure is retried on the next poll; any other failure ends the poll.
+      if (body.error !== undefined) {
+        if (body.error.status !== 0 && body.error.status < 500 && pollTimer !== null) { window.clearInterval(pollTimer); pollTimer = null; }
+        runState(body.error.text);
+        return;
+      }
       renderLive(body);
       if (!body.running && pollTimer !== null) {
         window.clearInterval(pollTimer);
@@ -615,7 +703,7 @@ a { margin-right: 0.5rem; }
         refreshWorlds();
         refreshRuns();
       }
-    }, function (e) { runState('unreachable: ' + e); });
+    });
   }
   function pollLive() {
     if (pollTimer !== null) window.clearInterval(pollTimer);
@@ -631,6 +719,12 @@ a { margin-right: 0.5rem; }
     var keepSpec = spec.value;
     var keep = Array.prototype.map.call(csv.selectedOptions, function (o) { return o.value; }).concat(picked || []);
     inputsLoaded = Promise.all([getJson('/api/inputs'), getJson('/api/uploads')]).then(function (pair) {
+      var failure = pair[0].error || pair[1].error;
+      if (failure !== undefined) {
+        byId('gen-spec-note').textContent = failure.text;
+        byId('gen-csv-note').textContent = failure.text;
+        return;
+      }
       var uploads = pair[1].uploads || [];
       function options(files, kind) {
         return files.map(function (f) { return { value: f, label: f }; }).concat(uploads
@@ -657,7 +751,7 @@ a { margin-right: 0.5rem; }
       return chain.then(function () { return f.text(); }).then(function (content) {
         return post('/api/uploads', { kind: kind, name: f.name, content: content });
       }).then(function (r) {
-        if (r.error !== undefined) { said.push(f.name + ': ' + r.error.code + ': ' + r.error.message); return; }
+        if (r.error !== undefined) { said.push(f.name + ': ' + r.error.text); return; }
         picked.push(UPLOAD + r.upload.id);
         said.push('uploaded ' + r.upload.name + ' (' + r.upload.bytes + ' bytes)');
       });
@@ -665,7 +759,7 @@ a { margin-right: 0.5rem; }
       note.textContent = said.join('; ');
       input.value = '';
       return loadInputs(picked);
-    }, function (e) { note.textContent = 'upload failed: ' + e; });
+    }, function () { note.textContent = 'The browser could not read a chosen file. Choose it again, then upload.'; });
   }
   byId('gen-spec-upload').addEventListener('click', function () { uploadChosen('openapi', byId('gen-spec-file'), byId('gen-spec-note')); });
   byId('gen-csv-upload').addEventListener('click', function () { uploadChosen('csv', byId('gen-csv-file'), byId('gen-csv-note')); });
@@ -680,7 +774,7 @@ a { margin-right: 0.5rem; }
       ? '/api/uploads/' + encodeURIComponent(spec.slice(UPLOAD.length)) + '/paths'
       : '/api/inputs/' + encodeURIComponent(spec) + '/paths';
     getJson(source).then(function (body) {
-      if (body.error !== undefined) { only.appendChild(el('p', body.error.code + ': ' + body.error.message)); return; }
+      if (body.error !== undefined) { var line = el('p', body.error.text); line.className = 'problem'; only.appendChild(line); return; }
       body.paths.forEach(function (p) {
         var label = document.createElement('label');
         var box = document.createElement('input');
@@ -692,7 +786,7 @@ a { margin-right: 0.5rem; }
         label.appendChild(document.createTextNode(' ' + p));
         only.appendChild(label);
       });
-    }, function (e) { only.appendChild(el('p', 'unreachable: ' + e)); });
+    });
   }
   function showKind() {
     var kind = byId('gen-kind').value;
@@ -725,15 +819,16 @@ a { margin-right: 0.5rem; }
     if (budget !== '') body.budgetUsd = Number(budget);
     if (minutes !== '') body.maxMinutes = Number(minutes);
     post('/api/generate', body).then(function (r) {
-      if (r.error !== undefined) { runState(r.error.code + ': ' + r.error.message); return; }
+      if (r.error !== undefined) { runState(r.error.text); return; }
       liveRun = r.runId;
       runState('run ' + r.runId + ' started, writing ' + r.outDir);
       pollLive();
-    }, function (e) { runState('unreachable: ' + e); });
+    });
   });
   function refreshRuns() {
     runsMeta.textContent = 'loading…';
     return getJson('/api/runs').then(function (body) {
+      if (body.error !== undefined) { runsMeta.textContent = ''; showProblem(runsTable, body.error.text); return; }
       var past = body.runs || [];
       runsMeta.textContent = past.length + ' run(s)';
       clear(runsTable);
@@ -742,7 +837,7 @@ a { margin-right: 0.5rem; }
         return { world: r.name, 'run id': r.runId, model: r.model, transport: r.transport, cost: usd(r.costUsd), ms: r.ms, outcome: r.outcome };
       });
       runsTable.appendChild(grid(['world', 'run id', 'model', 'transport', 'cost', 'ms', 'outcome'], rows));
-    }, function (e) { runsMeta.textContent = 'unreachable: ' + e; });
+    });
   }
 
   // ---- Eval: the run list with the pass-rate line, and the summary toggle ------------
@@ -756,12 +851,14 @@ a { margin-right: 0.5rem; }
     getJson('/api/eval/' + encodeURIComponent(dir)).then(function (body) {
       evalDir = dir;
       evalSummary.hidden = false;
-      evalSummary.textContent = body.error !== undefined ? body.error.code + ': ' + body.error.message : body.summary;
-    }, function (e) { evalSummary.hidden = false; evalSummary.textContent = 'unreachable: ' + e; });
+      evalSummary.className = body.error !== undefined ? 'problem' : '';
+      evalSummary.textContent = body.error !== undefined ? body.error.text : body.summary;
+    });
   }
   function refreshEval() {
     evalMeta.textContent = 'loading…';
     return getJson('/api/eval').then(function (body) {
+      if (body.error !== undefined) { evalMeta.textContent = ''; showProblem(evalTable, body.error.text); return; }
       var runs = body.runs || [];
       evalMeta.textContent = runs.length + ' eval run(s)';
       clear(evalTable);
@@ -778,7 +875,7 @@ a { margin-right: 0.5rem; }
         return { name: r.dir, date: m === null ? '-' : m[1], 'pass rate': pass, '': view };
       });
       evalTable.appendChild(grid(['name', 'date', 'pass rate', ''], rows));
-    }, function (e) { evalMeta.textContent = 'unreachable: ' + e; });
+    });
   }
 
   // ---- Spend: the meters, the by-day rows and the caps, from costs --json -------------
@@ -788,6 +885,7 @@ a { margin-right: 0.5rem; }
   function refreshSpend() {
     spendMeta.textContent = 'loading…';
     return getJson('/api/costs').then(function (body) {
+      if (body.error !== undefined) { spendMeta.textContent = ''; showProblem(spendBody, body.error.text); return; }
       clear(spendBody);
       var m = body.meters || {};
       spendBody.appendChild(el('h3', 'meters (today is ' + (m.day === undefined ? '?' : m.day) + ' UTC)'));
@@ -815,7 +913,7 @@ a { margin-right: 0.5rem; }
         spendBody.appendChild(grid(['cap', 'cap usd', 'spent usd', 'remaining usd'], capRows));
       }
       spendMeta.textContent = 'costs --json, cached up to 30 s';
-    }, function (e) { spendMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   byId('spend-refresh').addEventListener('click', refreshSpend);
 
@@ -842,18 +940,20 @@ a { margin-right: 0.5rem; }
     if (!playWorld.value) return Promise.resolve();
     playMeta.textContent = 'loading…';
     return getJson('/api/worlds/' + encodeURIComponent(playWorld.value) + '/tasks').then(function (body) {
+      if (body.error !== undefined) { playTasks = []; fill(playTask, []); playInstruction.textContent = ''; playMeta.textContent = body.error.text; return; }
       playTasks = body.tasks || [];
       fill(playTask, playTasks.map(function (t) { return { value: t.id, label: t.id }; }));
       showInstruction();
       clear(proofTable);
       playMeta.textContent = PLAY_META;
-    }, function (e) { playMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   function loadPlayWorlds() {
     return getJson('/api/worlds').then(function (body) {
+      if (body.error !== undefined) { playMeta.textContent = body.error.text; return; }
       fill(playWorld, (body.worlds || []).map(function (w) { return { value: w.name, label: w.name }; }));
       return loadTasks();
-    }, function (e) { playMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   playWorld.addEventListener('change', function () { if (playWorld.value !== '') setHash(playWorld.value, 'play'); loadTasks(); });
   playTask.addEventListener('change', showInstruction);
@@ -862,7 +962,7 @@ a { margin-right: 0.5rem; }
     proofTable.appendChild(el('p', 'proving ' + playWorld.value + ' with worldplay verify...'));
     post('/api/worlds/' + encodeURIComponent(playWorld.value) + '/proof', {}).then(function (body) {
       clear(proofTable);
-      if (body.error) { proofTable.appendChild(el('p', body.error.code + ': ' + body.error.message)); return; }
+      if (body.error) { showProblem(proofTable, body.error.text); return; }
       var rows = (body.tasks || []).map(function (r) {
         var p = r.proof || {};
         return {
@@ -876,7 +976,7 @@ a { margin-right: 0.5rem; }
       });
       proofTable.appendChild(el('p', body.verified ? 'engine proof: every task verified' : 'engine proof: verify reported a failure'));
       proofTable.appendChild(grid(['task', 'difficulty', 'reference', 'noop', 'near miss', 'wrong (decoys)', 'replay'], rows));
-    }, function (e) { clear(proofTable); proofTable.appendChild(el('p', 'unreachable: ' + e)); });
+    });
   });
   function clip(v) { var t = typeof v === 'string' ? v : JSON.stringify(v); return t === undefined ? '' : (t.length > 600 ? t.slice(0, 600) + ' ...' : t); }
   /** One public message as text: the instruction, a request the agent made, the world's answer, or the final reply. */
@@ -912,10 +1012,17 @@ a { margin-right: 0.5rem; }
   }
   function showEpisode(runId) {
     return getJson('/api/episodes/' + encodeURIComponent(runId)).then(function (body) {
+      if (body.error !== undefined) {
+        showProblem(episodeView, body.error.text);
+        // A network or studio failure is tried again; any other failure stops watching.
+        if (watching === runId && (body.error.status === 0 || body.error.status >= 500)) setTimeout(function () { showEpisode(runId); }, 2000);
+        else if (watching === runId) watching = null;
+        return;
+      }
       renderEpisode(body);
       if (body.running && watching === runId) setTimeout(function () { showEpisode(runId); }, 2000);
       else if (watching === runId) { watching = null; refreshEpisodes(); }
-    }, function (e) { episodeView.textContent = 'unreachable: ' + e; });
+    });
   }
   var analyticsTable = byId('analytics-table');
   var analyticsMeta = byId('analytics-meta');
@@ -923,6 +1030,7 @@ a { margin-right: 0.5rem; }
   function refreshAnalytics() {
     analyticsMeta.textContent = 'loading…';
     return getJson('/api/episodes/analytics').then(function (body) {
+      if (body.error !== undefined) { analyticsMeta.textContent = ANALYTICS_META; showProblem(analyticsTable, body.error.text); return; }
       clear(analyticsTable);
       var rows = (body.groups || []).map(function (g) {
         return {
@@ -937,12 +1045,13 @@ a { margin-right: 0.5rem; }
       if (rows.length > 0) analyticsTable.appendChild(grid(['world', 'task', 'model', 'runs', 'successes', 'success rate', 'cost usd', 'cost per success', 'mean turns', 'failure causes', 'provenance'], rows));
       if ((body.unreadable || []).length > 0) analyticsTable.appendChild(el('p', 'unreadable episode lines: ' + body.unreadable.join(', ')));
       analyticsMeta.textContent = ANALYTICS_META;
-    }, function (e) { analyticsMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   function refreshEpisodes() {
     refreshAnalytics();
     episodesMeta.textContent = 'loading…';
     return getJson('/api/episodes').then(function (body) {
+      if (body.error !== undefined) { episodesMeta.textContent = ''; showProblem(episodesTable, body.error.text); return; }
       clear(episodesTable);
       var list = body.episodes || [];
       episodesMeta.textContent = list.length + ' episode run(s) under eval/episodes';
@@ -953,7 +1062,7 @@ a { margin-right: 0.5rem; }
         return { run: r.runId, world: r.world, task: r.task, stop: r.running ? 'running' : r.stop, score: r.score === null ? '-' : r.score, 'cost usd': r.costUsd === null ? '-' : usd(r.costUsd), '': b };
       });
       if (rows.length > 0) episodesTable.appendChild(grid(['run', 'world', 'task', 'stop', 'score', 'cost usd', ''], rows));
-    }, function (e) { episodesMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   byId('play-run').addEventListener('click', function () {
     var body = { world: playWorld.value, task: playTask.value, agent: byId('play-agent').value };
@@ -962,12 +1071,12 @@ a { margin-right: 0.5rem; }
     if (budget > 0) body.budgetUsd = budget;
     if (turns > 0) body.maxTurns = Math.floor(turns);
     post('/api/episodes', body).then(function (r) {
-      if (r.error) { playMeta.textContent = r.error.code + ': ' + r.error.message; return; }
+      if (r.error) { playMeta.textContent = r.error.text; return; }
       playMeta.textContent = 'started ' + r.runId;
       watching = r.runId;
       refreshEpisodes();
       showEpisode(r.runId);
-    }, function (e) { playMeta.textContent = 'unreachable: ' + e; });
+    });
   });
   // ---- Explorer: one world's definition, its running instance, and the API console ---
   var explorerWorld = byId('explorer-world');
@@ -981,6 +1090,7 @@ a { margin-right: 0.5rem; }
 
   function fillExplorerWorlds() {
     return getJson('/api/worlds').then(function (body) {
+      if (body.error !== undefined) { explorerMeta.textContent = body.error.text; return; }
       var keep = explorerWorld.value;
       clear(explorerWorld);
       (body.worlds || []).forEach(function (w) {
@@ -989,7 +1099,7 @@ a { margin-right: 0.5rem; }
         explorerWorld.appendChild(opt);
       });
       if (keep !== '') explorerWorld.value = keep;
-    }, function (e) { explorerMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   function fieldText(f) { return f.name + ': ' + (f.ref === null ? f.type : 'ref to ' + f.ref); }
   function consoleButton(label, method, target, records) {
@@ -1010,7 +1120,7 @@ a { margin-right: 0.5rem; }
     setHash(name, 'explorer');
     getJson('/api/worlds/' + encodeURIComponent(name) + '/explorer').then(function (x) {
       clear(explorerBody);
-      if (x.error !== undefined) { explorerMeta.textContent = x.error.code + ': ' + x.error.message; return; }
+      if (x.error !== undefined) { explorerMeta.textContent = ''; showProblem(explorerBody, x.error.text); return; }
       explorerMeta.textContent = 'definition ' + x.wid + ', clock starts ' + x.clockStart;
       explorerBody.appendChild(el('p', x.description + (x.resembles === '' ? '' : ' Resembles ' + x.resembles + '.')));
       explorerBody.appendChild(el('h3', 'entities (' + x.entities.length + ')'));
@@ -1045,7 +1155,7 @@ a { margin-right: 0.5rem; }
       }
       explorerBody.appendChild(el('h3', 'tasks (' + x.tasks.length + '), as an agent is told them'));
       explorerBody.appendChild(grid(['task', 'difficulty', 'instruction', 'tid'], x.tasks.map(function (t) { return { task: t.id, difficulty: t.difficulty, instruction: t.instruction, tid: t.tid }; })));
-    }, function (e) { explorerMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   /** The rows of a list answer: the body itself when it is an array, else its first array property. */
   function rowsOf(value) {
@@ -1059,6 +1169,7 @@ a { margin-right: 0.5rem; }
     var name = explorerWorld.value;
     clear(consoleResult);
     getJson('/api/services').then(function (body) {
+      if (body.error !== undefined) { showProblem(consoleResult, body.error.text); return null; }
       var svc = serviceFor(name, body.services || []);
       if (svc === null) { consoleMeta.textContent = name + ' is not running: serve it in Worlds, then send'; return null; }
       consoleMeta.textContent = 'running instance ' + svc.id + ' on world port ' + svc.worldPort + ' since ' + svc.startedAt;
@@ -1067,7 +1178,7 @@ a { margin-right: 0.5rem; }
         try { req.body = JSON.parse(consoleBody.value); } catch (e) { consoleResult.appendChild(el('p', 'the body is not JSON: ' + e.message)); return null; }
       }
       return post('/api/services/' + encodeURIComponent(svc.id) + '/call', req).then(function (r) {
-        if (r.error !== undefined) { consoleResult.appendChild(el('p', r.error.code + ': ' + r.error.message)); return; }
+        if (r.error !== undefined) { showProblem(consoleResult, r.error.text); return; }
         consoleResult.appendChild(el('p', 'HTTP ' + r.status + ' from ' + r.world + ' in ' + r.ms + ' ms: ' + r.request.method + ' ' + r.request.path + (r.truncated ? ' (cut at 1 MiB)' : '')));
         var parsed = null;
         try { parsed = JSON.parse(r.body); } catch (e) { parsed = null; }
@@ -1077,7 +1188,7 @@ a { margin-right: 0.5rem; }
         }
         consoleResult.appendChild(el('pre', parsed === null ? r.body : JSON.stringify(parsed, null, 2)));
       });
-    }).catch(function (e) { consoleMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   /** Resets the served world to its seed once its name is typed (A-357). */
   function resetWorld() {
@@ -1085,14 +1196,15 @@ a { margin-right: 0.5rem; }
     var confirmBox = byId('reset-confirm');
     clear(consoleResult);
     getJson('/api/services').then(function (body) {
+      if (body.error !== undefined) { showProblem(consoleResult, body.error.text); return null; }
       var svc = serviceFor(name, body.services || []);
       if (svc === null) { consoleMeta.textContent = name + ' is not running: serve it in Worlds, then reset'; return null; }
       return post('/api/services/' + encodeURIComponent(svc.id) + '/reset', { confirm: confirmBox.value }).then(function (r) {
-        if (r.error !== undefined) { consoleResult.appendChild(el('p', r.error.code + ': ' + r.error.message)); return; }
+        if (r.error !== undefined) { showProblem(consoleResult, r.error.text); return; }
         confirmBox.value = '';
         consoleResult.appendChild(el('p', r.world + ' reset to its seed at ' + r.now + ', state ' + r.hash));
       });
-    }).catch(function (e) { consoleMeta.textContent = 'unreachable: ' + e; });
+    });
   }
   byId('explorer-load').addEventListener('click', explore);
   byId('console-form').addEventListener('submit', function (ev) { ev.preventDefault(); send(false); });
