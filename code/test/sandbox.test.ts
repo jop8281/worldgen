@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { SNIPPET_LIMITS, SnippetFault, type JobCtx } from '../src/engine/ctx.ts';
 import type { IssuePath } from '../src/engine/issues.ts';
 import type { Row } from '../src/engine/store.ts';
-import { ENGINE_CALL_SLOT, MAX_ARG_DEPTH, SANDBOX_GLOBALS, SANDBOX_HEAP_LIMITS, createVmHost, snippetWorkersStarted } from '../src/engine/sandbox.ts';
+import { ENGINE_CALL_SLOT, MAX_ARG_DEPTH, SANDBOX_GLOBALS, SANDBOX_HEAP_LIMITS, createVmHost, guardScale, snippetWorkersStarted } from '../src/engine/sandbox.ts';
 
 const CODE_DIR = fileURLToPath(new URL('..', import.meta.url));
 const PATH: IssuePath = ['jobs', 'escalate', 'run'];
@@ -702,7 +702,8 @@ describe('memory bound and worker reuse', { skip: HEAP_BOUND_SKIP }, () => {
   });
 
   it('gives snippet.memory, not timeout_guard, to a no-call allocation whose snippet process is starved of CPU', () => {
-    const h = createVmHost({ ctxCallsPerRun: 20_000, guardMs: 500, maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 });
+    // Scaled like the default host (A-169): on a 2-vCPU runner the starved allocation takes 5 to 8 s of wall time, at the 15 x guardMs backstop.
+    const h = createVmHost({ ctxCallsPerRun: 20_000, guardMs: 500 * guardScale(), maxOldGenerationSizeMb: 96, maxYoungGenerationSizeMb: 16 });
     const before = new Set(childPids());
     assert.equal(run('(ctx) => 1', jobCtx(), h), 1);
     const [pid] = childPids().filter((p) => !before.has(p));
