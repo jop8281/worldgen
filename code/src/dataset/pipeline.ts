@@ -16,7 +16,7 @@ import {
   checkWorld, createRuntime, dumpSha256, loadWorld, openApiOf, publicWorldOf, renderWorldYaml, saveWorld, taskPrivacy, worldIdOf,
   type CheckedWorld, type Difficulty, type OpenApiDocument, type StateDump, type Wid,
 } from '#engine';
-import { READY_TIMEOUT_SEC, SERVE_LOG, reachWorld, upWorld, type SandboxBackend, type WorldBundle } from '../sandboxes/backend.ts';
+import { READY_TIMEOUT_SEC, SERVE_LOG, reachWorld, upWorld, type Runner, type SandboxBackend, type WorldBundle } from '../sandboxes/backend.ts';
 import { runEpisode, type NextTurn, type SendableRequest, type WorldPort } from './episode.ts';
 import {
   DatasetError, GRADING_NOTE, PROMPT_VERSION, RUN_ID, TASK_ID, configVersion, hashState, isCompleteSuccess, redactor, sha256Hex,
@@ -304,6 +304,10 @@ export type PipelineDeps = {
   readonly now?: () => number;
   /** The result of `checkForRun(worldDir)` when the caller already ran it, so the world is not checked twice. */
   readonly checked?: CheckedForRun;
+  /** Runs the check and prepare children. Default nodeRunner. */
+  readonly runner?: Runner;
+  /** The source the children's allowlisted environment is built from. Default process.env. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly interrupt?: AbortSignal;
   readonly log?: (line: string) => void;
 };

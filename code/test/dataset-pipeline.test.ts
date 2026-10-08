@@ -5,6 +5,8 @@ import { describe, it } from 'node:test';
 import { PreflightError, checkForRun, prepareWorld, runPipeline, type PipelineDeps, type PipelineOptions } from '../src/dataset/pipeline.ts';
 import { CHUNK_SCRIPT, stateFromAdmin } from '../src/dataset/pipeline.ts';
 import { episodeSchema, hashState, sha256Hex } from '../src/dataset/schema.ts';
+import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
+import { engineGrader } from '../src/dataset/verifier.ts';
 import { collectBundle } from '../src/sandboxes/files.ts';
 import { turn, COMMIT, HELPDESK_DIR, easyOnly, fakeBackend, helpdesk, lazySolver, randomPort, RUN_BUDGET, solveAll, tmp, type FakeBackendOptions } from './dataset-kit.ts';
 import type { NextTurn } from '../src/dataset/episode.ts';
@@ -36,7 +38,7 @@ async function run(s: Setup = {}) {
       worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 60, budgetUsd: 5, maxMinutes: 5,
       secrets: [ANTHROPIC, BOAT], sandboxName: 'ds-run-1-abc123', port, ...s.opts,
     },
-    { backend, nextTurn: s.solver ?? solveAll, makeBundle: tinyBundle, log: (l) => logs.push(l), ...s.deps },
+    { backend, nextTurn: s.solver ?? solveAll, makeBundle: tinyBundle, grader: engineGrader, log: (l) => logs.push(l), ...s.deps },
   );
   return { result, backend, out, logs, port };
 }
@@ -144,6 +146,20 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     for (const f of backend.uploaded) assert.equal(Buffer.from(f.data).toString('utf8').includes(BOAT), false);
   });
 
+  it('checks and prepares in children whose environment holds no controller credential', RUN_BUDGET, async () => {
+    const calls: { argv: readonly string[]; env: Readonly<Record<string, string | undefined>> | undefined }[] = [];
+    const runner: Runner = async (argv, opts) => {
+      calls.push({ argv, env: opts?.env });
+      return nodeRunner(argv, opts);
+    };
+    const env = { PATH: process.env.PATH ?? '', HOME: '/home/op', LLM_KEY: 'sk-live-1', BOAT_API_KEY: 'boat-3', WORLDGEN_STUDIO_TOKEN: 'tok-4' };
+    const { result } = await run({ deps: { runner, env, grader: engineGrader } });
+    assert.equal(result.status, 'accepted');
+    const children = calls.filter((c) => c.argv.includes('src/cli/episode-prepare.ts'));
+    assert.deepEqual(children.map((c) => c.argv.includes('--check')), [true, false]);
+    for (const c of children) assert.deepEqual(c.env, { TZ: 'UTC', PATH: process.env.PATH ?? '' });
+  });
+
   it('rejects known secrets in the checked source world before freezing, bundling or model calls', RUN_BUDGET, async () => {
     const secret = 'controller-secret-sentinel-834029';
     const world = await helpdesk();
@@ -160,6 +176,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       worldDir: HELPDESK_DIR, out, runId: 'reject-secret', engineCommit: COMMIT, model: 'claude-sonnet-5-5',
       maxTurns: 10, budgetUsd: 1, maxMinutes: 1, secrets: [secret], sandboxName: 'reject-secret', port,
     }, {
+      grader: engineGrader,
       checked: { world: report.world, tasks: Object.entries(report.world.tasks).map(([id, t]) => ({ id, difficulty: t.difficulty, instruction: t.instruction })) },
       backend,
       makeBundle: async (dir) => { bundleCalls += 1; return tinyBundle(dir); },
@@ -278,7 +295,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       worldDir: HELPDESK_DIR, out: tmp('startup-deadline'), runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5',
       maxTurns: 60, budgetUsd: 5, maxMinutes: 1 / 60, secrets: [], sandboxName: 'ds-deadline', port,
     }, {
-      backend, makeBundle: tinyBundle, now: () => clock,
+      backend, makeBundle: tinyBundle, grader: engineGrader, now: () => clock,
       fetch: async () => { publicCalls += 1; return new Response('{}'); },
       nextTurn: async (view, signal) => { modelCalls += 1; return lazySolver(view, signal); },
     });
@@ -438,7 +455,7 @@ describe('refusals before anything starts', () => {
     const backend = fakeBackend(world, { port: randomPort() });
     const out = s.out ?? tmp('refused');
     await assert.rejects(
-      runPipeline({ worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'x-abc123', ...s.opts }, { backend, nextTurn: lazySolver, makeBundle: tinyBundle }),
+      runPipeline({ worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'x-abc123', ...s.opts }, { backend, nextTurn: lazySolver, makeBundle: tinyBundle, grader: engineGrader }),
       (e: unknown) => e instanceof PreflightError && (typeof re === 'string' ? e.message === re : re.test(e.message)),
     );
     assert.deepEqual(backend.events, []);

@@ -132,6 +132,8 @@ export type ChildGraderOptions = {
   readonly timeoutMs?: number;
   /** The command that runs a TypeScript file. Default tsx under codeDir; the Studio image has only bun. */
   readonly launcher?: readonly string[];
+  /** The source the child's allowlisted environment is built from. Default process.env. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 };
 
 /**
