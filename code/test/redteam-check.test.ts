@@ -161,7 +161,7 @@ const LONG: TestOptions = { timeout: 300_000 };
 /**
  * Capabilities a check layer needs before its rows mean anything. Every layer after seed reads
  * seeded rows, so it also needs check.seed. Units land in the order seed, tests, tasks, lints
- * (research/factory/backlog.json), so the first missing cap names the unit that blocks.
+ * (research/archive/factory/backlog.json), so the first missing cap names the unit that blocks.
  */
 const LAYER_CAPS: Readonly<Record<CheckLayer, readonly CapName[]>> = {
   schema: ['check.schema'],

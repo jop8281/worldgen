@@ -16,6 +16,7 @@ import { DEFAULT_TENANT } from '../studio/runstore.ts';
 import { reconcileJobs } from '../studio/reconcile.ts';
 import { osProcesses } from '../studio/runstore.ts';
 import { originOf, parseUsersFile, stopOnSignals, studioServer, type StudioUser } from '../studio/server.ts';
+import { UsageError, optionValue } from './options.ts';
 
 const DEFAULT_PORT = 8787;
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
@@ -60,8 +61,6 @@ Exit codes: 0 nothing stale (or every stop held), 3 a dry run found stale jobs, 
 undid it, 2 bad usage.
 `;
 
-class UsageError extends Error {}
-
 type Args = { readonly port: number; readonly host: string | undefined; readonly transport: 'claude-cli' | 'sdk' | undefined; readonly users: readonly StudioUser[]; readonly origin: string | undefined; readonly repoRoot: string; readonly worldsDir: string | undefined };
 
 function parse(argv: readonly string[]): Args | 'help' {
@@ -76,11 +75,7 @@ function parse(argv: readonly string[]): Args | 'help' {
   let origin: string | undefined = process.env['WORLDGEN_STUDIO_ORIGIN'] === '' ? undefined : process.env['WORLDGEN_STUDIO_ORIGIN'];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]!;
-    const value = (): string => {
-      const v = argv[++i];
-      if (v === undefined || v.trim() === '' || v.startsWith('--')) throw new UsageError(`${a} needs a value`);
-      return v;
-    };
+    const value = (): string => optionValue(a, argv[++i]);
     if (a === '--port') {
       const n = Number(value());
       if (!Number.isInteger(n) || n < 0 || n > 65535) throw new UsageError(`--port needs an integer from 0 to 65535, got ${n}`);
@@ -120,11 +115,7 @@ function parseReconcile(argv: readonly string[]): ReconcileArgs {
   let apply = false;
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]!;
-    const value = (): string => {
-      const v = argv[++i];
-      if (v === undefined || v.trim() === '' || v.startsWith('--')) throw new UsageError(`${a} needs a value`);
-      return v;
-    };
+    const value = (): string => optionValue(a, argv[++i]);
     if (a === '--apply' && !apply) apply = true;
     else if (a === '--tenant' && tenant === undefined) tenant = value();
     else if (a === '--repo-root') repoRoot = path.resolve(value());

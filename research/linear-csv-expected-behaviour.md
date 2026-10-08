@@ -6,7 +6,7 @@ Sources:
 
 - `research/linear.md` (T1 testbed: the metrics and the risks)
 - `research/linear-world.md` (Linear facts table, the state model and the KISS verdict)
-- `research/factory/backlog.json` on `factory/integration` `7ec4771` (the draft of 67 work orders; the live Linear team holds 54)
+- `research/factory/backlog.json` on `factory/integration` `7ec4771`, now archived at `research/archive/factory/backlog.json` (the draft of 67 work orders; the live Linear team holds 54)
 - Linear's docs ([exporting data](https://linear.app/docs/exporting-data), read 2026-10-06)
 - the engine at `7ec4771` (`fields.ts` CSV inference, `worldgen/input.ts`)
 

@@ -1,0 +1,11 @@
+{"at":"2026-10-08T08:13:18.193Z","runId":"run_20261008T081318Z_f4a2da57","t":"run_started","mode":"iterate","input":"change_request","model":"claude-sonnet-5-5","budgetUsd":3,"transport":"claude-cli"}
+{"at":"2026-10-08T08:13:18.444Z","runId":"run_20261008T081318Z_f4a2da57","t":"step_started","step":"plan","reason":"changed"}
+{"at":"2026-10-08T08:13:32.200Z","runId":"run_20261008T081318Z_f4a2da57","t":"attempt","step":"plan","n":1,"ms":13502,"usage":{"inputTokens":2,"outputTokens":2197,"cacheReadTokens":52963,"cacheWriteTokens":7963,"cacheWrite1hTokens":7963},"costUsd":0.06441859999999999,"outcome":{"kind":"accepted","warnings":0},"dump":"runs/run_20261008T081318Z_f4a2da57/001-plan-1.json"}
+{"at":"2026-10-08T08:13:32.201Z","runId":"run_20261008T081318Z_f4a2da57","t":"step_finished","step":"plan","attempts":1,"ms":13757,"costUsd":0.06441859999999999}
+{"at":"2026-10-08T08:13:32.725Z","runId":"run_20261008T081318Z_f4a2da57","t":"step_skipped","step":"model","why":"no planned change reaches entities, routes, fixtures"}
+{"at":"2026-10-08T08:13:32.726Z","runId":"run_20261008T081318Z_f4a2da57","t":"step_started","step":"workflow","reason":"changed"}
+{"at":"2026-10-08T08:13:37.811Z","runId":"run_20261008T081318Z_f4a2da57","t":"attempt","step":"workflow","n":1,"ms":4326,"usage":{"inputTokens":2,"outputTokens":99,"cacheReadTokens":56441,"cacheWriteTokens":28554,"cacheWrite1hTokens":28554},"costUsd":0.1264982,"outcome":{"kind":"accepted","warnings":1},"dump":"runs/run_20261008T081318Z_f4a2da57/002-workflow-1.json"}
+{"at":"2026-10-08T08:13:37.812Z","runId":"run_20261008T081318Z_f4a2da57","t":"step_finished","step":"workflow","attempts":1,"ms":5086,"costUsd":0.1264982}
+{"at":"2026-10-08T08:13:38.271Z","runId":"run_20261008T081318Z_f4a2da57","t":"step_skipped","step":"seed","why":"no planned change reaches seed, entities, fixtures"}
+{"at":"2026-10-08T08:13:38.683Z","runId":"run_20261008T081318Z_f4a2da57","t":"step_skipped","step":"tasks","why":"no planned change reaches tasks, entities, routes, actions, jobs, seed"}
+{"at":"2026-10-08T08:13:38.683Z","runId":"run_20261008T081318Z_f4a2da57","t":"run_finished","ms":20490,"costUsd":0.1909168,"worldWritten":true,"result":{"kind":"done","worldDir":"/Users/yossieliaz/wt/2026-10-08-stress-6/eval/runs/2026-10-08-stress-6/stripe-partial-refunds/world"}}

@@ -12,7 +12,7 @@ This repo holds two tools for a work trial. The world engine checks, serves, enf
 
 The task is in [research/spec.md](research/spec.md). The reasons behind this structure are in [research/architecture.md](research/architecture.md). Read the spec once. Do not copy it into code comments.
 
-Status on 2026-10-08, on stabilize/main: everything this file describes is built. The hand-in is the tag v1.0-handin on 4b3d2be4; later work lands on stabilize/main as before. The engine checks a world in all seven layers including lints, serves it with the admin port and `GET /openapi.json`, verifies, grades, writes docs, and compares a world with its source spec (`worldplay openapi`). WorldGen has the run loop, the `worldgen` CLI, the description, OpenAPI and CSV inputs, the iterate run (`--world`), the judge, the repair policy, the preservation gate and `REPORT.md`. Also built: the rehearsal runner, the live runner (`bun run live`, `scripts/live.sh`), the spend ledger (`bun run costs`), the OpenShell, sbx and Boat sandbox backends, the dataset export (`bun run dataset`), the Studio (`bun run studio`) with sign-in, jobs that run once, isolated check children and web hardening, its Docker deploy (`scripts/studio-deploy.sh`), its qualification (`scripts/studio-qualify.sh`) and its alert check (`bun run studio-watch`), the demos (`scripts/demo.sh`, `scripts/solve-demo.sh`, `scripts/demo-all.sh`) and the fresh-clone gate (`scripts/qualify-main.sh`). Bun is the default runtime and Node 22 the second gate. `prod/worlds/` holds 2 hand-built worlds (helpdesk and retail-tau2) and 23 generated ones. Every path this file names in backticks exists.
+Status on 2026-10-08, on stabilize/main: everything this file describes is built. The hand-in is the tag v1.0-handin on 4b3d2be4; later work lands on stabilize/main as before. The engine checks a world in all seven layers including lints, serves it with the admin port and `GET /openapi.json`, verifies, grades, writes docs, and compares a world with its source spec (`worldplay openapi`). WorldGen has the run loop, the `worldgen` CLI, the description, OpenAPI and CSV inputs, the iterate run (`--world`), the judge, the repair policy, the preservation gate and `REPORT.md`. Also built: the rehearsal runner, the live runner (`bun run live`, `scripts/live.sh`), the spend ledger (`bun run costs`), the OpenShell, sbx and Boat sandbox backends, the dataset export (`bun run dataset`), the Studio (`bun run studio`) with sign-in, jobs that run once, isolated check children and web hardening, its Docker deploy (`scripts/studio-deploy.sh`), its qualification (`scripts/studio-qualify.sh`) and its alert check (`bun run studio-watch`), the demos (`scripts/demo.sh`, `scripts/solve-demo.sh`, `scripts/demo-all.sh`) and the fresh-clone gate (`scripts/qualify-main.sh`). Bun is the only runtime and test runner, and CI runs no Node job (A-379). `prod/worlds/` holds 2 hand-built worlds (helpdesk and retail-tau2) and 23 generated ones. Every path this file names in backticks exists.
 
 ## How work lands
 
@@ -85,7 +85,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `worldgen/fidelity.ts` | Fidelity to a frozen reference of the real software: the reference schema, `fidelityScore()`, and `fidelityGate()`, the last step's 0.80 floor for a description that names a reference (A-258). Pure. |
 | `worldgen/eval-outcomes.ts` | Offline eval analysis against an explicit expected case set, each case classed by `outcomeOf()` in `eval.ts`. No model, no file IO. |
 | `worldgen/eval.ts` | The rehearsal suite schema, case sequencing, the `summary.md` scorecard and `fidelityScore()` against `eval/fidelity/*.yaml`. `outcomeOf()` is the one classifier of a case into the five outcome classes, for `summary.md` and `eval-outcomes.ts` alike (A-340), and the pass rate counts every expected case (A-341). No model, no file IO. |
-| `worldgen/live.ts` | The live run: plans cases from the files in `prod/prompts/`, and renders the `prod/LIVE-RUN.md` table. No model, no file IO. |
+| `worldgen/live.ts` | The live run: plans cases from the files in `prod/prompts/`, and renders the live-run table that `bun run live` writes as prod/LIVE-RUN.md, a file that exists only after the first live run. No model, no file IO. |
 | `worldgen/config.ts` | Settings and defaults, parsed strictly. |
 | `costs/basis.ts` | The schema for model cost estimate sources, shared by transports and ledger entries. |
 | `costs/boat-receipts.ts` | Separate append-only Boat usage evidence, canonical snapshots by VM and requested UTC day, with inspection provenance and explicit list-price units. It never settles spend. |
@@ -112,7 +112,8 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `cli/worldplay.ts` | Argument parsing for the engine CLI: check, serve, verify, grade, docs. No logic. |
 | `cli/eval-analysis-files.ts` | Reads the current eval case paths for analysis, never hidden history as another case. |
 | `cli/eval-retention.ts` | `withEvalAttempt`: a per-case lock, and the previous case run renamed into `.attempts` before a new one writes its path. |
-| `cli/eval.ts` | Argument parsing and file IO for `bun run eval`. No logic. |
+| `cli/eval.ts` | File IO and wiring for `bun run eval`. No logic. |
+| `cli/eval-args.ts` | `bun run eval`'s options: `parseEvalArgs`, its usage and refusals, and `evalConfig`, the one config and transport an eval run builds its model from. `--transport` is a config override, like `--model`, so the model, `run_started` and `capsule.json` agree (YOS-255). |
 | `cli/costs.ts` | Argument parsing and printing for the spend CLI. |
 | `cli/dataset.ts` | `bun run dataset`: argument parsing and wiring for one sequential dataset run. The work is in `dataset/pipeline.ts`. No logic. |
 | `cli/verifier.ts` | The trusted verifier child process (YOS-159): spawned once per submission, it loads and checks the private world, verifies one protocol request, records the submission in the run's ledger, and prints one bounded verdict. No listener, no credential, no world or grader content on stderr. |
@@ -120,6 +121,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `cli/episode-prepare.ts` | The prepare child (A-347, A-353): spawned by `dataset/local.ts` once per episode and by `dataset/pipeline.ts` for a dataset run's check and prepare, with an environment of only TZ, PATH and the guard scale, it checks and freezes one world and prints the prepared world, without the CheckedWorld, as one JSON object. `--check <worldDir>` only checks and prints `{ tasks, source }`. Exit 3 means the world does not check, with the message on stderr. |
 | `cli/live.ts` | `bun run live`: lists the prompts, runs WorldGen on each one at a time, checks and verifies, moves a verified world to `prod/worlds`, writes the table. The dry run prints each world's real destination, and the results file when it is not the default. |
 | `cli/models.ts` | The shared wiring for CLIs: transport choice, metering into the ledger, the example world, and writing `REPORT.md`. |
+| `cli/options.ts` | The options the model-calling CLIs repeat (YOS-203): `--model`, `--transport`, `--budget-usd` and `--max-minutes` read into config overrides, the rule for an option's value, `CONFIG_FILE` and `UsageError`. Parsing only; each CLI keeps its own walk over argv. `test/cli-options-golden.test.ts` pins every CLI's results and refusals. |
 | `cli/episode.ts` | Argument parsing and wiring for `bun run episode`: one local agent episode for the studio's Agent Playground. The work is in `dataset/local.ts`. No logic. |
 | `cli/studio.ts` | Argument parsing and wiring for `bun run studio`: the operator web app, and its users from `--users <file>` or `WORLDGEN_STUDIO_TOKEN`, and the `reconcile-jobs` subcommand. No logic. |
 | `cli/studio-watch.ts` | Argument parsing, the two GETs and the exit status for `bun run studio-watch`: one check of a running Studio, OK lines and exit 0, or one `ALERT <code>: <why>` line per problem and exit 1. The token comes only from `WORLDGEN_STUDIO_TOKEN`, goes only to `GET /api/costs` as a bearer header, and is never printed. The rules are in `studio/watch.ts`. No logic. |
@@ -154,13 +156,12 @@ Each row names the mechanism that fails when you break the rule. Do not route ar
 
 ## Commands
 
-Run these from `code/`, after one `bun install` on Bun 1.4. Bun is the package manager, script runner, test runner and runtime. `package-lock.json` stays for the Node CI job, which runs the same tests under node:test on Node 22 and gates the snippet heap bound that Bun ignores (A-87).
+Run these from `code/`, after one `bun install` on Bun 1.4. Bun is the package manager, script runner, test runner and runtime. `package-lock.json` stays, kept in step with `bun.lock` by `test/lockfile-parity.test.ts`. CI runs Bun only, so the snippet heap bound that Bun ignores (A-87) is no longer CI-gated, by user order (A-379).
 
 ```sh
 bun run typecheck                                    # whole package, then engine core without Node types
 bun run test                                         # bun test runs the node:test files
 bun run check                                        # the default gate: typecheck, then every test under Bun (A-134)
-npm run check:node                                   # the second gate: typecheck, then node:test on Node 22; enforces the heap bound
 bun run docs                                         # regenerate ../prod/world-format.md
 bun run e2e                                          # acceptance: typecheck, helpdesk checked, verified and over HTTP, CLI help, fresh docs
 
@@ -241,7 +242,7 @@ Never branch on `def.type`, with a `switch` or an `===`, outside `fields.ts`. Ca
 - Test `policy.ts` with tables that map state and outcome to a decision. Do not route them through the fake model.
 - If a change in call order breaks the fake model script, fix the script. Do not loosen the assertion.
 - `test/architecture.test.ts` also checks that every path this file names exists.
-- Run receipts in CI's environment: `WORLDGEN_GUARD_SCALE=4`, which every job in `.github/workflows/check.yml` sets, for example `WORLDGEN_GUARD_SCALE=4 nice -n 15 bun test --timeout 120000 --max-concurrency 1 <files>`, and the same variable for `node --import tsx --test`. Unset, the snippet guard is 2000 ms, as a developer machine keeps it (A-169). Set to 4, it is the guard CI tests against, and a child built from `process.env` carries it.
+- Run receipts in CI's environment: `WORLDGEN_GUARD_SCALE=4`, which every job in `.github/workflows/check.yml` sets, for example `WORLDGEN_GUARD_SCALE=4 nice -n 15 bun test --timeout 120000 --max-concurrency 1 <files>`. Unset, the snippet guard is 2000 ms, as a developer machine keeps it (A-169). Set to 4, it is the guard CI tests against, and a child built from `process.env` carries it.
 - A test that asserts a child's environment passes its own env source (`env` on `childGrader`, `runLocalEpisode`, `runPipeline` or `studioServer`) and never reads `process.env` into the expectation, so CI's variables cannot change it.
 
 ## Decisions and assumptions

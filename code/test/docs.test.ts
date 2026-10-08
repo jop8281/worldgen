@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { z } from 'zod';
-import { FIELD_TYPES, ISSUES, SECTIONS, formatReference, worldFormatDoc } from '#engine';
+import { FIELD_TYPES, ISSUES, SECTIONS, formatReference, loadWorld, worldFormatDoc } from '#engine';
 import { CLIENT_CTX, GRADER_CTX, HANDLER_CTX, JOB_CTX, SEED_CTX } from '../src/engine/ctx.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
@@ -130,13 +130,18 @@ function helpOf(file: string, ...args: string[]): { status: number | null; stdou
 const readmeDocs = (): string => ['README.md', 'research/readme-reference.md'].map((f) => readFileSync(path.join(REPO_DIR, f), 'utf8')).join('\n');
 
 describe('documented commands exist', () => {
-  const docs = { 'README.md': shCommands(readmeDocs()), 'AGENTS.md': shCommands(readFileSync(path.join(REPO_DIR, 'AGENTS.md'), 'utf8')) };
+  const docs = {
+    'README.md': shCommands(readmeDocs()),
+    'AGENTS.md': shCommands(readFileSync(path.join(REPO_DIR, 'AGENTS.md'), 'utf8')),
+    'prod/system.md': shCommands(readFileSync(path.join(REPO_DIR, 'prod/system.md'), 'utf8')),
+  };
 
   it('R17 the parser finds the documented commands', () => {
     assert.ok(docs['README.md'].includes('bun run worldplay serve ../prod/worlds/helpdesk --port 4000'));
     assert.ok(docs['AGENTS.md'].includes('bun run docs'));
     assert.ok(docs['AGENTS.md'].includes('bun run worldplay check  ../prod/worlds/helpdesk'));
     assert.ok(docs['README.md'].includes('bun run worldgen "add partial refunds" --world ../prod/worlds/gen-refunds'));
+    assert.ok(docs['prod/system.md'].includes('bun run studio'));
   });
 
   for (const [file, commands] of Object.entries(docs)) {
@@ -168,12 +173,12 @@ describe('documented commands exist', () => {
   });
 
   it('R17 every other documented script or tsx entry exists and answers --help with 0', () => {
-    for (const cmd of [...docs['README.md'], ...docs['AGENTS.md']].filter((c) => c.startsWith('npx tsx '))) {
+    for (const cmd of Object.values(docs).flat().filter((c) => c.startsWith('npx tsx '))) {
       const entry = cmd.split(/\s+/)[2]!;
       assert.ok(existsSync(path.join(CODE_DIR, entry)), entry);
       assert.equal(helpOf(entry).status, 0, `${entry} --help`);
     }
-    for (const cmd of [...docs['README.md'], ...docs['AGENTS.md']].filter((c) => /^(\.\.\/)?scripts\//.test(c))) {
+    for (const cmd of Object.values(docs).flat().filter((c) => /^(\.\.\/)?scripts\//.test(c))) {
       const rel = cmd.split(/\s+/)[0]!.replace(/^\.\.\//, '');
       assert.ok(existsSync(path.join(REPO_DIR, rel)), rel);
     }
@@ -203,7 +208,7 @@ function shLines(file: string): DocLine[] {
   return out;
 }
 
-const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md'];
+const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md', 'prod/system.md'];
 
 describe('documented worldplay subcommands, worldgen flags and runner', () => {
   const lines = DOC_FILES.flatMap(shLines);
@@ -238,8 +243,8 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
     }
   });
 
-  it('R17 docs use bun, and npm only for the Node gate; a miss names file:line', () => {
-    for (const l of lines) assert.ok(!/\bnpm (?:test|install|run (?!check:node\b))/.test(l.text), `${l.file}:${l.line}: ${l.text}`);
+  it('R17 docs use bun, never npm; a miss names file:line', () => {
+    for (const l of lines) assert.ok(!/\bnpm (?:test|install|ci|run )/.test(l.text), `${l.file}:${l.line}: ${l.text}`);
   });
 
   it('R17 AGENTS.md and design.md do not call shipped work planned', () => {
@@ -250,11 +255,9 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
     }
   });
 
-  it('the Node gate runs node:test under Node, never bun', () => {
+  it('test:node runs node:test under Node, never bun', () => {
     // More --import loaders may follow tsx, such as the active-handles report (A-223); the runner stays node --test.
     assert.match(PACKAGE.scripts['test:node'] ?? '', /^node --import tsx( --import \S+)* --test /);
-    assert.doesNotMatch(PACKAGE.scripts['check:node'] ?? '', /\bbun\b/);
-    assert.match(PACKAGE.scripts['check:node'] ?? '', /\btest:node\b/);
   });
 
   it('R17 a costs script runs cli/costs.ts and README.md documents it in one block', () => {
@@ -350,11 +353,11 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
 
   it('finds the documented commands in each file, fenced and inline', () => {
     const heads = (file: string): string[] => [...new Set(commands.filter((c) => c.file === file).map((c) => c.head))].sort();
-    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'npm run check:node', 'scripts/demo-all.sh']);
-    assert.deepEqual(heads('prod/README.md'), ['../scripts/live.sh', 'bun run docs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay']);
+    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'scripts/demo-all.sh']);
+    assert.deepEqual(heads('prod/README.md'), ['../scripts/live.sh', 'bun run docs', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay']);
     assert.deepEqual(heads('prod/prompts/README.md'), ['bun run live', 'bun run worldgen']);
     assert.deepEqual(heads('research/live-run-runbook.md'), [
-      'bun run check', 'bun run costs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'npm run check:node',
+      'bun run check', 'bun run costs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay',
       'scripts/boat-ci.sh', 'scripts/live.sh', 'scripts/solve-demo.sh',
     ]);
     assert.deepEqual(heads('research/studio-demo-runbook.md'), ['bun run studio', 'bun scripts/studio-rehearse.ts', 'scripts/studio-deploy.sh']);
@@ -570,5 +573,28 @@ describe('research/decisions.md tables', () => {
   it('every row of research/decisions.md has a unique A-<n> id or its legacy one, five columns, a date and a yes or no', () => {
     const file = 'research/decisions.md';
     assert.deepEqual(decisionProblems(file, readFileSync(path.join(REPO_DIR, file), 'utf8'), LEGACY_DECISION_IDS), []);
+  });
+});
+
+describe('world inventory (YOS-206)', () => {
+  it('README.md, AGENTS.md and prod/design.md state the world and task counts prod/worlds holds', async () => {
+    const root = path.join(REPO_DIR, 'prod/worlds');
+    const dirs = (await readdir(root, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.') && !e.name.endsWith('.partial')).map((e) => e.name);
+    let tasks = 0;
+    for (const d of dirs) {
+      const w = await loadWorld(path.join(root, d));
+      assert.ok(w.ok, d);
+      tasks += Object.keys((w.value as { tasks?: object }).tasks ?? {}).length;
+    }
+    const gen = dirs.filter((d) => d.startsWith('gen-')).length;
+    const hand = dirs.length - gen;
+    const read = (f: string): string => readFileSync(path.join(REPO_DIR, f), 'utf8');
+    const want: Record<string, string[]> = {
+      'README.md': [`holds ${dirs.length} worlds and ${tasks} tasks`, `WorldGen generated the other ${gen},`],
+      'AGENTS.md': [`holds ${hand} hand-built worlds (helpdesk and retail-tau2) and ${gen} generated ones`],
+      'prod/design.md': [`Of the ${gen} generated worlds`, `holds ${gen} \`gen-*\` worlds and ${hand} hand-built worlds`, `The ${dirs.length} worlds hold ${tasks} tasks`],
+    };
+    const missing = Object.entries(want).flatMap(([f, ss]) => ss.filter((x) => !read(f).includes(x)).map((x) => `${f}: "${x}"`));
+    assert.deepEqual(missing, []);
   });
 });

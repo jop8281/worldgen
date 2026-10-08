@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full check on a ref in a large Boat VM: `bun run check` and `npm run check:node` in parallel.
+# Run the full check on a ref in a large Boat VM: `bun run check`.
 #
 #   scripts/boat-ci.sh <ref>        # e.g. origin/main; needs BOAT_API_KEY and WORLDGEN_BOAT_ORG in the environment
 #

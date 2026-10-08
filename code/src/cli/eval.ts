@@ -8,7 +8,9 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { checkWorld, loadWorld, worldSchema } from '#engine';
 import { fidelityScore, parseFidelityReference, type FidelityReference } from '../worldgen/fidelity.ts';
-import { loadConfig, type Config } from '../worldgen/config.ts';
+import { type Config } from '../worldgen/config.ts';
+import { evalConfig, parseEvalArgs, USAGE, type EvalArgs } from './eval-args.ts';
+import { CONFIG_FILE, UsageError } from './options.ts';
 import {
   caseLayout,
   fidelityCell,
@@ -39,91 +41,13 @@ import { runWorldGen } from '../worldgen/run.ts';
 import { withEvalAttempt } from './eval-retention.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
-const CONFIG_FILE = path.join(CODE_DIR, 'worldgen.config.json');
 const DEFAULT_SUITE = path.resolve(CODE_DIR, '../eval/suite.yaml');
 const RUNS_DIR = path.resolve(CODE_DIR, '../eval/runs');
-const BOAT_PENDING = 'boat fan-out lands with sandbox backends';
-
-const USAGE = `usage: bun run eval -- [options]
-
-options:
-  --suite <file>          suite file (default ../eval/suite.yaml)
-  --only <id,...>         run only these case ids
-  --tag <tag,...>         run only the cases that carry any of these tags (after --only)
-  --dry-run               validate the suite and its input files; no model call, nothing written
-  --model <id>            override worldgen.config.json model
-  --budget-usd <n>        override the per-run budget (maxCostUsd)
-  --max-minutes <n>       override the per-run time limit
-  --out-dir <dir>         run directory (default ../eval/runs/<YYYY-MM-DD>-<suite>)
-  --transport <t>         claude-cli (default) or sdk (reads LLM_KEY from the environment)
-  --backend <b>           local (default) or boat; ${BOAT_PENDING}
-  --parallel <n>          cases at once (default 1); above 1 needs --backend boat
-`;
-
-type Backend = 'local' | 'boat';
-type Transport = 'claude-cli' | 'sdk';
-type Args = {
-  suite: string;
-  only: readonly string[] | null;
-  tags: readonly string[] | null;
-  dryRun: boolean;
-  outDir: string | null;
-  transport: Transport;
-  backend: Backend;
-  parallel: number;
-  overrides: Partial<Config>;
-};
-
-class UsageError extends Error {}
 
 const out = (line: string): void => void process.stdout.write(`${line}\n`);
 const err = (line: string): void => void process.stderr.write(`${line}\n`);
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-function positive(flag: string, v: string, integer: boolean): number {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0 || (integer && !Number.isInteger(n))) {
-    throw new UsageError(`${flag} needs a positive ${integer ? 'integer' : 'number'}, got ${v}`);
-  }
-  return n;
-}
-
-function oneOf<T extends string>(flag: string, v: string, allowed: readonly T[]): T {
-  const hit = allowed.find((a) => a === v);
-  if (hit === undefined) throw new UsageError(`${flag} must be one of ${allowed.join(', ')}, got ${v}`);
-  return hit;
-}
-
-function parseArgs(argv: readonly string[]): Args | 'help' {
-  const args: Args = { suite: DEFAULT_SUITE, only: null, tags: null, dryRun: false, outDir: null, transport: 'claude-cli', backend: 'local', parallel: 1, overrides: {} };
-  for (let i = 0; i < argv.length; i++) {
-    const flag = argv[i]!;
-    const value = (): string => {
-      const v = argv[++i];
-      if (v === undefined || v.startsWith('--')) throw new UsageError(`${flag} needs a value`);
-      return v;
-    };
-    if (flag === '--help' || flag === '-h') return 'help';
-    else if (flag === '--dry-run') args.dryRun = true;
-    else if (flag === '--suite') args.suite = path.resolve(value());
-    else if (flag === '--only') args.only = value().split(',').filter((id) => id !== '');
-    else if (flag === '--tag') args.tags = value().split(',').filter((t) => t !== '');
-    else if (flag === '--model') args.overrides.model = value();
-    else if (flag === '--budget-usd') args.overrides.maxCostUsd = positive(flag, value(), false);
-    else if (flag === '--max-minutes') args.overrides.maxMinutes = positive(flag, value(), false);
-    else if (flag === '--out-dir') args.outDir = path.resolve(value());
-    else if (flag === '--transport') args.transport = oneOf<Transport>(flag, value(), ['claude-cli', 'sdk']);
-    else if (flag === '--backend') args.backend = oneOf<Backend>(flag, value(), ['local', 'boat']);
-    else if (flag === '--parallel') args.parallel = positive(flag, value(), true);
-    else if (flag.startsWith('-')) throw new UsageError(`unknown option ${flag}`);
-    else throw new UsageError(`unexpected argument ${flag}`);
-  }
-  if (args.only !== null && args.only.length === 0) throw new UsageError('--only needs at least one case id');
-  if (args.tags !== null && args.tags.length === 0) throw new UsageError('--tag needs at least one tag');
-  if (args.backend === 'boat') throw new UsageError(`--backend boat is not available yet: ${BOAT_PENDING}`);
-  if (args.parallel > 1) throw new UsageError(`--parallel above 1 needs --backend boat (${BOAT_PENDING}); the local backend runs cases one at a time`);
-  return args;
-}
 
 /** Why a case cannot run, or null when its input files exist and digest. */
 async function caseProblem(c: SuiteCase, baseDir: string): Promise<string | null> {
@@ -218,13 +142,14 @@ async function collect(runDir: string, suite: Suite, refs: ReadonlyMap<string, F
   return records;
 }
 
-async function runSuite(args: Args, suiteFile: string, suite: Suite, cases: readonly SuiteCase[]): Promise<number> {
+async function runSuite(args: EvalArgs, suiteFile: string, suite: Suite, cases: readonly SuiteCase[]): Promise<number> {
   let config: Config;
   let model: Model;
   let exampleWorld: World;
   try {
-    config = await loadConfig(CONFIG_FILE, args.overrides);
-    model = makeModel(config, process.env, args.transport);
+    const setup = await evalConfig(CONFIG_FILE, args.overrides);
+    config = setup.config;
+    model = makeModel(config, process.env, setup.transport);
     exampleWorld = await loadExampleWorld(config);
   } catch (e) {
     err(message(e));
@@ -272,9 +197,9 @@ async function runSuite(args: Args, suiteFile: string, suite: Suite, cases: read
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  let args: Args | 'help';
+  let args: EvalArgs | 'help';
   try {
-    args = parseArgs(argv);
+    args = parseEvalArgs(argv, DEFAULT_SUITE);
   } catch (e) {
     if (!(e instanceof UsageError)) throw e;
     process.stderr.write(`${e.message}\n${USAGE}`);

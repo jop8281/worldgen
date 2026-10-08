@@ -1,0 +1,32 @@
+ok       170ms 01-sign-in
+ok       174ms 02-dashboard
+ok         2ms 03-filter
+ok      1678ms 04-serve-helpdesk
+ok      1373ms 05-explorer
+ok       154ms 06-openapi
+ok       155ms 07-console-get
+ok       153ms 08-console-422
+ok       154ms 09-read-after-422
+ok       155ms 10-reset-refused
+ok       152ms 11-reset
+ok       155ms 12-builder-kind
+ok       154ms 13-builder-upload
+ok       155ms 14-plan
+ok         3ms 15-iterate-form
+ok       155ms 16-iterate-result
+ok      1377ms 17-proof
+ok      6086ms 18-noop-episode
+ok         1ms 19-spend
+ok       152ms 20-stop-helpdesk
+ok         2ms 21-operator-sign-in
+ok      1522ms 22-operator-serve
+ok      1525ms 23-operator-masked
+ok       154ms 24-operator-stop
+ok         2ms 25-viewer-sign-in
+ok       155ms 26-viewer-report
+ok       153ms 27-viewer-serve
+ok      5661ms 28-idempotent-retry
+ok         0ms 29-other-tenant
+ada's ops run 20261008T094811Z-noop-f0408f; ana's acme retry: same 20261008T094823Z-noop-6c1aa8; bob's episodes: 0 episode run(s) under eval/episodes
+
+all page errors:

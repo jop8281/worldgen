@@ -227,7 +227,7 @@ const CRASH_ERRORS = ['TypeError', 'ReferenceError', 'RangeError', 'SyntaxError'
 // ---------------------------------------------------------------------------------------
 
 /**
- * Which check capability produces each code (research/factory/backlog.json): solution, noop,
+ * Which check capability produces each code (research/archive/factory/backlog.json): solution, noop,
  * range and determinism checks come with the tasks layer (engine-grade-verify-basic); decoys
  * and prefixes with engine-verify-full; world.too_few_tasks with engine-lints. A row skips
  * until the unit that owns its code lands, instead of failing on a pass-through layer.

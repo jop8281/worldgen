@@ -1,6 +1,6 @@
 /**
- * The test gate on a large Boat VM: `bun run check` and `npm run check:node` in parallel on one
- * archived ref, with a summary per runtime. Driven by scripts/boat-ci.sh; reads BOAT_API_KEY from
+ * The test gate on a large Boat VM: `bun run check` on one archived ref, with a summary per run.
+ * Driven by scripts/boat-ci.sh; reads BOAT_API_KEY from
  * the environment only. The VM always goes down. It is metered like every Boat VM: its 2-hour TTL
  * is reserved in the spend ledger before creation, so `reconcile-orphans` sees a live claim.
  *
@@ -19,14 +19,13 @@ if (archive === undefined) {
 }
 
 const BUN_DIR = '/tmp/worldgen-bun';
-/** CI's Node major (A-87 gates the heap bound on it) and a guard scale for six suites sharing 8 CPUs, so failures map onto CI's. */
+/** The Node major scripts/factory-check.sh needs, and a guard scale for suites sharing 8 CPUs, so failures map onto CI's. */
 const NODE_MAJOR = '22';
 const GUARD_SCALE = '2';
 const NODE_DIR = '/tmp/worldgen-node22';
 const PATHS = `export PATH=${BUN_DIR}/node_modules/.bin:${NODE_DIR}/bin:$PATH WORLDGEN_GUARD_SCALE=${GUARD_SCALE}; cd /tmp/worldgen/repo/code`;
 const RUNS: Record<string, string> = {
   bun: 'bun run check',
-  node: 'npm run check:node',
 };
 const POLL_MS = 20_000;
 const MAX_MS = 100 * 60_000;
@@ -79,9 +78,7 @@ try {
     const exit = (await sh(`cat /tmp/${name}.exit`)).trim();
     const summary = name === 'factory'
       ? await sh(`grep -E '^(# |ℹ )(tests|pass|fail|skipped|todo|cancelled) |^not ok |^✖ ' /tmp/factory.log | head -60 || true`)
-      : name === 'bun'
-      ? await sh(`grep -E '^ *[0-9]+ (pass|fail|skip|todo)$|^Ran [0-9]+ tests|^\\(fail\\)' /tmp/bun.log | sort -u | head -60 || true`)
-      : await sh(`grep -E '^(# |ℹ )(tests|pass|fail|skipped|todo|cancelled) |^not ok |^✖ |\\[active-handles\\]' /tmp/node.log | head -60 || true`);
+      : await sh(`grep -E '^ *[0-9]+ (pass|fail|skip|todo)$|^Ran [0-9]+ tests|^\\(fail\\)' /tmp/bun.log | sort -u | head -60 || true`);
     const tc = await sh(`grep -E 'error TS' /tmp/${name}.log | head -10 || true`);
     process.stdout.write(`\n== ${name} (${RUNS[name]}) exit ${exit}\n${tc}${summary}`);
     if (name === 'factory' && junitOut !== undefined) {
