@@ -100,14 +100,14 @@ export const SENSITIVE_WITHHELD = '[withheld: the response could not be read as 
 
 const obj = (v: unknown): v is Readonly<Record<string, unknown>> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** Each entity's sensitive field names, keyed by its idPrefix, from a loaded world definition. A row id is `<idPrefix>_…`. */
+/** Each entity's sensitive field names, keyed by its idPrefix, from a loaded world definition. A row id is `<idPrefix>_…`; entities sharing a prefix share the union. */
 export function sensitiveOf(world: unknown): ReadonlyMap<string, ReadonlySet<string>> {
-  const out = new Map<string, ReadonlySet<string>>();
+  const out = new Map<string, Set<string>>();
   const entities = obj(world) && obj(world['entities']) ? world['entities'] : {};
   for (const entity of Object.values(entities)) {
     if (!obj(entity) || typeof entity['idPrefix'] !== 'string' || !obj(entity['fields'])) continue;
     const names = Object.entries(entity['fields']).filter(([, def]) => obj(def) && def['sensitive'] === true).map(([name]) => name);
-    if (names.length > 0) out.set(entity['idPrefix'], new Set(names));
+    if (names.length > 0) out.set(entity['idPrefix'], new Set([...(out.get(entity['idPrefix']) ?? []), ...names]));
   }
   return out;
 }

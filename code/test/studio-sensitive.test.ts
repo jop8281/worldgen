@@ -52,6 +52,14 @@ describe('sensitive fields: pure masking', () => {
     assert.deepEqual([...sensitive].map(([prefix, fields]) => [prefix, [...fields]]), [['cus', ['tier']]]);
   });
 
+  it('gives two entities that share an idPrefix the union of their sensitive fields', () => {
+    const shared = sensitiveOf({ entities: {
+      customer: { idPrefix: 'cus', fields: { tier: { type: 'string', sensitive: true } } },
+      contact: { idPrefix: 'cus', fields: { phone: { type: 'string', sensitive: true } } },
+    } });
+    assert.deepEqual([...shared].map(([prefix, fields]) => [prefix, [...fields]]), [['cus', ['tier', 'phone']]]);
+  });
+
   it('masks the field in list, single and nested rows, and nothing else', () => {
     assert.deepEqual(
       maskSensitive({ data: [{ id: 'cus_0001', name: 'Acme', tier: 'enterprise' }, { id: 'tkt_0001', tier: 'kept' }], next: null }, sensitive),
@@ -149,6 +157,7 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
   let world: WorldServer;
   let studio: StudioServer;
   let broken = '';
+  let plainSvc = '';
 
   before(async () => {
     root = await mkdtemp(path.join(tmpdir(), 'studio-sensitive-routes-'));
@@ -160,6 +169,9 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
     await copyFile(path.resolve(import.meta.dirname, '../../prod/worlds/helpdesk/world.yaml'), path.join(worldsDir, 'helpdesk', 'world.yaml'));
     await mkdir(path.join(worldsDir, 'broken'), { recursive: true });
     await writeFile(path.join(worldsDir, 'broken', 'world.yaml'), 'entities: [not a world\n');
+    const plain = checkWorld(minimalWorld());
+    assert.ok(plain.ok);
+    await saveWorld(path.join(worldsDir, 'plain'), plain.world);
     // One real episode on the sensitive world: the agent lists the customers, then finishes.
     await runLocalEpisode({
       worldDir: path.join(worldsDir, 'secretive'), taskId: 'resolve_password_ticket', out: path.join(root, 'eval', 'episodes', 'ep-sens'), runId: 'ep-sens',
@@ -179,6 +191,9 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
     const served = await post(studio.url, '/api/worlds/broken/serve', ADMIN, {});
     assert.equal(served.status, 200, JSON.stringify(served.body));
     broken = String(served.body['id']);
+    const servedPlain = await post(studio.url, '/api/worlds/plain/serve', ADMIN, {});
+    assert.equal(servedPlain.status, 200, JSON.stringify(servedPlain.body));
+    plainSvc = String(servedPlain.body['id']);
   });
   after(async () => {
     await studio.close();
@@ -225,5 +240,25 @@ describe('sensitive fields: episodes, export and an unreadable world', () => {
     assert.equal(await call(OPERATOR), SENSITIVITY_UNREAD);
     assert.equal((JSON.parse(await call(ADMIN)) as { tier: string }).tier, 'enterprise');
     assert.equal((await get(studio.url, '/api/worlds/broken/export', OPERATOR)).status, 403);
+  });
+
+  it('masks an episode by the world it ran on, frozen in its run, even after its world dir holds a world with no sensitive field', async () => {
+    const plain = checkWorld(minimalWorld());
+    assert.ok(plain.ok);
+    await saveWorld(path.join(worldsDir, 'secretive'), plain.world);
+    assert.deepEqual(await episodeTiers(OPERATOR), [['cus_0001', '[sensitive]'], ['cus_0002', '[sensitive]'], ['cus_0003', '[sensitive]'], ['cus_0004', '[sensitive]'], ['cus_0005', '[sensitive]']]);
+  });
+
+  it('masks a field marked sensitive after the world was served, without a restart', async () => {
+    const tier = async (): Promise<string> => {
+      const r = await post(studio.url, `/api/services/${plainSvc}/call`, OPERATOR, { method: 'GET', path: '/customers/cus_0001' });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      return (JSON.parse(String(r.body['body'])) as { tier: string }).tier;
+    };
+    assert.equal(await tier(), 'enterprise');
+    const marked = checkWorld(sensitiveWorld());
+    assert.ok(marked.ok);
+    await saveWorld(path.join(worldsDir, 'plain'), marked.world);
+    assert.equal(await tier(), SENSITIVE_MASK);
   });
 });

@@ -65,6 +65,7 @@ import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, sensitiveOf, type 
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
+import { worldArtifactPath } from '../dataset/store.ts';
 import { summarizeEpisodes } from './analytics.ts';
 import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, recoveryOf, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
@@ -453,6 +454,16 @@ type Route =
   | { readonly method: 'GET' | 'POST'; readonly need: StudioRole; readonly parts: readonly string[]; readonly run: Handler };
 
 /** The capsule.json of one world dir, parsed, or null when absent or foreign. */
+/**
+ * The sensitive fields of the world an episode ran on: the copy frozen in its run's out dir at prepare time, never a world
+ * looked up by name now, which may since be another. Null when the copy is missing or unreadable (A-356).
+ */
+async function episodeSensitivity(episode: unknown, out: string): Promise<Sensitivity> {
+  const version = isObject(episode) ? episode['world_version'] : undefined;
+  if (typeof version !== 'string' || !/^[0-9a-f]{64}$/.test(version)) return null;
+  return sensitivityOf(path.dirname(path.join(out, worldArtifactPath(version))));
+}
+
 /** The sensitive fields of the world at `dir`, or null when its world.yaml cannot be read, so the caller fails closed (A-356). */
 async function sensitivityOf(dir: string): Promise<Sensitivity> {
   const loaded = await loadWorld(dir);
@@ -1016,7 +1027,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         request: { method, path: `${url.pathname}${url.search}`, body: payload ?? null },
         status: res.status, contentType: res.headers.get('content-type'), ms: Date.now() - started,
         // A sensitive field's value never reaches a role below admin (A-356).
-        body: who.role === 'admin' ? text : bodyBelowAdmin(text, hit.sensitive), truncated,
+        // Masked by the world as served and as it is now, so a field marked sensitive since the serve is masked too.
+        body: who.role === 'admin' ? text : bodyBelowAdmin(text, mergeSensitivity([hit.sensitive, await sensitivityOf(hit.dir)])), truncated,
       },
     };
   }
@@ -1669,7 +1681,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (run === undefined && !await isDir(out)) return unknown;
     const exported = await exportedEpisode(out, runId);
     // Tool results hold the world's answers, so a role below admin sees them masked like the console's (A-356).
-    const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, await episodeSensitivity(exported, run, who, filter));
+    const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, await episodeSensitivity(exported, out));
     const output = run?.child?.output() ?? '';
     const running = run !== undefined && run.phase !== 'finished';
     return {
@@ -1681,21 +1693,6 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         ...(run !== undefined && !running && run.exitCode !== 0 ? { failure: output.split('\n').filter((l) => l.trim() !== '').slice(-3) } : {}),
       },
     };
-  }
-
-  /** The sensitive fields of the world an episode ran on: its job's world, and every world `who` sees whose meta.name is the episode's world_id. */
-  async function episodeSensitivity(episode: unknown, run: Job | undefined, who: User, filter: string | null): Promise<Sensitivity> {
-    const dirs = new Set<string>();
-    if (isEpisode(run)) {
-      const w = await worldDirOf(run.episode.world, who, filter);
-      if (w.ok) dirs.add(w.dir);
-    }
-    const name = isObject(episode) ? episode['world_id'] : undefined;
-    for (const { dir } of await worldEntries(shelvesOf(who, filter))) {
-      const loaded = await loadWorld(dir);
-      if (loaded.ok && isObject(loaded.value) && isObject(loaded.value['meta']) && loaded.value['meta']['name'] === name) dirs.add(dir);
-    }
-    return mergeSensitivity(await Promise.all([...dirs].map(sensitivityOf)));
   }
 
   /** The episode dirs under eval/episodes that `who` sees. */
