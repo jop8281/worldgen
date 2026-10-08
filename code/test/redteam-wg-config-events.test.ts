@@ -119,7 +119,7 @@ describe('redteam config: strictness', () => {
     assert.equal(c.maxCostUsd, 5);
     assert.equal(c.maxMinutes, 15);
     assert.equal(c.maxBacktracks, 2);
-    assert.deepEqual(c.steps, { plan: { maxAttempts: 3, minShareSeconds: 330 }, model: { maxAttempts: 4 }, workflow: { maxAttempts: 5 }, seed: { maxAttempts: 4 }, tasks: { maxAttempts: 5 } });
+    assert.deepEqual(c.steps, { plan: { maxAttempts: 3, minShareSeconds: 330 }, model: { maxAttempts: 4 }, workflow: { maxAttempts: 4 }, seed: { maxAttempts: 4 }, tasks: { maxAttempts: 4 } });
   });
 });
 

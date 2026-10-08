@@ -23,7 +23,7 @@ describe('loadConfig', () => {
     assert.equal(c.maxBacktracks, 2);
     assert.equal(c.maxOutputTokens, 16000);
     assert.equal(c.steps.plan.maxAttempts, 3);
-    assert.equal(c.steps.workflow.maxAttempts, 5);
+    assert.equal(c.steps.workflow.maxAttempts, 4);
   });
 
   it('rejects an unknown step key and names it', async () => {
@@ -41,7 +41,7 @@ describe('loadConfig', () => {
     assert.equal(c.model, 'claude-sonnet-5-5');
     assert.equal(c.maxCostUsd, 1.5);
     assert.equal(c.maxMinutes, 7);
-    assert.equal(c.steps.tasks.maxAttempts, 5);
+    assert.equal(c.steps.tasks.maxAttempts, 4);
   });
 
   it('ignores undefined overrides', async () => {
