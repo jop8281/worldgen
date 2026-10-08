@@ -751,8 +751,9 @@ function checkExposure(events: readonly SpendEvent[], reservations: readonly Res
     const def = CAPS[cap];
     if (capUsd === undefined || (def.kind !== undefined && def.kind !== kind)) continue;
     const w = windowExposure(events, reservations, cap, now);
-    if (w.unknownSpend > 0) throw new Error(`cost admission refused: ${def.env} cannot be enforced while applicable billing is unknown (see \`costs\`; settle a stale claim with \`costs release <id> --usd <n>\`)`);
-    if (w.unknownClaims.length > 0) throw new Error(`cost admission refused: ${def.env} cannot be enforced while an active spending obligation is unknown (claim ${w.unknownClaims[0]?.id}; it expires ${MODEL_CLAIM_TTL_MS / 3600_000} h after it opened, or \`costs release\` it)`);
+    if (w.unknownSpend > 0) throw new CostUnenforceableError(cap, null, `cost admission refused: ${def.env} cannot be enforced while applicable billing is unknown (see \`costs\`; settle a stale claim with \`costs release <id> --usd <n>\`)`);
+    const claim = w.unknownClaims[0]?.id;
+    if (claim !== undefined) throw new CostUnenforceableError(cap, claim, `cost admission refused: ${def.env} cannot be enforced while an active spending obligation is unknown (claim ${claim}; it expires ${MODEL_CLAIM_TTL_MS / 3600_000} h after it opened, or \`costs release\` it)`);
     const exposure = roundUsd(w.spentUsd + w.reservedUsd);
     if (exposure >= capUsd || roundUsd(exposure + additionalUsd) > capUsd) {
       throw new SpendCapError({ cap, capUsd, spentUsd: roundUsd(exposure + additionalUsd), remainingUsd: 0 }, day);
@@ -794,11 +795,33 @@ const METER_SCOPE = {
  * spans every session: `daily spend cap WORLDGEN_MAX_DAILY_USD=$60.00 reached: $60.08 spent today
  * (2026-10-07 UTC), all sessions, model calls and sandboxes`.
  */
+/** Why a call was not admitted under `cap` while billing is unknown, for stop reasons and reports. */
+export function unenforceable(cap: CapName, claim: string | null): string {
+  const what = claim === null ? 'some spend in its window has unknown cost' : `claim ${claim} has unknown cost`;
+  return `not admitted: ${CAPS[cap].env} cannot be enforced while ${what}; nothing was called or spent (see \`costs\`, settle with \`costs release <id> --usd <n>\`)`;
+}
+
 export function capReached(cap: CapName, capUsd: number, spentUsd: number, day: string): string {
   const def: { env: string; window: 'day' | 'total'; kind: SpendKind | undefined } = CAPS[cap];
   const scope = METER_SCOPE[def.kind ?? 'all'];
   const window = def.window === 'day' ? { name: 'daily', when: `today (${day} UTC)` } : { name: 'total', when: 'in all time' };
   return `${window.name} ${scope.label}spend cap ${def.env}=$${capUsd.toFixed(2)} reached: $${spentUsd.toFixed(2)} spent ${window.when}, all sessions, ${scope.spend}`;
+}
+
+/**
+ * The ledger refused a call before it was made because `cap` cannot be enforced: spend in its window has unknown
+ * cost, or `claim` is an open obligation of unknown cost. Nothing was called or spent (YOS-227).
+ */
+export class CostUnenforceableError extends Error {
+  readonly kind = 'cost_unenforceable' as const;
+  readonly cap: CapName;
+  readonly claim: string | null;
+  constructor(cap: CapName, claim: string | null, message: string) {
+    super(message);
+    this.name = 'CostUnenforceableError';
+    this.cap = cap;
+    this.claim = claim;
+  }
 }
 
 export class SpendCapError extends Error {
