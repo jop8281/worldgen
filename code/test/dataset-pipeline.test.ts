@@ -10,7 +10,7 @@ import { engineGrader } from '../src/dataset/verifier.ts';
 import { collectBundle } from '../src/sandboxes/files.ts';
 import { turn, COMMIT, HELPDESK_DIR, easyOnly, fakeBackend, helpdesk, lazySolver, randomPort, RUN_BUDGET, solveAll, tmp, type FakeBackendOptions } from './dataset-kit.ts';
 import type { NextTurn } from '../src/dataset/episode.ts';
-import { checkWorld, dumpSha256, type StateDump } from '#engine';
+import { checkWorld, dumpSha256, loadWorld, saveWorld, worldIdOf, type StateDump } from '#engine';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const ANTHROPIC = 'sk-ant-api03-ANTHROPIC-SECRET-VALUE';
@@ -146,6 +146,32 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     for (const f of backend.uploaded) assert.equal(Buffer.from(f.data).toString('utf8').includes(BOAT), false);
   });
 
+  it('refuses a world that changed between its check and its freeze, before any Boat call', RUN_BUDGET, async () => {
+    const dir = path.join(tmp('changed-world'), 'helpdesk');
+    cpSync(HELPDESK_DIR, dir, { recursive: true });
+    const loaded = await loadWorld(dir);
+    assert.ok(loaded.ok);
+    const original = checkWorld(loaded.value);
+    assert.ok(original.ok);
+    const edited = checkWorld({ ...original.world, meta: { ...original.world.meta, description: 'Edited between the check and the freeze.' } });
+    assert.ok(edited.ok);
+    const runner: Runner = async (argv, opts) => {
+      const res = await nodeRunner(argv, opts);
+      if (argv.includes('--check')) await saveWorld(dir, edited.world);
+      return res;
+    };
+    const backend = fakeBackend(original.world, { port: randomPort() });
+    await assert.rejects(runPipeline({
+      worldDir: dir, out: tmp('changed-out'), runId: 'changed', engineCommit: COMMIT, model: 'claude-sonnet-5-5',
+      maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'changed-abc123',
+    }, { backend, nextTurn: solveAll, makeBundle: tinyBundle, grader: engineGrader, runner }), {
+      name: 'PreflightError',
+      message: `the world in ${dir} changed between its check and its freeze (checked ${worldIdOf(original.world)}, froze ${worldIdOf(edited.world)}); nothing ran, so run again`,
+    });
+    assert.notEqual(worldIdOf(original.world), worldIdOf(edited.world));
+    assert.deepEqual(backend.events, []);
+  });
+
   it('checks and prepares in children whose environment holds no controller credential', RUN_BUDGET, async () => {
     const calls: { argv: readonly string[]; env: Readonly<Record<string, string | undefined>> | undefined }[] = [];
     const runner: Runner = async (argv, opts) => {
@@ -177,7 +203,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       maxTurns: 10, budgetUsd: 1, maxMinutes: 1, secrets: [secret], sandboxName: 'reject-secret', port,
     }, {
       grader: engineGrader,
-      checked: { tasks: Object.entries(report.world.tasks).map(([id, t]) => ({ id, difficulty: t.difficulty, instruction: t.instruction })), source: JSON.stringify(report.world) },
+      checked: { tasks: Object.entries(report.world.tasks).map(([id, t]) => ({ id, difficulty: t.difficulty, instruction: t.instruction })), source: JSON.stringify(report.world), wid: worldIdOf(report.world) },
       backend,
       makeBundle: async (dir) => { bundleCalls += 1; return tinyBundle(dir); },
       nextTurn: async (view, signal) => { modelCalls += 1; return lazySolver(view, signal); },

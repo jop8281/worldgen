@@ -86,7 +86,7 @@ export async function checkForRun(worldDir: string): Promise<CheckedWorldForRun>
 }
 
 /** What a controller learns of a checked world: plain data, so it never holds a CheckedWorld. `source` is the world as JSON, for the secret guard. */
-export type CheckedForRun = { readonly tasks: PreparedWorld['tasks']; readonly source: string };
+export type CheckedForRun = { readonly tasks: PreparedWorld['tasks']; readonly source: string; readonly wid: string };
 
 export const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
