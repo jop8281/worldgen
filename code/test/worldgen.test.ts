@@ -757,6 +757,29 @@ describe('runWorldGen create: OpenAPI request shape is judged at the step that b
     assert.equal(result.kind, 'done');
   });
 
+  it('replays YOS-241: an action field the spec requires, made required but with a default, is progress, and the next attempt hears why', async () => {
+    const spec = specFile({ '/tickets/{id}/resolve': { post: {
+      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' } } } } } },
+      responses: { '200': { description: 'resolved' } } } } });
+    const resolve = TARGET.actions['resolve_ticket']!;
+    const withReason = (reason: object) => ({ note: 'resolve takes a reason', upsert: { actions: { ...TARGET.actions, resolve_ticket: { ...resolve, input: { reason } } }, jobs: TARGET.jobs } });
+    // As the live run answered: the field optional, then required with a default. Before YOS-241 both read
+    // `fields reason`, so the second stopped the run as no_progress before a third workflow call.
+    const script: Script = [{ input: PLAN }, { input: EDITS.model }, { input: withReason({ type: 'string' }) },
+      { input: withReason({ type: 'string', required: true, default: 'none' }) }, new ModelError('the third workflow call')];
+    const { result, events, calls } = await run(script, { input: { kind: 'openapi', path: spec, only: [] }, digest: OPENAPI_DIGEST });
+    assert.deepEqual(steps(events), [['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'rejected'], ['workflow', 'rejected'], ['workflow', 'model_error']]);
+    const found = events.flatMap((e) => (e.t === 'attempt' && e.outcome.kind === 'rejected' ? [e.outcome.issues.map((i) => [i.code, i.path.join('.'), i.found])] : []));
+    const at = 'input.openapi.POST /tickets/{id}/resolve.request.reason';
+    assert.deepEqual(found, [
+      [['openapi.required_field_missing', at, 'reason is optional']],
+      [['openapi.required_field_missing', at, 'reason has a default, so a request may leave it out']],
+    ]);
+    assert.equal(calls[4]?.prompt.includes('reason has a default, so a request may leave it out'), true);
+    assert.equal(calls[4]?.prompt.includes('make it required with no default'), true);
+    assert.deepEqual(result.kind === 'stopped' ? result.reason : null, { kind: 'model_error', message: 'the third workflow call' });
+  });
+
   it('rejects a route whose request requires a field the spec leaves optional at the model step, not first at tasks', async () => {
     const spec = specFile({ '/customers': { post: {
       requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, tier: { type: 'string', enum: ['free', 'pro', 'enterprise'] } } } } } },
@@ -1511,6 +1534,16 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
     assert.deepEqual(listed(prompt, 'Required keys'), ['- entities.customer', '- entities.ticket', '- routes.list_tickets', '- routes.get_ticket', '- routes.list_customers']);
     assert.deepEqual(listed(prompt, 'Action routes'), ['- resolve_ticket']);
     assert.equal(STAGES.model.brief.includes('A plan route whose id is also a workflow action name is an action route'), true);
+  });
+
+  it('tells the model stage to type an imported date-only column as a string with a date pattern, and only then (YOS-247)', () => {
+    const fixtures = { enrollments: [{ student: 'S1', enrolled_on: '2026-08-28', paid_at: '2026-08-28T09:00:00Z' }, { student: 'S2', enrolled_on: '', paid_at: '2026-08-29T10:00:00Z' }] };
+    const dated = { ...emptyWorld('w', 'worldgen'), fixtures };
+    assert.deepEqual(listed(stagePrompt('model', plan, dated, null), 'Imported date-only columns'), [
+      '- enrollments.enrolled_on holds dates with no time, such as 2026-08-28: type its field string with pattern ^\\d{4}-\\d{2}-\\d{2}$, never datetime, so the imported values seed unchanged.',
+    ]);
+    assert.equal(stagePrompt('model', plan, emptyWorld('w', 'worldgen'), null).includes('## Imported date-only columns'), false);
+    assert.equal(stagePrompt('workflow', plan, dated, null).includes('## Imported date-only columns'), false);
   });
 
   it('plan coverage checks a claimed route as its action at the workflow stage, never as a route', () => {
