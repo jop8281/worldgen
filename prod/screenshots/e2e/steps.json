@@ -45,13 +45,13 @@
           "sent": {},
           "status": 200,
           "answer": {
-            "id": "svc-144bf21f",
+            "id": "svc-03ec7dd3",
             "name": "helpdesk",
             "tenant": "acme",
-            "pid": 3443,
-            "worldPort": 53178,
-            "adminPort": 53179,
-            "startedAt": "2026-10-08T05:39:09.723Z"
+            "pid": 6869,
+            "worldPort": 53741,
+            "adminPort": 53742,
+            "startedAt": "2026-10-08T05:41:45.686Z"
           }
         }
       ],
@@ -84,16 +84,16 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/call",
+          "path": "/api/services/svc-03ec7dd3/call",
           "sent": {
             "method": "GET",
             "path": "/tickets?status=open&limit=3"
           },
           "status": 200,
           "answer": {
-            "service": "svc-144bf21f",
+            "service": "svc-03ec7dd3",
             "world": "helpdesk",
-            "worldPort": 53178,
+            "worldPort": 53741,
             "request": {
               "method": "GET",
               "path": "/tickets?status=open&limit=3",
@@ -101,7 +101,7 @@
             },
             "status": 200,
             "contentType": "application/json; charset=utf-8",
-            "ms": 4,
+            "ms": 2,
             "body": "{\"data\":[{\"id\":\"tkt_0001\",\"created_at\":\"2026-03-02T04:00:00.000Z\",\"updated_at\":\"2026-03-02T08:00:00.000Z\",\"subject\":\"Label printer offline in DC-3\",\"description\":\"The Zebra printer at dock 3 shows offline since 04:00. Outbound pallets cannot be labelled.\",\"customer_id\":\"cus_0001\",\"assignee_id\":\"agt_0001\",\"priority\":\"high\",\"status\":\"open\",\"escalation_level\":0,\"escalated_at\":null,\"sla_started_at\":\"2026-03-02T04:00:00.000Z\",\"sla_due_at\":\"2026-03-02T08:00:00.000Z\",\"sla_breached\":true,\"resolved_at\":null},{\"id\":\"tkt_0002\",\"created_at\":\"2026-03-02T07:00:00.000Z\",\"updated_at\":\"2026-03-02T07:30:00.000Z\",\"subject\":\"Label printer jams on 4x6 stock\",\"description\":\"Jams about once per roll since we switched label stock.\",\"customer_id\":\"cus_0001\",\"assignee_id\":\"agt_0001\",\"priority\":\"normal\",\"status\":\"open\",\"escalation_level\":0,\"escalated_at\":null,\"sla_started_at\":\"2026-03-02T07:00:00.000Z\",\"sla_due_at\":\"2026-03-02T15:00:00.000Z\",\"sla_breached\":false,\"resolved_at\":null},{\"id\":\"tkt_0005\",\"created_at\":\"2026-03-02T08:10:00.000Z\",\"updated_at\":\"2026-03-02T08:35:00.000Z\",\"subject\":\"Checkout API returning 502 errors\",\"description\":\"About 30% of checkout calls fail with 502 since 08:05.\",\"customer_id\":\"cus_0003\",\"assignee_id\":\"agt_0005\",\"priority\":\"urgent\",\"status\":\"open\",\"escalation_level\":0,\"escalated_at\":null,\"sla_started_at\":\"2026-03-02T08:10:00.000Z\",\"sla_due_at\":\"2026-03-02T09:10:00.000Z\",\"sla_breached\":false,\"resolved_at\":null}],\"next_cursor\":\"JTVCJTIyJTIyJTJDbnVsbCUyQyUyMnRrdF8wMDA1JTIyJTVE\"}",
             "truncated": false
           }
@@ -123,7 +123,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/call",
+          "path": "/api/services/svc-03ec7dd3/call",
           "sent": {
             "method": "PATCH",
             "path": "/tickets/tkt_0001",
@@ -133,9 +133,9 @@
           },
           "status": 200,
           "answer": {
-            "service": "svc-144bf21f",
+            "service": "svc-03ec7dd3",
             "world": "helpdesk",
-            "worldPort": 53178,
+            "worldPort": 53741,
             "request": {
               "method": "PATCH",
               "path": "/tickets/tkt_0001",
@@ -179,7 +179,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/call",
+          "path": "/api/services/svc-03ec7dd3/call",
           "sent": {
             "method": "PATCH",
             "path": "/tickets/tkt_0001",
@@ -190,9 +190,9 @@
           },
           "status": 200,
           "answer": {
-            "service": "svc-144bf21f",
+            "service": "svc-03ec7dd3",
             "world": "helpdesk",
-            "worldPort": 53178,
+            "worldPort": 53741,
             "request": {
               "method": "PATCH",
               "path": "/tickets/tkt_0001",
@@ -203,7 +203,7 @@
             },
             "status": 422,
             "contentType": "application/json; charset=utf-8",
-            "ms": 1,
+            "ms": 0,
             "body": "{\"error\":{\"code\":\"state.transition\",\"message\":\"ticket tkt_0001 status cannot move from open to new\"}}",
             "truncated": false
           }
@@ -238,16 +238,16 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/call",
+          "path": "/api/services/svc-03ec7dd3/call",
           "sent": {
             "method": "GET",
             "path": "/tickets/tkt_0001"
           },
           "status": 200,
           "answer": {
-            "service": "svc-144bf21f",
+            "service": "svc-03ec7dd3",
             "world": "helpdesk",
-            "worldPort": 53178,
+            "worldPort": 53741,
             "request": {
               "method": "GET",
               "path": "/tickets/tkt_0001",
@@ -277,7 +277,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/reset",
+          "path": "/api/services/svc-03ec7dd3/reset",
           "sent": {
             "confirm": ""
           },
@@ -306,13 +306,13 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/reset",
+          "path": "/api/services/svc-03ec7dd3/reset",
           "sent": {
             "confirm": "helpdesk"
           },
           "status": 200,
           "answer": {
-            "service": "svc-144bf21f",
+            "service": "svc-03ec7dd3",
             "world": "helpdesk",
             "now": "2026-03-02T09:00:00.000Z",
             "hash": "4a92e68ff2df751541ba0f40f916f28c"
@@ -335,7 +335,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/reset",
+          "path": "/api/services/svc-03ec7dd3/reset",
           "sent": {
             "confirm": "helpdesk"
           },
@@ -343,7 +343,7 @@
           "answer": {
             "error": {
               "code": "auth.forbidden",
-              "message": "POST /api/services/svc-144bf21f/reset needs the operator role; vic is a viewer"
+              "message": "POST /api/services/svc-03ec7dd3/reset needs the operator role; vic is a viewer"
             }
           }
         }
@@ -366,7 +366,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/reset",
+          "path": "/api/services/svc-03ec7dd3/reset",
           "sent": {
             "confirm": "helpdesk"
           },
@@ -374,7 +374,7 @@
           "answer": {
             "error": {
               "code": "service.unknown",
-              "message": "No service svc-144bf21f"
+              "message": "No service svc-03ec7dd3"
             }
           }
         }
@@ -397,11 +397,11 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-144bf21f/stop",
+          "path": "/api/services/svc-03ec7dd3/stop",
           "sent": {},
           "status": 200,
           "answer": {
-            "id": "svc-144bf21f",
+            "id": "svc-03ec7dd3",
             "stopped": true,
             "signal": "SIGTERM"
           }
@@ -426,13 +426,13 @@
           "sent": {},
           "status": 200,
           "answer": {
-            "id": "svc-08f85e9b",
+            "id": "svc-e448c910",
             "name": "gen-billing-dunning",
             "tenant": "acme",
-            "pid": 3609,
-            "worldPort": 53205,
-            "adminPort": 53206,
-            "startedAt": "2026-10-08T05:39:19.943Z"
+            "pid": 7034,
+            "worldPort": 53793,
+            "adminPort": 53794,
+            "startedAt": "2026-10-08T05:41:56.002Z"
           }
         }
       ],
@@ -465,16 +465,16 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/call",
+          "path": "/api/services/svc-e448c910/call",
           "sent": {
             "method": "GET",
             "path": "/customers?limit=2"
           },
           "status": 200,
           "answer": {
-            "service": "svc-08f85e9b",
+            "service": "svc-e448c910",
             "world": "gen-billing-dunning",
-            "worldPort": 53205,
+            "worldPort": 53793,
             "request": {
               "method": "GET",
               "path": "/customers?limit=2",
@@ -504,7 +504,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/call",
+          "path": "/api/services/svc-e448c910/call",
           "sent": {
             "method": "PATCH",
             "path": "/customers/cus_0001",
@@ -514,9 +514,9 @@
           },
           "status": 200,
           "answer": {
-            "service": "svc-08f85e9b",
+            "service": "svc-e448c910",
             "world": "gen-billing-dunning",
-            "worldPort": 53205,
+            "worldPort": 53793,
             "request": {
               "method": "PATCH",
               "path": "/customers/cus_0001",
@@ -560,7 +560,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/call",
+          "path": "/api/services/svc-e448c910/call",
           "sent": {
             "method": "PATCH",
             "path": "/customers/cus_0001",
@@ -571,9 +571,9 @@
           },
           "status": 200,
           "answer": {
-            "service": "svc-08f85e9b",
+            "service": "svc-e448c910",
             "world": "gen-billing-dunning",
-            "worldPort": 53205,
+            "worldPort": 53793,
             "request": {
               "method": "PATCH",
               "path": "/customers/cus_0001",
@@ -619,16 +619,16 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/call",
+          "path": "/api/services/svc-e448c910/call",
           "sent": {
             "method": "GET",
             "path": "/customers/cus_0001"
           },
           "status": 200,
           "answer": {
-            "service": "svc-08f85e9b",
+            "service": "svc-e448c910",
             "world": "gen-billing-dunning",
-            "worldPort": 53205,
+            "worldPort": 53793,
             "request": {
               "method": "GET",
               "path": "/customers/cus_0001",
@@ -658,7 +658,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/reset",
+          "path": "/api/services/svc-e448c910/reset",
           "sent": {
             "confirm": ""
           },
@@ -687,13 +687,13 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/reset",
+          "path": "/api/services/svc-e448c910/reset",
           "sent": {
             "confirm": "gen-billing-dunning"
           },
           "status": 200,
           "answer": {
-            "service": "svc-08f85e9b",
+            "service": "svc-e448c910",
             "world": "gen-billing-dunning",
             "now": "2026-10-06T09:00:00.000Z",
             "hash": "518b2f962695137e7b9a2d96f14f22e1"
@@ -716,7 +716,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/reset",
+          "path": "/api/services/svc-e448c910/reset",
           "sent": {
             "confirm": "gen-billing-dunning"
           },
@@ -724,7 +724,7 @@
           "answer": {
             "error": {
               "code": "auth.forbidden",
-              "message": "POST /api/services/svc-08f85e9b/reset needs the operator role; vic is a viewer"
+              "message": "POST /api/services/svc-e448c910/reset needs the operator role; vic is a viewer"
             }
           }
         }
@@ -747,7 +747,7 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/reset",
+          "path": "/api/services/svc-e448c910/reset",
           "sent": {
             "confirm": "gen-billing-dunning"
           },
@@ -755,7 +755,7 @@
           "answer": {
             "error": {
               "code": "service.unknown",
-              "message": "No service svc-08f85e9b"
+              "message": "No service svc-e448c910"
             }
           }
         }
@@ -778,11 +778,11 @@
       "requests": [
         {
           "method": "POST",
-          "path": "/api/services/svc-08f85e9b/stop",
+          "path": "/api/services/svc-e448c910/stop",
           "sent": {},
           "status": 200,
           "answer": {
-            "id": "svc-08f85e9b",
+            "id": "svc-e448c910",
             "stopped": true,
             "signal": "SIGTERM"
           }
