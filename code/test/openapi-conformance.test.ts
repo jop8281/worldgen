@@ -216,8 +216,7 @@ describe('Versioned OpenAPI conformance evidence', () => {
 });
 
 function cli(args: readonly string[], world = helpdesk) {
-  const runtime = process.versions['bun'] === undefined ? ['--import', 'tsx'] : [];
-  return spawnSync(process.execPath, [...runtime, 'src/cli/worldplay.ts', 'openapi', world, ...args], {
+  return spawnSync(process.execPath, ['src/cli/worldplay.ts', 'openapi', world, ...args], {
     cwd: code, encoding: 'utf8', timeout: 120000, maxBuffer: 4 * 1024 * 1024,
   });
 }

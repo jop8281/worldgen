@@ -13,7 +13,7 @@ import { SandboxError, assertSandboxName, type SandboxFile, type WorldBundle } f
 
 /** Package-root files a served world needs. The first two are required: `bun install --frozen-lockfile` reads both. */
 const REQUIRED_ROOT_FILES = ['package.json', 'bun.lock'] as const;
-const OPTIONAL_ROOT_FILES = ['worldgen.config.json', 'models.json', 'package-lock.json'] as const;
+const OPTIONAL_ROOT_FILES = ['worldgen.config.json', 'models.json'] as const;
 const TSCONFIG = /^tsconfig.*\.json$/;
 /** Directories never copied, at any depth: installed deps and run output. */
 const SKIP_DIRS = new Set(['node_modules', 'runs']);

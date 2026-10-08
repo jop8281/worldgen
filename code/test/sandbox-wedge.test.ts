@@ -16,7 +16,7 @@ const CODE_DIR = path.resolve(import.meta.dirname, '..');
 
 describe('snippet host liveness', () => {
   it('an outer run whose guard expires while a nested run replies faults instead of wedging the host', () => {
-    const r = spawnSync(process.execPath, ['--import', 'tsx', 'test/helpers/wedge-repro.ts'], { cwd: CODE_DIR, encoding: 'utf8', timeout: 90_000, killSignal: 'SIGKILL' });
+    const r = spawnSync(process.execPath, ['test/helpers/wedge-repro.ts'], { cwd: CODE_DIR, encoding: 'utf8', timeout: 90_000, killSignal: 'SIGKILL' });
     assert.equal(r.error, undefined, `the child did not finish in 90 s; it printed:\n${r.stdout}`);
     assert.equal(r.status, 0, r.stderr);
     const lines = r.stdout.trim().split('\n');

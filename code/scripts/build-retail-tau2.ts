@@ -2,7 +2,7 @@
  * Writes prod/worlds/retail-tau2/world.yaml through checkWorld and saveWorld. The world is a hand-mapped
  * model of the tau2-bench retail domain (sierra-research/tau2-bench at commit 5bfa7e3), read from
  * research/tau2-retail-expected-behaviour.md. The seed is written by hand, not copied from tau2's db.json.
- * Usage: npx tsx scripts/build-retail-tau2.ts [outDir]
+ * Usage: bun scripts/build-retail-tau2.ts [outDir]
  */
 import path from 'node:path';
 import { checkWorld, saveWorld } from '#engine';

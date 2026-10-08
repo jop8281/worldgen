@@ -2,7 +2,7 @@
  * The trusted verifier child process (YOS-159, A-224). Not a user command: `dataset/verifier.ts`
  * spawns it, one process per submission, as
  *
- *   node_modules/.bin/tsx src/cli/verifier.ts <privateWorldDir> <requestFile> <engineRevision> <ledgerFile>
+ *   bun src/cli/verifier.ts <privateWorldDir> <requestFile> <engineRevision> <ledgerFile>
  *
  * It loads and checks the private world, verifies one protocol request against it (the engine's
  * `verifySubmission` replays the trace and grades), records the submission in the run's ledger,

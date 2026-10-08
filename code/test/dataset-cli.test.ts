@@ -24,7 +24,7 @@ const spawnCli = (args: string[], env: Record<string, string> = {}): Promise<Ran
   new Promise((resolve) => {
     execFile(
       process.execPath,
-      ['--import', 'tsx', 'src/cli/dataset.ts', ...args],
+      ['src/cli/dataset.ts', ...args],
       { cwd: CODE_DIR, env: { PATH: process.env['PATH'] ?? '', HOME: process.env['HOME'] ?? '', WORLDGEN_COSTS_FILE: path.join(tmp('costs'), 'costs.jsonl'), ...env } },
       (err, stdout, stderr) => resolve({ code: err === null ? 0 : typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : 1, stdout, stderr }),
     );

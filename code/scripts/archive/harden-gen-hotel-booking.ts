@@ -2,7 +2,7 @@
  * Pins the exact fields two gen-hotel-booking graders may change with ctx.guardChanges and adds one
  * correct-fix-then-collateral decoy to each, then saves through checkWorld and saveWorld.
  * Rerunning is safe: graders are replaced and decoys are matched by their `why`.
- * Usage: npx tsx scripts/archive/harden-gen-hotel-booking.ts [worldDir] [--decoys-only]
+ * Usage: bun scripts/archive/harden-gen-hotel-booking.ts [worldDir] [--decoys-only]
  */
 import path from 'node:path';
 import { checkWorld, loadWorld, saveWorld } from '#engine';

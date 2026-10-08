@@ -44,15 +44,15 @@ export const STRICT = process.env['REDTEAM_STRICT'] === '1';
 
 export const CODE_DIR = fileURLToPath(new URL('../../', import.meta.url));
 /** Engine CLI per A-52 (U-7): `worldplay`; falls back to the pre-rename `world.ts` until the CLI unit lands. */
-/** True when the suite runs under Bun (U-12); child processes then run .ts directly instead of via tsx. */
+/** True when the suite runs under Bun (U-12, A-381): child processes run .ts directly. */
 export const IS_BUN = typeof process.versions['bun'] === 'string';
 /** Runtime-neutral argv for running a TS entry file in a child process. */
 export function tsEntryArgs(file: string, rest: readonly string[] = []): string[] {
-  return IS_BUN ? [file, ...rest] : ['--import', 'tsx', file, ...rest];
+  return [file, ...rest];
 }
 /** Runtime-neutral argv for evaluating a TS/ESM module string in a child process. */
 export function tsEvalArgs(script: string, rest: readonly string[] = []): string[] {
-  return IS_BUN ? ['-e', script, ...rest] : ['--import', 'tsx', '--input-type=module', '-e', script, ...rest];
+  return ['-e', script, ...rest];
 }
 
 export const CLI_PATH = existsSync(join(CODE_DIR, 'src', 'cli', 'worldplay.ts'))
@@ -615,7 +615,7 @@ export async function writeWorldDir(world: unknown): Promise<string> {
 
 export type CliResult = { readonly code: number | null; readonly stdout: string; readonly stderr: string; readonly timedOut: boolean };
 
-/** Runs the world CLI the way `npm run worldplay -- <args>` does (tsx src/cli/worldplay.ts), from code/. */
+/** Runs the world CLI the way `bun run worldplay <args>` does (bun src/cli/worldplay.ts), from code/. */
 export function runCli(args: readonly string[], o: { timeoutMs?: number } = {}): Promise<CliResult> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, tsEntryArgs(CLI_PATH, args), { cwd: CODE_DIR, stdio: ['ignore', 'pipe', 'pipe'] });

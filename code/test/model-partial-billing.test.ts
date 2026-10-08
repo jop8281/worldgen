@@ -62,8 +62,7 @@ describe('partial model usage is not final spending', () => {
     const error = Object.assign(new StepShareExpired(1000, 1000), { usage, costUsd: 0.2399543 });
     const model = meteredModel({ async propose() { throw error; } }, ledger, { provider: 'claude-cli', account: 'claude-cli', caps: { maxTotalUsd: 0.5 } });
     await assert.rejects(model.propose({}));
-    const runtime = process.versions['bun'] === undefined ? ['--import', 'tsx'] : [];
-    const cli = (...args: string[]) => spawnSync(process.execPath, [...runtime, 'src/cli/costs.ts', '--file', file, ...args], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: { PATH: process.env['PATH'] } });
+    const cli = (...args: string[]) => spawnSync(process.execPath, ['src/cli/costs.ts', '--file', file, ...args], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: { PATH: process.env['PATH'] } });
     const json = cli('--json');
     assert.equal(json.status, 0);
     const out = JSON.parse(json.stdout);

@@ -226,7 +226,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(worldFiles.length, 1);
     assert.match(worldFiles[0] ?? '', /^worlds\/[0-9a-f]{64}\/world\.yaml$/);
     const version = worldFiles[0]?.split('/')[1] ?? '';
-    for (const required of ['package.json', 'package-lock.json', 'src/cli/worldplay.ts', 'src/engine/index.ts']) assert.equal(paths.includes(required), true, required);
+    for (const required of ['package.json', 'src/cli/worldplay.ts', 'src/engine/index.ts']) assert.equal(paths.includes(required), true, required);
     assert.equal(paths.some((p) => /(^|\/)\.env|node_modules|\.pem$|credentials|private\//.test(p)), false);
     // The uploaded world.yaml is the public form: no private task source, unlike the private
     // world it is bound to by its folder name, which stays on the trusted side.

@@ -46,9 +46,8 @@ describe('eval transport (YOS-255)', () => {
 
   it('builds the sdk model the flag names, which refuses without LLM_KEY before any call or file', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'eval-transport-run-'));
-    const runtime = process.versions.bun === undefined ? ['--import', 'tsx'] : [];
     const env = { PATH: process.env['PATH'] ?? '', HOME: home, WORLDGEN_COSTS_FILE: path.join(home, 'costs.jsonl'), WORLDGEN_CLAUDE_BIN: '/nonexistent/claude' };
-    const r = spawnSync(process.execPath, [...runtime, 'src/cli/eval.ts', '--only', 'helpdesk-sla', '--transport', 'sdk', '--out-dir', path.join(home, 'run')], { cwd: CODE_DIR, env, encoding: 'utf8', timeout: 60_000 });
+    const r = spawnSync(process.execPath, ['src/cli/eval.ts', '--only', 'helpdesk-sla', '--transport', 'sdk', '--out-dir', path.join(home, 'run')], { cwd: CODE_DIR, env, encoding: 'utf8', timeout: 60_000 });
     assert.deepEqual([r.status, r.stderr.trim()], [1, '--transport sdk needs LLM_KEY set in the environment']);
     assert.deepEqual([existsSync(path.join(home, 'run')), existsSync(path.join(home, 'costs.jsonl'))], [false, false]);
   });
