@@ -104,12 +104,12 @@ worldgen/
     src/boat/      client
     src/sandboxes/ backend files openshell sbx boat registry
     src/dataset/   episode solver pipeline local store schema verifier
-    src/studio/    page explorer analytics runstore server
-    src/cli/       worldplay worldgen eval eval-analysis-files eval-retention costs sandbox dataset episode live models verifier studio-check studio
+    src/studio/    page explorer analytics runstore server watch
+    src/cli/       worldplay worldgen eval eval-analysis-files eval-retention costs sandbox dataset episode live models verifier studio-check studio studio-watch
     src/lib/       never
     test/          architecture engine fields ctx sandbox worlds policy worldgen (*.test.ts)
   eval/        suite.yaml  inputs/  runs/<date>-<suite>/
-  prod/        README.md  design.md  world-format.md (generated)  worlds/helpdesk/  worlds/gen-<slug>/
+  prod/        README.md  design.md  world-format.md (generated)  worlds/helpdesk/  worlds/retail-tau2/  worlds/gen-<slug>/
 ```
 
 The runtime picture and who owns each concern at run time is in [runtime-architecture.md](runtime-architecture.md).

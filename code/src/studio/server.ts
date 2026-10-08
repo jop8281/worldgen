@@ -57,6 +57,7 @@ import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
 import { adoptedChild, loadRuns, osProcesses, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
+import { trafficCounter } from './watch.ts';
 
 /** Ordered: each role can do everything the roles before it can. */
 export const STUDIO_ROLES = ['viewer', 'operator', 'admin'] as const;
@@ -689,15 +690,19 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   await persist();
   let costsCache: { at: number; value: unknown } | null = null;
   let costsInFlight: Promise<unknown> | null = null;
+  const traffic = trafficCounter(now());
 
   // ---- handlers ---------------------------------------------------------------------------
 
-  /** Readiness for a container or load balancer: the worlds directory reads, and the build and runtime are named. */
+  /**
+   * Readiness for a container or load balancer: the worlds directory reads, and the build and runtime are named. Traffic
+   * counts every answer but health polls, since start and in the last 300 s (YOS-237). It is public, so it holds no spend.
+   */
   async function health(): Promise<Reply> {
     const bun = process.versions['bun'];
     const runtime = bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`;
     try {
-      return { status: 200, body: { ok: true, build: opts.build ?? 'unknown', runtime, worlds: (await worldNames()).length } };
+      return { status: 200, body: { ok: true, build: opts.build ?? 'unknown', runtime, worlds: (await worldNames()).length, traffic: traffic.snapshot(now()) } };
     } catch (e) {
       return fail(503, 'health.worlds_unreadable', `worlds directory ${worldsDir} cannot be read: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -1652,6 +1657,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       reply = fail(500, 'studio.error', `Studio error: ${e instanceof Error ? e.message : String(e)}`);
     }
+    // Health polls would drown the traffic they report, so they are not counted.
+    const segments = segmentsOf(req.url ?? '/');
+    if (!(req.method === 'GET' && segments.length === 2 && segments[0] === 'api' && segments[1] === 'health')) traffic.record(now(), reply.status);
     if (req.method === 'POST') {
       const error = isObject(reply.body) && isObject(reply.body['error']) ? reply.body['error']['code'] : undefined;
       await audit({
