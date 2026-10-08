@@ -1172,7 +1172,7 @@ describe('studio page accessibility (YOS-187)', () => {
 
   it('names every input, select and textarea', () => {
     const controls = [...tags('input'), ...tags('select'), ...tags('textarea')];
-    assert.equal(controls.length, 19);
+    assert.equal(controls.length, 20);
     const unnamed = controls.filter((c) => {
       const id = /\bid="([^"]+)"/.exec(c.tag)?.[1];
       return !c.tag.includes('aria-label=') && !(id !== undefined && labelledFor.has(id)) && !insideLabel(c.at);
