@@ -575,7 +575,7 @@ function knownTotal(values: readonly (number | null)[], show: (n: number) => str
 
 /**
  * summary.md: one row per expected suite case, missing and invalid ones included, totals by outcome class, the pass
- * rate over the cases that ran, top issue triage, then why each case is missing, invalid, unlogged or crashed. Unknown
+ * rate over every expected case (A-341), top issue triage, then why each case is missing, invalid, unlogged or crashed. Unknown
  * time or cost prints as unknown, never 0.
  */
 export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[]): string {
@@ -585,7 +585,6 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
   const outcomes: readonly Outcome[] = [...rows.map((r) => r.outcome), ...absent.map((a): Outcome => (a.kind === 'missing' ? 'not run' : 'infra failure'))];
   const count = (o: Outcome): number => outcomes.filter((x) => x === o).length;
   const passed = rows.filter((r) => r.pass).length;
-  const ran = expected - count('not run');
   const unlogged = rows.filter((r) => !r.logged).length;
   const unknownCostCalls = rows.reduce((s, r) => s + r.unknownCostCalls, 0);
   const showFidelity = rows.some((r) => r.fidelity !== null);
@@ -613,7 +612,7 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
     `**Median and p95:** ${percentile(rows.map((r) => r.ms), 50, (n) => `${minutes(n)} min`, expected)} and ${percentile(rows.map((r) => r.ms), 95, (n) => `${minutes(n)} min`, expected)}; ` +
       `${percentile(rows.map((r) => r.costUsd), 50, (n) => `$${usd(n)}`, expected)} and ${percentile(rows.map((r) => r.costUsd), 95, (n) => `$${usd(n)}`, expected)}.`,
     '',
-    `**Pass rate:** ${passed}/${ran}${ran === 0 ? '' : ` (${Math.round((100 * passed) / ran)}%)`}, success and expected refusal over the ${ran} cases that ran (${count('not run')} not run).`,
+    `**Pass rate:** ${passed}/${expected}${expected === 0 ? '' : ` (${Math.round((100 * passed) / expected)}%)`}, success and expected refusal over all ${expected} expected cases (${count('not run')} not run).`,
   ];
   if (absent.length > 0) {
     out.push('', '## Missing or invalid', '', ...absent.map((a) => `- \`${a.id}\`: ${a.kind === 'missing' ? 'no case.json in the run directory' : `case.json is invalid: ${cell(a.why)}`}`));

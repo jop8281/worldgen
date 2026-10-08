@@ -1,7 +1,7 @@
 /**
  * One classifier for the eval (YOS-240, A-340): the same case files, read as summary.md reads them (cli/eval.ts collect)
- * and as eval-outcomes.ts reads them, give every case the same outcome and pass, and summary.md's Totals and Pass rate
- * count the same passes.
+ * and as eval-outcomes.ts reads them, give every case the same outcome and pass, summary.md's Totals and Pass rate
+ * count the same passes, and both publish the same rate over every expected case (A-341).
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -75,12 +75,13 @@ describe('one outcome classifier for summary.md and eval-outcomes (A-340)', () =
     assert.deepEqual(analysis.cases.map((c) => [c.id, c.outcome, c.passed]), EXPECTED);
   });
 
-  it('counts the same classes, and Totals and Pass rate count the same passes', () => {
+  it('counts the same classes and publishes the same pass rate over every expected case', () => {
     const lines = renderSummary({ run: 'agree', suite: 'agree', model: 'claude-sonnet-5-5', budgetUsd: 1, maxMinutes: 1 }, entries).split('\n');
     const totals = lines.find((l) => l.startsWith('**Totals:**')) ?? '';
     assert.equal(totals.startsWith('**Totals:** 9 expected cases: 1 success, 1 expected refusal, 2 product failure, 4 infra failure, 1 not run; '), true, totals);
-    assert.equal(lines.find((l) => l.startsWith('**Pass rate:**')), '**Pass rate:** 2/8 (25%), success and expected refusal over the 8 cases that ran (1 not run).');
+    assert.equal(lines.find((l) => l.startsWith('**Pass rate:**')), '**Pass rate:** 2/9 (22%), success and expected refusal over all 9 expected cases (1 not run).');
     assert.deepEqual(analysis.outcomes, { success: 1, 'expected refusal': 1, 'product failure': 2, 'infra failure': 4, 'not run': 1 });
     assert.equal(analysis.passed, 2);
+    assert.equal(analysis.passRate, 2 / 9);
   });
 });
