@@ -4,7 +4,11 @@
   "mode": "iterate",
   "input": {
     "kind": "change_request",
-    "digest": "6848e3d97d701bc7d66932ce196883489cd9ded7eb88985087cc788b922b08d4"
+    "digest": "6848e3d97d701bc7d66932ce196883489cd9ded7eb88985087cc788b922b08d4",
+    "source": {
+      "kind": "change_request",
+      "before": "runs/run_20261008T040526Z_58a430cb/before"
+    }
   },
   "worldId": "wid_f1ab4b835b50b73aacdea8192b6e7ff0b2e1ac745ba09a5086621dbb0fc818c1",
   "model": "claude-sonnet-5-5",
