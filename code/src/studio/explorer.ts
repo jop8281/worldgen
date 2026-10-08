@@ -1,12 +1,13 @@
 /**
  * The World Explorer's view of one checked world definition: identity, entities and their
- * references, routes and actions, jobs, and the task catalog. Pure: no IO.
+ * references, each state field's machine, the seed's row and state counts, routes and actions, jobs,
+ * and the task catalog. Pure: no IO.
  *
  * Public facts only. A task is its id, content id, difficulty and instruction, which an agent
  * under test is told anyway; graders, solutions, decoys and every snippet source (handlers, jobs,
- * seeds) stay out. test/studio.test.ts proves it with canaries.
+ * seeds) stay out. The seed is counts only, never a row's values. test/studio.test.ts proves it with canaries.
  */
-import { taskIdOf, worldIdOf, type CheckedWorld } from '#engine';
+import { machineOf, taskIdOf, worldIdOf, type CheckedWorld, type WorldStats } from '#engine';
 
 export type ExplorerField = { readonly name: string; readonly type: string; readonly ref: string | null; readonly def: Readonly<Record<string, unknown>> };
 export type ExplorerEntity = {
@@ -32,6 +33,10 @@ export type ExplorerRoute = {
 };
 export type ExplorerJob = { readonly name: string; readonly description: string; readonly every: string };
 export type ExplorerTask = { readonly id: string; readonly tid: string; readonly difficulty: string; readonly instruction: string };
+/** One state field's workflow: its states, the state a create starts in, and the moves it allows. */
+export type ExplorerMachine = { readonly entity: string; readonly field: string; readonly states: readonly string[]; readonly initial: string; readonly transitions: Readonly<Record<string, readonly string[]>> };
+/** What the seed made: rows per entity, and per `entity.field` state field the rows in each state. */
+export type ExplorerSeed = Pick<WorldStats, 'rows' | 'states'>;
 export type WorldExplorer = {
   readonly name: string;
   readonly wid: string;
@@ -39,6 +44,8 @@ export type WorldExplorer = {
   readonly resembles: string;
   readonly clockStart: string;
   readonly entities: readonly ExplorerEntity[];
+  readonly machines: readonly ExplorerMachine[];
+  readonly seed: ExplorerSeed;
   readonly routes: readonly ExplorerRoute[];
   readonly jobs: readonly ExplorerJob[];
   readonly tasks: readonly ExplorerTask[];
@@ -55,7 +62,7 @@ const fieldOf = (name: string, def: FieldDef): ExplorerField => ({
 
 const fieldsOf = (fields: Readonly<Record<string, FieldDef>>): ExplorerField[] => Object.entries(fields).map(([name, def]) => fieldOf(name, def));
 
-export function explorerOf(dirName: string, world: CheckedWorld): WorldExplorer {
+export function explorerOf(dirName: string, world: CheckedWorld, seed: ExplorerSeed): WorldExplorer {
   const entities = Object.entries(world.entities).map(([name, e]) => ({ name, description: e.description, idPrefix: e.idPrefix, fields: fieldsOf(e.fields as Record<string, FieldDef>) }));
   const referencedBy = new Map<string, string[]>();
   for (const e of entities) {
@@ -72,6 +79,11 @@ export function explorerOf(dirName: string, world: CheckedWorld): WorldExplorer 
       refersTo: [...new Set(e.fields.flatMap((f) => (f.ref === null ? [] : [f.ref])))].sort(),
       referencedBy: referencedBy.get(e.name) ?? [],
     })),
+    machines: Object.entries(world.entities).flatMap(([entity, e]) => Object.entries(e.fields).flatMap(([field, def]) => {
+      const m = machineOf(def);
+      return m === undefined ? [] : [{ entity, field, states: m.states, initial: m.initial, transitions: m.transitions }];
+    })),
+    seed: { rows: seed.rows, states: seed.states },
     routes: [
       ...Object.entries(world.routes).map(([name, r]) => ({ name, kind: r.op, method: r.method, path: r.path, entity: r.entity, description: r.description ?? '', input: [] })),
       ...Object.entries(world.actions).map(([name, a]) => ({ name, kind: 'action', method: a.method, path: a.path, entity: null, description: a.description ?? '', input: fieldsOf(a.input as Record<string, FieldDef>) })),
