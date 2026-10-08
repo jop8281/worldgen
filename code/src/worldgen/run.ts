@@ -41,7 +41,7 @@ import { blockingIssues, checkJudgeable, infraIssues, preservationIssues, reques
 import { CallStalled, ModelError, StepShareExpired, estimateCallUsd, type CallProgress, type Model, type Proposal, type ProposeRequest, type Usage } from './llm.ts';
 import { frozenTests, parsePlanYaml, planSchemaFor, renderPlanYaml, type Plan, type planSchema } from './plan.ts';
 import { renderPlanMd } from './plan-md.ts';
-import { attemptIssueSet, decide, estimateCallMs, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
+import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
 import { renderReport } from './report.ts';
 import { PLAN_BRIEF, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
 
@@ -741,7 +741,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
       const choice = stepModel(config, step, escalated);
       const asked = { system: systemFor(step), ...ask(feedback) };
       const estimateUsd = estimateCallUsd(config, choice.model, asked.system.length + asked.prompt.length);
-      const estimateMs = estimateCallMs(choice.effort, callMs[step], feedback !== null, step);
+      const repair = nextIsRepair(callMs[step], feedback !== null);
+      const estimateMs = estimateCallMs(choice.effort, callMs[step], repair, step);
       // checkedAt on the performance timeline: the judge below is bounded by the run deadline, perfAt + left.
       const perfAt = performance.now();
       const checkedAt = now();
@@ -843,7 +844,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
       ledger = record(ledger, step, costUsd ?? 0, attemptIssueSet(judged.outcome, owned));
       stepCost += costUsd ?? 0;
       // A stalled call's time is the transport's silence, not how long this step's calls take.
-      if (judged.outcome.kind !== 'stalled') callMs[step].push({ ms, repair: feedback !== null });
+      if (judged.outcome.kind !== 'stalled') callMs[step].push({ ms, repair });
       made += 1;
       const n = ledger.attempts[step];
       seq += 1;

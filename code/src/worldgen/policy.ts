@@ -144,8 +144,18 @@ function firstCallDefaultMs(effort: Effort | undefined, step: StepId | undefined
   return Math.round((m.ms * ladder) / DEFAULT_CALL_MS[m.effort]);
 }
 
-/** A finished call's duration, and whether it carried feedback from a rejected attempt (a repair). */
+/** A finished call's duration, and whether it was a repair (`nextIsRepair`). */
 export type CallRecord = { readonly ms: number; readonly repair: boolean };
+
+/**
+ * Whether a step's next call is a repair: it carries feedback, or the step already made a first call. A rerun after a
+ * backtrack with no feedback of its own still finds its earlier answer in the world. Eleven such live reruns took a
+ * median 0.36 of their first call, p75 0.64 (A-349). So the preflight in run.ts and the reserve below price it the same
+ * way, as a repair.
+ */
+export function nextIsRepair(history: readonly CallRecord[], feedback: boolean): boolean {
+  return feedback || history.some((c) => !c.repair);
+}
 
 /** A repair rewrites only what the engine rejected. Live seed and workflow repairs took 0.16 to 0.19 of the first call, one workflow repair 0.76. */
 export const REPAIR_FRACTION = 0.25;
@@ -176,14 +186,12 @@ export const NO_CALLS: CallHistory = { plan: [], model: [], workflow: [], seed: 
 
 /**
  * Ms a later step keeps while an earlier step runs: the estimate of its next call at its configured effort (A-311).
- * A step that already made a first call runs again only after a backtrack, as a repair (A-139). Tasks keeps a whole
- * first call until it has made one (A-114); after that it can only rerun with its own rejection as feedback, as a repair
- * (A-330). `steps[step].reserve` of `maxMinutes` is a floor.
+ * A step that already made a first call runs again only after a backtrack, as a repair (A-139, A-349), tasks included
+ * (A-330). Before its first call a step keeps a whole first call (A-114). `steps[step].reserve` of `maxMinutes` is a floor.
  */
 function reserveMs(config: Config, step: StepId, history: CallHistory): number {
   const calls = history[step];
-  const rerun = calls.some((c) => !c.repair);
-  const estimate = estimateCallMs(stepModel(config, step, false).effort, calls, rerun, step);
+  const estimate = estimateCallMs(stepModel(config, step, false).effort, calls, nextIsRepair(calls, false), step);
   return Math.max(estimate, (config.steps[step].reserve ?? 0) * config.maxMinutes * 60_000);
 }
 

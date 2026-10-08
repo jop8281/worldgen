@@ -1,0 +1,218 @@
+software: Todoist/Asana-style to-do app (projects, tasks, assignees, due dates)
+summary: A small team to-do app. Members own tasks inside projects. Tasks move todo, in_progress, done, and each has an optional assignee and due date. A job flags overdue tasks as time passes. A project is active or archived. It can be archived only when every task in it is done, and an archived project is frozen until it is unarchived.
+clock:
+  start: 2026-10-06T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: member
+    purpose: A person who can be assigned tasks.
+    keyFields:
+      - name
+      - email (unique)
+      - active (bool)
+  - name: project
+    purpose: A container of tasks. Status is active or archived and is changed only by the archive and unarchive actions.
+    keyFields:
+      - name
+      - description
+      - 'status (state: active|archived, readonly)'
+      - archived_at (readonly, nullable)
+      - owner_id (ref member, nullable)
+  - name: task
+    purpose: A unit of work in one project. It has an optional assignee and due date, and moves through todo, in_progress and done.
+    keyFields:
+      - project_id (ref project)
+      - title
+      - description
+      - priority (low|normal|high|urgent)
+      - 'status (state: todo|in_progress|done, readonly)'
+      - assignee_id (ref member, nullable, readonly)
+      - due_at (datetime, nullable)
+      - is_overdue (bool, readonly)
+      - completed_at (readonly, nullable)
+workflows:
+  - name: project_lifecycle
+    entity: project
+    states:
+      - active
+      - archived
+    rules:
+      - A project starts active.
+      - archive_project works only on an active project and only if every task in it has status done. Otherwise it returns 409 with code open_tasks and the number of tasks not done. A project with no tasks may be archived.
+      - archive_project sets archived_at to now. unarchive_project clears it.
+      - unarchive_project works only on an archived project and returns it to active.
+      - Archiving an archived project, or unarchiving an active one, returns 409 invalid_state.
+      - Status is readonly, so a PATCH cannot change it.
+    actions:
+      - archive_project
+      - unarchive_project
+  - name: task_lifecycle
+    entity: task
+    states:
+      - todo
+      - in_progress
+      - done
+    rules:
+      - A task starts todo in an active project.
+      - 'Allowed moves: todo to in_progress, todo to done, in_progress to todo (not exposed), in_progress to done, and done to todo through reopen_task.'
+      - Every task action returns 409 project_archived when the task's project is archived.
+      - complete_task sets completed_at to now and is_overdue to false.
+      - reopen_task clears completed_at and recomputes is_overdue from due_at and the current time.
+      - assign_task takes a nullable member_id. It refuses an inactive or unknown member with 409 or 422. It refuses a done task with 409 invalid_state. It refuses an assignee equal to the current one with 409 no_change.
+      - update_task edits title, description, priority and due_at. It is refused for a done task.
+      - create_task requires project_id and title, and refuses an archived project. It also takes optional assignee_id, due_at and priority.
+    actions:
+      - create_task
+      - update_task
+      - assign_task
+      - start_task
+      - complete_task
+      - reopen_task
+jobs:
+  - name: flag_overdue
+    every: 1h
+    rule: For every task whose status is not done and whose due_at is set and earlier than now, set is_overdue true. For every task that is done, or has no due_at, or has a due_at not yet passed, set is_overdue false. Write only rows whose value changes. It does not touch tasks of archived projects, which are all done anyway.
+routes:
+  - id: list_projects
+    method: GET
+    path: /projects
+    purpose: List projects. Filter by status or owner_id, search by name, sort by name or created_at.
+  - id: get_project
+    method: GET
+    path: /projects/{id}
+    purpose: Fetch one project.
+  - id: create_project
+    method: POST
+    path: /projects
+    purpose: Create a project. It starts active.
+  - id: update_project
+    method: PATCH
+    path: /projects/{id}
+    purpose: Edit name, description or owner. Status stays readonly.
+  - id: list_members
+    method: GET
+    path: /members
+    purpose: List members. Filter by active, search by name or email.
+  - id: get_member
+    method: GET
+    path: /members/{id}
+    purpose: Fetch one member.
+  - id: create_member
+    method: POST
+    path: /members
+    purpose: Create a member.
+  - id: list_tasks
+    method: GET
+    path: /tasks
+    purpose: List tasks. Filter by project_id, assignee_id, status, priority or is_overdue, search by title, sort by due_at or created_at. pageSize 25.
+  - id: get_task
+    method: GET
+    path: /tasks/{id}
+    purpose: Fetch one task.
+  - id: list_project_tasks
+    method: GET
+    path: /projects/{project_id}/tasks
+    purpose: List the tasks of one project, with the same filters as list_tasks.
+  - id: create_task
+    method: POST
+    path: /tasks
+    purpose: Action. Create a task in an active project. It starts as todo.
+  - id: update_task
+    method: PATCH
+    path: /tasks/{id}
+    purpose: Action. Edit title, description, priority or due_at while the project is active.
+  - id: assign_task
+    method: POST
+    path: /tasks/{id}/assign
+    purpose: Action. Set or clear the assignee. The member must be active.
+  - id: start_task
+    method: POST
+    path: /tasks/{id}/start
+    purpose: Action. Move a todo task to in_progress.
+  - id: complete_task
+    method: POST
+    path: /tasks/{id}/complete
+    purpose: Action. Mark a todo or in_progress task done.
+  - id: reopen_task
+    method: POST
+    path: /tasks/{id}/reopen
+    purpose: Action. Move a done task back to todo. It is refused if the project is archived.
+  - id: archive_project
+    method: POST
+    path: /projects/{id}/archive
+    purpose: Action. Archive an active project only if every task in it is done.
+  - id: unarchive_project
+    method: POST
+    path: /projects/{id}/unarchive
+    purpose: Action. Make an archived project active again.
+seed:
+  rowsPerEntity:
+    member: 8
+    project: 14
+    task: 130
+  mix: "Members: 7 active and 1 inactive. Projects: about 55% active and 45% archived. Among the active ones, 3 are fully done and so archivable, 1 has no tasks, and the rest have between 1 and 6 open tasks. Every task of an archived project is done. Tasks: about 35% todo, 30% in_progress and 35% done. About 70% of tasks have an assignee. About 80% have a due date, and open tasks with a past due date have is_overdue true. Priorities are spread low 25%, normal 45%, high 22%, urgent 8%. Some tasks have near-duplicate titles across projects. At least one active project has more than 25 tasks, so listing needs paging. Anchor rows: a project 'Q3 Marketing Launch' that has exactly one open task, and a task 'Order team lunch' that is unassigned. Member names include two members who share a first name."
+tasks:
+  - id: assign_team_lunch_task
+    difficulty: easy
+    intent: Assign the unassigned task 'Order team lunch' to the member Priya Raman. Two members share the first name Priya, so the agent must look up the right one. Success is that task's assignee_id equal to the right member and nothing else changed.
+    decoyIdea: Assign it to the other Priya, or to the first member returned by a search for 'Priya'.
+  - id: archive_q3_launch_project
+    difficulty: medium
+    intent: Archive the project 'Q3 Marketing Launch'. It has exactly one open task, so the agent must find it and complete it first, then archive. The end state is the project archived, that one task done, and no other task or project touched.
+    decoyIdea: Complete every task of a similarly named project, or try to PATCH the status to archived, which fails. Another wrong path is to complete all of the project's tasks including ones already done, or to complete the task and never archive.
+  - id: archive_all_finished_projects
+    difficulty: hard
+    intent: Archive every active project whose tasks are all done, including the project with no tasks. Leave projects with any open task alone and do not complete any task. The agent must page through tasks, since one active project has more than 25 of them. The grader checks that exactly the right set of projects is archived and that no task changed.
+    decoyIdea: Read only the first page of tasks per project and wrongly judge a large project finished. Or complete the open tasks first so every project can be archived. Or skip the empty project. Or archive only the projects that have at least one done task.
+open_questions:
+  - question: Can a project with no tasks be archived?
+    default_answer: Yes. 'All tasks done' is vacuously true for an empty project.
+  - question: Do cancelled or deleted tasks count as done for the archive rule?
+    default_answer: There is no cancelled state. Only status done counts.
+  - question: Can an archived project be restored, and may its tasks change while archived?
+    default_answer: It can be restored with unarchive_project. Its tasks are frozen while it is archived.
+  - question: Can a task have more than one assignee?
+    default_answer: No. One nullable assignee.
+  - question: Should the app have users, logins or a 'my tasks' view?
+    default_answer: No. A single workspace with no authentication.
+  - question: Are due dates dates or timestamps, and is there overdue behaviour?
+    default_answer: UTC timestamps. An hourly job flags open tasks past due as is_overdue.
+  - question: Can projects, tasks or members be deleted?
+    default_answer: No. Retirement is archive for projects and active=false for members.
+assumptions:
+  - decision: Only a task in status done counts as done for archiving. There is no cancelled state, and in_progress and todo block archiving.
+    why: The input says 'all of its tasks are done'. A single completion state keeps the rule unambiguous.
+  - decision: A project with zero tasks can be archived.
+    why: The rule 'all tasks done' is vacuously true. The refusal message for a blocked archive tells the caller how many tasks are not done.
+  - decision: Project status and task status are readonly on PATCH. Status moves only through the archive_project, unarchive_project, start_task, complete_task and reopen_task actions.
+    why: A plain PATCH cannot check another entity, so archive-only-when-done must live in a handler. The same applies to the archived-project freeze on tasks.
+  - decision: 'An archived project is frozen: create_task, update_task, assign_task, start_task, complete_task and reopen_task all return 409 project_archived for its tasks. Unarchiving makes the project writable again.'
+    why: This is the usual meaning of archive. It also keeps the invariant that an archived project has only done tasks.
+  - decision: The assignee is a single member. Only active members can be assigned. Deactivating a member does not unassign their existing tasks.
+    why: Single assignee matches the input. Cascading unassignment would add scope the input does not ask for.
+  - decision: due_at is a datetime, stored as a UTC timestamp, with no separate date type.
+    why: The world format has only datetime. Due dates are seeded at end-of-day UTC.
+  - decision: The hourly job flag_overdue sets is_overdue=true on tasks that are not done and past due_at, and sets it back to false when a task is done or its due date moves to the future. A done task is never overdue.
+    why: It gives due dates a time-driven effect. Tasks can only read the seeded state because they cannot advance the clock.
+  - decision: Single workspace, no authentication, no current-user concept. The caller is told who to assign through ids.
+    why: The input mentions none, and it keeps the API surface small.
+  - decision: No delete routes for projects, tasks or members. Archive and deactivation are the ways to retire them.
+    why: The input has archive as the retirement path, and deletion would bypass the archive invariant.
+  - decision: The clock starts at 2026-10-06T09:00:00Z with tick 0s unless an action sets a duration.
+    why: Explicit time keeps due dates, overdue flags and graders deterministic.
+outOfScope:
+  - what: Authentication, permissions and per-user views such as 'my tasks'
+    why: The input defines no users or roles.
+  - what: Subtasks, dependencies, labels, comments, attachments and recurring tasks
+    why: The input names only projects, tasks, assignees and due dates.
+  - what: Notifications, reminders and email
+    why: The overdue job only flags tasks. Delivery is outside the world's API.
+  - what: Deleting projects, tasks or members
+    why: Archive and unarchive cover retirement. Deletion would bypass the archive rule.
+  - what: Multiple assignees, teams and workspaces
+    why: The input has one assignee per task and a single workspace.
+  - what: Time zones and recurring due dates
+    why: All times are UTC.
+changes: []

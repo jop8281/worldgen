@@ -478,3 +478,37 @@ describe('studio tenancy: costs, ids, buckets and shelves (A-344)', () => {
     assert.equal((await call(base, 'GET', '/api/worlds/hand-beta/report', ADA)).status, 200);
   });
 });
+
+describe('studio tenancy: serving for a tenant, and pins still starting (#46 follow-up)', () => {
+  it('serves a world for the tenant an admin names with ?tenant=, so that tenant sees it and no other does', async () => {
+    const f = await fixture();
+    await writeWorld(path.join(f.worldsDir, 'acme', 'gen-acme-only'), minimalWorld());
+    const base = await start(f);
+    const served = await call(base, 'POST', '/api/worlds/gen-acme-only/serve?tenant=acme', ADA, {});
+    assert.deepEqual([served.status, served.body['tenant']], [200, 'acme']);
+    const ids = async (token: string): Promise<unknown[]> => ((await call(base, 'GET', '/api/services', token)).body['services'] as Json[]).map((s) => s['id']);
+    assert.deepEqual(await ids(OTTO), [served.body['id']]);
+    assert.deepEqual(await ids(GINA), []);
+  });
+
+  it('refuses a second pin of a port a serve still starting holds, and spawns nothing for it', async () => {
+    const f = await fixture();
+    await writeWorld(path.join(f.worldsDir, 'gen-pin'), minimalWorld());
+    let report = '';
+    let spawns = 0;
+    const spawner: Spawner = () => {
+      spawns += 1;
+      return { pid: 47001, exited: new Promise<number | null>(() => {}), kill: () => true, output: () => report };
+    };
+    const base = await start(f, { spawner });
+    const first = call(base, 'POST', '/api/worlds/gen-pin/serve', ADA, { port: 4700 });
+    // The first serve is spawned and waits for its child's report; give the request time to reach that wait.
+    for (let i = 0; i < 100 && spawns === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    const second = await call(base, 'POST', '/api/worlds/gen-pin/serve?tenant=acme', ADA, { port: 4701 });
+    assert.deepEqual([second.status, second.body['error']], [409, { code: 'serve.port_taken', message: 'port 4701 or its admin port 4702 is pinned by a serve that has not reported its ports yet' }]);
+    assert.equal(spawns, 1);
+    report = `${JSON.stringify({ listening: { world: 4700, admin: 4701 } })}\n`;
+    const done = await first;
+    assert.deepEqual([done.status, done.body['worldPort'], done.body['adminPort']], [200, 4700, 4701]);
+  });
+});
