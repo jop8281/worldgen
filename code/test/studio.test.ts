@@ -11,10 +11,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
-import { createServer as createNetServer } from 'node:net';
 import { checkWorld, saveWorld, serve, worldIdOf, type World, type WorldServer } from '#engine';
 import { nodeRunner, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../src/sandboxes/backend.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
+import { quietPort } from './helpers/ports.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 // ---- transport: fetch against the loopback studio ----------------------------------------------
@@ -953,16 +953,13 @@ describe('studio', () => {
     it('retries a refused call while a just-served world starts listening, then answers the world (A-278)', async () => {
       const report = checkWorld(minimalWorld());
       assert.ok(report.ok);
-      const port = await new Promise<number>((resolve) => {
-        const probe = createNetServer().listen(0, '127.0.0.1', () => {
-          const a = probe.address();
-          probe.close(() => resolve(a !== null && typeof a === 'object' ? a.port : 0));
-        });
-      });
+      // The world binds this port 600 ms after the call starts, so it must be one no port-0 bind can take meanwhile.
+      const port = await quietPort();
       const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', { port });
       assert.equal(served.status, 200, JSON.stringify(served.body));
       const id = String(served.body['id']);
-      const late = new Promise<Awaited<ReturnType<typeof serve>>>((resolve) => setTimeout(() => resolve(serve(report.world, { port })), 600));
+      const late = new Promise<WorldServer>((resolve, reject) => setTimeout(() => serve(report.world, { port, adminPort: 0 }).then(resolve, reject), 600));
+      late.catch(() => undefined);
       try {
         const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
         assert.deepEqual([r.status, r.body['status']], [200, 200], JSON.stringify(r.body));
@@ -973,13 +970,9 @@ describe('studio', () => {
     });
 
     it('answers a real 502 when nothing listens on the world port, never a made-up success', async () => {
-      const port = await new Promise<number>((resolve) => {
-        const probe = createNetServer().listen(0, '127.0.0.1', () => {
-          const a = probe.address();
-          probe.close(() => resolve(a !== null && typeof a === 'object' ? a.port : 0));
-        });
-      });
+      const port = await quietPort();
       const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', { port });
+      assert.equal(served.status, 200, JSON.stringify(served.body));
       const id = String(served.body['id']);
       try {
         const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
