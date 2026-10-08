@@ -243,8 +243,8 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
     }
   });
 
-  it('R17 docs use bun, and npm only for the Node gate; a miss names file:line', () => {
-    for (const l of lines) assert.ok(!/\bnpm (?:test|install|run (?!check:node\b))/.test(l.text), `${l.file}:${l.line}: ${l.text}`);
+  it('R17 docs use bun, never npm; a miss names file:line', () => {
+    for (const l of lines) assert.ok(!/\bnpm (?:test|install|ci|run )/.test(l.text), `${l.file}:${l.line}: ${l.text}`);
   });
 
   it('R17 AGENTS.md and design.md do not call shipped work planned', () => {
@@ -255,11 +255,9 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
     }
   });
 
-  it('the Node gate runs node:test under Node, never bun', () => {
+  it('test:node runs node:test under Node, never bun', () => {
     // More --import loaders may follow tsx, such as the active-handles report (A-223); the runner stays node --test.
     assert.match(PACKAGE.scripts['test:node'] ?? '', /^node --import tsx( --import \S+)* --test /);
-    assert.doesNotMatch(PACKAGE.scripts['check:node'] ?? '', /\bbun\b/);
-    assert.match(PACKAGE.scripts['check:node'] ?? '', /\btest:node\b/);
   });
 
   it('R17 a costs script runs cli/costs.ts and README.md documents it in one block', () => {
@@ -355,11 +353,11 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
 
   it('finds the documented commands in each file, fenced and inline', () => {
     const heads = (file: string): string[] => [...new Set(commands.filter((c) => c.file === file).map((c) => c.head))].sort();
-    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'npm run check:node', 'scripts/demo-all.sh']);
+    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'scripts/demo-all.sh']);
     assert.deepEqual(heads('prod/README.md'), ['../scripts/live.sh', 'bun run docs', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay']);
     assert.deepEqual(heads('prod/prompts/README.md'), ['bun run live', 'bun run worldgen']);
     assert.deepEqual(heads('research/live-run-runbook.md'), [
-      'bun run check', 'bun run costs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'npm run check:node',
+      'bun run check', 'bun run costs', 'bun run live', 'bun run test', 'bun run worldgen', 'bun run worldplay',
       'scripts/boat-ci.sh', 'scripts/live.sh', 'scripts/solve-demo.sh',
     ]);
     assert.deepEqual(heads('research/studio-demo-runbook.md'), ['bun run studio', 'bun scripts/studio-rehearse.ts', 'scripts/studio-deploy.sh']);

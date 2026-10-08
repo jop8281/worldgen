@@ -171,14 +171,12 @@ Check the work and the spend:
 
 ```sh
 bun run check
-npm ci && npm run check:node
 bun run costs --by run
 ../scripts/demo-all.sh
 ../scripts/qualify-main.sh --ref origin/main
 ```
 
 - `bun run check` is the gate: typecheck, then every test, with no real model call.
-- `npm run check:node` is the second gate, on Node 22. It is the only gate that enforces the snippet heap bound.
 - `demo-all.sh` walks the whole system in 25 PASS-or-FAIL steps with no model call.
 - `qualify-main.sh` repeats the gate on a fresh clone of a ref.
 - `bun run costs --by run` shows each run's spend from the ledger, and the caps when `WORLDGEN_MAX_*` is set.

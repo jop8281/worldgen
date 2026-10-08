@@ -111,6 +111,6 @@ Taken from the real app with no model call: the dashboard and the episode on `2c
 ## More
 
 - [research/readme-reference.md](research/readme-reference.md) holds the longer reference this README used to carry: every world with its task scores, the engine and Docker details, other CLIs, checks and costs, Boat recovery, and the historical PR table.
-- `bun run check` is the gate: typecheck, then every test, with no real model call. Node 22 runs the second gate with `npm ci && npm run check:node`.
+- `bun run check` is the gate: typecheck, then every test, with no real model call.
 - [research/architecture.md](research/architecture.md) gives the reasoning, [research/decisions.md](research/decisions.md) logs every design call, and [AGENTS.md](AGENTS.md) holds the working rules.
 - Work is tracked in the [WorldGen Linear project](https://linear.app/yossi-zozo123/project/worldgen-f83badd4a2c7).
