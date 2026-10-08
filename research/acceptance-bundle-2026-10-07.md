@@ -4,15 +4,15 @@ This file ties each released SHA to the evidence recorded for it on 2026-10-07 (
 
 ## Released SHAs
 
-Each promotion merges one `stabilize/main` head into `main`.
+Each promotion merges one `stabilize/main` head into `main`. The PR numbers are from the earlier repository, jop8281/zozo123-genworld (old repo), which no longer exists.
 
 | main | stabilize head | PR | Merged (UTC) |
 |---|---|---|---|
-| `1bb94583` | `fc39ef8` | [#383](https://github.com/jop8281/zozo123-genworld/pull/383) | 14:51 |
-| `3ff2c3a3` | `9e51479` | [#403](https://github.com/jop8281/zozo123-genworld/pull/403) | 15:52 |
-| `21dd0039` | `12e10fe` | [#410](https://github.com/jop8281/zozo123-genworld/pull/410) | 16:21 |
+| `1bb94583` | `fc39ef8` | #383 | 14:51 |
+| `3ff2c3a3` | `9e51479` | #403 | 15:52 |
+| `21dd0039` | `12e10fe` | #410 | 16:21 |
 
-`21dd0039` is the demo main. It adds only [#408](https://github.com/jop8281/zozo123-genworld/pull/408) to `3ff2c3a3`.
+`21dd0039` is the demo main. It adds only #408 to `3ff2c3a3`.
 
 ## Full test suite
 
@@ -67,7 +67,7 @@ On main `3ff2c3a3`, 22 of 29 cases passed (75.9%), over 30 runs, 177.7 minutes a
 
 ## GitHub Actions on main 21dd0039
 
-As read at about 17:15 UTC. Push run `37651398363`: `node` failed, `e2e` failed, and `check` was still in progress. Dispatch run `37651460024` was cancelled. The e2e failure was the 10-minute step cap, which [#411](https://github.com/jop8281/zozo123-genworld/pull/411) raises. The cause of the `node` failure is not recorded.
+As read at about 17:15 UTC. Push run `37651398363`: `node` failed, `e2e` failed, and `check` was still in progress. Dispatch run `37651460024` was cancelled. The e2e failure was the 10-minute step cap, which #411 raises. The cause of the `node` failure is not recorded.
 
 ## Gaps
 
