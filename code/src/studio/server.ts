@@ -183,7 +183,7 @@ export interface StudioServer {
   /**
    * Drops the port and open connections, stops every served world (SIGTERM, then SIGKILL) and every running check, and
    * resolves once each is gone. A generation run or an episode gets SIGTERM, its own clean stop, and finishes billing
-   * on its own (A-279).
+   * on its own (A-279); its record says the close stopped it (A-363).
    */
   close(): Promise<void>;
 }
@@ -289,6 +289,7 @@ const fingerprintOf = (kind: string, request: readonly string[]): string => crea
 const STOPPED_REASON: Record<Extract<Recovery, { outcome: 'stopped' }>['reason'], string> = {
   process_gone: 'the studio restarted while this run was running and its process is gone; its evidence stays in the <out>.partial directory',
   start_unconfirmed: 'the studio stopped before it confirmed this run started, so it is never started again: its process may have started, and a paid run must not run twice',
+  studio_closed: 'the studio closed before this run finished and sent its process SIGTERM, its clean stop; the run is never started again',
 };
 
 /** One directory level of a request target: not empty, no separators, no dot segments. */
@@ -1203,9 +1204,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     kind: job.kind, key: job.key, phase: job.phase, lease: job.lease, ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
   });
 
+  /** A running job another studio holds whose process is gone: recovery stops it once that lease runs out. */
+  const ownerGone = (job: Job): boolean => !holds(job) && job.phase === 'running' && job.pid !== null && !processes.alive(job.pid);
+
   /**
    * Starts a job once per key (A-335). A client key names one job forever; a derived key matches only an unfinished
-   * job, so the same request after the first one finished is a deliberate rerun. The intent is on disk before the spawn.
+   * job, so the same request after the first one finished is a deliberate rerun. A derived key also passes over a job
+   * whose owner is gone, which would only hand this request a run that already ended (A-363). The intent is on disk
+   * before the spawn.
    */
   async function startJob(start: JobStart): Promise<Reply> {
     const clientKey = idempotencyKeyOf(start.rawKey);
@@ -1214,7 +1220,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const key = clientKey.key ?? `derived:${fingerprint}`;
     // No await from this lookup to the insert below, so two requests with one key cannot both miss. Another tenant's job
     // never matches: its key is unused here, since a replay or a refusal would tell this caller that the key exists.
-    const prior = [...jobs.values()].find((j) => j.tenant === start.tenant && j.key === key && (clientKey.key !== undefined || j.phase !== 'finished'));
+    const prior = [...jobs.values()].find((j) => j.tenant === start.tenant && j.key === key
+      && (clientKey.key !== undefined || (j.phase !== 'finished' && !ownerGone(j))));
     if (prior !== undefined) {
       if (prior.fingerprint === fingerprint) return startAnswer(prior, true);
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (job ${prior.runId})`);
@@ -1916,6 +1923,16 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     port,
     close() {
       closing ??= (async () => {
+        // Each job this studio holds is stopped by the close, so it is recorded as stopped in the last write, its lease
+        // released. The record says the studio stopped it, not how its process exited, since close does not wait (A-363).
+        const unfinished = [...jobs.values()].filter((job) => job.phase !== 'finished');
+        const at = new Date(now()).toISOString();
+        for (const job of unfinished.filter(holds)) {
+          job.phase = 'finished';
+          job.lease = null;
+          job.recovery = { at, from: me, outcome: 'stopped', reason: 'studio_closed' };
+        }
+        void persist();
         closed = true;
         clearInterval(renewal);
         const unbound = server.listening ? new Promise<void>((resolve) => server.close(() => resolve())) : Promise.resolve();
@@ -1923,7 +1940,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         stopping.abort();
         // A generation run or an episode takes SIGTERM as its clean stop and bills its call on its own (A-279), so close
         // does not wait for it or SIGKILL it.
-        for (const job of jobs.values()) if (job.phase !== 'finished') job.child?.kill('SIGTERM');
+        for (const job of unfinished) job.child?.kill('SIGTERM');
         await Promise.all([
           unbound,
           ...[...services.values()].map(({ child }) => child).concat([...startingChildren]).map((child) => signalAndWait(child, ['SIGTERM', 'SIGKILL'])),
