@@ -1,0 +1,798 @@
+{
+  "studio": "a scratch studio on loopback, signed in from a users file of three",
+  "people": [
+    {
+      "name": "ana",
+      "role": "operator",
+      "tenant": "acme"
+    },
+    {
+      "name": "vic",
+      "role": "viewer",
+      "tenant": "acme"
+    },
+    {
+      "name": "bob",
+      "role": "operator",
+      "tenant": "globex"
+    }
+  ],
+  "pageErrors": [],
+  "steps": [
+    {
+      "n": 1,
+      "file": "01-sign-in.png",
+      "who": "ana (operator, acme)",
+      "world": null,
+      "what": "ana signs in through the token field; the bar names her and her role",
+      "requests": [],
+      "stateHash": null,
+      "checks": {
+        "signedIn": true
+      },
+      "ok": true
+    },
+    {
+      "n": 2,
+      "file": "02-helpdesk-serve.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "ana serves helpdesk; it runs on its own world port, and its admin port stays on loopback",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/worlds/helpdesk/serve",
+          "sent": {},
+          "status": 200,
+          "answer": {
+            "id": "svc-03ec7dd3",
+            "name": "helpdesk",
+            "tenant": "acme",
+            "pid": 6869,
+            "worldPort": 53741,
+            "adminPort": 53742,
+            "startedAt": "2026-10-08T05:41:45.686Z"
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "served": true,
+        "recorded": true
+      },
+      "ok": true
+    },
+    {
+      "n": 3,
+      "file": "03-helpdesk-seed-hash.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "the world's admin console reads the seed state hash",
+      "requests": [],
+      "stateHash": "4a92e68ff2df751541ba0f40f916f28c",
+      "checks": {
+        "hash": true
+      },
+      "ok": true
+    },
+    {
+      "n": 4,
+      "file": "04-helpdesk-legal-read.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "a legal read through the API console: GET /tickets?status=open&limit=3, the world's real 200 and body",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/call",
+          "sent": {
+            "method": "GET",
+            "path": "/tickets?status=open&limit=3"
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-03ec7dd3",
+            "world": "helpdesk",
+            "worldPort": 53741,
+            "request": {
+              "method": "GET",
+              "path": "/tickets?status=open&limit=3",
+              "body": null
+            },
+            "status": 200,
+            "contentType": "application/json; charset=utf-8",
+            "ms": 2,
+            "body": "{\"data\":[{\"id\":\"tkt_0001\",\"created_at\":\"2026-03-02T04:00:00.000Z\",\"updated_at\":\"2026-03-02T08:00:00.000Z\",\"subject\":\"Label printer offline in DC-3\",\"description\":\"The Zebra printer at dock 3 shows offline since 04:00. Outbound pallets cannot be labelled.\",\"customer_id\":\"cus_0001\",\"assignee_id\":\"agt_0001\",\"priority\":\"high\",\"status\":\"open\",\"escalation_level\":0,\"escalated_at\":null,\"sla_started_at\":\"2026-03-02T04:00:00.000Z\",\"sla_due_at\":\"2026-03-02T08:00:00.000Z\",\"sla_breached\":true,\"resolved_at\":null},{\"id\":\"tkt_0002\",\"created_at\":\"2026-03-02T07:00:00.000Z\",\"updated_at\":\"2026-03-02T07:30:00.000Z\",\"subject\":\"Label printer jams on 4x6 stock\",\"description\":\"Jams about once per roll since we switched label stock.\",\"customer_id\":\"cus_0001\",\"assignee_id\":\"agt_0001\",\"priority\":\"normal\",\"status\":\"open\",\"escalation_level\":0,\"escalated_at\":null,\"sla_started_at\":\"2026-03-02T07:00:00.000Z\",\"sla_due_at\":\"2026-03-02T15:00:00.000Z\",\"sla_breached\":false,\"resolved_at\":null},{\"id\":\"tkt_0005\",\"created_at\":\"2026-03-02T08:10:00.000Z\",\"updated_at\":\"2026-03-02T08:35:00.000Z\",\"subject\":\"Checkout API returning 502 errors\",\"description\":\"About 30% of checkout calls fail with 502 since 08:05.\",\"customer_id\":\"cus_0003\",\"assignee_id\":\"agt_0005\",\"priority\":\"urgent\",\"status\":\"open\",\"escalation_level\":0,\"escalated_at\":null,\"sla_started_at\":\"2026-03-02T08:10:00.000Z\",\"sla_due_at\":\"2026-03-02T09:10:00.000Z\",\"sla_breached\":false,\"resolved_at\":null}],\"next_cursor\":\"JTVCJTIyJTIyJTJDbnVsbCUyQyUyMnRrdF8wMDA1JTIyJTVE\"}",
+            "truncated": false
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "status200": true,
+        "picked": true
+      },
+      "ok": true
+    },
+    {
+      "n": 5,
+      "file": "05-helpdesk-legal-write.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "a legal write: PATCH /tickets/tkt_0001 {\"priority\":\"low\"}, answered 200 with the changed record",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/call",
+          "sent": {
+            "method": "PATCH",
+            "path": "/tickets/tkt_0001",
+            "body": {
+              "priority": "low"
+            }
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-03ec7dd3",
+            "world": "helpdesk",
+            "worldPort": 53741,
+            "request": {
+              "method": "PATCH",
+              "path": "/tickets/tkt_0001",
+              "body": {
+                "priority": "low"
+              }
+            },
+            "status": 200,
+            "contentType": "application/json; charset=utf-8",
+            "ms": 1,
+            "body": "{\"id\":\"tkt_0001\",\"created_at\":\"2026-03-02T04:00:00.000Z\",\"updated_at\":\"2026-03-02T09:00:01.000Z\",\"subject\":\"Label printer offline in DC-3\",\"description\":\"The Zebra printer at dock 3 shows offline since 04:00. Outbound pallets cannot be labelled.\",\"customer_id\":\"cus_0001\",\"assignee_id\":\"agt_0001\",\"priority\":\"low\",\"status\":\"open\",\"escalation_level\":0,\"escalated_at\":null,\"sla_started_at\":\"2026-03-02T04:00:00.000Z\",\"sla_due_at\":\"2026-03-02T08:00:00.000Z\",\"sla_breached\":true,\"resolved_at\":null}",
+            "truncated": false
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "status200": true
+      },
+      "ok": true
+    },
+    {
+      "n": 6,
+      "file": "06-helpdesk-hash-after-write.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "the state hash moved with the legal write",
+      "requests": [],
+      "stateHash": "b8eba3cd80c116ce3180a698a11f66d8",
+      "checks": {
+        "moved": true
+      },
+      "ok": true
+    },
+    {
+      "n": 7,
+      "file": "07-helpdesk-illegal-write.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "an illegal write: PATCH /tickets/tkt_0001 {\"status\":\"new\",\"priority\":\"urgent\"}. Its legal half is not applied either: 422 state.transition",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/call",
+          "sent": {
+            "method": "PATCH",
+            "path": "/tickets/tkt_0001",
+            "body": {
+              "status": "new",
+              "priority": "urgent"
+            }
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-03ec7dd3",
+            "world": "helpdesk",
+            "worldPort": 53741,
+            "request": {
+              "method": "PATCH",
+              "path": "/tickets/tkt_0001",
+              "body": {
+                "status": "new",
+                "priority": "urgent"
+              }
+            },
+            "status": 422,
+            "contentType": "application/json; charset=utf-8",
+            "ms": 0,
+            "body": "{\"error\":{\"code\":\"state.transition\",\"message\":\"ticket tkt_0001 status cannot move from open to new\"}}",
+            "truncated": false
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "status422": true,
+        "code": true
+      },
+      "ok": true
+    },
+    {
+      "n": 8,
+      "file": "08-helpdesk-hash-unchanged.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "the state hash after the 422 is the hash before it",
+      "requests": [],
+      "stateHash": "b8eba3cd80c116ce3180a698a11f66d8",
+      "checks": {
+        "unchanged": true
+      },
+      "ok": true
+    },
+    {
+      "n": 9,
+      "file": "09-helpdesk-read-after-422.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "GET /tickets/tkt_0001: the record holds the legal write and nothing of the refused one",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/call",
+          "sent": {
+            "method": "GET",
+            "path": "/tickets/tkt_0001"
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-03ec7dd3",
+            "world": "helpdesk",
+            "worldPort": 53741,
+            "request": {
+              "method": "GET",
+              "path": "/tickets/tkt_0001",
+              "body": null
+            },
+            "status": 200,
+            "contentType": "application/json; charset=utf-8",
+            "ms": 1,
+            "body": "{\"id\":\"tkt_0001\",\"created_at\":\"2026-03-02T04:00:00.000Z\",\"updated_at\":\"2026-03-02T09:00:01.000Z\",\"subject\":\"Label printer offline in DC-3\",\"description\":\"The Zebra printer at dock 3 shows offline since 04:00. Outbound pallets cannot be labelled.\",\"customer_id\":\"cus_0001\",\"assignee_id\":\"agt_0001\",\"priority\":\"low\",\"status\":\"open\",\"escalation_level\":0,\"escalated_at\":null,\"sla_started_at\":\"2026-03-02T04:00:00.000Z\",\"sla_due_at\":\"2026-03-02T08:00:00.000Z\",\"sla_breached\":true,\"resolved_at\":null}",
+            "truncated": false
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "status200": true,
+        "kept": true
+      },
+      "ok": true
+    },
+    {
+      "n": 10,
+      "file": "10-helpdesk-reset-refused.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "reset without the typed name: refused, and nothing changes",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/reset",
+          "sent": {
+            "confirm": ""
+          },
+          "status": 400,
+          "answer": {
+            "error": {
+              "code": "reset.confirm",
+              "message": "a reset throws away every change to helpdesk's state; send {\"confirm\": \"helpdesk\"} to go ahead"
+            }
+          }
+        }
+      ],
+      "stateHash": "b8eba3cd80c116ce3180a698a11f66d8",
+      "checks": {
+        "refused": true,
+        "unchanged": true
+      },
+      "ok": true
+    },
+    {
+      "n": 11,
+      "file": "11-helpdesk-reset.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "reset with the typed name: the world is back at its seed hash",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/reset",
+          "sent": {
+            "confirm": "helpdesk"
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-03ec7dd3",
+            "world": "helpdesk",
+            "now": "2026-03-02T09:00:00.000Z",
+            "hash": "4a92e68ff2df751541ba0f40f916f28c"
+          }
+        }
+      ],
+      "stateHash": "4a92e68ff2df751541ba0f40f916f28c",
+      "checks": {
+        "answered": true,
+        "seedHash": true
+      },
+      "ok": true
+    },
+    {
+      "n": 12,
+      "file": "12-helpdesk-viewer-refused.png",
+      "who": "vic (viewer, acme)",
+      "world": "helpdesk",
+      "what": "vic, a viewer in the same tenant, types the name and presses reset: 403",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/reset",
+          "sent": {
+            "confirm": "helpdesk"
+          },
+          "status": 403,
+          "answer": {
+            "error": {
+              "code": "auth.forbidden",
+              "message": "POST /api/services/svc-03ec7dd3/reset needs the operator role; vic is a viewer"
+            }
+          }
+        }
+      ],
+      "stateHash": "4a92e68ff2df751541ba0f40f916f28c",
+      "checks": {
+        "signedIn": true,
+        "forbidden": true,
+        "status403": true,
+        "unchanged": true
+      },
+      "ok": true
+    },
+    {
+      "n": 13,
+      "file": "13-helpdesk-other-tenant.png",
+      "who": "bob (operator, globex)",
+      "world": "helpdesk",
+      "what": "bob, an operator in another tenant: helpdesk is not running for him, and a reset of ana's service id answers 404",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/reset",
+          "sent": {
+            "confirm": "helpdesk"
+          },
+          "status": 404,
+          "answer": {
+            "error": {
+              "code": "service.unknown",
+              "message": "No service svc-03ec7dd3"
+            }
+          }
+        }
+      ],
+      "stateHash": "4a92e68ff2df751541ba0f40f916f28c",
+      "checks": {
+        "signedIn": true,
+        "notRunning": true,
+        "status404": true,
+        "unchanged": true
+      },
+      "ok": true
+    },
+    {
+      "n": 14,
+      "file": "14-helpdesk-stop.png",
+      "who": "ana (operator, acme)",
+      "world": "helpdesk",
+      "what": "ana stops helpdesk",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-03ec7dd3/stop",
+          "sent": {},
+          "status": 200,
+          "answer": {
+            "id": "svc-03ec7dd3",
+            "stopped": true,
+            "signal": "SIGTERM"
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "stopped": true
+      },
+      "ok": true
+    },
+    {
+      "n": 15,
+      "file": "15-gen-billing-dunning-serve.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "ana serves gen-billing-dunning; it runs on its own world port, and its admin port stays on loopback",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/worlds/gen-billing-dunning/serve",
+          "sent": {},
+          "status": 200,
+          "answer": {
+            "id": "svc-e448c910",
+            "name": "gen-billing-dunning",
+            "tenant": "acme",
+            "pid": 7034,
+            "worldPort": 53793,
+            "adminPort": 53794,
+            "startedAt": "2026-10-08T05:41:56.002Z"
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "served": true,
+        "recorded": true
+      },
+      "ok": true
+    },
+    {
+      "n": 16,
+      "file": "16-gen-billing-dunning-seed-hash.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "the world's admin console reads the seed state hash",
+      "requests": [],
+      "stateHash": "518b2f962695137e7b9a2d96f14f22e1",
+      "checks": {
+        "hash": true
+      },
+      "ok": true
+    },
+    {
+      "n": 17,
+      "file": "17-gen-billing-dunning-legal-read.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "a legal read through the API console: GET /customers?limit=2, the world's real 200 and body",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/call",
+          "sent": {
+            "method": "GET",
+            "path": "/customers?limit=2"
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-e448c910",
+            "world": "gen-billing-dunning",
+            "worldPort": 53793,
+            "request": {
+              "method": "GET",
+              "path": "/customers?limit=2",
+              "body": null
+            },
+            "status": 200,
+            "contentType": "application/json; charset=utf-8",
+            "ms": 1,
+            "body": "{\"data\":[{\"id\":\"cus_0001\",\"created_at\":\"2025-01-10T09:00:00.000Z\",\"updated_at\":\"2025-01-10T09:00:00.000Z\",\"name\":\"Cedar Analytics\",\"email\":\"billing@cedaranalytics.example\",\"default_payment_method_id\":\"pm_0001\"},{\"id\":\"cus_0002\",\"created_at\":\"2025-01-19T09:00:00.000Z\",\"updated_at\":\"2025-01-19T09:00:00.000Z\",\"name\":\"Summit Analytics\",\"email\":\"billing@summitanalytics.example\",\"default_payment_method_id\":\"pm_0003\"}],\"next_cursor\":\"JTVCJTIyJTIyJTJDbnVsbCUyQyUyMmN1c18wMDAyJTIyJTVE\"}",
+            "truncated": false
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "status200": true,
+        "picked": true
+      },
+      "ok": true
+    },
+    {
+      "n": 18,
+      "file": "18-gen-billing-dunning-legal-write.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "a legal write: PATCH /customers/cus_0001 {\"name\":\"Renamed in the E2E cus_0001\"}, answered 200 with the changed record",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/call",
+          "sent": {
+            "method": "PATCH",
+            "path": "/customers/cus_0001",
+            "body": {
+              "name": "Renamed in the E2E cus_0001"
+            }
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-e448c910",
+            "world": "gen-billing-dunning",
+            "worldPort": 53793,
+            "request": {
+              "method": "PATCH",
+              "path": "/customers/cus_0001",
+              "body": {
+                "name": "Renamed in the E2E cus_0001"
+              }
+            },
+            "status": 200,
+            "contentType": "application/json; charset=utf-8",
+            "ms": 1,
+            "body": "{\"id\":\"cus_0001\",\"created_at\":\"2025-01-10T09:00:00.000Z\",\"updated_at\":\"2026-10-06T09:00:00.000Z\",\"name\":\"Renamed in the E2E cus_0001\",\"email\":\"billing@cedaranalytics.example\",\"default_payment_method_id\":\"pm_0001\"}",
+            "truncated": false
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "status200": true
+      },
+      "ok": true
+    },
+    {
+      "n": 19,
+      "file": "19-gen-billing-dunning-hash-after-write.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "the state hash moved with the legal write",
+      "requests": [],
+      "stateHash": "160fd7e2202610df54bcf6d54864c8fa",
+      "checks": {
+        "moved": true
+      },
+      "ok": true
+    },
+    {
+      "n": 20,
+      "file": "20-gen-billing-dunning-illegal-write.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "an illegal write: PATCH /customers/cus_0001 {\"name\":\"Never applied\",\"email\":\"not-an-email\"}. Its legal half is not applied either: 422 field.type",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/call",
+          "sent": {
+            "method": "PATCH",
+            "path": "/customers/cus_0001",
+            "body": {
+              "name": "Never applied",
+              "email": "not-an-email"
+            }
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-e448c910",
+            "world": "gen-billing-dunning",
+            "worldPort": 53793,
+            "request": {
+              "method": "PATCH",
+              "path": "/customers/cus_0001",
+              "body": {
+                "name": "Never applied",
+                "email": "not-an-email"
+              }
+            },
+            "status": 422,
+            "contentType": "application/json; charset=utf-8",
+            "ms": 1,
+            "body": "{\"error\":{\"code\":\"field.type\",\"message\":\"Invalid write to customer cus_0001: email expected an email address, found \\\"not-an-email\\\"\"}}",
+            "truncated": false
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "status422": true,
+        "code": true
+      },
+      "ok": true
+    },
+    {
+      "n": 21,
+      "file": "21-gen-billing-dunning-hash-unchanged.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "the state hash after the 422 is the hash before it",
+      "requests": [],
+      "stateHash": "160fd7e2202610df54bcf6d54864c8fa",
+      "checks": {
+        "unchanged": true
+      },
+      "ok": true
+    },
+    {
+      "n": 22,
+      "file": "22-gen-billing-dunning-read-after-422.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "GET /customers/cus_0001: the record holds the legal write and nothing of the refused one",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/call",
+          "sent": {
+            "method": "GET",
+            "path": "/customers/cus_0001"
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-e448c910",
+            "world": "gen-billing-dunning",
+            "worldPort": 53793,
+            "request": {
+              "method": "GET",
+              "path": "/customers/cus_0001",
+              "body": null
+            },
+            "status": 200,
+            "contentType": "application/json; charset=utf-8",
+            "ms": 0,
+            "body": "{\"id\":\"cus_0001\",\"created_at\":\"2025-01-10T09:00:00.000Z\",\"updated_at\":\"2026-10-06T09:00:00.000Z\",\"name\":\"Renamed in the E2E cus_0001\",\"email\":\"billing@cedaranalytics.example\",\"default_payment_method_id\":\"pm_0001\"}",
+            "truncated": false
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "status200": true,
+        "kept": true
+      },
+      "ok": true
+    },
+    {
+      "n": 23,
+      "file": "23-gen-billing-dunning-reset-refused.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "reset without the typed name: refused, and nothing changes",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/reset",
+          "sent": {
+            "confirm": ""
+          },
+          "status": 400,
+          "answer": {
+            "error": {
+              "code": "reset.confirm",
+              "message": "a reset throws away every change to gen-billing-dunning's state; send {\"confirm\": \"gen-billing-dunning\"} to go ahead"
+            }
+          }
+        }
+      ],
+      "stateHash": "160fd7e2202610df54bcf6d54864c8fa",
+      "checks": {
+        "refused": true,
+        "unchanged": true
+      },
+      "ok": true
+    },
+    {
+      "n": 24,
+      "file": "24-gen-billing-dunning-reset.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "reset with the typed name: the world is back at its seed hash",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/reset",
+          "sent": {
+            "confirm": "gen-billing-dunning"
+          },
+          "status": 200,
+          "answer": {
+            "service": "svc-e448c910",
+            "world": "gen-billing-dunning",
+            "now": "2026-10-06T09:00:00.000Z",
+            "hash": "518b2f962695137e7b9a2d96f14f22e1"
+          }
+        }
+      ],
+      "stateHash": "518b2f962695137e7b9a2d96f14f22e1",
+      "checks": {
+        "answered": true,
+        "seedHash": true
+      },
+      "ok": true
+    },
+    {
+      "n": 25,
+      "file": "25-gen-billing-dunning-viewer-refused.png",
+      "who": "vic (viewer, acme)",
+      "world": "gen-billing-dunning",
+      "what": "vic, a viewer in the same tenant, types the name and presses reset: 403",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/reset",
+          "sent": {
+            "confirm": "gen-billing-dunning"
+          },
+          "status": 403,
+          "answer": {
+            "error": {
+              "code": "auth.forbidden",
+              "message": "POST /api/services/svc-e448c910/reset needs the operator role; vic is a viewer"
+            }
+          }
+        }
+      ],
+      "stateHash": "518b2f962695137e7b9a2d96f14f22e1",
+      "checks": {
+        "signedIn": true,
+        "forbidden": true,
+        "status403": true,
+        "unchanged": true
+      },
+      "ok": true
+    },
+    {
+      "n": 26,
+      "file": "26-gen-billing-dunning-other-tenant.png",
+      "who": "bob (operator, globex)",
+      "world": "gen-billing-dunning",
+      "what": "bob, an operator in another tenant: gen-billing-dunning is not running for him, and a reset of ana's service id answers 404",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/reset",
+          "sent": {
+            "confirm": "gen-billing-dunning"
+          },
+          "status": 404,
+          "answer": {
+            "error": {
+              "code": "service.unknown",
+              "message": "No service svc-e448c910"
+            }
+          }
+        }
+      ],
+      "stateHash": "518b2f962695137e7b9a2d96f14f22e1",
+      "checks": {
+        "signedIn": true,
+        "notRunning": true,
+        "status404": true,
+        "unchanged": true
+      },
+      "ok": true
+    },
+    {
+      "n": 27,
+      "file": "27-gen-billing-dunning-stop.png",
+      "who": "ana (operator, acme)",
+      "world": "gen-billing-dunning",
+      "what": "ana stops gen-billing-dunning",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/services/svc-e448c910/stop",
+          "sent": {},
+          "status": 200,
+          "answer": {
+            "id": "svc-e448c910",
+            "stopped": true,
+            "signal": "SIGTERM"
+          }
+        }
+      ],
+      "stateHash": null,
+      "checks": {
+        "stopped": true
+      },
+      "ok": true
+    }
+  ]
+}
