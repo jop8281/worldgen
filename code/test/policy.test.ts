@@ -521,15 +521,17 @@ describe('the tasks reserve is never below the tasks call estimate (A-114)', () 
   const fresh = { startedAtMs: 0, spentUsd: 0, attempts: { plan: 0, model: 0, workflow: 0, seed: 0, tasks: 0 }, backtracks: 0, seenIssueSets: { plan: [], model: [], workflow: [], seed: [], tasks: [] }, stallRetries: { plan: 0, model: 0, workflow: 0, seed: 0, tasks: 0 } };
   const tasksRan = { ...NO_CALLS, tasks: [{ ms: 180_000, repair: false }] };
 
-  it('the live library run: seed attempt 2 starts at 624.4 s; tasks keeps its 132 s first-call estimate, or 180 s after a 180 s tasks call', () => {
+  it('the live library run: seed attempt 2 starts at 624.4 s; tasks keeps its 132 s first-call estimate, or a 45 s repair after a 180 s tasks call (A-330)', () => {
     assert.equal(stepShareMs(cfg, fresh, 'seed', 624_400), 143_600);
-    assert.equal(stepShareMs(cfg, fresh, 'seed', 624_400, tasksRan), 95_600);
+    assert.equal(stepShareMs(cfg, fresh, 'seed', 624_400, tasksRan), 230_600);
   });
-  it('a seed call that runs to its share leaves at least the tasks estimate; 180000 ms needed against 173976 ms left cannot happen', () => {
-    const share = stepShareMs(cfg, fresh, 'seed', 624_400, tasksRan);
-    const leftAfterSeed = 900_000 - (624_400 + share);
-    assert.equal(leftAfterSeed, 180_000);
-    assert.equal(preflight(cfg, fresh, 624_400 + share, 0, 180_000, 'tasks', tasksRan), null);
+  it('a seed call that runs to its share leaves the estimate of the tasks call that follows; 180000 ms needed against 173976 ms left cannot happen', () => {
+    const share = stepShareMs(cfg, fresh, 'seed', 624_400);
+    assert.equal(900_000 - (624_400 + share), 132_000);
+    assert.equal(preflight(cfg, fresh, 624_400 + share, 0, 132_000, 'tasks'), null);
+    const rerun = stepShareMs(cfg, fresh, 'seed', 624_400, tasksRan);
+    assert.equal(900_000 - (624_400 + rerun), 45_000);
+    assert.equal(preflight(cfg, fresh, 624_400 + rerun, 0, 45_000, 'tasks', tasksRan), null);
   });
   it('the refusal that did happen names the next call and the time left', () => {
     assert.deepEqual(preflight(cfg, fresh, 726_024, 0, 180_000, 'tasks'),
@@ -632,12 +634,12 @@ describe('after a backtrack, later steps that already ran are reserved at their 
   const at = (startedAtMs: number): Ledger => ledger({ startedAtMs, backtracks: 1 });
   const first = (ms: number) => ({ ms, repair: false });
   const repair = (ms: number) => ({ ms, repair: true });
-  // Each later step is reserved at its repair estimate, a quarter of its first call or its slowest repair; tasks keeps its first call.
+  // Each later step is reserved at its repair estimate, a quarter of its first call or its slowest repair, tasks too once it ran (A-330).
   const cases = [
     { name: 'stress-1b stripe-refunds: tasks -> model with 218749 ms left', nowMs: 501_251,
-      history: { ...NO_CALLS, workflow: [first(55_000)], seed: [first(124_719)], tasks: [first(158_311)] }, modelMs: 4_950.5, share: 15_508 },
+      history: { ...NO_CALLS, workflow: [first(55_000)], seed: [first(124_719)], tasks: [first(158_311)] }, modelMs: 4_950.5, share: 134_242 },
     { name: 'stress-1b petstore-store: tasks -> model with 321815 ms left', nowMs: 398_185,
-      history: { ...NO_CALLS, workflow: [first(85_690), repair(88_262)], seed: [first(65_720)], tasks: [first(85_143)] }, modelMs: 3_720.5, share: 131_980 },
+      history: { ...NO_CALLS, workflow: [first(85_690), repair(88_262)], seed: [first(65_720)], tasks: [first(85_143)] }, modelMs: 3_720.5, share: 195_837 },
   ];
   for (const c of cases) {
     it(`${c.name} gets ${c.share} ms for model, not 0`, () => {
@@ -645,7 +647,7 @@ describe('after a backtrack, later steps that already ran are reserved at their 
       assert.equal(preflight(cfg, at(0), c.nowMs, 0, c.modelMs, 'model', c.history), null);
     });
   }
-  it('stress-1b stripe-partial-refunds: 78543 ms left cannot fit the reruns (5762 + 39009.5 + 151025 ms), so model is still refused', () => {
+  it('stress-1b stripe-partial-refunds: 78543 ms left cannot fit the reruns (5762 + 39009.5 + 37756.25 ms), so model is still refused', () => {
     const history = { ...NO_CALLS, workflow: [first(23_048)], seed: [first(156_038)], tasks: [first(151_025)] };
     assert.deepEqual(preflight(cfg, at(0), 641_457, 0, 6_226.25, 'model', history),
       { kind: 'stage_time_exhausted', step: 'model', shareMs: 0 });
