@@ -153,8 +153,12 @@ export interface SpawnedChild {
   output(): string;
 }
 
-export type SpawnOpts = { readonly cwd?: string };
-/** Starts argv as a long-running child, no shell, stdio captured, environment inherited untouched. */
+export type SpawnOpts = {
+  readonly cwd?: string;
+  /** The child's whole environment, as in RunOpts. Unset, the child inherits this process's environment. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+};
+/** Starts argv as a long-running child, no shell, stdio captured, environment inherited unless opts.env replaces it. */
 export type Spawner = (argv: readonly string[], opts?: SpawnOpts) => SpawnedChild;
 
 /**

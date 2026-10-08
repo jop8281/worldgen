@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 import { parse, stringify } from 'yaml';
 import { checkWorld, saveWorld } from '#engine';
-import { nodeRunner, type RunOpts, type Runner, type Spawner } from '../src/sandboxes/backend.ts';
+import { nodeRunner, type RunOpts, type Runner, type SpawnOpts, type SpawnedChild, type Spawner } from '../src/sandboxes/backend.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
 import { minimalWorld } from './helpers/world.ts';
 
@@ -84,6 +84,44 @@ describe('studio isolation: the check and proof children', () => {
     const expected = { TZ: 'UTC', PATH: '/usr/bin:/bin', WORLDGEN_GUARD_SCALE: '4' };
     assert.deepEqual(check.opts?.env, expected);
     assert.deepEqual(proof.opts?.env, expected);
+  });
+
+  it('gives a served world the allowlist and an episode the whole environment', async () => {
+    const spawned: { argv: readonly string[]; env: SpawnOpts['env'] }[] = [];
+    const spawner: Spawner = (argv, o) => {
+      spawned.push({ argv: [...argv], env: o?.env });
+      let gone: (code: number | null) => void = () => {};
+      const exited = new Promise<number | null>((resolve) => (gone = resolve));
+      const child: SpawnedChild = { pid: 4242, exited, kill: () => (gone(null), true), output: () => '' };
+      return child;
+    };
+    const runner: Runner = async () => ({ code: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' });
+    const env = {
+      PATH: '/usr/bin:/bin',
+      HOME: '/home/op',
+      LLM_KEY: 'sk-live-1',
+      BOAT_API_KEY: 'boat-3',
+      WORLDGEN_STUDIO_TOKEN: 'tok-4',
+      WORLDPLAY_HOST: '0.0.0.0',
+      WORLDPLAY_ADMIN_HOST: '0.0.0.0',
+      WORLDGEN_GUARD_SCALE: '4',
+    };
+    const task = Object.keys(minimalWorld().tasks)[0];
+    assert.ok(task !== undefined);
+    const s = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, env });
+    try {
+      const served = await fetch(`${s.url}/api/worlds/good/serve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      assert.equal(served.status, 200);
+      const episode = await fetch(`${s.url}/api/episodes`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ world: 'good', task, agent: 'noop' }) });
+      assert.equal(episode.status, 200, await episode.clone().text());
+    } finally {
+      await s.close();
+    }
+    const serve = spawned.find((c) => c.argv[1] === 'src/cli/worldplay.ts' && c.argv[2] === 'serve');
+    const ep = spawned.find((c) => c.argv[1] === 'src/cli/episode.ts');
+    assert.ok(serve !== undefined && ep !== undefined, JSON.stringify(spawned.map((c) => c.argv.slice(0, 3))));
+    assert.deepEqual(serve.env, { TZ: 'UTC', PATH: '/usr/bin:/bin', WORLDGEN_GUARD_SCALE: '4' });
+    assert.deepEqual(ep.env, env);
   });
 
   it('starts one check child for concurrent requests to the same unchecked world', async () => {
