@@ -43,5 +43,5 @@ Hand-checked behaviour tables that units and eval runs check worlds against.
 
 ## Factory
 
-- `factory/` mirrors the factory coordinator's ledger: the unit recipe, standing orders, backlog and user decisions. See `factory/README.md`.
+- `archive/factory/` mirrors the factory coordinator's ledger: the unit recipe, standing orders, backlog and user decisions. See `archive/factory/README.md`.
 - `spec-calls/<unit>.md` holds the spec calls each factory unit made. Engine-freeze and docs units fold them into `decisions.md`.
