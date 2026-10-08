@@ -38,6 +38,22 @@ bun run live ../prod/prompts                                     # every prompt 
 - Model and budget are settings. The default is `claude-sonnet-5-5` through `claude -p`, at $5 and 15 minutes per run. `--model` takes any Claude model with a known price, and `--budget-usd` and `--max-minutes` change the limits. No call falls back to another model. `--transport sdk` uses the Anthropic SDK with the key in `LLM_KEY`.
 - `scripts/demo-all.sh` runs the whole system in 25 PASS-or-FAIL steps, with no model call, in about a minute. `bun run studio` opens a local operator web app at http://127.0.0.1:8787.
 
+## Status of main
+
+`main` is `39720d89`, promotion 9 ([#83](https://github.com/jop8281/worldgen/pull/83)) of `stabilize/main` `acd0aadd`. Its verdict CI runs are pending. Each row links the PRs in this repository that built it. [research/readme-reference.md](research/readme-reference.md#status) keeps the table of what was built before this repository's snapshot.
+
+| What | Where | PRs |
+|---|---|---|
+| Studio World Builder: upload an OpenAPI spec or CSV files to build from, and read a world's plan: its assumptions, open questions and what it leaves out | `code/src/studio/uploads.ts`, `code/src/studio/page.ts` | [#79](https://github.com/jop8281/worldgen/pull/79) |
+| Iterate a world from the browser on the tenant's own copy, published only when the run ends done | `code/src/studio/server.ts`, `code/src/cli/worldgen.ts` | [#77](https://github.com/jop8281/worldgen/pull/77) |
+| Explorer: reset a served world only after its name is typed, and show its workflows and seed counts | `code/src/studio/explorer.ts`, `code/src/studio/server.ts` | [#70](https://github.com/jop8281/worldgen/pull/70), [#81](https://github.com/jop8281/worldgen/pull/81) |
+| Recorded browser E2E: helpdesk and gen-billing-dunning under an operator, a viewer and another tenant, 27 frames and a step log with each state hash; the signed-in rehearsal, 17 steps | `code/scripts/studio-e2e.ts`, `code/scripts/studio-rehearse.ts`, `prod/screenshots/` | [#80](https://github.com/jop8281/worldgen/pull/80), [#68](https://github.com/jop8281/worldgen/pull/68) |
+| Studio shutdown: SIGTERM or SIGINT stops every served world and check before exit; `reconcile-jobs` stops jobs whose owner is gone | `code/src/cli/studio.ts`, `code/src/studio/reconcile.ts` | [#75](https://github.com/jop8281/worldgen/pull/75), [#64](https://github.com/jop8281/worldgen/pull/64), [#74](https://github.com/jop8281/worldgen/pull/74) |
+| The page resumes its view after a refresh, and every control has a label | `code/src/studio/page.ts`, `code/scripts/studio-a11y-probe.ts` | [#69](https://github.com/jop8281/worldgen/pull/69) |
+| Dataset controller: check, prepare and grading run in child processes, which do not get the controller's keys | `code/src/dataset/pipeline.ts`, `code/src/cli/episode-prepare.ts` | [#67](https://github.com/jop8281/worldgen/pull/67), [#76](https://github.com/jop8281/worldgen/pull/76) |
+| stress-4, 23 of 29 (see [Results](#the-full-suite)), and two fixes for defects it found: a `?limit=` lookup is not paging, and a frozen test that throws goes to the workflow step first | `eval/runs/2026-10-08-stress-4/`, `code/src/engine/tasks.ts`, `code/src/worldgen/stages.ts` | [#71](https://github.com/jop8281/worldgen/pull/71), [#73](https://github.com/jop8281/worldgen/pull/73) |
+| OpenAPI `--only`: the plan must name every input operation. The `--only /store` live run on main `e034036c` ended done in 248 s for $0.82, with 3 verified tasks, and `worldplay check` and `verify` exit 0 | `code/src/worldgen/input-coverage.ts`, `code/src/worldgen/stages.ts` | [#45](https://github.com/jop8281/worldgen/pull/45) |
+
 ## Results
 
 ### On this repository
@@ -51,17 +67,16 @@ One `bun run worldgen` on the spec's own example description, "an IT asset track
 | Cost | $1.45, a client-side estimate |
 | `worldplay verify` | solution 1.000 and no-op 0.000 on each task, every decoy below 1 |
 
-### Earlier, historical
+### The full suite
 
-These ran before this repository's one-commit snapshot, so the SHA names a commit of the earlier repository. stress-2 ran the whole 29-case `stress` suite on `3ff2c3a`, at $3 and 12 minutes per run. Its source is [eval/runs/2026-10-07-stress-2/summary.md](eval/runs/2026-10-07-stress-2/summary.md).
+stress-4 ran the 29-case `stress` suite once on main `4b3d2be4`, at $3 and 12 minutes per run. Its source is [eval/runs/2026-10-08-stress-4/summary.md](eval/runs/2026-10-08-stress-4/summary.md).
 
-| Measure | stress-2 |
+| Measure | stress-4 |
 |---|---|
-| Cases that ended as expected | 22 of 29, including 3 impossible inputs refused as expected |
-| Time per run, over 30 runs | p50 6.4 min, p90 8.9 min, max 9.8 min |
-| Cost per run, over 30 runs | p50 $1.27, p90 $1.64, max $1.88 |
-
-The 7 misses have three root causes, each explained in the summary.
+| Cases that ended as expected | 23 of 29 (79%): 20 succeeded, and 3 impossible inputs were refused as expected |
+| Product failures | 6, each with a root cause and an issue |
+| Time per run, over 31 runs | p50 5.1 min, p95 10.3 min, max 11.5 min |
+| Spend | $26.71 settled, plus one cancelled call whose final billing is unknown |
 
 ## Worlds
 
@@ -69,7 +84,7 @@ The 7 misses have three root causes, each explained in the summary.
 
 ## Studio screenshots
 
-Taken from the real app with no model call: the dashboard and the episode on `2c36e0da`, signed in as an admin, and the other four on `b2b980f9`. [prod/screenshots/README.md](prod/screenshots/README.md) gives the command, viewport, runtime and digest of each one.
+Taken from the real app with no model call: the dashboard and the episode on `2c36e0da`, signed in as an admin, and the other four on `b2b980f9`. [prod/screenshots/README.md](prod/screenshots/README.md) gives the command, viewport, runtime and digest of each one. It also records the browser E2E's 27 frames, in [prod/screenshots/e2e/](prod/screenshots/e2e/).
 
 | | |
 |---|---|
