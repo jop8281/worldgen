@@ -363,7 +363,15 @@ describe('runWorldGen iterate: add refunds to a copy of the golden helpdesk', ()
     assert.ok(report.includes('| assign_newest_acme_ticket | '));
     const c = capsuleSchema.parse(JSON.parse(readFileSync(join(dir, CAPSULE_FILE), 'utf8')));
     assert.equal(c.mode, 'iterate');
-    assert.deepEqual(c.input, { kind: 'change_request', digest: '30c2a0859ff08f0a9e51ebc8b8d082724e540031a7f27d320db4a350cc03ae23' });
+    assert.deepEqual(c.input, { kind: 'change_request', digest: '30c2a0859ff08f0a9e51ebc8b8d082724e540031a7f27d320db4a350cc03ae23', source: { kind: 'change_request', before: 'runs/run_iter/before' } });
+    // The world the change started from is saved, so the Changes section can be re-rendered from the capsule (A-351).
+    const snapshot = await loadWorld(join(dir, 'runs', 'run_iter', 'before'));
+    const startedFrom = snapshot.ok ? checkWorld(snapshot.value) : null;
+    const now = await loadWorld(dir);
+    const ended = now.ok ? checkWorld(now.value) : null;
+    assert.ok(startedFrom?.ok && ended?.ok);
+    assert.deepEqual(diffWorlds(startedFrom.world, ended.world).changes.map((ch) => `${ch.kind} ${ch.section}.${ch.key}`),
+      ['item_added entities.refund', 'item_added routes.get_refund', 'item_added routes.list_refunds', 'item_added actions.issue_refund', 'item_added seed.refund', 'item_added tests.issue_refund_on_resolved']);
     assert.equal(report.includes(`World id (WID): \`${c.worldId}\`.`), true);
     assert.deepEqual(readdirSync(join(dir, 'runs', 'run_iter')).filter((f) => f === 'events.jsonl'), ['events.jsonl']);
     assert.equal(readdirSync(join(dir, 'runs', 'run_iter')).filter((f) => f.endsWith('.json')).length, 5);
