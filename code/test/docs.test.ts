@@ -130,13 +130,18 @@ function helpOf(file: string, ...args: string[]): { status: number | null; stdou
 const readmeDocs = (): string => ['README.md', 'research/readme-reference.md'].map((f) => readFileSync(path.join(REPO_DIR, f), 'utf8')).join('\n');
 
 describe('documented commands exist', () => {
-  const docs = { 'README.md': shCommands(readmeDocs()), 'AGENTS.md': shCommands(readFileSync(path.join(REPO_DIR, 'AGENTS.md'), 'utf8')) };
+  const docs = {
+    'README.md': shCommands(readmeDocs()),
+    'AGENTS.md': shCommands(readFileSync(path.join(REPO_DIR, 'AGENTS.md'), 'utf8')),
+    'prod/system.md': shCommands(readFileSync(path.join(REPO_DIR, 'prod/system.md'), 'utf8')),
+  };
 
   it('R17 the parser finds the documented commands', () => {
     assert.ok(docs['README.md'].includes('bun run worldplay serve ../prod/worlds/helpdesk --port 4000'));
     assert.ok(docs['AGENTS.md'].includes('bun run docs'));
     assert.ok(docs['AGENTS.md'].includes('bun run worldplay check  ../prod/worlds/helpdesk'));
     assert.ok(docs['README.md'].includes('bun run worldgen "add partial refunds" --world ../prod/worlds/gen-refunds'));
+    assert.ok(docs['prod/system.md'].includes('bun run studio'));
   });
 
   for (const [file, commands] of Object.entries(docs)) {
@@ -168,12 +173,12 @@ describe('documented commands exist', () => {
   });
 
   it('R17 every other documented script or tsx entry exists and answers --help with 0', () => {
-    for (const cmd of [...docs['README.md'], ...docs['AGENTS.md']].filter((c) => c.startsWith('npx tsx '))) {
+    for (const cmd of Object.values(docs).flat().filter((c) => c.startsWith('npx tsx '))) {
       const entry = cmd.split(/\s+/)[2]!;
       assert.ok(existsSync(path.join(CODE_DIR, entry)), entry);
       assert.equal(helpOf(entry).status, 0, `${entry} --help`);
     }
-    for (const cmd of [...docs['README.md'], ...docs['AGENTS.md']].filter((c) => /^(\.\.\/)?scripts\//.test(c))) {
+    for (const cmd of Object.values(docs).flat().filter((c) => /^(\.\.\/)?scripts\//.test(c))) {
       const rel = cmd.split(/\s+/)[0]!.replace(/^\.\.\//, '');
       assert.ok(existsSync(path.join(REPO_DIR, rel)), rel);
     }
@@ -203,7 +208,7 @@ function shLines(file: string): DocLine[] {
   return out;
 }
 
-const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md'];
+const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md', 'prod/system.md'];
 
 describe('documented worldplay subcommands, worldgen flags and runner', () => {
   const lines = DOC_FILES.flatMap(shLines);
