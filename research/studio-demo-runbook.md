@@ -65,7 +65,7 @@ The minutes are talk time. The "Measured" column is the page time for the step, 
 | 13:30 | 21. A masked field (`23-operator-masked`) | Explorer `helpdesk`, `explore`, then console `GET /customers?limit=2`, `send` | HTTP 200, and each customer's `email` reads `[sensitive]`. Email is a sensitive field of helpdesk, and ana is no admin. An admin sees the value. | 1.5 to 1.7 s |
 | 14:00 | 22. Her clean up (`24-operator-stop`) | `stop` on helpdesk | The served count returns to 0. | 0.15 s |
 | 14:15 | 23. A viewer (`25-viewer-sign-in`, `26-viewer-report`) | `Sign out`, paste vic's token, `Sign in`; then `report` on **helpdesk** | The bar reads `vic (viewer)`. The report pane reads "Hidden because this world has sensitive fields. Ask an admin to open it." | 0.15 s |
-| 14:40 | 24. A role refusal (`27-viewer-serve`) | `serve` on **helpdesk** | Under the filter: "Your role can't see this. Ask an admin for access." A viewer looks; an operator serves. | 0.15 s |
+| 14:40 | 24. A role refusal (`27-viewer-serve`) | `serve` on **helpdesk** | Under the filter: "Your role can't do this. Ask an admin for access." A viewer looks; an operator serves. | 0.15 s |
 
 The rehearsal also checks two things the talk does not click:
 - **`28-idempotent-retry`.** Signed in as ana, it posts the same noop episode request twice with one `Idempotency-Key`. Both answers carry the same run id, and the second says `replayed: true`, so the studio started one episode. After a reload, her Episodes list holds that one run. Generation runs share that code path, but a generation calls Sonnet, so the rehearsal retries the free episode instead.

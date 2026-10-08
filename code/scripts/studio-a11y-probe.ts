@@ -24,7 +24,8 @@ const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The page's PROBLEM lines (src/studio/page.ts) that the forced failures must show. */
 const SIGNED_OUT = 'You are signed out. Sign in again with your studio token.';
-const FORBIDDEN = "Your role can't see this. Ask an admin for access.";
+/** A viewer's refused serve is an action, so its line says do (J113). */
+const FORBIDDEN = "Your role can't do this. Ask an admin for access.";
 const SENSITIVE = 'Hidden because this world has sensitive fields. Ask an admin to open it.';
 const SERVER = 'The studio failed on its side. Try again, and check the studio log if it keeps failing.';
 const NETWORK = 'The studio did not answer. Check that it is still running, then try again.';
