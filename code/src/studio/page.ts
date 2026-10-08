@@ -220,7 +220,8 @@ a { margin-right: 0.5rem; }
     notFound: 'Not found. It may have been removed; refresh the list and try again.',
     server: 'The studio failed on its side. Try again, and check the studio log if it keeps failing.',
     network: 'The studio did not answer. Check that it is still running, then try again.',
-    refused: 'The studio refused this request. Check what you entered and try again.'
+    refused: 'The studio refused this request. Check what you entered and try again.',
+    resetConfirm: 'Type the world name exactly to confirm the reset.'
   };
   /** The line a failed answer shows: one of PROBLEM by status and error code, or the studio's own words for a refusal it explained. */
   function problemText(status, code, message) {
@@ -229,6 +230,8 @@ a { margin-right: 0.5rem; }
     if (status === 403) return /[.]sensitive$/.test(code) ? PROBLEM.sensitive : PROBLEM.forbidden;
     if (status === 404) return PROBLEM.notFound;
     if (status >= 500) return message ? PROBLEM.server + ' The studio said: ' + message : PROBLEM.server;
+    // The API's own sentence for a reset without its name speaks of a JSON body; the page says what to type.
+    if (code === 'reset.confirm') return PROBLEM.resetConfirm;
     return message || PROBLEM.refused;
   }
   /** Signed out: the sign-in line says so and the form shows. */
@@ -354,6 +357,8 @@ a { margin-right: 0.5rem; }
     if (n === null || n === undefined) return 'unknown';
     return '$' + Number(n).toFixed(4);
   }
+  /** A fact a past run never logged reads as such, never as null. */
+  function recorded(v) { return v === null || v === undefined ? 'not recorded' : v; }
   /** A same-host URL for one of a running world's ports, built from location, never stored. */
   function portUrl(port) { return location.protocol + '//' + location.hostname + ':' + port; }
 
@@ -834,7 +839,7 @@ a { margin-right: 0.5rem; }
       clear(runsTable);
       if (past.length === 0) { runsTable.appendChild(el('p', 'no runs')); return; }
       var rows = past.map(function (r) {
-        return { world: r.name, 'run id': r.runId, model: r.model, transport: r.transport, cost: usd(r.costUsd), ms: r.ms, outcome: r.outcome };
+        return { world: r.name, 'run id': r.runId, model: recorded(r.model), transport: recorded(r.transport), cost: usd(r.costUsd), ms: recorded(r.ms), outcome: recorded(r.outcome) };
       });
       runsTable.appendChild(grid(['world', 'run id', 'model', 'transport', 'cost', 'ms', 'outcome'], rows));
     });
