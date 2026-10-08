@@ -73,17 +73,25 @@ const reasonOf = (stop: Exclude<VerifierVerdict['stop'], 'graded'>): string => `
  * pipeline holds. One instance is one verifier session: a submission graded once cannot be
  * graded again through it.
  */
+/**
+ * Frozen private worlds this process has loaded and checked, by directory and world version. A frozen world never
+ * changes, so each is checked once; a full check blocks the event loop for seconds on a slow host.
+ */
+const frozenWorlds = new Map<string, Promise<CheckedWorld | null>>();
+
+async function loadFrozen(held: HeldWorld): Promise<CheckedWorld | null> {
+  const loaded = await loadWorld(held.frozenDir);
+  if (!loaded.ok) return null;
+  const report = checkWorld(loaded.value);
+  return report.ok ? report.world : null;
+}
+
 export function engineGrader(held: HeldWorld): EpisodeGrader {
   const seen = new Set<string>();
-  let world: Promise<CheckedWorld | null> | undefined;
-  const loadFrozen = async (): Promise<CheckedWorld | null> => {
-    const loaded = await loadWorld(held.frozenDir);
-    if (!loaded.ok) return null;
-    const report = checkWorld(loaded.value);
-    return report.ok ? report.world : null;
-  };
+  const key = `${held.frozenDir}\n${held.worldVersion}`;
   return async (sub) => {
-    world ??= loadFrozen();
+    let world = frozenWorlds.get(key);
+    if (world === undefined) frozenWorlds.set(key, (world = loadFrozen(held)));
     const checked = await world;
     if (checked === null) return { ok: false, reason: 'the frozen private world does not check' };
     const { verdict, ledger } = verifySubmission(

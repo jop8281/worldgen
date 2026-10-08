@@ -5,6 +5,7 @@
  */
 import crypto from 'node:crypto';
 import fs, { mkdtempSync, writeFileSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -48,19 +49,38 @@ export async function preparedHelpdesk(): Promise<{ out: string; prep: PreparedW
 
 export type LocalWorld = { readonly port: WorldPort; readonly server: WorldServer; readonly url: string; close(): Promise<void> };
 
-/** The helpdesk served on free ports, with a WorldPort that speaks HTTP to both ports directly. */
+/**
+ * One request on its own connection. The world is served in this process, so a test that blocks the event loop for
+ * longer than the server's keep-alive timeout (a full check on a slow runner) would have the server close a pooled
+ * socket just as fetch reused it: ECONNRESET on the next reset (promotion 9, J87).
+ */
+function httpOnce(url: string, method: string, body?: string, signal?: AbortSignal): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(url, {
+      method, agent: false, ...(signal === undefined ? {} : { signal }),
+      headers: { connection: 'close', ...(body === undefined ? {} : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }) },
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => (text += chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+/** The helpdesk served on free ports, with a WorldPort that speaks HTTP to both ports directly, one connection per request. */
 export async function localWorld(world: CheckedWorld, ports?: { port: number; adminPort: number }): Promise<LocalWorld> {
   const server = await serve(world, ports ?? { port: 0 });
   const admin = async (method: string, route: string): Promise<{ status: number; body: unknown }> => {
-    const res = await fetch(`${server.adminUrl}${route}`, { method });
-    return { status: res.status, body: await res.json() };
+    const res = await httpOnce(`${server.adminUrl}${route}`, method);
+    return { status: res.status, body: JSON.parse(res.text) };
   };
   const port: WorldPort = {
     async call(req, signal) {
-      const res = await fetch(`${server.url}${req.target}`, {
-        method: req.method, signal, ...(req.bodyText === undefined ? {} : { body: req.bodyText, headers: { 'content-type': 'application/json' } }),
-      });
-      return { status: res.status, text: await res.text() };
+      return httpOnce(`${server.url}${req.target}`, req.method, req.bodyText, signal);
     },
     async reset() {
       const r = await admin('POST', '/_world/reset');
