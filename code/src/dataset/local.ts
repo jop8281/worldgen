@@ -1,22 +1,27 @@
 /**
  * One agent episode on the operator's own machine, for the studio's Agent Playground (YOS-190).
- * The engine serves the checked world on loopback: the agent gets only the world port and the
- * public OpenAPI document, the admin port is the controller's private channel for reset, state and
- * log, and `engineGrader` grades the recorded trace against the private world in this process.
+ * The world never runs in this process, whose environment holds the model key (A-347). A prepare
+ * child checks and freezes it, a `worldplay serve` child serves it on loopback (the agent gets only
+ * the world port and the public OpenAPI document, the admin port is the controller's private
+ * channel for reset, state and log), and a `cli/verifier.ts` child grades each recorded trace
+ * against the private world. Each runs in an allowlisted environment; only `nextTurn` keeps this
+ * process's own.
  * The episode is saved, exported and reopened through store.ts exactly as a dataset run's are.
  *
  * There is no sandbox here, so this is for a trusted operator on loopback. Hosted or untrusted
  * agents need the YOS-159/191 boundary that pipeline.ts runs in Boat.
  */
-import { serve, type CallRecord, type WorldServer } from '#engine';
+import type { CallRecord } from '#engine';
+import { isolatedEnv, listeningPorts, nodeRunner, nodeSpawn, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
+import path from 'node:path';
 import { runEpisode, type NextTurn, type SendableRequest, type WorldPort } from './episode.ts';
-import { checkForRun, prepareWorld, stateFromAdmin } from './pipeline.ts';
+import { stateFromAdmin, type PreparedWorld } from './pipeline.ts';
 import { PROMPT_VERSION, canonicalJson, configVersion, type Episode, type Redactor } from './schema.ts';
 import { appendEpisode, exportDataset, startRunLog, writeArtifacts, type ExportResult } from './store.ts';
-import { engineGrader } from './verifier.ts';
+import { childGrader } from './verifier.ts';
 
-/** A WorldPort over a world the engine serves in this process: the world port for the agent, the admin port for the controller. */
-export function loopbackPort(server: Pick<WorldServer, 'url' | 'adminUrl'>, doFetch: typeof fetch = globalThis.fetch): WorldPort {
+/** A WorldPort over a world served on loopback: the world port for the agent, the admin port for the controller. */
+export function loopbackPort(server: { readonly url: string; readonly adminUrl: string }, doFetch: typeof fetch = globalThis.fetch): WorldPort {
   const base = new URL(server.url);
   async function admin(method: 'GET' | 'POST', route: string, label: string): Promise<unknown> {
     const res = await doFetch(`${server.adminUrl}${route}`, { method, headers: { accept: 'application/json' } });
@@ -68,6 +73,12 @@ export type LocalEpisodeOptions = {
   readonly redact: Redactor;
   readonly now?: () => number;
   readonly interrupt?: AbortSignal | undefined;
+  /** Starts the serve child. Default nodeSpawn. */
+  readonly spawner?: Spawner;
+  /** Runs the prepare and verifier children. Default nodeRunner. */
+  readonly runner?: Runner;
+  /** The source the children's allowlisted environment is built from. Default process.env. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 };
 
 export type LocalEpisodeResult = {
@@ -76,9 +87,35 @@ export type LocalEpisodeResult = {
   readonly export: ExportResult;
 };
 
-/** The ids of every proven task of a world, in world order. Refuses a world the engine does not check and prove. */
-export async function provenTasks(worldDir: string): Promise<readonly { readonly id: string; readonly difficulty: string; readonly instruction: string }[]> {
-  return (await checkForRun(worldDir)).tasks.map((t) => ({ id: t.id, difficulty: t.difficulty, instruction: t.instruction }));
+type Prepared = Omit<PreparedWorld, 'world'>;
+
+const CODE_DIR = path.resolve(import.meta.dirname, '../..');
+const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+async function prepareInChild(o: LocalEpisodeOptions, runner: Runner, env: Record<string, string>): Promise<Prepared> {
+  const res = await runner(['bun', 'src/cli/episode-prepare.ts', o.worldDir, o.out], { cwd: CODE_DIR, env, timeoutMs: 300_000 });
+  if (res.code === 3) throw new Error(res.stderr.trim());
+  if (res.code !== 0) throw new Error(`the prepare process failed (exit ${res.code}): ${lastLine(res.stderr) || 'no output'}`);
+  try {
+    return JSON.parse(res.stdout) as Prepared;
+  } catch {
+    throw new Error(`the prepare process answered with something other than a prepared world (${lastLine(res.stderr) || 'no output'})`);
+  }
+}
+
+/** The serve child's ports once it reports both listening, or an error with its last output when it exits first or 120 s pass. */
+async function untilServing(child: SpawnedChild): Promise<{ readonly world: number; readonly admin: number }> {
+  const tail = (): string => child.output().trim().split('\n').slice(-5).join('\n');
+  let gone = false;
+  void child.exited.then(() => (gone = true));
+  const deadline = Date.now() + 120_000;
+  while (!gone && Date.now() < deadline) {
+    const ports = listeningPorts(child.output());
+    if (ports !== null) return ports;
+    await sleep(100);
+  }
+  throw new Error(`the world did not start serving (${gone ? 'the serve process exited' : 'timed out'}):\n${tail()}`);
 }
 
 /**
@@ -87,14 +124,19 @@ export async function provenTasks(worldDir: string): Promise<readonly { readonly
  */
 export async function runLocalEpisode(o: LocalEpisodeOptions): Promise<LocalEpisodeResult> {
   const now = o.now ?? Date.now;
-  const checked = await checkForRun(o.worldDir);
-  const prep = await prepareWorld(o.worldDir, o.out, checked);
+  const runner = o.runner ?? nodeRunner;
+  const src = o.env ?? process.env;
+  const prep = await prepareInChild(o, runner, isolatedEnv(src));
   const task = prep.tasks.find((t) => t.id === o.taskId);
   if (task === undefined) throw new Error(`task ${o.taskId} is not a proven task of ${prep.worldId}: ${prep.tasks.map((t) => t.id).join(', ')}`);
   if (!(await startRunLog(o.out, o.runId))) throw new Error(`run id ${o.runId} is already used in ${o.out}`);
-  const server = await serve(prep.world, { port: 0 });
+  const child = (o.spawner ?? nodeSpawn)(['bun', 'src/cli/worldplay.ts', 'serve', prep.frozenDir, '--port', '0'], { cwd: CODE_DIR, env: isolatedEnv(src) });
   try {
-    const grade = engineGrader({ world: prep.world, wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: o.engineCommit });
+    const ports = await untilServing(child);
+    const grade = childGrader({ codeDir: CODE_DIR, out: o.out, runner, launcher: ['bun'] })({
+      wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: o.engineCommit,
+    });
+    const server = { url: `http://127.0.0.1:${ports.world}`, adminUrl: `http://127.0.0.1:${ports.admin}` };
     const { episode, artifacts } = await runEpisode({
       runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION,
       configVersion: configVersion({ maxTurns: o.maxTurns, budgetUsd: o.budgetUsd, maxMinutes: o.maxMinutes }), model: o.model,
@@ -111,7 +153,11 @@ export async function runLocalEpisode(o: LocalEpisodeOptions): Promise<LocalEpis
     }
     return { episode, export: exported };
   } finally {
-    await server.close();
+    child.kill('SIGTERM');
+    // A pending timer would hold the episode CLI open after the child is gone, so it is cleared.
+    const force = setTimeout(() => child.kill('SIGKILL'), 5000);
+    await child.exited;
+    clearTimeout(force);
   }
 }
 

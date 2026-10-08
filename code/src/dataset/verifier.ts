@@ -32,6 +32,8 @@ export type GraderWorld = {
   readonly frozenDir: string;
   readonly engine: string;
 };
+/** What the verifier request and the child grader need of a world: no CheckedWorld, so a caller that never loaded the world can grade. */
+export type HeldWorld = Omit<GraderWorld, 'world'>;
 export type GraderFactory = (held: GraderWorld) => EpisodeGrader;
 
 /** The protocol request the controller sends; the engine's verifierRequestSchema validates it on the verifier side. */
@@ -48,7 +50,7 @@ export type VerifierRequestMessage = {
 };
 
 /** Builds the protocol request: the identities the run is bound to, the trace, its chain, and the final state. */
-export function verifierRequestOf(held: GraderWorld, sub: EpisodeSubmission): VerifierRequestMessage {
+export function verifierRequestOf(held: HeldWorld, sub: EpisodeSubmission): VerifierRequestMessage {
   return {
     protocol: VERIFIER_PROTOCOL,
     submission: sub.submission,
@@ -128,6 +130,8 @@ export type ChildGraderOptions = {
   readonly runner?: Runner;
   /** How long the child may run. Default 300000 ms. */
   readonly timeoutMs?: number;
+  /** The command that runs a TypeScript file. Default tsx under codeDir; the Studio image has only bun. */
+  readonly launcher?: readonly string[];
 };
 
 /**
@@ -137,9 +141,9 @@ export type ChildGraderOptions = {
  * bounded verdict. A non-zero exit, a timeout or an unparseable answer is a failed grade, never
  * a crash of the run.
  */
-export function childGrader(o: ChildGraderOptions): GraderFactory {
+export function childGrader(o: ChildGraderOptions): (held: HeldWorld) => EpisodeGrader {
   const runner = o.runner ?? nodeRunner;
-  const tsx = path.join(o.codeDir, 'node_modules', '.bin', 'tsx');
+  const launcher = o.launcher ?? [path.join(o.codeDir, 'node_modules', '.bin', 'tsx')];
   const requestsDir = path.join(o.out, 'private', 'verifier', 'requests');
   const ledger = path.join(o.out, 'private', 'verifier', 'submissions.jsonl');
   return (held) => async (sub) => {
@@ -149,7 +153,7 @@ export function childGrader(o: ChildGraderOptions): GraderFactory {
     let run: RunResult;
     try {
       run = await runner(
-        [tsx, 'src/cli/verifier.ts', held.frozenDir, file, held.engine, ledger],
+        [...launcher, 'src/cli/verifier.ts', held.frozenDir, file, held.engine, ledger],
         { cwd: o.codeDir, timeoutMs: o.timeoutMs ?? CHILD_TIMEOUT_MS, env: childEnv() },
       );
     } catch (e) {

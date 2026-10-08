@@ -405,3 +405,22 @@ export async function upWorld(backend: SandboxBackend, bundle: WorldBundle, opts
     throw err;
   }
 }
+
+/** The environment of a child that runs a world's snippets: TZ, PATH and the guard scale, never a credential (A-338, A-343, A-347). */
+export function isolatedEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  return { TZ: 'UTC', PATH: env['PATH'] ?? '', ...(env['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: env['WORLDGEN_GUARD_SCALE'] }) };
+}
+
+/** The ports `worldplay serve` reports once both listen: its `{"listening":{"world":W,"admin":A}}` line, or null before it. */
+export function listeningPorts(output: string): { readonly world: number; readonly admin: number } | null {
+  for (const line of output.split('\n')) {
+    if (!line.startsWith('{"listening"')) continue;
+    try {
+      const l = (JSON.parse(line) as { listening?: { world?: unknown; admin?: unknown } } | null)?.listening;
+      if (l !== undefined && Number.isInteger(l.world) && Number.isInteger(l.admin)) return { world: l.world as number, admin: l.admin as number };
+    } catch {
+      // a line still being written
+    }
+  }
+  return null;
+}
