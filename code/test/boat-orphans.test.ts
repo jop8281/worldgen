@@ -434,7 +434,7 @@ describe('bun run sandbox reconcile-orphans', () => {
       const address = boat.address();
       assert.ok(address !== null && typeof address === 'object');
       const r = await run(['reconcile-orphans', '--apply', '--id', 'sb_cli'], {
-        BOAT_API_KEY: KEY, WORLDGEN_BOAT_ORG: 'org_test', WORLDGEN_COSTS_FILE: path.join(dir, 'costs.jsonl'), BOAT_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
+        BOAT_API_KEY: KEY, WORLDGEN_BOAT_ORG: 'org_test', WORLDGEN_COSTS_FILE: path.join(dir, 'costs.jsonl'), BOAT_BASE_URL: `http://127.0.0.1:${address.port}/v1`, WORLDGEN_BOAT_LOOPBACK: '1',
       });
       const out = JSON.parse(r.stdout) as { receipts: { action: string; error?: string }[] };
       assert.deepEqual([r.code, out.receipts.map(x => [x.action, x.error ?? null]), r.stderr], [1, [['archive_started', null], ['archive_failed', 'boat.dev stop failed: HTTP 503 busy']], 'next: bun run sandbox -- reconcile-orphans --apply --id sb_cli\n']);
