@@ -17,7 +17,7 @@ Name files in lowercase kebab-case. Record each design call as a row in `decisio
 
 ## Plans
 
-- `plan.md` is the product plan, partly superseded by `decisions.md`. `plan-draft-<angle>.md` and `plan-critique-<reviewer>.json` are the drafts and critiques it came from.
+- `plan.md` is the product plan, partly superseded by `decisions.md`. `archive/plan-draft-<angle>.md` and `archive/plan-critique-<reviewer>.json` are the drafts and critiques it came from.
 - `graphs-and-universes.md`, `portfolio.md` and `python-alternative.md` record larger calls: the two-stage design, the reference targets, and the Python replan we did not choose.
 - `linear.md` covers how we use Linear. `linear-world.md` covers Linear as a world to build.
 
