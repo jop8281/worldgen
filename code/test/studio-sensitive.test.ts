@@ -549,6 +549,6 @@ describe('sensitive fields: a generation run\'s events (A-367)', () => {
     await endLast('episode: GET /customers answered {"tier":"platinum"}\n', 1, p);
     const failure = async (token: string): Promise<unknown> => (await get(studio.url, p, token)).body?.['failure'];
     assert.deepEqual(await failure(ADMIN), ['episode: GET /customers answered {"tier":"platinum"}']);
-    assert.deepEqual(await failure(VIEWER), [RUN_WITHHELD]);
+    assert.deepEqual(await failure(VIEWER), [CHILD_TEXT_WITHHELD]);
   });
 });
