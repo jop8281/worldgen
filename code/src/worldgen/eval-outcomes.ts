@@ -22,7 +22,7 @@ const EVENT_TAGS = {
 const STOP_TAGS = {
   input_rejected: true, attempts_exhausted: true, no_progress: true, backtrack_limit: true,
   budget_exhausted: true, time_exhausted: true, stage_time_exhausted: true, model_error: true,
-  spend_cap: true, judge_error: true, infra_unavailable: true, transport_stalled: true, cancelled: true,
+  spend_cap: true, cost_unenforceable: true, judge_error: true, infra_unavailable: true, transport_stalled: true, cancelled: true,
 } satisfies Record<StopReason['kind'], true>;
 const unknownMetrics = (): Metrics => ({ ms: null, costUsd: null, attempts: null });
 const record = (v: unknown): Record<string, unknown> | null => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : null;

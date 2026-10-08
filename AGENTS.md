@@ -106,7 +106,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `studio/page.ts` | The studio page: one offline operator app. Pure. |
 | `studio/runstore.ts` | The studio's generation runs on disk (`.studio-runs.json` in the worlds dir): saved on start and exit, reloaded on start, where a live process is adopted and a dead unfinished one is interrupted (A-329). Process checks are injected. |
 | `studio/explorer.ts` | The World Explorer's view of a checked world: wid, entities and references, routes, jobs, and tasks as an agent is told them. Pure; no snippet or task source. |
-| `studio/server.ts` | The studio server: worlds, explorer, rollout, the API console, generation runs, eval and spend, and the Agent Playground (episode children, the engine proof), loopback. |
+| `studio/server.ts` | The studio server: worlds, explorer, rollout, the API console, generation runs, eval and spend, and the Agent Playground (episode children, the engine proof). Owns sign-in: the roles each route needs (viewer, operator, admin), bearer-token checks, and the audit line every POST writes (A-322..A-325). Loopback unless users are configured. |
 | `cli/sandbox.ts` | Argument parsing for `bun run sandbox`: up, exec, down, discover, track, capture-usage, reconcile-create, reconcile-usage. No logic. |
 | `cli/worldplay.ts` | Argument parsing for the engine CLI: check, serve, verify, grade, docs. No logic. |
 | `cli/eval-analysis-files.ts` | Reads the current eval case paths for analysis, never hidden history as another case. |
@@ -118,7 +118,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `cli/live.ts` | `bun run live`: lists the prompts, runs WorldGen on each one at a time, checks and verifies, moves a verified world to `prod/worlds`, writes the table. |
 | `cli/models.ts` | The shared wiring for CLIs: transport choice, metering into the ledger, the example world, and writing `REPORT.md`. |
 | `cli/episode.ts` | Argument parsing and wiring for `bun run episode`: one local agent episode for the studio's Agent Playground. The work is in `dataset/local.ts`. No logic. |
-| `cli/studio.ts` | Argument parsing and wiring for `bun run studio`: the operator web app. No logic. |
+| `cli/studio.ts` | Argument parsing and wiring for `bun run studio`: the operator web app, and its users from `--users <file>` or `WORLDGEN_STUDIO_TOKEN`. No logic. |
 | `lib/never.ts` | `assertNever` for exhaustive switches. |
 
 `cli/worldgen.ts` sits with the other CLIs and imports `cli/models.ts`. Its iterate mode (`--world`) loads a checked existing world, plans the change, reruns affected stages through the preservation gate, and saves a semantic Changes report. Stops preserve the previous world and plan.
@@ -172,7 +172,7 @@ bun run sandbox --help                            # up <worldDir> --backend open
 bun run dataset --help                            # one graded solver episode per task in a Boat sandbox; needs BOAT_API_KEY.
                                                   # The sandbox serves the public bundle only; a separate verifier child process
                                                   # (cli/verifier.ts) grades each recorded trace against the private world.
-bun run studio [--port 8787] [--worlds-dir <dir>] [--repo-root <dir>]   # the operator web app: worlds dashboard, rollout, generation runs, eval, spend and the Agent Playground, loopback
+bun run studio [--port 8787] [--users <file>] [--worlds-dir <dir>] [--repo-root <dir>]   # the operator web app: worlds dashboard, rollout, generation runs, eval, spend and the Agent Playground; sign-in when users are given
 ../scripts/live.sh --env-only                        # the live-run env check; drop --env-only and pass <slug> "<description>" to run
 
 bun run worldgen "A helpdesk with SLA tiers and on-call escalation" --out ../prod/worlds/gen-<slug>
@@ -183,7 +183,7 @@ bun run worldgen "add refunds" --world ../prod/worlds/gen-<slug>   # iterate an 
 
 The admin port serves `GET /_world/state`, `POST /_world/reset`, `GET /_world/log`, `GET /_world/openapi`, `POST /_world/clock` with `{"advance":"4h"}`, and `POST /_world/grade/<task>`. `serve` also prints the console URL, the self-contained operator page the admin port serves at `GET /`. The agent under test only gets the world port. `--model`, `--budget-usd` and `--max-minutes` override `worldgen.config.json`. The model runs through `claude -p` by default; `--transport sdk` reads the key from `LLM_KEY`. The spend ledger is the file in `WORLDGEN_COSTS_FILE`, default costs.jsonl under ~/.worldgen, capped by `WORLDGEN_MAX_DAILY_USD` and `WORLDGEN_MAX_TOTAL_USD` across both meters, and per meter by `WORLDGEN_MAX_DAILY_LLM_USD` and `WORLDGEN_MAX_DAILY_SANDBOX_USD`. Boat time without `BOAT_USD_PER_COMPUTE_HOUR` is recorded unpriced (usd null), never as $0.
 
-The studio (`bun run studio`) is the operator's loopback web app: one offline page (`studio/page.ts`, no absolute URL, textContent only) over the `studio/server.ts` routes. It spawns `worldplay serve` and `worldgen` children through the injected `Spawner` (`nodeSpawn` in `sandboxes/backend.ts`) with the environment passed through untouched, so no key is stored or logged, and it never imports `worldgen/llm.ts`. The studio port carries no `/_world` route; a served world keeps its own world and admin ports. The Explorer's API console (`POST /api/services/:id/call`) forwards one request to the world port of a service the studio started and answers the world's real status and body. It refuses `/_world` paths and any other origin, so it never reaches an admin port (A-268).
+The studio (`bun run studio`) is the operator's loopback web app: one offline page (`studio/page.ts`, no absolute URL, textContent only) over the `studio/server.ts` routes. It spawns `worldplay serve` and `worldgen` children through the injected `Spawner` (`nodeSpawn` in `sandboxes/backend.ts`) with the environment passed through untouched, so no key is stored or logged, and it never imports `worldgen/llm.ts`. The studio port carries no `/_world` route; a served world keeps its own world and admin ports. The Explorer's API console (`POST /api/services/:id/call`) forwards one request to the world port of a service the studio started and answers the world's real status and body. It refuses `/_world` paths and any other origin, so it never reaches an admin port (A-268). With `--users <file>` or `WORLDGEN_STUDIO_TOKEN`, every route but the page and `GET /api/health` needs a bearer token: a viewer reads, an operator also runs every POST, and an admin also reads `GET /api/audit`, the log of every POST. The page holds the token per tab and never in a cookie, because a served world logs every request header. Without users the studio binds only loopback (A-322..A-325).
 
 ## How to add common things
 
