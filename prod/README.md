@@ -14,3 +14,31 @@ bun run worldgen "A helpdesk with SLA tiers" --out ../prod/worlds/gen-helpdesk-s
 ```
 
 Slugs are lowercase kebab-case and name the software, such as `gen-helpdesk-sla` or `gen-stripe-refunds`. Only the engine writes `world.yaml` (`saveWorld`). The one exception is `worlds/helpdesk/`, which is written by hand.
+
+## The work-trial spec, item by item
+
+Each row names where the spec item lives and the command that shows it. Commands run from `code/` after `bun install`. The spec is [research/spec.md](../research/spec.md).
+
+| Spec item | Where | See it |
+|---|---|---|
+| Engine: data model, API, custom logic, seed, tasks | `world.yaml`, documented in [world-format.md](world-format.md) | `bun run worldplay check ../prod/worlds/helpdesk` |
+| Check, with errors a model can fix | `code/src/engine/check.ts`, `issues.ts` | each issue prints path, expected, found and hint |
+| Serve from a fresh copy of the seed | `code/src/engine/http.ts` | `bun run worldplay serve ../prod/worlds/helpdesk --port 4000` |
+| Enforce: no write breaks the model, no partial change | `transact()` in `code/src/engine/store.ts` | `code/test/runtime.test.ts` and `actions.test.ts` assert the state dump is unchanged after a failed call |
+| Deterministic, engine-controlled time | `code/src/engine/clock.ts`, `sandbox.ts` | `POST /_world/clock` on the admin port; verify replays every solution |
+| Inspect and reset | admin port | `GET /_world/state`, `POST /_world/reset`, `GET /_world/log` |
+| Grade: reference 1, doing nothing 0 | `code/src/engine/tasks.ts` | `bun run worldplay verify ../prod/worlds/helpdesk` |
+| WorldGen from a description, an OpenAPI spec (optionally `--only`) or CSV | `code/src/worldgen/input.ts` | `bun run worldgen "<description>"`, `--openapi <spec> --only <prefix>`, `--csv <files>` |
+| Six stages, plan first, plan saved for a human | `code/src/worldgen/stages.ts`, `plan.ts` | `plan.yaml` in every `worlds/gen-*/`; runs now also write `plan.md` beside it |
+| Self-repair within a budget, knows when to stop | `code/src/worldgen/policy.ts`, `run.ts` | a stopped run leaves `world.yaml` untouched and writes `REPORT.md` with the reason |
+| Engine is the only judge | `code/test/architecture.test.ts` | WorldGen imports only `#engine` and never grades with a model |
+| Iterates | `code/src/worldgen/iterate.ts` | `bun run worldgen "add refunds" --world ../prod/worlds/gen-<slug>` |
+| Observable: stages, repairs, time, cost | `code/src/worldgen/events.ts` | `REPORT.md` in every `worlds/gen-*/`, and `runs/<runId>/events.jsonl` in 22 of the 23 |
+| Configurable: model and budget | `code/worldgen.config.json` | `--model`, `--budget-usd`, `--max-minutes` |
+| Deliverable: repository, one command each | this repository | `bun run worldplay …`, `bun run worldgen …` |
+| Deliverable: short design doc | [design.md](design.md) | world format, engine guarantees, WorldGen loop |
+| Deliverable: one world built by hand | `worlds/helpdesk/` | checked and verified by `test/worlds.test.ts` |
+| Deliverable: worlds from the prompts the team sends | `prompts/`, then `worlds/gen-<slug>/` | open until the prompts arrive; `bun run live ../prod/prompts` runs them one at a time |
+| Live run on unseen prompts | `code/src/cli/live.ts`, `../scripts/live.sh` | `bun run live <dir>`; `--dry-run` lists the prompts without a model call |
+
+The 23 `worlds/gen-*/` directories are worlds WorldGen generated during the trial, and each carries its plan and report. CI (`.github/workflows/check.yml`) runs on every push to `main` and `stabilize/main`. It typechecks, runs the full suite under Bun and again under Node 22, and runs the e2e acceptance.
