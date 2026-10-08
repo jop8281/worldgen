@@ -43,7 +43,6 @@
  *   ended the child. A child that dies on its own removes its own record.
  */
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import type { Dirent } from 'node:fs';
@@ -53,7 +52,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { loadWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
-import type { RunResult, Runner, SpawnedChild, Spawner } from '../sandboxes/backend.ts';
+import { freePort, isolatedEnv, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
 import { adoptedChild, loadRuns, osProcesses, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
@@ -362,19 +361,6 @@ function write(res: ServerResponse, reply: Reply): void {
   const text = JSON.stringify(reply.body ?? null);
   res.writeHead(reply.status, { ...SECURITY_HEADERS, ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
   res.end(text);
-}
-
-/** A port that was free a moment ago, from the OS. */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createNetServer();
-    probe.once('error', reject);
-    probe.listen(0, DEFAULT_HOST, () => {
-      const a = probe.address();
-      const port = a !== null && typeof a === 'object' ? a.port : 0;
-      probe.close(() => resolve(port));
-    });
-  });
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -743,10 +729,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const checking = new Map<string, Promise<Reply>>();
 
   /** The check, proof and serve children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338, A-343). */
-  const childEnv = (): Record<string, string> => {
-    const src = opts.env ?? process.env;
-    return { TZ: 'UTC', PATH: src['PATH'] ?? '', ...(src['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: src['WORLDGEN_GUARD_SCALE'] }) };
-  };
+  const childEnv = (): Record<string, string> => isolatedEnv(opts.env ?? process.env);
   /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
   const modelEnv = (): Record<string, string | undefined> => {
     const { WORLDGEN_STUDIO_TOKEN: _token, ...rest } = opts.env ?? process.env;

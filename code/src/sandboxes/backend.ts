@@ -7,6 +7,7 @@
  * `bun install --frozen-lockfile`, start `worldplay serve` on that Bun detached, wait for the port, and expose the world port only.
  */
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import { constants } from 'node:os';
 
 /** One file to place in a sandbox. `path` is relative and POSIX, under the sandbox workdir. */
@@ -404,4 +405,22 @@ export async function upWorld(backend: SandboxBackend, bundle: WorldBundle, opts
     }
     throw err;
   }
+}
+
+/** The environment of a child that runs a world's snippets: TZ, PATH and the guard scale, never a credential (A-338, A-343, A-347). */
+export function isolatedEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  return { TZ: 'UTC', PATH: env['PATH'] ?? '', ...(env['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: env['WORLDGEN_GUARD_SCALE'] }) };
+}
+
+/** A loopback port that was free a moment ago, from the OS. */
+export function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const a = probe.address();
+      const port = a !== null && typeof a === 'object' ? a.port : 0;
+      probe.close(() => resolve(port));
+    });
+  });
 }
