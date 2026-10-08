@@ -51,7 +51,7 @@ The minutes are talk time. The "Measured" column is the rehearsal's page time fo
 | 4:15 | 7. A legal call (`07-console-get`) | Console `GET /tickets?status=open&limit=3`, then `send` | The world's real HTTP 200 with three `tkt_` rows. The console only ever reaches the world port. Note tkt_0001's priority, `high`. | 0.15 s |
 | 5:00 | 8. A wrong write (`08-console-422`) | Console `PATCH /tickets/tkt_0001` with body `{"status":"new","priority":"urgent"}`, then `send` | HTTP 422 `state.transition`: an open ticket cannot move to new. | 0.15 s |
 | 5:30 | 9. Nothing applied (`09-read-after-422`) | Console `GET /tickets/tkt_0001`, then `send` | The ticket's priority is still `high`. The engine refused the whole write, so the legal half was not applied either. | 0.15 s |
-| 6:00 | 10. Reset refused (`10-reset-refused`) | `reset` with the name box empty | Refused: "a reset throws away every change to helpdesk's state; send {"confirm": "helpdesk"} to go ahead". Nothing changes. | 0.15 s |
+| 6:00 | 10. Reset refused (`10-reset-refused`) | `reset` with the name box empty | Refused: "Type the world name exactly to confirm the reset." Nothing changes. | 0.15 s |
 | 6:30 | 11. Reset (`11-reset`) | Type `helpdesk` into the box, then `reset` | "helpdesk reset to its seed at …, state …": the world is back at its seed. | 0.15 s |
 | 7:00 | 12. World Builder (`12-builder-kind`, `13-builder-upload`) | Generation runs: kind `openapi`. Then `upload a spec` → choose `eval/inputs/petstore.openapi.yaml` → `upload` | "uploaded petstore.openapi.yaml (7737 bytes)". The spec list now picks `uploaded: petstore.openapi.yaml`, and its 6 paths are offered as `--only` checkboxes. **Do not press `generate`**: that runs Sonnet and spends (see Fresh generation below). | 0.15 s each |
 | 8:15 | 13. A plan (`14-plan`) | `plan` on the **gen-library-loans** row | The plan WorldGen wrote before building: its 14 assumptions, each with why, its open questions with the defaults taken, what is out of scope and why, and plan.md. | 0.15 s |
@@ -84,7 +84,5 @@ Generation runs → kind `description`, a one-line prompt, out slug, budget `3`,
 
 ## Known gaps
 
-- **Past runs.** A run with no capsule.json shows `null` for model, transport, ms and outcome. Its cost already reads `unknown`.
-- **The refused reset.** It shows the studio's own sentence, which speaks of the API ("send {"confirm": "helpdesk"}"). The page's input box is what a person uses.
 - **Big generated worlds.** Opening one in the Explorer takes about 6 s. This talk explores only helpdesk.
 - **Not rehearsed live.** Generation, iterate and cancellation all call Sonnet, so the talk shows a finished iterate instead, and this pass made no model calls.
