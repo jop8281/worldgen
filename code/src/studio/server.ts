@@ -1397,14 +1397,20 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   // ---------------------------------------------------------------- agent playground (YOS-190)
 
   let commit: string | null = null;
-  /** The commit of the code the studio runs, recorded on every episode as its engine. Read once, through the injected runner. */
+  /**
+   * The commit of the code the studio runs, recorded on every episode as its engine. Read once, through the injected
+   * runner. The Studio image has neither .git nor a git binary, so there the sha it was built from (`build`) names
+   * it (YOS-236). A missing binary rejects the runner, and that counts as no commit too.
+   */
   async function engineCommit(): Promise<string | null> {
     if (commit !== null) return commit;
-    const r = await opts.runner(['git', 'rev-parse', 'HEAD'], { cwd: codeDir });
-    const sha = r.stdout.trim();
-    if (r.code !== 0 || !/^[0-9a-f]{7,64}$/.test(sha)) return null;
-    commit = sha;
-    return sha;
+    const isSha = (s: string | undefined): s is string => s !== undefined && /^[0-9a-f]{7,64}$/.test(s);
+    const r = await opts.runner(['git', 'rev-parse', 'HEAD'], { cwd: codeDir }).catch(() => null);
+    const sha = r === null ? '' : r.stdout.trim();
+    const found = r !== null && r.code === 0 && isSha(sha) ? sha : isSha(opts.build) ? opts.build : null;
+    if (found === null) return null;
+    commit = found;
+    return found;
   }
 
   /** The tasks of a world, public fields only: id, difficulty and the instruction an agent gets. Never a grader, solution or decoy. */
@@ -1492,7 +1498,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       flags.push(flag, String(v));
     }
     const sha = await engineCommit();
-    if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory, so the episode would have no engine identity');
+    if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory and no build sha is set, so the episode would have no engine identity');
     return startJob({
       kind: 'episode',
       tenant: who.tenant,
