@@ -116,7 +116,9 @@ process.stdin.on('end', () => process.stdout.write(JSON.stringify({ type: 'resul
     chmodSync(bin, 0o755);
     const env = generationEnv({ ...PARENT, PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: root, TMPDIR: root, WORLDGEN_CLAUDE_BIN: bin, WORLDGEN_COSTS_FILE: path.join(root, 'costs.jsonl') }, undefined);
     const out = path.join(root, 'gen-codec');
-    const r = spawnSync(process.execPath, ['src/cli/worldgen.ts', 'A video codec that encodes frames', '--out', out], { cwd: CODE_DIR, env, encoding: 'utf8', timeout: 110_000 });
+    // Under Node the child needs the tsx loader for the TypeScript source; Bun runs it as is.
+    const runtime = process.versions.bun === undefined ? ['--import', 'tsx'] : [];
+    const r = spawnSync(process.execPath, [...runtime, 'src/cli/worldgen.ts', 'A video codec that encodes frames', '--out', out], { cwd: CODE_DIR, env, encoding: 'utf8', timeout: 110_000 });
     assert.equal(r.status, 1, r.stderr);
     assert.ok(r.stderr.startsWith('stopped: input_rejected'), r.stderr);
     assert.equal(existsSync(seen), true);
