@@ -135,6 +135,26 @@ describe('nodeRunner', () => {
     assert.equal(res.code, 0);
     process.kill(Number(res.stdout));
   });
+
+  it('stops the child when its signal aborts, and settles once it is gone', async () => {
+    const stop = new AbortController();
+    const call = nodeRunner([process.execPath, '-e', 'process.stdout.write("up"); setInterval(() => {}, 1000)'], { signal: stop.signal });
+    setTimeout(() => stop.abort(), 300);
+    assert.deepEqual(await call, { code: 143, stdout: 'up', stderr: '' });
+  });
+
+  it('kills a child that outlives SIGTERM after an abort', async () => {
+    const stop = new AbortController();
+    const call = nodeRunner([process.execPath, '-e', 'process.on("SIGTERM", () => {}); process.stdout.write("up"); setInterval(() => {}, 1000)'], { signal: stop.signal });
+    setTimeout(() => stop.abort(), 300);
+    assert.equal((await call).code, 137);
+  });
+
+  it('stops at once a child whose signal was already aborted', async () => {
+    const stop = new AbortController();
+    stop.abort();
+    assert.equal((await nodeRunner([process.execPath, '-e', 'setInterval(() => {}, 1000)'], { signal: stop.signal })).code, 143);
+  });
 });
 
 describe('shell quoting for detached starts', () => {

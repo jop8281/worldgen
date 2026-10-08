@@ -224,6 +224,12 @@ a { margin-right: 0.5rem; }
   var signedIn = fetch('/api/me', { headers: authHeaders({}) }).then(function (r) {
     return r.json().then(function (body) {
       authNote(r.status, body);
+      // Spend needs the admin role, so any other page neither shows it nor asks for it.
+      if (r.status === 200 && body.role === 'admin') refreshSpend();
+      else {
+        byId('sec-spend').hidden = true;
+        document.querySelector('nav a[href="#sec-spend"]').hidden = true;
+      }
       if (r.status !== 200) return false;
       if (!body.signIn) {
         whoLine.textContent = body.name + ' (' + body.role + '), sign-in off';
@@ -922,7 +928,6 @@ a { margin-right: 0.5rem; }
   refreshRuns();
   refreshEval();
   refreshEpisodes();
-  refreshSpend();
   Promise.all([signedIn, worldsReady]).then(function (done) {
     if (!done[0]) return;
     restoreFromHash();
