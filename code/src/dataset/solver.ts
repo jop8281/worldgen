@@ -34,6 +34,9 @@ export interface SolverProposer {
     readonly tool: { readonly name: string; readonly description: string; readonly inputSchema: object };
     readonly signal?: AbortSignal | undefined;
     readonly maxCostUsd?: number | undefined;
+    /** The run and step the spend ledger files this call under (A-365). Plain data: no key, no environment. */
+    readonly runId?: string | undefined;
+    readonly step?: string | undefined;
   }): Promise<{
     readonly input: unknown;
     readonly advice: readonly string[];
@@ -103,8 +106,14 @@ export function pickDecision(input: unknown): unknown {
   return input;
 }
 
-/** A NextTurn over `proposer`. `signal` goes to the request, so a deadline cancels the HTTP call itself. */
-export function solverTurn(proposer: SolverProposer): NextTurn {
+/** The step every solver call is filed under in the spend ledger. */
+export const SOLVER_STEP = 'solver';
+
+/**
+ * A NextTurn over `proposer`. `signal` goes to the request, so a deadline cancels the HTTP call itself. `runId`, the
+ * dataset or episode run, goes on every request with the step `solver`, so `costs --by run` files the call under it.
+ */
+export function solverTurn(proposer: SolverProposer, runId?: string): NextTurn {
   return async (view, signal) => {
     signal.throwIfAborted();
     const p = await proposer.propose({
@@ -113,6 +122,8 @@ export function solverTurn(proposer: SolverProposer): NextTurn {
       tool: { name: SOLVER_TOOL, description: 'Send one API request, or finish the task with your final reply.', inputSchema: SOLVER_TOOL_SCHEMA },
       signal,
       maxCostUsd: view.budgetLeftUsd,
+      ...(runId === undefined ? {} : { runId }),
+      step: SOLVER_STEP,
     });
     return { decision: pickDecision(p.input), commentary: p.advice.join('\n'), usage: p.usage, costUsd: p.costUsd, ms: p.ms };
   };
