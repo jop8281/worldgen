@@ -28,7 +28,7 @@ import {
   type CheckIssue, type CheckReport, type CheckedWorld, type IssuePath, type Section, type Step, type World, type WorldEdit,
 } from '#engine';
 import { assertNever } from '#lib/never';
-import { SpendCapError, type SpendEvent } from '../costs/ledger.ts';
+import { CostUnenforceableError, SpendCapError, type SpendEvent } from '../costs/ledger.ts';
 import { CAPSULE_FILE, runCapsule } from './capsule.ts';
 import { stepModel, transportOf, type Config } from './config.ts';
 import { createEmitter, type AttemptOutcome, type CutProgress, type Emit, type FidelityCheck, type RunEvent, type StopReason } from './events.ts';
@@ -753,6 +753,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
       } catch (e) {
         // The spend ledger refused the call before it was made: a cap ran out, the model did not fail.
         if (e instanceof SpendCapError) return { kind: 'stop', reason: { kind: 'spend_cap', cap: e.cap, capUsd: e.capUsd, spentUsd: e.spentUsd, day: e.day } };
+        if (e instanceof CostUnenforceableError) return { kind: 'stop', reason: { kind: 'cost_unenforceable', cap: e.cap, claim: e.claim } };
         if (e instanceof StepShareExpired) cut = { kind: 'share_expired', shareMs: e.shareMs, progress: cutProgress(e.progress) };
         if (e instanceof CallStalled) cut = { kind: 'stalled', idleMs: e.idleMs, progress: cutProgress(e.progress) };
         const billed = e instanceof ModelError ? e : undefined;
