@@ -45,7 +45,8 @@ studio's own environment, which a container gets at run time (docker run -e LLM_
 --origin (or WORLDGEN_STUDIO_ORIGIN) is the one public origin the studio is also reached at, such as
 http://127.0.0.1:9000 for a published container port. Otherwise it answers only to its bound
 address and the loopback names (127.0.0.1, localhost), and refuses any other Host or POST Origin.
-GET /api/health answers readiness with WORLDGEN_BUILD_SHA, the runtime and the world count.
+GET /api/health answers readiness with WORLDGEN_BUILD_SHA, the runtime, the world count and traffic (answers and
+5xx answers since start and in the last 300 s); bun run studio-watch turns it into alerts.
 `;
 
 class UsageError extends Error {}

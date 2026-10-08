@@ -11,10 +11,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
-import { createServer as createNetServer } from 'node:net';
 import { checkWorld, saveWorld, serve, worldIdOf, type World, type WorldServer } from '#engine';
 import { nodeRunner, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../src/sandboxes/backend.ts';
 import { studioServer, type StudioServer } from '../src/studio/server.ts';
+import { quietPort } from './helpers/ports.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 // ---- transport: fetch against the loopback studio ----------------------------------------------
@@ -296,12 +296,17 @@ describe('studio', () => {
   });
 
   describe('health', () => {
-    it('GET /api/health is ready with the build, the runtime and the world count', async () => {
+    it('GET /api/health is ready with the build, the runtime, the world count and the traffic so far', async () => {
       const r = await call(base, 'GET', '/api/health');
       assert.equal(r.status, 200);
       const listed = (JSON.parse((await call(base, 'GET', '/api/worlds')).text) as { worlds: unknown[] }).worlds.length;
       const bun = process.versions['bun'];
-      assert.deepEqual(JSON.parse(r.text), { ok: true, build: 'test-sha', runtime: bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`, worlds: listed });
+      // The first test of the suite: no answer has been counted yet, and health polls never are. Counts after real
+      // traffic, on an injected clock, are in test/studio-watch.test.ts.
+      const { traffic, ...rest } = JSON.parse(r.text) as { traffic: { since: string } };
+      assert.deepEqual(rest, { ok: true, build: 'test-sha', runtime: bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`, worlds: listed });
+      assert.equal(new Date(traffic.since).toISOString(), traffic.since);
+      assert.deepEqual({ ...traffic, since: 'ISO' }, { since: 'ISO', requests: 0, errors5xx: 0, windowSeconds: 300, window: { requests: 0, errors5xx: 0 } });
     });
   });
 
@@ -955,16 +960,13 @@ describe('studio', () => {
     it('retries a refused call while a just-served world starts listening, then answers the world (A-278)', async () => {
       const report = checkWorld(minimalWorld());
       assert.ok(report.ok);
-      const port = await new Promise<number>((resolve) => {
-        const probe = createNetServer().listen(0, '127.0.0.1', () => {
-          const a = probe.address();
-          probe.close(() => resolve(a !== null && typeof a === 'object' ? a.port : 0));
-        });
-      });
+      // The world binds this port 600 ms after the call starts, so it must be one no port-0 bind can take meanwhile.
+      const port = await quietPort();
       const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', { port });
       assert.equal(served.status, 200, JSON.stringify(served.body));
       const id = String(served.body['id']);
-      const late = new Promise<Awaited<ReturnType<typeof serve>>>((resolve) => setTimeout(() => resolve(serve(report.world, { port })), 600));
+      const late = new Promise<WorldServer>((resolve, reject) => setTimeout(() => serve(report.world, { port, adminPort: 0 }).then(resolve, reject), 600));
+      late.catch(() => undefined);
       try {
         const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
         assert.deepEqual([r.status, r.body['status']], [200, 200], JSON.stringify(r.body));
@@ -975,13 +977,9 @@ describe('studio', () => {
     });
 
     it('answers a real 502 when nothing listens on the world port, never a made-up success', async () => {
-      const port = await new Promise<number>((resolve) => {
-        const probe = createNetServer().listen(0, '127.0.0.1', () => {
-          const a = probe.address();
-          probe.close(() => resolve(a !== null && typeof a === 'object' ? a.port : 0));
-        });
-      });
+      const port = await quietPort();
       const served = await json(base, 'POST', '/api/worlds/hand-beta/serve', { port });
+      assert.equal(served.status, 200, JSON.stringify(served.body));
       const id = String(served.body['id']);
       try {
         const r = await json(base, 'POST', `/api/services/${id}/call`, { method: 'GET', path: '/customers' });
