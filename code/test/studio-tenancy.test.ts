@@ -50,11 +50,14 @@ function fakeSpawner(): { spawner: Spawner; spawned: Spawned[] } {
     // A fake `worldplay serve` reports its listening ports, as the real one does (A-348); other children print nothing.
     const serve = argv[1] === 'src/cli/worldplay.ts' && argv[2] === 'serve';
     const listening = serve ? `${JSON.stringify({ listening: { world: 46000 + 2 * spawned.length, admin: 46001 + 2 * spawned.length } })}\n` : '';
+    // It dies to a signal, as a real child does, so close() need not wait out its SIGKILL timer.
+    let die: (code: number | null) => void = () => {};
     const child: SpawnedChild = {
       pid: 45000 + spawned.length,
-      exited: new Promise<number | null>(() => {}),
+      exited: new Promise<number | null>((resolve) => (die = resolve)),
       kill(signal) {
         one.signals.push(signal);
+        die(null);
         return true;
       },
       output: () => listening,
@@ -508,7 +511,8 @@ describe('studio tenancy: serving for a tenant, and pins still starting (#46 fol
     let spawns = 0;
     const spawner: Spawner = () => {
       spawns += 1;
-      return { pid: 47001, exited: new Promise<number | null>(() => {}), kill: () => true, output: () => report };
+      let die: (code: number | null) => void = () => {};
+      return { pid: 47001, exited: new Promise<number | null>((resolve) => (die = resolve)), kill: () => (die(null), true), output: () => report };
     };
     const base = await start(f, { spawner });
     const first = call(base, 'POST', '/api/worlds/gen-pin/serve', ADA, { port: 4700 });
