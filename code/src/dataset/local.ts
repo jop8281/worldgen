@@ -9,6 +9,7 @@
  * agents need the YOS-159/191 boundary that pipeline.ts runs in Boat.
  */
 import { serve, type CallRecord, type WorldServer } from '#engine';
+import type { Runner, Spawner } from '../sandboxes/backend.ts';
 import { runEpisode, type NextTurn, type SendableRequest, type WorldPort } from './episode.ts';
 import { checkForRun, prepareWorld, stateFromAdmin } from './pipeline.ts';
 import { PROMPT_VERSION, canonicalJson, configVersion, type Episode, type Redactor } from './schema.ts';
@@ -68,6 +69,12 @@ export type LocalEpisodeOptions = {
   readonly redact: Redactor;
   readonly now?: () => number;
   readonly interrupt?: AbortSignal | undefined;
+  /** Starts the serve child. Default nodeSpawn. */
+  readonly spawner?: Spawner;
+  /** Runs the prepare and verifier children. Default nodeRunner. */
+  readonly runner?: Runner;
+  /** The source the children's allowlisted environment is built from. Default process.env. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 };
 
 export type LocalEpisodeResult = {
