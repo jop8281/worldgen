@@ -69,6 +69,26 @@ describe('openapiFidelity', () => {
     ]);
   });
 
+  it('says why a request may leave out a field the source requires: no body, not taken, optional or defaulted (YOS-241)', async () => {
+    const spec = { openapi: '3.0.3', paths: { '/contract-probe': { post: {
+      requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['quantity'], properties: { quantity: { type: 'integer' }, note: { type: 'string' } } } } } },
+      responses: { '200': { description: 'ok' } },
+    } } } };
+    const int = { type: 'int', nullable: false, unique: false, readonly: false } as const;
+    const found = async (input: World['actions'][string]['input']): Promise<string[]> => {
+      const world = await petstore();
+      world.actions.contract_probe = { method: 'POST', path: '/contract-probe', description: 'Required-input fidelity probe', input, handler: '(ctx) => ({ status: 200, body: {} })' };
+      const checked = checkWorld(world);
+      assert.ok(checked.ok, JSON.stringify(checked.ok ? null : checked.issues));
+      return openapiFidelity(checked.world, spec, ['/contract-probe']).filter((i) => i.code === 'openapi.required_field_missing').map((i) => i.found);
+    };
+    assert.deepEqual(await found({}), ['no request body']);
+    assert.deepEqual(await found({ note: { type: 'string', required: false, nullable: true, unique: false, readonly: false } }), ['fields note']);
+    assert.deepEqual(await found({ quantity: { ...int, required: false } }), ['quantity is optional']);
+    assert.deepEqual(await found({ quantity: { ...int, required: true, default: 1 } }), ['quantity has a default, so a request may leave it out']);
+    assert.deepEqual(await found({ quantity: { ...int, required: true } }), []);
+  });
+
   it('accepts a required source object represented by a required reference', async () => {
     const world = await petstore();
     const category = Object.values(world.entities.pet?.fields ?? {}).find((f) => f.type === 'ref' && f.entity === 'category');

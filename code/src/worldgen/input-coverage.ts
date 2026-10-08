@@ -23,6 +23,17 @@ type Cell = string | number | boolean | null;
 
 const asInstant = (text: string): number => Date.parse(/(?:Z|[+-]\d\d:?\d\d)$/.test(text) ? text : `${text}Z`);
 const asWord = (text: string): string => text.trim().toLowerCase().replace(/[\s_-]+/g, '_');
+/**
+ * What a time column should hold for an imported instant cell: the same instant in ISO 8601 UTC, or in whole seconds
+ * when the seed wrote a number. A date with no time, such as 2026-08-28, is midnight UTC (YOS-247). Null for a cell that
+ * is not an instant.
+ */
+function instantToWrite(expected: Cell, found: Cell): string | null {
+  if (typeof expected !== 'string' || !/\d{4}-\d\d-\d\d/.test(expected)) return null;
+  const at = asInstant(expected);
+  if (!Number.isFinite(at)) return null;
+  return typeof found === 'number' ? String(Math.floor(at / 1000)) : new Date(at).toISOString();
+}
 
 /**
  * Cells are equal when they are the same value, the same text of a number, the same instant (a time
@@ -45,7 +56,8 @@ function sameCell(a: Cell | undefined, b: Cell | undefined): boolean {
  * are all present and distinct, or by position when none is. A time column may be null where the import
  * has a time only when the row's imported status says it does not apply yet: an enum or state column
  * of that row that the seed kept unchanged (a created shipment has no shipped_at). A seed may drop or add rows (the count
- * check owns that), so an imported row with no seeded partner is not a mismatch here.
+ * check owns that), so an imported row with no seeded partner is not a mismatch here. A time column's example also names
+ * the value to write (`instantToWrite`), so the seed step can fix an instant on its own.
  */
 function valueMismatches(world: World, seeded: readonly object[], entity: string, fixtures: InputDigest['fixtures'][string]): string | null {
   const fields = world.entities[entity]?.fields ?? {};
@@ -72,7 +84,11 @@ function valueMismatches(world: World, seeded: readonly object[], entity: string
       const explained = timed && cellOf(partner, c) == null && statusColumns.some((sc) => sameCell(cellOf(partner, sc), fixture[sc]));
       if (c === key || explained || sameCell(cellOf(partner, c), fixture[c])) continue;
       total += 1;
-      if (bad.length < VALUE_EXAMPLES_MAX) bad.push(`row ${n + 1}${key === undefined ? '' : ` (${key}=${JSON.stringify(fixture[key])})`} ${c}: expected ${JSON.stringify(fixture[c] ?? null)}, found ${JSON.stringify(cellOf(partner, c) ?? null)}`);
+      if (bad.length >= VALUE_EXAMPLES_MAX) continue;
+      const expected = fixture[c] ?? null;
+      const found = cellOf(partner, c) ?? null;
+      const write = timed ? instantToWrite(expected, found) : null;
+      bad.push(`row ${n + 1}${key === undefined ? '' : ` (${key}=${JSON.stringify(fixture[key])})`} ${c}: expected ${JSON.stringify(expected)}, found ${JSON.stringify(found)}${write === null ? '' : `, write ${write}`}`);
     }
   });
   return total === 0 ? null : `${bad.join('; ')}${total > bad.length ? `; ${total - bad.length} more differ` : ''}`;

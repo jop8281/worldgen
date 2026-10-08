@@ -291,6 +291,25 @@ export function seedBlocking(warnings: readonly CheckIssue[], plan: Plan): reado
   return warnings.filter((w) => w.code.startsWith('seed.') && w.code !== 'seed.too_few_rows_for_paging' && (w.code !== 'seed.state_mix_skewed' || neededButMissing(w)));
 }
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * One line per imported column whose every filled cell is a date with no time, such as 2026-08-28 (YOS-247). The model
+ * step is told to type it as a string with a date pattern: a datetime field cannot hold those values unchanged, and the
+ * seed step, which owns the values, cannot change a field type.
+ */
+export function dateOnlyColumnLines(world: World): string[] {
+  const lines: string[] = [];
+  for (const [table, rows] of Object.entries(world.fixtures)) {
+    for (const column of Object.keys(rows[0] ?? {})) {
+      const cells = rows.map((r) => r[column]).filter((v) => v !== null && v !== undefined && v !== '');
+      if (cells.length === 0 || !cells.every((v) => typeof v === 'string' && DATE_ONLY.test(v))) continue;
+      lines.push(`- ${table}.${column} holds dates with no time, such as ${String(cells[0])}: type its field string with pattern ^\\d{4}-\\d{2}-\\d{2}$, never datetime, so the imported values seed unchanged.`);
+    }
+  }
+  return lines;
+}
+
 export const STAGES = {
   model: {
     id: 'model',

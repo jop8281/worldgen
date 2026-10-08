@@ -43,7 +43,7 @@ import { frozenTests, parsePlanYaml, planSchemaFor, renderPlanYaml, type Plan, t
 import { renderPlanMd } from './plan-md.ts';
 import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
 import { renderReport } from './report.ts';
-import { PLAN_BRIEF, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
+import { PLAN_BRIEF, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, dateOnlyColumnLines, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
 
 export type Job =
   | { readonly kind: 'create'; readonly input: Input; readonly outDir: string }
@@ -290,6 +290,7 @@ export function stagePrompt(stage: StageId, plan: Plan, world: World, feedback: 
     ...promptSection('Paths routes already own', stage === 'workflow' ? takenPaths(world) : []),
     ...promptSection('What the planned tasks need from the seed', stage === 'seed' ? seedNeedLines(seedNeeds(plan, world)) : []),
     ...promptSection('Pressure each task must show, every claim in every answer', stage === 'tasks' ? taskPressureLines(plan, world) : []),
+    ...promptSection('Imported date-only columns', stage === 'model' ? dateOnlyColumnLines(world) : []),
     ...promptSection('Spec field names', openapi && stage === 'model' ? SPEC_FIELD_NAMES : []),
     ...feedbackBlock(feedback),
   ].join('\n');
@@ -761,7 +762,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
       // Keep SHARE_GRACE_MS before the run deadline so a transport kill is recorded, unless that would cut a call preflight let through: then it races the deadline as before.
       const margined = Math.min(shareMs, leftMs - SHARE_GRACE_MS);
       const timeoutMs = estimateMs <= margined ? margined : Math.max(0, Math.min(shareMs, leftMs));
-      const req: ProposeRequest = { ...asked, model: choice.model, effort: choice.effort, timeoutMs, maxCostUsd: Math.max(0, config.maxCostUsd - ledger.spentUsd), signal: cancel.signal };
+      const req: ProposeRequest = { ...asked, model: choice.model, effort: choice.effort, timeoutMs, maxCostUsd: Math.max(0, config.maxCostUsd - ledger.spentUsd), signal: cancel.signal, runId, step };
       let proposal: Proposal | null = null;
       let failure: { message: string; usage: Usage; costUsd: number | null; ms: number } | null = null;
       let partialModelUsage: SpendEvent['partialModelUsage'];
