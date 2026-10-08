@@ -1,5 +1,5 @@
 /** Offline analysis against an explicit expected set; no providers or file IO. */
-import { CASE_ID, caseFileSchema, type PhaseName } from './eval.ts';
+import { CASE_ID, caseFileSchema, caseVerdict, VERDICT_IDENTITY, type PhaseName, type VerdictClass } from './eval.ts';
 import type { RunEvent, StopReason } from './events.ts';
 
 export type ExpectedEvalCase = { readonly id: string; readonly expect: 'done' | 'stopped'; readonly change?: string };
@@ -13,7 +13,7 @@ export type EvalEvidence = {
 type Metrics = { ms: number | null; costUsd: number | null; attempts: number | null };
 type CaseOutcome = {
   id: string; status: 'valid' | 'invalid' | 'missing' | 'duplicate'; passed: boolean;
-  sources: string[]; diagnostics: string[]; metrics: Metrics;
+  class: VerdictClass; sources: string[]; diagnostics: string[]; metrics: Metrics;
 };
 const EVENT_TAGS = {
   run_started: true, step_started: true, step_skipped: true, attempt: true,
@@ -140,10 +140,10 @@ function analyzeLog(text: string | null | undefined): PhaseAnalysis {
 }
 
 function analyzeCase(expected: ExpectedEvalCase, evidence: readonly EvalEvidence[]): CaseOutcome {
-  const out: CaseOutcome = { id: expected.id, status: 'valid', passed: false, sources: evidence.map((e) => e.source), diagnostics: [], metrics: unknownMetrics() };
-  const invalid = (why: string): CaseOutcome => ({ ...out, status: 'invalid', diagnostics: [...out.diagnostics, why], metrics: unknownMetrics() });
-  if (evidence.length === 0) return { ...out, status: 'missing', diagnostics: ['Expected case evidence missing'] };
-  if (evidence.length > 1) return { ...out, status: 'duplicate', diagnostics: ['Multiple records for one expected case'] };
+  const out: CaseOutcome = { id: expected.id, status: 'valid', passed: false, class: 'invalid_evidence', sources: evidence.map((e) => e.source), diagnostics: [], metrics: unknownMetrics() };
+  const invalid = (why: string): CaseOutcome => ({ ...out, status: 'invalid', class: 'invalid_evidence', diagnostics: [...out.diagnostics, why], metrics: unknownMetrics() });
+  if (evidence.length === 0) return { ...out, status: 'missing', class: 'not_run', diagnostics: ['Expected case evidence missing'] };
+  if (evidence.length > 1) return { ...out, status: 'duplicate', class: 'invalid_evidence', diagnostics: ['Multiple records for one expected case'] };
   const e = evidence[0]!;
   if (e.problem !== undefined) return invalid('Evidence path unreadable or unsafe');
   if (e.caseText === null) return invalid('Case record unreadable');
@@ -174,9 +174,17 @@ function analyzeCase(expected: ExpectedEvalCase, evidence: readonly EvalEvidence
     ms: sum(phases.map((p) => p.metrics.ms)), costUsd: sum(phases.map((p) => p.metrics.costUsd)), attempts: sum(phases.map((p) => p.metrics.attempts)),
   };
   const stop = phases.at(-1)?.stop;
-  out.passed = expected.expect === 'done'
-    ? final.result === 'done' && file.verify.kind === 'pass'
-    : final.result === 'stopped' && stop != null && stop !== 'model_error';
+  // The same semantic decision the summary scorecard uses (YOS-240): an expected stop passes
+  // only on a verdict stop; product and infrastructure stops, and unlogged stops, never pass.
+  const verdict = caseVerdict({
+    expect: expected.expect,
+    evidence: 'record',
+    status: final.result,
+    stopKind: stop ?? null,
+    verify: file.verify,
+  });
+  out.class = verdict.class;
+  out.passed = verdict.pass;
   return out;
 }
 
@@ -216,5 +224,6 @@ export function analyzeEvalOutcomes(expected: readonly ExpectedEvalCase[], evide
     completeSuite: validSuite && Object.values(metrics).every((m) => m.total !== null), metrics,
     percentileMethod: 'nearest-rank: sorted measured case totals at ceil(p × n), one-based; no interpolation; null for no samples',
     interpretation: 'Descriptive evidence only; no improvement claim. Rates use all expected cases; measured totals and percentiles cover only measured expected cases.',
+    verdict: VERDICT_IDENTITY,
   };
 }

@@ -339,10 +339,10 @@ describe('summary.md fidelity', () => {
 
   it('adds the column and the misses section, with - for a case without a reference', () => {
     const lines = renderSummary(meta, [{ kind: 'record', record: rec('a', result) }, { kind: 'record', record: rec('b', { kind: 'no_world', why: 'last phase did not finish' }) }, { kind: 'record', record: rec('c') }]).split('\n');
-    assert.equal(lines[4], '| case | expect | result | stop reason | attempts per step | min | $ | verify | fidelity | log | pass |');
-    assert.ok(lines[6]!.includes('| 0.957 (68/71) | '));
-    assert.ok(lines[7]!.includes('| no world: last phase did not finish | '));
-    assert.ok(lines[8]!.includes('| - | '));
+    assert.equal(lines[5], '| case | expect | result | stop reason | attempts per step | min | $ | verify | fidelity | log | pass |');
+    assert.ok(lines[7]!.includes('| 0.957 (68/71) | '));
+    assert.ok(lines[8]!.includes('| no world: last phase did not finish | '));
+    assert.ok(lines[9]!.includes('| - | '));
     const i = lines.indexOf('## Fidelity misses');
     assert.deepEqual(lines.slice(i, i + 6), [
       '## Fidelity misses',
@@ -356,7 +356,7 @@ describe('summary.md fidelity', () => {
 
   it('leaves the table as before when no case has a reference', () => {
     const text = renderSummary(meta, [{ kind: 'record', record: rec('a') }]);
-    assert.equal(text.split('\n')[4], '| case | expect | result | stop reason | attempts per step | min | $ | verify | log | pass |');
+    assert.equal(text.split('\n')[5], '| case | expect | result | stop reason | attempts per step | min | $ | verify | log | pass |');
     assert.equal(text.includes('Fidelity misses'), false);
   });
 });

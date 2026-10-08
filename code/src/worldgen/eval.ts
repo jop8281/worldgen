@@ -419,6 +419,8 @@ export type CaseRow = {
   readonly outcome: RunOutcome;
   /** A success or an expected refusal. */
   readonly pass: boolean;
+  /** The shared caseVerdict behind `pass`: the class and the decision, identical for both consumers. */
+  readonly verdict: CaseVerdict;
   readonly phases: readonly PhaseSummary[];
 };
 
@@ -443,9 +445,10 @@ function verifyCell(v: VerifyResult): string {
 
 /**
  * Whether a stop is a verdict on the prompt (true) or a failure of the machinery around the model (false).
- * Only a verdict can pass an `expect: stopped` case. A Record, so a new stop kind must be classified here.
+ * Only a verdict can pass an `expect: stopped` case. A Record, so a new stop kind must be classified here:
+ * adding a kind to `StopReason` (such as a cost admission stop) fails typecheck until this row decides it.
  */
-const STOP_IS_VERDICT: Record<StopReason['kind'], boolean> = {
+export const STOP_IS_VERDICT: Record<StopReason['kind'], boolean> = {
   input_rejected: true,
   attempts_exhausted: true,
   no_progress: true,
@@ -481,6 +484,64 @@ function outcomeOf(expect: Expect, status: PhaseStatus, stopKind: string | null,
   return verify.kind === 'pass' ? 'success' : 'product failure';
 }
 
+/** Who decides a pass, and by what rule. Both reports state it, so a report names its classifier (YOS-240). */
+export const VERDICT_IDENTITY = {
+  version: 2,
+  source: 'code/src/worldgen/eval.ts caseVerdict',
+  rule: 'an expect: stopped case passes only on a verdict stop; model_error (product_failure), judge_error, infra_unavailable, transport_stalled and cancelled (infrastructure_failure), and unlogged or unknown stops, never pass; a done case passes only with a passed verification',
+} as const;
+
+/**
+ * The one verdict on an expected case, shared by the summary scorecard and the offline analyzer,
+ * so the two consumers can never disagree on what a terminal outcome means (YOS-240).
+ *
+ * The classes keep the five-way distinction the issue asks for: the semantic expected refusal
+ * (`expected_refusal`), the product failure (`product_failure`), the infrastructure failure
+ * (`infrastructure_failure`), the invalid evidence (`invalid_evidence`) and the not-run case
+ * (`not_run`), plus `done` for the terminal that finished and saved a world.
+ */
+export type VerdictClass =
+  | 'done'
+  | 'expected_refusal'
+  | 'product_failure'
+  | 'infrastructure_failure'
+  | 'invalid_evidence'
+  | 'not_run';
+
+export type CaseVerdict = { readonly class: VerdictClass; readonly pass: boolean };
+
+export type CaseVerdictInput = {
+  readonly expect: Expect;
+  /** What the expected case left: one readable record, a broken one, two or more, or nothing. */
+  readonly evidence: 'record' | 'invalid' | 'duplicate' | 'missing';
+  /** The terminal status the evidence establishes: done, stopped, crashed, or none. */
+  readonly status: 'done' | 'stopped' | 'crashed' | null;
+  /** The terminal stop's reason kind when the log records one, else null. */
+  readonly stopKind: string | null;
+  /** The engine verification of the saved world, when one ran. */
+  readonly verify: VerifyResult | null;
+};
+
+/** The shared semantic decision: the class of one expected case's outcome and whether it passes. */
+export function caseVerdict(input: CaseVerdictInput): CaseVerdict {
+  if (input.evidence === 'missing') return { class: 'not_run', pass: false };
+  if (input.evidence !== 'record') return { class: 'invalid_evidence', pass: false };
+  if (input.status === 'done') {
+    return { class: 'done', pass: input.expect === 'done' && input.verify?.kind === 'pass' };
+  }
+  if (input.status === 'stopped') {
+    if (input.stopKind === 'model_error') return { class: 'product_failure', pass: false };
+    if (input.stopKind !== null && MACHINERY_STOPS.has(input.stopKind)) return { class: 'infrastructure_failure', pass: false };
+    if (input.stopKind !== null && Object.hasOwn(STOP_IS_VERDICT, input.stopKind)) {
+      return { class: 'expected_refusal', pass: input.expect === 'stopped' };
+    }
+    // A stop whose reason was never logged, or a kind outside the closed union, is no evidence of a refusal.
+    return { class: 'invalid_evidence', pass: false };
+  }
+  // Crashed, or a readable record that still cannot establish a terminal outcome.
+  return { class: 'invalid_evidence', pass: false };
+}
+
 export function summarizeCase(r: CaseRecord): CaseRow {
   const phases = r.phases.map(summarizePhase);
   const last = phases[phases.length - 1];
@@ -489,6 +550,13 @@ export function summarizeCase(r: CaseRecord): CaseRow {
   const attemptParts = phases
     .filter((p) => p.attempts.length > 0)
     .map((p) => `${prefix(p.phase)}${p.attempts.map(([step, n]) => `${step} ${n}`).join(', ')}`);
+  const verdict = caseVerdict({
+    expect: r.expect,
+    evidence: 'record',
+    status,
+    stopKind: last?.stopKind ?? null,
+    verify: r.verify,
+  });
   const outcome = outcomeOf(r.expect, status, last?.stopKind ?? null, r.verify);
   return {
     id: r.id,
@@ -503,9 +571,24 @@ export function summarizeCase(r: CaseRecord): CaseRow {
     fidelity: r.fidelity ?? null,
     logged: phases.length > 0 && phases.every((p) => p.logProblems.length === 0),
     outcome,
-    pass: outcome === 'success' || outcome === 'expected refusal',
+    pass: verdict.pass,
+    verdict,
     phases,
   };
+}
+
+/** The verdict of any summary entry: the shared decision, including missing and invalid entries. */
+export function entryVerdict(e: SummaryEntry): CaseVerdict {
+  switch (e.kind) {
+    case 'record':
+      return summarizeCase(e.record).verdict;
+    case 'missing':
+      return caseVerdict({ expect: e.expect, evidence: 'missing', status: null, stopKind: null, verify: null });
+    case 'invalid':
+      return caseVerdict({ expect: e.expect, evidence: 'invalid', status: null, stopKind: null, verify: null });
+    default:
+      return assertNever(e);
+  }
 }
 
 export type SummaryMeta = {
@@ -592,6 +675,7 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
     `# Eval run ${meta.run}`,
     '',
     `Suite \`${meta.suite}\`, model \`${meta.model}\`, budget $${usd(meta.budgetUsd)} and ${meta.maxMinutes} min per run.`,
+    `Verdicts (v${VERDICT_IDENTITY.version}, ${VERDICT_IDENTITY.source}): ${VERDICT_IDENTITY.rule}.`,
     '',
     ...(showFidelity
       ? ['| case | expect | result | stop reason | attempts per step | min | $ | verify | fidelity | log | pass |', '|---|---|---|---|---|--:|--:|---|--:|---|---|']
@@ -602,7 +686,7 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
     }),
     ...absent.map((a) => {
       const mid = showFidelity ? ['-'] : [];
-      return `| ${[a.id, a.expect, a.kind, '-', '-', 'unknown', 'unknown', '-', ...mid, '-', 'no'].map(cell).join(' | ')} |`;
+      return `| ${[a.id, a.expect, a.kind, '-', '-', 'unknown', 'unknown', '-', ...mid, '-', entryVerdict(a).pass ? 'yes' : 'no'].map(cell).join(' | ')} |`;
     }),
     '',
     `**Totals:** ${expected} expected cases: ${OUTCOMES.map((o) => `${count(o)} ${o}`).join(', ')}; ` +

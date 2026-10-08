@@ -509,6 +509,7 @@ describe('renderSummary on literal events', () => {
         '# Eval run 2026-10-06-stress',
         '',
         'Suite `stress`, model `claude-sonnet-5-5`, budget $5.00 and 15 min per run.',
+        'Verdicts (v2, code/src/worldgen/eval.ts caseVerdict): an expect: stopped case passes only on a verdict stop; model_error (product_failure), judge_error, infra_unavailable, transport_stalled and cancelled (infrastructure_failure), and unlogged or unknown stops, never pass; a done case passes only with a passed verification.',
         '',
         '| case | expect | result | stop reason | attempts per step | min | $ | verify | log | pass |',
         '|---|---|---|---|---|--:|--:|---|---|---|',
@@ -594,7 +595,7 @@ describe('renderSummary on literal events', () => {
       ],
       verify: { kind: 'not_run' },
     };
-    assert.equal(renderSummary(meta, [{ kind: 'record', record: r }]).split('\n')[6], '| x | stopped | stopped | model_error | - | 0.0 | 0.00 | - | ok | no |');
+    assert.equal(renderSummary(meta, [{ kind: 'record', record: r }]).split('\n')[7], '| x | stopped | stopped | model_error | - | 0.0 | 0.00 | - | ok | no |');
   });
 
   it('does not pass an expected stop when the engine could not judge the world', () => {
@@ -609,7 +610,7 @@ describe('renderSummary on literal events', () => {
       verify: { kind: 'not_run' },
     };
     assert.equal(summarizeCase(r).pass, false);
-    assert.equal(renderSummary(meta, [{ kind: 'record', record: r }]).split('\n')[6], '| x | stopped | stopped | judge_error at model | - | 0.0 | 0.25 | - | ok | no |');
+    assert.equal(renderSummary(meta, [{ kind: 'record', record: r }]).split('\n')[7], '| x | stopped | stopped | judge_error at model | - | 0.0 | 0.25 | - | ok | no |');
   });
 
   it('does not pass an expected stop that was a stalled claude CLI', () => {
@@ -623,18 +624,18 @@ describe('renderSummary on literal events', () => {
       ],
       verify: { kind: 'not_run' },
     };
-    assert.equal(renderSummary(meta, [{ kind: 'record', record: r }]).split('\n')[6], '| x | stopped | stopped | transport_stalled at plan | - | 0.0 | 0.00 | - | ok | no |');
+    assert.equal(renderSummary(meta, [{ kind: 'record', record: r }]).split('\n')[7], '| x | stopped | stopped | transport_stalled at plan | - | 0.0 | 0.00 | - | ok | no |');
   });
 
   it('escapes pipes and newlines inside a cell', () => {
     const r: CaseRecord = { id: 'x', expect: 'done', phases: [phase('create', null, 'a | b\nc', [])], verify: { kind: 'not_run' } };
     const lines = renderSummary(meta, [{ kind: 'record', record: r }]).split('\n');
-    assert.equal(lines[6], '| x | done | crashed | crashed: a \\| b | - | unknown | unknown | - | ok | no |');
+    assert.equal(lines[7], '| x | done | crashed | crashed: a \\| b | - | unknown | unknown | - | ok | no |');
     assert.equal(lines.at(-2), '- `x` create: a \\| b c');
   });
 
   it('renders an empty run without a percentage', () => {
-    assert.equal(renderSummary(meta, []).split('\n')[11], '**Pass rate:** 0/0, success and expected refusal over the 0 cases that ran (0 not run).');
+    assert.equal(renderSummary(meta, []).split('\n')[12], '**Pass rate:** 0/0, success and expected refusal over the 0 cases that ran (0 not run).');
   });
 
   it('counts every case in one of five outcome classes, and passes only a success or an expected refusal (A-336)', () => {
