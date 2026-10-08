@@ -5,13 +5,15 @@
  * of one. The loader reads only the final name, so a temp file a crash left behind is never read. One studio writes a
  * worlds dir's registry (A-373); a file a writer cannot read whole is kept aside before anything replaces it.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { processStartOf, type SpawnedChild } from '../sandboxes/backend.ts';
 
 /** The registry's file name in the worlds directory. A file, so the worlds table (directories only) never lists it. */
 export const RUN_STORE_FILE = '.studio-runs.json';
+/** Finished jobs moved out of the registry, one JSON line each, appended and never rewritten (A-376). */
+export const RUN_ARCHIVE_FILE = '.studio-runs.archive.jsonl';
 
 export type JobKind = 'generate' | 'episode';
 /** The tenant of open mode, of the WORLDGEN_STUDIO_TOKEN admin, and of a record written before tenants existed. */
@@ -208,6 +210,12 @@ export async function loadRunsToWrite(worldsDir: string, keep: KeepDamaged): Pro
   await rename(path.join(worldsDir, RUN_STORE_FILE), path.join(worldsDir, kept));
   keep.log(`${RUN_STORE_FILE} ${read.damage}: kept as ${kept}, ${read.runs.length} readable job${read.runs.length === 1 ? '' : 's'} loaded`);
   return read.runs;
+}
+
+/** Appends finished jobs to the archive beside the registry. The archive only grows, so no job history is ever dropped (A-376). */
+export async function archiveRuns(worldsDir: string, runs: readonly StoredRun[]): Promise<void> {
+  await mkdir(worldsDir, { recursive: true });
+  await appendFile(path.join(worldsDir, RUN_ARCHIVE_FILE), runs.map((r) => `${JSON.stringify(r)}\n`).join(''));
 }
 
 export async function saveRuns(worldsDir: string, runs: readonly StoredRun[]): Promise<void> {

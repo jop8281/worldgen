@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { createServer, request, type Server } from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import { after, describe, it } from 'node:test';
 import { checkWorld, saveWorld } from '#engine';
 import type { RunResult, Runner, SpawnedChild, Spawner } from '../src/sandboxes/backend.ts';
 import { AUDIT_FILE, AUDIT_ROTATED_FILE, bucketsOf, studioServer, type StudioOptions, type StudioServer } from '../src/studio/server.ts';
+import { RUN_ARCHIVE_FILE, RUN_STORE_FILE } from '../src/studio/runstore.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 type Json = { [k: string]: unknown };
@@ -38,7 +39,7 @@ const ok = (stdout = '{"ok":true}'): RunResult => ({ code: 0, stdout, stderr: ''
 const defaultRunner: Runner = async (argv) => (argv[0] === 'git' ? ok('abc1234def\n') : argv.includes('src/cli/studio-check.ts') ? ok() : ok(''));
 
 /** A studio over worlds w01..w<n> (copies of the minimal world), whose spawned children never exit until stopped. */
-async function rig(o: { worlds?: number; runner?: Runner; studio?: Partial<StudioOptions>; worldPort?: number } = {}) {
+async function rig(o: { worlds?: number; runner?: Runner; studio?: Partial<StudioOptions>; worldPort?: number; exitAtOnce?: boolean } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'studio-limits-'));
   roots.push(root);
   const worldsDir = path.join(root, 'prod', 'worlds');
@@ -52,6 +53,7 @@ async function rig(o: { worlds?: number; runner?: Runner; studio?: Partial<Studi
     spawned.push([...argv]);
     let gone: (code: number | null) => void = () => {};
     const exited = new Promise<number | null>((resolve) => (gone = resolve));
+    if (o.exitAtOnce === true) gone(0);
     const world = o.worldPort ?? (port += 2);
     const said = argv[2] === 'serve' ? `{"listening":{"world":${world},"admin":${world + 1}}}\n` : '';
     const child: SpawnedChild = { pid: 45000 + spawned.length, exited, kill: () => (gone(null), true), output: () => said };
@@ -333,5 +335,52 @@ describe('limits that had no test hitting them', () => {
       const silent = await call('POST', `/api/services/${svc}/call`, { method: 'GET', path: '/hang' });
       assert.deepEqual([silent.status, (silent.body['error'] as Json)['code'], Date.now() - started < 2_000], [502, 'call.unreachable', true]);
     });
+  });
+});
+
+describe('registry and disk growth (A-376)', () => {
+  it('moves finished jobs past maxFinishedJobs, oldest first, to the append-only archive, and keeps the rest in the registry', async () => {
+    const { call, worldsDir } = await rig({ exitAtOnce: true, studio: { maxFinishedJobs: 2 } });
+    const ids: string[] = [];
+    for (const slug of ['first', 'second', 'third']) {
+      const r = await call('POST', '/api/generate', gen(slug));
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      const id = String(r.body['runId']);
+      ids.push(id);
+      for (let n = 0; (await call('GET', `/api/generate/${id}`)).body['running'] !== false; n++) {
+        if (n > 300) assert.fail(`${id} did not finish`);
+        await sleep(10);
+      }
+    }
+    await until(() => existsSync(path.join(worldsDir, RUN_ARCHIVE_FILE)));
+    const live = (JSON.parse(readFileSync(path.join(worldsDir, RUN_STORE_FILE), 'utf8')) as { runId: string }[]).map((j) => j.runId);
+    const archive = readFileSync(path.join(worldsDir, RUN_ARCHIVE_FILE), 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { runId: string; phase: string }));
+    assert.deepEqual([live, archive.map((a) => [a.runId, a.phase])], [[ids[1], ids[2]], [[ids[0], 'finished']]]);
+  });
+
+  it('refuses a generate and an iterate with 429 shelf.full once the shelf holds maxShelfDirs dirs, and removes nothing', async () => {
+    const { call, worldsDir, spawned } = await rig({ studio: { maxShelfDirs: 2 } });
+    const refusal = [429, { code: 'shelf.full', message: 'This shelf holds 2 dirs, and the studio adds none past 2; an operator removes old ones first' }];
+    assert.deepEqual(errorOf(await call('POST', '/api/generate', gen('more'))), refusal);
+    assert.deepEqual(errorOf(await call('POST', '/api/worlds/w01/iterate', { change: 'add a refunds queue' })), refusal);
+    assert.deepEqual([spawned.length, readdirSync(worldsDir).filter((e) => !e.startsWith('.')).sort()], [0, ['w01', 'w02']]);
+  });
+
+  it('still answers a replay when the shelf is full, and refuses a new start', async () => {
+    const { call, worldsDir } = await rig({ studio: { maxShelfDirs: 3 } });
+    const first = await call('POST', '/api/generate', gen('kept'), { 'idempotency-key': 'k1' });
+    assert.equal(first.status, 200);
+    await mkdir(path.join(worldsDir, 'w03'));
+    const replay = await call('POST', '/api/generate', gen('kept'), { 'idempotency-key': 'k1' });
+    assert.deepEqual([replay.status, replay.body['replayed'], replay.body['runId']], [200, true, first.body['runId']]);
+    assert.equal((await call('POST', '/api/generate', gen('another'))).status, 429);
+  });
+
+  it('refuses an episode with 429 episode.dirs_full once eval/episodes holds maxEpisodeDirs dirs, and removes nothing', async () => {
+    const { call, root, spawned } = await rig({ studio: { maxEpisodeDirs: 1 } });
+    await mkdir(path.join(root, 'eval', 'episodes', 'old-run'), { recursive: true });
+    const r = await call('POST', '/api/episodes', { world: 'w01', task: 'resolve_password_ticket', agent: 'noop' });
+    assert.deepEqual(errorOf(r), [429, { code: 'episode.dirs_full', message: 'eval/episodes holds 1 dirs, and the studio adds none past 1; an operator removes old ones first' }]);
+    assert.deepEqual([spawned.length, existsSync(path.join(root, 'eval', 'episodes', 'old-run'))], [0, true]);
   });
 });

@@ -75,7 +75,7 @@ import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedC
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { worldArtifactPath } from '../dataset/store.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { adoptedChild, DEFAULT_TENANT, loadRunsToWrite, osProcesses, recoveryOf, RUN_STORE_FILE, sameProcess, saveRuns, stderrLine, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
+import { adoptedChild, archiveRuns, DEFAULT_TENANT, loadRunsToWrite, osProcesses, recoveryOf, RUN_STORE_FILE, sameProcess, saveRuns, stderrLine, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
 import { MAX_UPLOAD_BYTES, MAX_UPLOADS, openapiPaths, parseUpload, uploadFileOf, uploadIdOf, uploadPartsOf, UPLOADS_DIR, type Upload, type UploadKind } from './uploads.ts';
 import { trafficCounter } from './watch.ts';
@@ -184,6 +184,11 @@ export type StudioOptions = {
   readonly callTimeoutMs?: number | undefined;
   /** The audit file size that rotates it to .studio-audit.1.jsonl. Default 64 MiB (A-375). */
   readonly auditMaxBytes?: number | undefined;
+  /** Finished jobs the registry keeps; older ones move to .studio-runs.archive.jsonl. Default 200 (A-376). */
+  readonly maxFinishedJobs?: number | undefined;
+  /** Entries a shelf may hold before generate and iterate are refused, and episode dirs before an episode is. Defaults 200 and 500 (A-376). */
+  readonly maxShelfDirs?: number | undefined;
+  readonly maxEpisodeDirs?: number | undefined;
 };
 
 export type RateLimit = { readonly capacity: number; readonly refillPerSecond: number };
@@ -203,6 +208,10 @@ const HEADERS_TIMEOUT_MS = 10_000;
 /** Longest request path an audit line records, and the audit file size that rotates it (A-375). */
 const MAX_AUDIT_PATH_CHARS = 256;
 const DEFAULT_AUDIT_MAX_BYTES = 67_108_864;
+/** Finished jobs the registry keeps before it archives the oldest, and the dir counts past which new work is refused (A-376). */
+const DEFAULT_MAX_FINISHED_JOBS = 200;
+const DEFAULT_MAX_SHELF_DIRS = 200;
+const DEFAULT_MAX_EPISODE_DIRS = 500;
 
 /** Token buckets by key, oldest inserted dropped beyond MAX_BUCKETS, on the clock `now`. */
 export function bucketsOf(limit: RateLimit, now: () => number) {
@@ -835,11 +844,35 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   });
   // One write at a time, in order, so the file on disk is always the latest whole registry. True when it was written.
   let persisting: Promise<boolean> = Promise.resolve(true);
+  const maxFinishedJobs = opts.maxFinishedJobs ?? DEFAULT_MAX_FINISHED_JOBS;
+  /** Run ids moved to the archive, or being moved: never written to the registry again. */
+  const archived = new Set<string>();
   const persist = (): Promise<boolean> => {
     if (closed) return Promise.resolve(false);
+    // Finished jobs past maxFinishedJobs move, oldest first, to the append-only archive, so the registry stays small
+    // and no history is lost (A-376).
+    const finished = [...jobs.values()].filter((j) => j.phase === 'finished' && !archived.has(j.runId)).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    const moving = finished.slice(0, Math.max(0, finished.length - maxFinishedJobs)).map(storedOf);
+    for (const r of moving) archived.add(r.runId);
     const snapshot = [...jobs.values()].map(storedOf);
-    persisting = persisting.then(() => saveRuns(worldsDir, snapshot)).then(() => true, () => false);
+    persisting = persisting.then(async () => {
+      // The archive is written first: a crash between the two writes leaves a job in both files, never in neither.
+      const moved = moving.length === 0 || await archiveRuns(worldsDir, moving).then(() => true, () => false);
+      if (!moved) for (const r of moving) archived.delete(r.runId);
+      await saveRuns(worldsDir, snapshot.filter((r) => !archived.has(r.runId)));
+      if (moved) for (const r of moving) jobs.delete(r.runId);
+    }).then(() => true, () => false);
     return persisting;
+  };
+  const maxShelfDirs = opts.maxShelfDirs ?? DEFAULT_MAX_SHELF_DIRS;
+  const maxEpisodeDirs = opts.maxEpisodeDirs ?? DEFAULT_MAX_EPISODE_DIRS;
+  /**
+   * 429 when `dir` already holds `most` entries (dot files aside): generate, iterate and episodes each add a dir, and
+   * the studio never removes one, since a stopped run keeps it as evidence (A-359). An operator cleans up (A-376).
+   */
+  const dirsFull = async (dir: string, most: number, code: string, what: string): Promise<Reply | null> => {
+    const n = (await readdir(dir).catch((): string[] => [])).filter((e) => !e.startsWith('.')).length;
+    return n >= most ? fail(429, code, `${what} holds ${n} dirs, and the studio adds none past ${most}; an operator removes old ones first`) : null;
   };
   // The audit log: one line per POST, appended one at a time in order. A failed append never fails the reply (fail-open).
   const auditPath = path.join(worldsDir, AUDIT_FILE);
@@ -1528,6 +1561,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
      * spawn that threw does, and answers 500 with `code` and the error's message.
      */
     readonly prepare?: { readonly code: string; readonly run: (job: Job) => Promise<void> } | undefined;
+    /** The dir cap that refuses this start, read before startJob and answered after a replay, so a replay still answers (A-376). */
+    readonly full?: Reply | null | undefined;
   };
 
   /** The answer to a start, the same for the first request and each replay of it. */
@@ -1563,6 +1598,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       if (prior.fingerprint === fingerprint) return startAnswer(prior, true);
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (job ${prior.runId})`);
     }
+    if (start.full !== undefined && start.full !== null) return start.full;
     // Counted after the lookup, so a replay answers first. Intents and jobs another studio leases count. Still no await.
     // The cap is global because it protects the machine. The refusal states no count, since the count holds other tenants' jobs.
     const active = [...jobs.values()].filter((j) => j.kind === start.kind && j.phase !== 'finished').length;
@@ -1646,6 +1682,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const flags = [...(budget === undefined ? [] : ['--budget-usd', String(budget)]), ...(minutes === undefined ? [] : ['--max-minutes', String(minutes)])];
     // `default` keeps the old layout, so open mode and the token admin write where they always did.
     const outDir = path.join(writeRootOf(who.tenant), `gen-${slug}`);
+    const full = await dirsFull(writeRootOf(who.tenant), maxShelfDirs, 'shelf.full', 'This shelf');
     let args: string[];
     // A description goes after `--`, so one that starts with - is text, never an option.
     let description: string | null = null;
@@ -1712,7 +1749,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const head = ['bun', 'src/cli/worldgen.ts', ...args];
     const tail = description === null ? [] : ['--', description];
     const request = [...head, ...tail];
-    return startJob({ kind: 'generate', tenant: who.tenant, rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...head, ...transport, ...tail] }) });
+    return startJob({ full, kind: 'generate', tenant: who.tenant, rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...head, ...transport, ...tail] }) });
   }
 
   /**
@@ -1735,8 +1772,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const root = owner === DEFAULT_TENANT ? worldsDir : shelfOf(owner).root;
     await mkdir(root, { recursive: true });
     const taken = new Set(await readdir(root).catch((): string[] => []));
+    const full = await dirsFull(root, maxShelfDirs, 'shelf.full', 'This shelf');
     const transport = opts.transport === undefined ? [] : ['--transport', opts.transport];
     return startJob({
+      full,
       kind: 'generate',
       tenant: owner,
       rawKey: ctx.key,
@@ -2073,7 +2112,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     const sha = await engineCommit();
     if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory and no build sha is set, so the episode would have no engine identity');
+    const full = await dirsFull(episodesDir, maxEpisodeDirs, 'episode.dirs_full', 'eval/episodes');
     return startJob({
+      full,
       kind: 'episode',
       tenant: ctx.filter ?? who.tenant,
       rawKey: ctx.key,
