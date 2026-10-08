@@ -10,3 +10,5 @@ worlds/generated/**/transcripts/
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
+# The studio run registry (A-329), written into whatever worlds dir the studio serves.
+.studio-runs.json
