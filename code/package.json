@@ -31,7 +31,6 @@
     "test": "bun test --timeout 120000 ./test",
     "test:node": "node --import tsx --import ./test/helpers/active-handles.ts --test --test-concurrency=3 --test-timeout=${WORLDGEN_TEST_TIMEOUT_MS:-600000} test/*.test.ts",
     "check": "bun run typecheck && bun run test",
-    "check:node": "npm run typecheck && npm run test:node",
     "e2e": "bun scripts/e2e.ts"
   },
   "dependencies": {

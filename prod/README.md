@@ -42,4 +42,4 @@ Each row names where the spec item lives and the command that shows it. Commands
 | Live run on unseen prompts | `code/src/cli/live.ts`, `../scripts/live.sh` | `bun run live <dir>`; `--dry-run` lists the prompts without a model call |
 | Beyond the spec: the Studio, an operator web app with sign-in and tenants | `code/src/studio/` | `bun run studio`; [screenshots/README.md](screenshots/README.md) records its browser E2E under three roles ([#80](https://github.com/jop8281/worldgen/pull/80)) |
 
-The 23 `worlds/gen-*/` directories are worlds WorldGen generated during the trial, and each carries its plan and report. CI (`.github/workflows/check.yml`) runs on every push to `main` and `stabilize/main`. It typechecks, runs the full suite under Bun and again under Node 22, and runs the e2e acceptance.
+The 23 `worlds/gen-*/` directories are worlds WorldGen generated during the trial, and each carries its plan and report. CI (`.github/workflows/check.yml`) runs on every push to `main` and `stabilize/main`. It typechecks, runs the full suite under Bun, and runs the e2e acceptance.
