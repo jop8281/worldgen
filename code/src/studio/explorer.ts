@@ -175,6 +175,8 @@ export function mergeSensitivity(all: readonly Sensitivity[]): Sensitivity {
 }
 
 /** What a role below admin sees in place of a run's free text that can quote seed values or model output (A-367). */
+/** What a role below admin sees in place of run text that can quote a task's grader, solution or decoy (A-374). */
+export const TASK_TEXT_WITHHELD = "[withheld: it can quote a task's grader, solution or decoy, which only an admin may see]";
 export const RUN_TEXT_WITHHELD = "[withheld: it can quote seed values, and the run's world has a sensitive field or saved none to tell]";
 
 const isIssue = (v: Readonly<Record<string, unknown>>): boolean =>
