@@ -110,6 +110,32 @@ export const osProcesses: Processes = {
   },
 };
 
+/**
+ * What the lease rules (A-335) do with an unfinished job at `at`: leave it while it is finished, held by `holder` or
+ * leased to anyone, resume it when its lease ran out and its process lives, and stop it otherwise. An intent is
+ * stopped, never started, because its child may have started before the crash. `holder` is the studio asking, or null
+ * for a reader that holds no lease, such as reconcile-jobs. The one copy of the rule: the studio and reconcile-jobs both
+ * call it.
+ */
+export type RecoveryDecision =
+  | { readonly kind: 'leave'; readonly why: 'finished' | 'held' | 'lease_live' }
+  | { readonly kind: 'resume'; readonly from: string; readonly pid: number }
+  | { readonly kind: 'stop'; readonly from: string; readonly reason: Extract<Recovery, { outcome: 'stopped' }>['reason'] };
+
+export function recoveryOf(job: Pick<StoredRun, 'phase' | 'lease' | 'pid'>, at: number, holder: string | null, processes: Processes): RecoveryDecision {
+  if (job.phase === 'finished') return { kind: 'leave', why: 'finished' };
+  if (holder !== null && job.lease?.holder === holder) return { kind: 'leave', why: 'held' };
+  if (job.lease !== null && Date.parse(job.lease.expiresAt) > at) return { kind: 'leave', why: 'lease_live' };
+  const from = job.lease?.holder ?? 'legacy';
+  if (job.phase === 'running' && job.pid !== null && processes.alive(job.pid)) return { kind: 'resume', from, pid: job.pid };
+  return { kind: 'stop', from, reason: job.phase === 'intent' ? 'start_unconfirmed' : 'process_gone' };
+}
+
+/** A stored job as a stop decision leaves it: finished, its lease released, and why it stopped. */
+export function stoppedRun(run: StoredRun, decision: Extract<RecoveryDecision, { kind: 'stop' }>, at: number): StoredRun {
+  return { ...run, phase: 'finished', lease: null, recovery: { at: new Date(at).toISOString(), from: decision.from, outcome: 'stopped', reason: decision.reason } };
+}
+
 export async function loadRuns(worldsDir: string): Promise<StoredRun[]> {
   const text = await readFile(path.join(worldsDir, RUN_STORE_FILE), 'utf8').catch(() => null);
   if (text === null) return [];

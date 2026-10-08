@@ -57,12 +57,13 @@ import { appendFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
+import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, recoveryOf, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
 import { trafficCounter } from './watch.ts';
 
@@ -570,6 +571,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const services = new Map<string, { record: ServiceRecord; dir: string; child: SpawnedChild }>();
   /** `<tenant> <world dir>` of each `worldplay serve` that has not reported its ports yet. */
   const starting = new Set<string>();
+  /** Ports an admin pinned for a `worldplay serve` that has not reported yet: the world port and its admin port. */
+  const pinning = new Set<number>();
   const jobs = new Map<string, Job>();
   /** A generation run `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
   const runOf = (runId: string, who: User, filter: string | null): Job | undefined => {
@@ -672,24 +675,26 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       void persist();
     });
   };
-  /**
-   * A job whose holder died (no lease, or one past its expiry) is resumed when its process lives and stopped when it
-   * does not. An intent is stopped, never started: its child may have started before the crash. True when it acted.
-   */
+  /** Applies the lease rules (`recoveryOf`, A-335) to a job whose holder may have died. True when it acted. */
   const recover = (job: Job, at: number): boolean => {
-    if (job.phase === 'finished' || holds(job) || (job.lease !== null && Date.parse(job.lease.expiresAt) > at)) return false;
-    const from = job.lease?.holder ?? 'legacy';
+    const decision = recoveryOf(job, at, me, processes);
     const when = new Date(at).toISOString();
-    if (job.phase === 'running' && job.pid !== null && processes.alive(job.pid)) {
-      job.lease = leaseFrom(at);
-      job.recovery = { at: when, from, outcome: 'resumed' };
-      watch(job, adoptedChild(job.pid, processes));
-    } else {
-      job.recovery = { at: when, from, outcome: 'stopped', reason: job.phase === 'intent' ? 'start_unconfirmed' : 'process_gone' };
-      job.phase = 'finished';
-      job.lease = null;
+    switch (decision.kind) {
+      case 'leave':
+        return false;
+      case 'resume':
+        job.lease = leaseFrom(at);
+        job.recovery = { at: when, from: decision.from, outcome: 'resumed' };
+        watch(job, adoptedChild(decision.pid, processes));
+        return true;
+      case 'stop':
+        job.recovery = { at: when, from: decision.from, outcome: 'stopped', reason: decision.reason };
+        job.phase = 'finished';
+        job.lease = null;
+        return true;
+      default:
+        return assertNever(decision);
     }
-    return true;
   };
   /**
    * The lease tick. Each unfinished job this studio holds gets a fresh lease, unless the file names another holder: a
@@ -972,7 +977,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
     const dir = w.dir;
-    const startKey = `${who.tenant} ${dir}`;
+    // An admin serving with ?tenant=t serves the world for t, so t's own operators see and stop it.
+    const owner = filter ?? who.tenant;
+    const startKey = `${owner} ${dir}`;
     if (starting.has(startKey)) return fail(409, 'world.already_serving', `${name} is starting; wait for it or stop it`);
     // Only a service the caller sees blocks a second serve, so the refusal never names another tenant's port. A second
     // `worldplay serve` of one world dir is safe: serve keeps its state in memory and writes nothing into the dir.
@@ -990,8 +997,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
           return fail(409, 'serve.port_taken', `port ${wanted} or its admin port ${wanted + 1} belongs to ${record.name} (${record.id})`);
         }
       }
+      if (pinning.has(wanted) || pinning.has(wanted + 1)) {
+        return fail(409, 'serve.port_taken', `port ${wanted} or its admin port ${wanted + 1} is pinned by a serve that has not reported its ports yet`);
+      }
       port = wanted;
     }
+    // From the checks above to here nothing awaits, so a second pin of the same port cannot pass them before this one is held.
+    const pinned = port === 0 ? [] : [port, port + 1];
+    for (const held of pinned) pinning.add(held);
     const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
     starting.add(startKey);
     let report: Awaited<ReturnType<typeof firstReport>>;
@@ -999,6 +1012,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       report = await firstReport(child, opts.serveWaitMs ?? SERVE_WAIT_MS);
     } finally {
       starting.delete(startKey);
+      for (const held of pinned) pinning.delete(held);
     }
     if (report.kind === 'exited') {
       const said = child.output().trim().split('\n').pop()?.trim() ?? '';
@@ -1010,7 +1024,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     }
     let id = `svc-${randomBytes(4).toString('hex')}`;
     while (services.has(id)) id = `svc-${randomBytes(4).toString('hex')}`;
-    const record: ServiceRecord = { id, name, tenant: who.tenant, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
+    const record: ServiceRecord = { id, name, tenant: owner, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
     services.set(id, { record, dir, child });
     void child.exited.then(() => {
       services.delete(id);
