@@ -13,18 +13,18 @@ import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkWorld, loadWorld, type World } from '#engine';
-import { loadConfig, transportOf, TRANSPORTS, type Config } from '../worldgen/config.ts';
+import { loadConfig, transportOf, type Config } from '../worldgen/config.ts';
 import { createEmitter, describeStop } from '../worldgen/events.ts';
 import { inputSchema, parseInputArgs, type Input } from '../worldgen/input.ts';
 import { commitLabel, delivered, planIntake, renderLiveRun, type LiveCase, type LiveCheck, type LiveMeta, type LiveRow } from '../worldgen/live.ts';
 import { nodeRunner, type Runner } from '../sandboxes/backend.ts';
 import { runWorldGen, type Job } from '../worldgen/run.ts';
 import { loadExampleWorld, makeModel, mtimeOf, writeReport } from './models.ts';
+import { CONFIG_FILE, MODEL_OPTIONS, UsageError, modelOverrides, optionValue } from './options.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
 const REPO_DIR = path.resolve(CODE_DIR, '..');
 const DEFAULT_REPORT = path.join(REPO_DIR, 'prod/LIVE-RUN.md');
-const CONFIG_FILE = path.join(CODE_DIR, 'worldgen.config.json');
 
 const USAGE = `usage: bun run live <prompts-dir> [options]
 
@@ -48,8 +48,6 @@ options:
 
 exit codes: 0 every prompt delivered, 1 a prompt stopped, crashed or failed verify, 2 bad usage or intake
 `;
-
-class UsageError extends Error {}
 
 const out = (line: string): void => void process.stdout.write(`${line}\n`);
 const err = (line: string): void => void process.stderr.write(`${line}\n`);
@@ -75,24 +73,17 @@ export type LiveArgs = {
   readonly overrides: Partial<Config>;
 };
 
-function positive(flag: string, v: string): number {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) throw new UsageError(`${flag} needs a positive number, got ${v}`);
-  return n;
-}
-
 export function parseArgs(argv: readonly string[]): LiveArgs | 'help' {
   if (argv.some((a) => a === '--help' || a === '-h')) return 'help';
   const values = new Map<string, string>();
   let dryRun = false;
   let promptsDir: string | undefined;
-  const VALUE_FLAGS = ['--only', '--commit', '--date', '--report', '--worlds-dir', '--out-dir', '--model', '--transport', '--budget-usd', '--max-minutes'];
+  const VALUE_FLAGS: readonly string[] = ['--only', '--commit', '--date', '--report', '--worlds-dir', '--out-dir', ...MODEL_OPTIONS];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === '--dry-run') dryRun = true;
     else if (VALUE_FLAGS.includes(a)) {
-      const v = argv[++i];
-      if (v === undefined || v.trim() === '' || v.startsWith('--')) throw new UsageError(`${a} needs a value`);
+      const v = optionValue(a, argv[++i]);
       if (values.has(a)) throw new UsageError(`${a} is given twice`);
       values.set(a, v);
     } else if (a.startsWith('-')) throw new UsageError(`unknown option ${a}`);
@@ -103,19 +94,7 @@ export function parseArgs(argv: readonly string[]): LiveArgs | 'help' {
   const date = values.get('--date') ?? new Date().toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new UsageError(`--date needs YYYY-MM-DD, got ${date}`);
 
-  const overrides: Partial<Config> = {};
-  const model = values.get('--model');
-  if (model !== undefined) overrides.model = model;
-  const transport = values.get('--transport');
-  if (transport !== undefined) {
-    const hit = TRANSPORTS.find((t) => t === transport);
-    if (hit === undefined) throw new UsageError(`--transport must be one of ${TRANSPORTS.join(', ')}, got ${transport}`);
-    overrides.transport = hit;
-  }
-  const budget = values.get('--budget-usd');
-  if (budget !== undefined) overrides.maxCostUsd = positive('--budget-usd', budget);
-  const minutes = values.get('--max-minutes');
-  if (minutes !== undefined) overrides.maxMinutes = positive('--max-minutes', minutes);
+  const overrides = modelOverrides((o) => values.get(o));
 
   const only = values.get('--only');
   return {

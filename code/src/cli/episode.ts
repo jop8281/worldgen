@@ -13,11 +13,10 @@ import type { NextTurn } from '../dataset/episode.ts';
 import { finishAtOnce, runLocalEpisode } from '../dataset/local.ts';
 import { GRADING_NOTE, redactor } from '../dataset/schema.ts';
 import { solverTurn } from '../dataset/solver.ts';
-import { DEFAULT_API_KEY_ENV, DEFAULT_MODEL, TRANSPORTS, loadConfig, transportOf, type Transport } from '../worldgen/config.ts';
+import { DEFAULT_API_KEY_ENV, DEFAULT_MODEL, loadConfig, transportOf, type Transport } from '../worldgen/config.ts';
 import { makeModel } from './models.ts';
+import { CONFIG_FILE, UsageError, positiveNumber, transportOption } from './options.ts';
 
-const CODE_DIR = path.resolve(import.meta.dirname, '../..');
-const CONFIG_FILE = path.join(CODE_DIR, 'worldgen.config.json');
 /** A solver turn is one tool call, so the reply cap is far below the generator's. */
 const SOLVER_MAX_OUTPUT_TOKENS = 4096;
 /** The agents an episode can run. `noop` finishes at once and costs nothing; `sonnet` runs DEFAULT_MODEL, whatever config's model, and spends. */
@@ -43,19 +42,13 @@ one JSON line with the episode id, stop reason, score and spend.
   --transport <t>      claude-cli (default) or sdk; sdk needs ${DEFAULT_API_KEY_ENV}
 ${GRADING_NOTE}`;
 
-class UsageError extends Error {}
 type Env = Readonly<Record<string, string | undefined>>;
 export type Args = {
   readonly world: string; readonly task: string; readonly out: string; readonly runId: string; readonly engineCommit: string; readonly agent: Agent;
   readonly maxTurns: number; readonly budgetUsd: number; readonly maxMinutes: number; readonly transport: Transport | undefined;
 };
 
-function positive(flag: string, v: string | undefined, fallback: number): number {
-  if (v === undefined) return fallback;
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) throw new UsageError(`${flag} needs a positive number, got ${v}`);
-  return n;
-}
+const positive = (flag: string, v: string | undefined, fallback: number): number => (v === undefined ? fallback : positiveNumber(flag, v));
 
 export function parse(argv: readonly string[]): Args | 'help' {
   let v: ReturnType<typeof parseArgs>['values'];
@@ -82,14 +75,14 @@ export function parse(argv: readonly string[]): Args | 'help' {
   if (!/^[0-9a-f]{7,64}$/.test(engineCommit)) throw new UsageError(`--engine-commit must be 7 to 64 lowercase hex digits, got ${engineCommit}`);
   const agent = (v['agent'] as string | undefined) ?? 'noop';
   if (!(AGENTS as readonly string[]).includes(agent)) throw new UsageError(`--agent must be one of ${AGENTS.join(', ')}, got ${agent}`);
-  const transport = v['transport'] as string | undefined;
-  if (transport !== undefined && !(TRANSPORTS as readonly string[]).includes(transport)) throw new UsageError(`--transport must be one of ${TRANSPORTS.join(', ')}, got ${transport}`);
+  const given = v['transport'] as string | undefined;
+  const transport = given === undefined ? undefined : transportOption('--transport', given);
   return {
     world: path.resolve(need('world')), task: need('task'), out: path.resolve(need('out')), runId: need('run-id'), engineCommit, agent: agent as Agent,
     maxTurns: Math.floor(positive('--max-turns', v['max-turns'] as string | undefined, 12)),
     budgetUsd: positive('--budget-usd', v['budget-usd'] as string | undefined, 0.5),
     maxMinutes: positive('--max-minutes', v['max-minutes'] as string | undefined, 5),
-    transport: transport as Transport | undefined,
+    transport,
   };
 }
 

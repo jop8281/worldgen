@@ -23,9 +23,9 @@ import { GRADING_NOTE, redactor, type Redactor } from '../dataset/schema.ts';
 import { releaseStaleClaim } from '../dataset/store.ts';
 import { DEFAULT_API_KEY_ENV, loadConfig, transportOf, type Config, type Transport } from '../worldgen/config.ts';
 import { makeModel } from './models.ts';
+import { CONFIG_FILE, UsageError } from './options.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
-const CONFIG_FILE = path.join(CODE_DIR, 'worldgen.config.json');
 const BOAT_KEY_ENV = 'BOAT_API_KEY';
 /** A solver turn is one tool call, so the reply cap is far below the generator's. */
 const SOLVER_MAX_OUTPUT_TOKENS = 4096;
@@ -93,8 +93,8 @@ type Args = {
   readonly transport?: Transport;
   readonly model?: string;
 };
-class UsageError extends Error {}
-
+// dataset words its number and transport refusals its own way, and reads numbers stricter than options.ts does;
+// YOS-203 lists both for a decision before they move there.
 const positive = (flag: string, raw: string, whole: boolean): number => {
   const ok = whole ? /^[1-9]\d*$/.test(raw) : /^\d+(\.\d+)?$/.test(raw) && Number(raw) > 0;
   if (!ok) throw new UsageError(`${flag} must be a positive ${whole ? 'whole number' : 'number'}, got ${JSON.stringify(raw)}`);

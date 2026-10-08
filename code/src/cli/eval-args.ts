@@ -4,7 +4,8 @@
  * same transport, as `bun run worldgen` does (YOS-255).
  */
 import path from 'node:path';
-import { TRANSPORTS, loadConfig, transportOf, type Config, type Transport } from '../worldgen/config.ts';
+import { loadConfig, transportOf, type Config, type Transport } from '../worldgen/config.ts';
+import { UsageError, isModelOption, modelOverride, oneOf, optionValue } from './options.ts';
 
 export const BOAT_PENDING = 'boat fan-out lands with sandbox backends';
 
@@ -37,43 +38,27 @@ export type EvalArgs = {
   overrides: Partial<Config>;
 };
 
-export class UsageError extends Error {}
-
-function positive(flag: string, v: string, integer: boolean): number {
+function positiveInteger(flag: string, v: string): number {
   const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0 || (integer && !Number.isInteger(n))) {
-    throw new UsageError(`${flag} needs a positive ${integer ? 'integer' : 'number'}, got ${v}`);
-  }
+  if (!Number.isInteger(n) || n <= 0) throw new UsageError(`${flag} needs a positive integer, got ${v}`);
   return n;
-}
-
-function oneOf<T extends string>(flag: string, v: string, allowed: readonly T[]): T {
-  const hit = allowed.find((a) => a === v);
-  if (hit === undefined) throw new UsageError(`${flag} must be one of ${allowed.join(', ')}, got ${v}`);
-  return hit;
 }
 
 export function parseEvalArgs(argv: readonly string[], defaultSuite: string): EvalArgs | 'help' {
   const args: EvalArgs = { suite: defaultSuite, only: null, tags: null, dryRun: false, outDir: null, backend: 'local', parallel: 1, overrides: {} };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]!;
-    const value = (): string => {
-      const v = argv[++i];
-      if (v === undefined || v.startsWith('--')) throw new UsageError(`${flag} needs a value`);
-      return v;
-    };
+    // eval alone takes a blank value, such as --model "" (YOS-203 lists it for a decision).
+    const value = (): string => optionValue(flag, argv[++i], 'accept');
     if (flag === '--help' || flag === '-h') return 'help';
     else if (flag === '--dry-run') args.dryRun = true;
     else if (flag === '--suite') args.suite = path.resolve(value());
     else if (flag === '--only') args.only = value().split(',').filter((id) => id !== '');
     else if (flag === '--tag') args.tags = value().split(',').filter((t) => t !== '');
-    else if (flag === '--model') args.overrides.model = value();
-    else if (flag === '--budget-usd') args.overrides.maxCostUsd = positive(flag, value(), false);
-    else if (flag === '--max-minutes') args.overrides.maxMinutes = positive(flag, value(), false);
+    else if (isModelOption(flag)) Object.assign(args.overrides, modelOverride(flag, value()));
     else if (flag === '--out-dir') args.outDir = path.resolve(value());
-    else if (flag === '--transport') args.overrides.transport = oneOf(flag, value(), TRANSPORTS);
     else if (flag === '--backend') args.backend = oneOf<Backend>(flag, value(), ['local', 'boat']);
-    else if (flag === '--parallel') args.parallel = positive(flag, value(), true);
+    else if (flag === '--parallel') args.parallel = positiveInteger(flag, value());
     else if (flag.startsWith('-')) throw new UsageError(`unknown option ${flag}`);
     else throw new UsageError(`unexpected argument ${flag}`);
   }
