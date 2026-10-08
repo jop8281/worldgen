@@ -1513,6 +1513,16 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
     assert.equal(STAGES.model.brief.includes('A plan route whose id is also a workflow action name is an action route'), true);
   });
 
+  it('tells the model stage to type an imported date-only column as a string with a date pattern, and only then (YOS-247)', () => {
+    const fixtures = { enrollments: [{ student: 'S1', enrolled_on: '2026-08-28', paid_at: '2026-08-28T09:00:00Z' }, { student: 'S2', enrolled_on: '', paid_at: '2026-08-29T10:00:00Z' }] };
+    const dated = { ...emptyWorld('w', 'worldgen'), fixtures };
+    assert.deepEqual(listed(stagePrompt('model', plan, dated, null), 'Imported date-only columns'), [
+      '- enrollments.enrolled_on holds dates with no time, such as 2026-08-28: type its field string with pattern ^\\d{4}-\\d{2}-\\d{2}$, never datetime, so the imported values seed unchanged.',
+    ]);
+    assert.equal(stagePrompt('model', plan, emptyWorld('w', 'worldgen'), null).includes('## Imported date-only columns'), false);
+    assert.equal(stagePrompt('workflow', plan, dated, null).includes('## Imported date-only columns'), false);
+  });
+
   it('plan coverage checks a claimed route as its action at the workflow stage, never as a route', () => {
     const noAction = { ...TARGET, actions: {}, tests: {} };
     assert.deepEqual(planCoverage(plan, noAction).map((i) => [i.path.join('.'), i.found]), [
