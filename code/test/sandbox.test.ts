@@ -673,7 +673,8 @@ describe('memory bound and worker reuse', { skip: HEAP_BOUND_SKIP }, () => {
   });
 
   it('runs 200 trivial snippets on one reused worker under 5000 ms with no state carried between runs', () => {
-    const h = createVmHost();
+    // Its own pool key, so no earlier test's requests bring this process near LANE_REQUEST_BUDGET mid-test.
+    const h = createVmHost({ ...SNIPPET_LIMITS, maxYoungGenerationSizeMb: SNIPPET_LIMITS.maxYoungGenerationSizeMb - 2 });
     assert.equal(run('(ctx) => 0', jobCtx(), h), 0);
     const started = snippetWorkersStarted();
     const t0 = performance.now();
@@ -687,7 +688,7 @@ describe('memory bound and worker reuse', { skip: HEAP_BOUND_SKIP }, () => {
   });
 
   it('serves a nested run on the outer run\'s process, and an inner out-of-memory faults the outer run too', () => {
-    const h = createVmHost();
+    const h = createVmHost({ ...SNIPPET_LIMITS, maxYoungGenerationSizeMb: SNIPPET_LIMITS.maxYoungGenerationSizeMb - 3 });
     const inner = h.compile('handler', '(ctx) => ({ status: 201 })', PATH);
     const grow = h.compile('handler', GROW, PATH);
     if (!inner.ok || !grow.ok) throw new Error('compile failed');
@@ -758,5 +759,16 @@ describe('memory bound and worker reuse', { skip: HEAP_BOUND_SKIP }, () => {
     const ctx = jobCtx({ now: () => { log.push(`now${log.length}`); return String(log.length); } });
     assert.equal(run('(ctx) => [ctx.now(), ctx.now(), ctx.now()].join("|")', ctx), '1|2|3');
     assert.deepEqual(log, ['now0', 'now1', 'now2']);
+  });
+});
+
+describe('snippet process request budget', () => {
+  it('retires a snippet process after 2000 requests and starts a fresh one for the next', () => {
+    const h = createVmHost({ ctxCallsPerRun: 20_000, guardMs: 2000, maxOldGenerationSizeMb: 77, maxYoungGenerationSizeMb: 7 });
+    const started = snippetWorkersStarted();
+    const c = h.compile('job', '(ctx) => 1', PATH);
+    if (!c.ok) throw new Error('compile failed');
+    for (let i = 0; i < 2000; i++) assert.equal(c.run(jobCtx()), 1);
+    assert.equal(snippetWorkersStarted() - started, 2);
   });
 });

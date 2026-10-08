@@ -20,7 +20,9 @@
  *   and runs a watchdog for a worker busy with no ctx call past its wait. A process V8 aborts writes no frame;
  *   main reads EOF and reads the cause from the process's stderr.
  * - ctx stays on main. Snippet processes are pooled per heap limit and reused across runs and
- *   hosts. A nested run (a ctx member that runs another snippet) goes to the same process: its
+ *   hosts, and retire at an outer-request boundary after LANE_REQUEST_BUDGET requests: a long-lived
+ *   Bun process holds its peak heap, and a native crash came from one (A-331). A nested run (a ctx
+ *   member that runs another snippet) goes to the same process: its
  *   worker serves the request inside the ctx call it is waiting on, as the in-process vm did.
  *   Processes are unref'd and exit when main closes their FIFOs, exits or is killed.
  * - Every realm starts from an empty object and gets only SANDBOX_GLOBALS. No Date, Intl,
@@ -171,6 +173,8 @@ const PARENT_WATCH_MS = 250;
 const HELLO = 82;
 /** Idle snippet processes kept per heap limit. */
 const MAX_IDLE = 4;
+/** Requests, nested ones included, a snippet process serves before it is retired at the next outer boundary (A-331). */
+export const LANE_REQUEST_BUDGET = 2000;
 
 /**
  * The snippet worker. Plain CommonJS, run with eval. It loops forever on a synchronous receive,
@@ -721,6 +725,8 @@ interface Lane {
   readonly errFd: number;
   /** How the lane ended, told to every run still waiting on it (an outer run whose nested run died). */
   death: Outcome | undefined;
+  /** Requests served so far, outer and nested. */
+  served: number;
 }
 
 type Heap = { readonly maxOldGenerationSizeMb: number; readonly maxYoungGenerationSizeMb: number; readonly startMs: number };
@@ -810,11 +816,11 @@ function startLane(heap: Heap, key: string): Lane {
     started += 1;
     holds.push(openSync(inPath, constants.O_RDWR), openSync(outPath, constants.O_RDONLY | constants.O_NONBLOCK));
     if (!awaitHello(holds[1]!, heap.startMs)) {
-      const lane: Lane = { key, child, toChild: -1, fromChild: -1, errFd, death: undefined };
+      const lane: Lane = { key, child, toChild: -1, fromChild: -1, errFd, death: undefined, served: 0 };
       kill(lane, { t: 'dead', reason: 'start', message: `the snippet process did not start within ${heap.startMs} ms` });
       return lane;
     }
-    return { key, child, toChild: openSync(inPath, constants.O_WRONLY), fromChild: openSync(outPath, constants.O_RDONLY | constants.O_NONBLOCK), errFd, death: undefined };
+    return { key, child, toChild: openSync(inPath, constants.O_WRONLY), fromChild: openSync(outPath, constants.O_RDONLY | constants.O_NONBLOCK), errFd, death: undefined, served: 0 };
   } finally {
     for (const fd of holds) closeSync(fd);
     rmSync(dir, { recursive: true, force: true });
@@ -848,7 +854,7 @@ function release(lane: Lane): void {
   if (lane.death !== undefined) return;
   const list = idle.get(lane.key) ?? [];
   idle.set(lane.key, list);
-  if (list.length < MAX_IDLE) list.push(lane);
+  if (list.length < MAX_IDLE && lane.served < LANE_REQUEST_BUDGET) list.push(lane);
   else kill(lane, { t: 'dead', reason: 'crash', message: 'the snippet process was retired' });
 }
 
@@ -1079,6 +1085,7 @@ function exchange(heap: Heap, request: object, members: Member[], errors: unknow
   const nested = outer !== undefined && outer.key === key && outer.death === undefined;
   const lane = nested ? outer : acquire(heap, key);
   active.push(lane);
+  lane.served += 1;
   const rid = (nextRequest += 1);
   const waitMs = (request as { guardMs: number }).guardMs * WALL_BACKSTOP_FACTOR + STALL_SLACK_MS;
   try {
