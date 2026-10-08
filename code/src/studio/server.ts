@@ -23,6 +23,13 @@
  *   credential is a bearer header, never a cookie: a cookie ignores ports and would reach every served world on the
  *   host, whose call log records request headers. With no users the studio is open and must stay on loopback. Every
  *   POST is appended to <worldsDir>/.studio-audit.jsonl: who, what and the status, never a token or a body.
+ * - Tenancy (YOS-187, A-344). Every user has a tenant; the WORLDGEN_STUDIO_TOKEN admin and open mode are `default`. Jobs,
+ *   episodes, services and audit lines record the caller's tenant. A viewer or operator sees and acts on its own
+ *   tenant's records only, an admin on every tenant's, narrowed by `?tenant=`. A foreign record answers exactly like an
+ *   unknown one, and an idempotency key is looked up within the caller's tenant, so no answer tells a tenant that
+ *   another's record or key exists. The world library, the top-level dirs of worldsDir, is shared and read-only. A
+ *   generation writes into its tenant's dir, <worldsDir>/<tenant>/gen-<slug>, and `default` keeps the old layout,
+ *   <worldsDir>/gen-<slug>. Every `:name` route resolves its world through worldDirOf.
  * - The studio answers only to its own names. Every request's Host must be the bound address, a loopback name when
  *   bound to loopback or a wildcard, or the configured `origin`; a POST that carries an Origin needs one of the same.
  *   Open mode makes every request the local admin, so without this any page the operator visits could POST
@@ -36,7 +43,7 @@
  *   because its child may have started before the crash. So a retried POST, a double click or a crash never starts a
  *   second paid run.
  * - Web hardening (YOS-234). Every answer carries SECURITY_HEADERS (frame, sniffing, referrer and a CSP the offline page
- *   meets). Each POST route has one token bucket per client address, and a failed bearer draws from one bucket per
+ *   meets). Each POST route has one token bucket per client address and tenant, and a failed bearer draws from one bucket per
  *   client that slows token guessing; both read the injected clock. Unfinished runs and episodes are capped, counted
  *   after the idempotency lookup so a replay never gets 429. CSRF is the own-names guard's job (#12), not a check here.
  * - Stops never leave zombies: SIGTERM, a short wait, SIGKILL, and the answer says which signal
@@ -46,32 +53,37 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import type { Dirent } from 'node:fs';
-import { appendFile, readdir, readFile, stat } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { loadWorld } from '#engine';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
-import type { RunResult, Runner, SpawnedChild, Spawner } from '../sandboxes/backend.ts';
+import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
 import { summarizeEpisodes } from './analytics.ts';
-import { adoptedChild, loadRuns, osProcesses, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
+import { adoptedChild, DEFAULT_TENANT, loadRuns, osProcesses, RUN_STORE_FILE, saveRuns, type JobKind, type Lease, type Processes, type Recovery, type StoredRun } from './runstore.ts';
 import { studioPage } from './page.ts';
 import { trafficCounter } from './watch.ts';
 
 /** Ordered: each role can do everything the roles before it can. */
 export const STUDIO_ROLES = ['viewer', 'operator', 'admin'] as const;
 export type StudioRole = (typeof STUDIO_ROLES)[number];
-/** One signed-in person. Holds the sha256 hex of their token, never the token. */
-export type StudioUser = { readonly name: string; readonly role: StudioRole; readonly tokenSha256: string };
+/** One signed-in person and the tenant whose records they see. Holds the sha256 hex of their token, never the token. */
+export type StudioUser = { readonly name: string; readonly role: StudioRole; readonly tenant: string; readonly tokenSha256: string };
 
 /** The audit log of POST requests, in the worlds dir. */
 export const AUDIT_FILE = '.studio-audit.jsonl';
+
+/** A tenant name becomes a directory under the worlds dir, so it is one plain lowercase segment, never a `gen-<slug>` dir of the default tenant. */
+const TENANT = /^(?!gen-)[a-z0-9][a-z0-9-]{0,62}$/;
+const TENANT_RULE = 'tenant must be 1 to 63 lowercase letters, digits or dashes, starting with a letter or digit and not with gen-, which names the default tenant\'s generated worlds';
 
 const usersFileSchema = z.strictObject({
   users: z.array(z.strictObject({
     name: z.string().min(1),
     role: z.enum(STUDIO_ROLES),
+    tenant: z.string().regex(TENANT, TENANT_RULE).refine((t) => t !== DEFAULT_TENANT, 'tenant default is the library\'s own (open mode and the WORLDGEN_STUDIO_TOKEN admin); give each team a tenant of its own'),
     token_sha256: z.string().regex(/^[0-9a-f]{64}$/, 'token_sha256 must be 64 lowercase hex characters'),
   })).min(1, 'list at least one user: an empty list would turn sign-in off'),
 });
@@ -99,7 +111,7 @@ export function parseUsersFile(text: string): StudioUser[] {
   if (!parsed.success) {
     throw new Error(parsed.error.issues.map((i) => `${i.path.join('.') || '(file)'}: ${i.message}`).join('; '));
   }
-  return parsed.data.users.map((u) => ({ name: u.name, role: u.role, tokenSha256: u.token_sha256 }));
+  return parsed.data.users.map((u) => ({ name: u.name, role: u.role, tenant: u.tenant, tokenSha256: u.token_sha256 }));
 }
 
 export type StudioOptions = {
@@ -339,7 +351,12 @@ function zipOf(entries: readonly { readonly name: string; readonly data: Buffer 
 type Caller =
   | { readonly kind: 'anonymous' }
   | { readonly kind: 'rejected' }
-  | { readonly kind: 'user'; readonly name: string; readonly role: StudioRole };
+  | { readonly kind: 'user'; readonly name: string; readonly role: StudioRole; readonly tenant: string };
+/** A caller that passed sign-in: the only kind a route that needs a role is handed. */
+type User = Extract<Caller, { readonly kind: 'user' }>;
+
+/** Whether `who` sees a record of `tenant`: its own tenant's, or for an admin every tenant's, narrowed by `?tenant=`. */
+const visible = (tenant: string, who: User, filter: string | null): boolean => (who.role === 'admin' ? filter === null || tenant === filter : tenant === who.tenant);
 
 const roleRank = (role: StudioRole): number => STUDIO_ROLES.indexOf(role);
 const sha256 = (text: string): Buffer => createHash('sha256').update(text).digest();
@@ -358,21 +375,6 @@ function write(res: ServerResponse, reply: Reply): void {
   const text = JSON.stringify(reply.body ?? null);
   res.writeHead(reply.status, { ...SECURITY_HEADERS, ...reply.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
   res.end(text);
-}
-
-/** The ports `worldplay serve` reports once both listen: its `{"listening":{"world":W,"admin":A}}` line, or null before it. */
-function listeningPorts(output: string): { readonly world: number; readonly admin: number } | null {
-  for (const line of output.split('\n')) {
-    if (!line.startsWith('{"listening"')) continue;
-    try {
-      const v: unknown = JSON.parse(line);
-      const l = isObject(v) && isObject(v['listening']) ? v['listening'] : null;
-      if (l !== null && Number.isInteger(l['world']) && Number.isInteger(l['admin'])) return { world: l['world'] as number, admin: l['admin'] as number };
-    } catch {
-      // a line still being written
-    }
-  }
-  return null;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -394,10 +396,19 @@ async function signalAndWait(child: SpawnedChild, signals: readonly NodeJS.Signa
 }
 
 type Params = Record<string, string>;
-/** `key` is the request's Idempotency-Key header, which only the job-starting POSTs read. */
-type Handler = (params: Params, body: unknown, who: Caller, key: RawKey) => Promise<Reply> | Reply;
-/** `need` is the least role that may call the route; a public route needs no sign-in. */
-type Route = { readonly method: 'GET' | 'POST'; readonly need: StudioRole | 'public'; readonly parts: readonly string[]; readonly run: Handler };
+/**
+ * `key` is the request's Idempotency-Key header, which only the job-starting POSTs read. `filter` is an admin's
+ * `?tenant=`, null for everyone else and for an admin who sent none.
+ */
+type Ctx = { readonly key: RawKey; readonly filter: string | null };
+type Handler = (params: Params, body: unknown, who: User, ctx: Ctx) => Promise<Reply> | Reply;
+/**
+ * `need` is the least role that may call the route. A public route needs no sign-in and is handed no caller, so its
+ * answer cannot depend on the bearer: a public answer that did would tell an unthrottled guesser which tokens are valid.
+ */
+type Route =
+  | { readonly method: 'GET'; readonly need: 'public'; readonly parts: readonly string[]; readonly run: () => Promise<Reply> | Reply }
+  | { readonly method: 'GET' | 'POST'; readonly need: StudioRole; readonly parts: readonly string[]; readonly run: Handler };
 
 /** The capsule.json of one world dir, parsed, or null when absent or foreign. */
 async function readCapsule(dir: string): Promise<RunCapsule | null> {
@@ -462,8 +473,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   if (configuredOrigin === null) throw new Error(`studio origin must be an http(s) origin such as http://127.0.0.1:8787, got ${opts.origin}`);
   const digests = users.map((u) => {
     if (!/^[0-9a-f]{64}$/i.test(u.tokenSha256)) throw new Error(`studio user ${u.name}: tokenSha256 must be 64 hex characters`);
+    if (!TENANT.test(u.tenant)) throw new Error(`studio user ${u.name}: ${TENANT_RULE}`);
     return { user: u, digest: Buffer.from(u.tokenSha256, 'hex') };
   });
+  /** Every tenant with a directory of its own under the worlds dir. `default` has none: its worlds are the library. */
+  const tenants: ReadonlySet<string> = new Set(users.map((u) => u.tenant).filter((t) => t !== DEFAULT_TENANT).sort());
   const seen = new Set<string>();
   for (const { user, digest } of digests) {
     for (const [what, key] of [['name', user.name], ['token', digest.toString('hex')]] as const) {
@@ -473,13 +487,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
   /** Open mode makes every request the local admin; otherwise the bearer decides. Every digest is compared, in constant time. */
   const callerOf = (req: IncomingMessage): Caller => {
-    if (!signIn) return { kind: 'user', name: 'local', role: 'admin' };
+    if (!signIn) return { kind: 'user', name: 'local', role: 'admin', tenant: DEFAULT_TENANT };
     const m = /^bearer +(.+)$/i.exec(req.headers.authorization ?? '');
     if (m === null) return { kind: 'anonymous' };
     const given = sha256(m[1]!.trim());
     let hit: StudioUser | null = null;
     for (const d of digests) if (timingSafeEqual(given, d.digest)) hit = d.user;
-    return hit === null ? { kind: 'rejected' } : { kind: 'user', name: hit.name, role: hit.role };
+    return hit === null ? { kind: 'rejected' } : { kind: 'user', name: hit.name, role: hit.role, tenant: hit.tenant };
   };
   const repoRoot = path.resolve(opts.repoRoot);
   const worldsDir = path.resolve(opts.worldsDir ?? path.join(repoRoot, 'prod', 'worlds'));
@@ -501,8 +515,35 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const entries: readonly Dirent[] = await readdir(p, { withFileTypes: true }).catch(() => [] as readonly Dirent[]);
     return entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
   };
+  // A tenant's directory holds its worlds, so a shared world of the same name would be hidden from everyone.
+  for (const t of tenants) {
+    if (await file(path.join(worldsDir, t, 'world.yaml'))) throw new Error(`studio tenant ${t} is also a world in ${worldsDir}; rename the tenant`);
+  }
 
-  type ServiceRecord = { readonly id: string; readonly name: string; readonly pid: number | undefined; readonly worldPort: number; readonly adminPort: number; readonly startedAt: string };
+  /** One directory of world dirs: the shared library (tenant null) or one tenant's own. */
+  type Shelf = { readonly tenant: string | null; readonly root: string };
+  const LIBRARY: Shelf = { tenant: null, root: worldsDir };
+  const shelfOf = (tenant: string): Shelf => ({ tenant, root: path.join(worldsDir, tenant) });
+  /** What `who` reads: the library, then each tenant dir it sees, in name order. */
+  const shelvesOf = (who: User, filter: string | null): Shelf[] => [LIBRARY, ...[...tenants].filter((t) => visible(t, who, filter)).map(shelfOf)];
+  /** The dirs on a shelf. A tenant's own dir is never a dir of the library. */
+  const dirsOn = async (shelf: Shelf): Promise<string[]> => {
+    const names = (await dirsOf(shelf.root)).filter((name) => shelf.tenant !== null || !tenants.has(name));
+    if (shelf.tenant !== null) return names;
+    const kept: string[] = [];
+    for (const name of names) if (!await isTenantShelf(path.join(shelf.root, name))) kept.push(name);
+    return kept;
+  };
+  /** A library dir with no world.yaml or plan.yaml of its own but worlds below it is a removed tenant's shelf, never a world. */
+  const isTenantShelf = async (dir: string): Promise<boolean> => {
+    if (await file(path.join(dir, 'world.yaml')) || await file(path.join(dir, 'plan.yaml'))) return false;
+    for (const child of await dirsOf(dir)) {
+      if (await file(path.join(dir, child, 'world.yaml')) || await file(path.join(dir, child, 'plan.yaml'))) return true;
+    }
+    return false;
+  };
+
+  type ServiceRecord = { readonly id: string; readonly name: string; readonly tenant: string; readonly pid: number | undefined; readonly worldPort: number; readonly adminPort: number; readonly startedAt: string };
   type EpisodeRequest = { readonly world: string; readonly task: string; readonly agent: string };
   /**
    * One generation run or agent episode (A-335): its stored record, and the process this studio watches. `child` is
@@ -511,6 +552,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   type Job = {
     readonly runId: string;
     readonly kind: JobKind;
+    readonly tenant: string;
     readonly key: string;
     readonly fingerprint: string;
     readonly outDir: string;
@@ -525,14 +567,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     child: SpawnedChild | null;
   };
 
-  const services = new Map<string, { record: ServiceRecord; child: SpawnedChild }>();
-  /** World names whose `worldplay serve` has not reported its ports yet. */
+  const services = new Map<string, { record: ServiceRecord; dir: string; child: SpawnedChild }>();
+  /** `<tenant> <world dir>` of each `worldplay serve` that has not reported its ports yet. */
   const starting = new Set<string>();
-  let serviceSeq = 0;
   const jobs = new Map<string, Job>();
-  const runOf = (runId: string): Job | undefined => {
+  /** A generation run `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
+  const runOf = (runId: string, who: User, filter: string | null): Job | undefined => {
     const job = jobs.get(runId);
-    return job?.kind === 'generate' ? job : undefined;
+    return job?.kind === 'generate' && visible(job.tenant, who, filter) ? job : undefined;
   };
   const isEpisode = (job: Job | undefined): job is Job & { readonly episode: EpisodeRequest } => job?.kind === 'episode' && job.episode !== undefined;
   const processes = opts.processes ?? osProcesses;
@@ -575,13 +617,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   /** Set by close(): from then on the registry is never written. */
   let closed = false;
   const storedOf = (job: Job): StoredRun => ({
-    runId: job.runId, kind: job.kind, key: job.key, fingerprint: job.fingerprint, phase: job.phase, lease: job.lease,
+    runId: job.runId, kind: job.kind, tenant: job.tenant, key: job.key, fingerprint: job.fingerprint, phase: job.phase, lease: job.lease,
     ...(job.recovery === undefined ? {} : { recovery: job.recovery }),
     outDir: job.outDir, pid: job.pid, knownRuns: [...job.knownRuns], startedAt: job.startedAt, exitCode: job.exitCode,
     ...(job.episode === undefined ? {} : { episode: job.episode }),
   });
   const jobOf = (stored: StoredRun): Job => ({
-    runId: stored.runId, kind: stored.kind, key: stored.key, fingerprint: stored.fingerprint, outDir: stored.outDir,
+    runId: stored.runId, kind: stored.kind, tenant: stored.tenant, key: stored.key, fingerprint: stored.fingerprint, outDir: stored.outDir,
     knownRuns: new Set(stored.knownRuns), startedAt: stored.startedAt, episode: stored.episode, phase: stored.phase,
     lease: stored.lease, recovery: stored.recovery, pid: stored.pid, exitCode: stored.exitCode, child: null,
   });
@@ -603,18 +645,21 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     });
     return auditing;
   };
-  async function auditTail(): Promise<Reply> {
+  /** The last AUDIT_TAIL lines, or with `?tenant=` the last AUDIT_TAIL lines of that tenant. */
+  async function auditTail(filter: string | null): Promise<Reply> {
     await auditing;
     const text = await readFile(auditPath, 'utf8').catch(() => '');
+    const lines = text.split('\n').filter((l) => l.trim() !== '');
     const entries: unknown[] = [];
-    for (const line of text.split('\n').filter((l) => l.trim() !== '').slice(-AUDIT_TAIL)) {
+    for (const line of filter === null ? lines.slice(-AUDIT_TAIL) : lines) {
       try {
-        entries.push(JSON.parse(line));
+        const entry: unknown = JSON.parse(line);
+        if (filter === null || (isObject(entry) && entry['tenant'] === filter)) entries.push(entry);
       } catch {
         // a damaged line is skipped, not fatal
       }
     }
-    return { status: 200, body: { entries, unwritten } };
+    return { status: 200, body: { entries: entries.slice(-AUDIT_TAIL), unwritten } };
   }
   /** Watches a job's process. Its end finishes the job, unless another studio took the lease and so records the end. */
   const watch = (job: Job, child: SpawnedChild): void => {
@@ -697,39 +742,57 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   /**
    * Readiness for a container or load balancer: the worlds directory reads, and the build and runtime are named. Traffic
    * counts every answer but health polls, since start and in the last 300 s (YOS-237). It is public, so it holds no spend.
+   * The world count is the library's alone, the same for every caller, because a public answer must not depend on the bearer.
    */
   async function health(): Promise<Reply> {
     const bun = process.versions['bun'];
     const runtime = bun === undefined ? `node ${process.versions.node}` : `bun ${bun}`;
     try {
-      return { status: 200, body: { ok: true, build: opts.build ?? 'unknown', runtime, worlds: (await worldNames()).length, traffic: traffic.snapshot(now()) } };
+      return { status: 200, body: { ok: true, build: opts.build ?? 'unknown', runtime, worlds: (await worldEntries([LIBRARY])).length, traffic: traffic.snapshot(now()) } };
     } catch (e) {
       return fail(503, 'health.worlds_unreadable', `worlds directory ${worldsDir} cannot be read: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
   /**
-   * World directories. A generation stopped before its plan leaves runs/ and REPORT.md with neither world.yaml nor
-   * plan.yaml: that is a run, listed under /api/runs, not a world, so it is skipped here instead of reading as an
-   * invalid hand-built world. A dir with plan.yaml and no world.yaml is still listed, as a generation that failed.
+   * World directories on the shelves, each with the tenant whose dir holds it (null for the library). A generation
+   * stopped before its plan leaves runs/ and REPORT.md with neither world.yaml nor plan.yaml: that is a run, listed
+   * under /api/runs, not a world, so it is skipped here instead of reading as an invalid hand-built world. A dir with
+   * plan.yaml and no world.yaml is still listed, as a generation that failed.
    */
-  async function worldNames(): Promise<string[]> {
-    const names: string[] = [];
-    for (const name of await dirsOf(worldsDir)) {
-      if (name.endsWith(PARTIAL_SUFFIX)) continue;
-      const dir = path.join(worldsDir, name);
-      if (await file(path.join(dir, 'world.yaml')) || await file(path.join(dir, 'plan.yaml'))) names.push(name);
+  async function worldEntries(shelves: readonly Shelf[]): Promise<{ name: string; tenant: string | null; dir: string }[]> {
+    const out: { name: string; tenant: string | null; dir: string }[] = [];
+    for (const shelf of shelves) {
+      for (const name of await dirsOn(shelf)) {
+        if (name.endsWith(PARTIAL_SUFFIX)) continue;
+        const dir = path.join(shelf.root, name);
+        if (await file(path.join(dir, 'world.yaml')) || await file(path.join(dir, 'plan.yaml'))) out.push({ name, tenant: shelf.tenant, dir });
+      }
     }
-    return names;
+    return out;
   }
 
-  async function worlds(): Promise<Reply> {
-    const list = await Promise.all((await worldNames()).map(async (name) => {
-      const dir = path.join(worldsDir, name);
+  /**
+   * A world dir by its route name, or the reply that refuses it: the caller's own tenant dir first (an admin's
+   * `?tenant=` names it), then the library. A world in another tenant's dir answers like no world at all.
+   */
+  async function worldDirOf(name: string, who: User, filter: string | null): Promise<{ ok: true; dir: string } | { ok: false; reply: Reply }> {
+    if (!safeSegment(name)) return { ok: false, reply: fail(400, 'world.name_unsafe', 'a world name must be one plain path segment') };
+    const own = who.role === 'admin' && filter !== null ? filter : who.tenant;
+    for (const shelf of [...(tenants.has(own) ? [shelfOf(own)] : []), LIBRARY]) {
+      const dir = path.join(shelf.root, name);
+      if ((shelf.tenant !== null || !tenants.has(name)) && await isDir(dir) && (shelf.tenant !== null || !await isTenantShelf(dir))) return { ok: true, dir };
+    }
+    return { ok: false, reply: fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`) };
+  }
+
+  async function worlds(who: User, filter: string | null): Promise<Reply> {
+    const list = await Promise.all((await worldEntries(shelvesOf(who, filter))).map(async ({ name, tenant, dir }) => {
       const capsule = await readCapsule(dir);
       const loaded = await loadWorld(dir);
       const base = {
         name,
+        tenant,
         generated: await file(path.join(dir, 'plan.yaml')),
         ...(loaded.ok
           ? { taskCount: isObject(loaded.value) && isObject(loaded.value['tasks']) ? Object.keys(loaded.value['tasks']).length : 0 }
@@ -747,10 +810,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const checking = new Map<string, Promise<Reply>>();
 
   /** The check, proof and serve children run a world's snippets, so they get an allowlist, never the web process's credentials (A-338, A-343). */
-  const childEnv = (): Record<string, string> => {
-    const src = opts.env ?? process.env;
-    return { TZ: 'UTC', PATH: src['PATH'] ?? '', ...(src['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: src['WORLDGEN_GUARD_SCALE'] }) };
-  };
+  const childEnv = (): Record<string, string> => isolatedEnv(opts.env ?? process.env);
   /** Generation and episodes call the model, so they get the whole environment, LLM_KEY included, but never the studio's own sign-in token. */
   const modelEnv = (): Record<string, string | undefined> => {
     const { WORLDGEN_STUDIO_TOKEN: _token, ...rest } = opts.env ?? process.env;
@@ -760,27 +820,28 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const lastLine = (text: string): string => text.trim().split('\n').slice(-1)[0] ?? '';
 
   /** <name>.zip of the world's own files (EXPORT_FILES that exist), refused like the report when REPORT.md leaks task source. */
-  async function worldExport(p: Params): Promise<Reply> {
+  async function worldExport(p: Params, who: User, filter: string | null): Promise<Reply> {
     const name = p['name'] ?? '';
-    if (!safeSegment(name)) return fail(400, 'world.name_unsafe', 'a world name must be one plain path segment');
-    const dir = path.join(worldsDir, name);
-    if (!await isDir(dir)) return fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`);
-    if (!await file(path.join(dir, 'world.yaml'))) return fail(404, 'export.no_world', `${name} has no world.yaml to export`);
-    const checked = await worldReport(p);
+    const w = await worldDirOf(name, who, filter);
+    if (!w.ok) return w.reply;
+    if (!await file(path.join(w.dir, 'world.yaml'))) return fail(404, 'export.no_world', `${name} has no world.yaml to export`);
+    const checked = await reportOf(name, w.dir);
     if (checked.status !== 200) return checked;
     const entries: { name: string; data: Buffer }[] = [];
     for (const f of EXPORT_FILES) {
-      const data = await readFile(path.join(dir, f)).catch(() => null);
+      const data = await readFile(path.join(w.dir, f)).catch(() => null);
       if (data !== null) entries.push({ name: `${name}/${f}`, data });
     }
     return { status: 200, body: zipOf(entries), type: 'application/zip', filename: `${name}.zip` };
   }
 
-  async function worldReport(p: Params): Promise<Reply> {
-    const name = p['name'] ?? '';
-    if (!safeSegment(name)) return fail(400, 'world.name_unsafe', 'a world name must be one plain path segment');
-    const dir = path.join(worldsDir, name);
-    if (!await isDir(dir)) return fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`);
+  async function worldReport(p: Params, who: User, filter: string | null): Promise<Reply> {
+    const w = await worldDirOf(p['name'] ?? '', who, filter);
+    return w.ok ? reportOf(p['name'] ?? '', w.dir) : w.reply;
+  }
+
+  /** REPORT.md and capsule.json of a resolved world dir, refused when the report embeds private task source. */
+  async function reportOf(name: string, dir: string): Promise<Reply> {
     const report = await readFile(path.join(dir, 'REPORT.md'), 'utf8').catch(() => null);
     const capsule = await readCapsule(dir);
     if (report !== null) {
@@ -794,11 +855,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { name, report, ...(capsule === null ? {} : { capsule }) } };
   }
 
-  async function explorer(p: Params): Promise<Reply> {
+  async function explorer(p: Params, who: User, filter: string | null): Promise<Reply> {
     const name = p['name'] ?? '';
-    if (!safeSegment(name)) return fail(400, 'world.name_unsafe', 'a world name must be one plain path segment');
-    const dir = path.join(worldsDir, name);
-    if (!await isDir(dir)) return fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`);
+    const w = await worldDirOf(name, who, filter);
+    if (!w.ok) return w.reply;
+    const dir = w.dir;
     // The check verifies every task, about 9 s on a big world, so an explored world is kept until its world.yaml changes.
     const yaml = await stat(path.join(dir, 'world.yaml')).catch(() => null);
     const cached = checkedWorlds.get(dir);
@@ -834,8 +895,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   /** The API console: one request to the world port of a service this studio started, and the world's real answer. */
-  async function callService(p: Params, body: unknown): Promise<Reply> {
-    const hit = services.get(p['id'] ?? '');
+  /** A service `who` sees, by id. Another tenant's is not found, exactly like an id that never existed. */
+  const serviceOf = (id: string, who: User, filter: string | null): { record: ServiceRecord; dir: string; child: SpawnedChild } | undefined => {
+    const hit = services.get(id);
+    return hit !== undefined && visible(hit.record.tenant, who, filter) ? hit : undefined;
+  };
+
+  async function callService(p: Params, body: unknown, who: User, filter: string | null): Promise<Reply> {
+    const hit = serviceOf(p['id'] ?? '', who, filter);
     if (hit === undefined) return fail(404, 'service.unknown', `No service ${p['id'] ?? ''}`);
     if (!isObject(body)) return fail(400, 'call.body', 'the body must be a JSON object: {"method", "path", "body"}');
     const method = typeof body['method'] === 'string' ? body['method'].toUpperCase() : '';
@@ -900,18 +967,21 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
    * listen (A-348). Only an admin may pin a port, and never one a tracked service holds, so no caller can point the API
    * console at another service's world.
    */
-  async function serveWorld(p: Params, body: unknown, who: Caller): Promise<Reply> {
+  async function serveWorld(p: Params, body: unknown, who: User, filter: string | null): Promise<Reply> {
     const name = p['name'] ?? '';
-    if (!safeSegment(name)) return fail(400, 'world.name_unsafe', 'a world name must be one plain path segment');
-    if (starting.has(name)) return fail(409, 'world.already_serving', `${name} is starting; wait for it or stop it`);
-    for (const { record } of services.values()) {
-      if (record.name === name) return fail(409, 'world.already_serving', `${name} is already served on port ${record.worldPort}; stop it first`);
+    const w = await worldDirOf(name, who, filter);
+    if (!w.ok) return w.reply;
+    const dir = w.dir;
+    const startKey = `${who.tenant} ${dir}`;
+    if (starting.has(startKey)) return fail(409, 'world.already_serving', `${name} is starting; wait for it or stop it`);
+    // Only a service the caller sees blocks a second serve, so the refusal never names another tenant's port. A second
+    // `worldplay serve` of one world dir is safe: serve keeps its state in memory and writes nothing into the dir.
+    for (const s of services.values()) {
+      if (s.dir === dir && visible(s.record.tenant, who, filter)) return fail(409, 'world.already_serving', `${name} is already served on port ${s.record.worldPort}; stop it first`);
     }
-    const dir = path.join(worldsDir, name);
-    if (!await isDir(dir)) return fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`);
     const wanted = isObject(body) ? body['port'] : undefined;
     let port = 0;
-    if (wanted !== undefined && who.kind === 'user' && who.role === 'admin') {
+    if (wanted !== undefined && who.role === 'admin') {
       if (typeof wanted !== 'number' || !Number.isInteger(wanted) || wanted < 1 || wanted > 65534) {
         return fail(400, 'serve.port', 'port must be an integer from 1 to 65534 (the admin routes take port + 1)');
       }
@@ -923,12 +993,12 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       port = wanted;
     }
     const child = opts.spawner(['bun', 'src/cli/worldplay.ts', 'serve', dir, '--port', String(port)], { cwd: codeDir, env: childEnv() });
-    starting.add(name);
+    starting.add(startKey);
     let report: Awaited<ReturnType<typeof firstReport>>;
     try {
       report = await firstReport(child, opts.serveWaitMs ?? SERVE_WAIT_MS);
     } finally {
-      starting.delete(name);
+      starting.delete(startKey);
     }
     if (report.kind === 'exited') {
       const said = child.output().trim().split('\n').pop()?.trim() ?? '';
@@ -938,17 +1008,18 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       await signalAndWait(child, ['SIGTERM', 'SIGKILL']);
       return fail(504, 'serve.timeout', `worldplay serve for ${name} reported no listening ports within ${opts.serveWaitMs ?? SERVE_WAIT_MS} ms, so the studio stopped it`);
     }
-    const id = `svc-${(serviceSeq += 1)}`;
-    const record: ServiceRecord = { id, name, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
-    services.set(id, { record, child });
+    let id = `svc-${randomBytes(4).toString('hex')}`;
+    while (services.has(id)) id = `svc-${randomBytes(4).toString('hex')}`;
+    const record: ServiceRecord = { id, name, tenant: who.tenant, pid: child.pid, worldPort: report.world, adminPort: report.admin, startedAt: new Date().toISOString() };
+    services.set(id, { record, dir, child });
     void child.exited.then(() => {
       services.delete(id);
     });
     return { status: 200, body: record };
   }
 
-  async function stopService(p: Params): Promise<Reply> {
-    const hit = services.get(p['id'] ?? '');
+  async function stopService(p: Params, who: User, filter: string | null): Promise<Reply> {
+    const hit = serviceOf(p['id'] ?? '', who, filter);
     if (hit === undefined) return fail(404, 'service.unknown', `No service ${p['id'] ?? ''}`);
     const gone = await signalAndWait(hit.child, ['SIGTERM', 'SIGKILL']);
     services.delete(hit.record.id);
@@ -1007,6 +1078,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   /** What a job start asks for. `request` is what two retries share: the child's argv without the run id each job mints or the transport. */
   type JobStart = {
     readonly kind: JobKind;
+    /** The caller's tenant: the job's owner, and the scope its key is looked up in. */
+    readonly tenant: string;
     readonly rawKey: RawKey;
     readonly request: readonly string[];
     /** The run id after its UTC stamp. */
@@ -1037,24 +1110,27 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (!clientKey.ok) return clientKey.reply;
     const fingerprint = fingerprintOf(start.kind, start.request);
     const key = clientKey.key ?? `derived:${fingerprint}`;
-    // No await from this lookup to the insert below, so two requests with one key cannot both miss.
-    const prior = [...jobs.values()].find((j) => j.key === key && (clientKey.key !== undefined || j.phase !== 'finished'));
+    // No await from this lookup to the insert below, so two requests with one key cannot both miss. Another tenant's job
+    // never matches: its key is unused here, since a replay or a refusal would tell this caller that the key exists.
+    const prior = [...jobs.values()].find((j) => j.tenant === start.tenant && j.key === key && (clientKey.key !== undefined || j.phase !== 'finished'));
     if (prior !== undefined) {
       if (prior.fingerprint === fingerprint) return startAnswer(prior, true);
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (job ${prior.runId})`);
     }
     // Counted after the lookup, so a replay answers first. Intents and jobs another studio leases count. Still no await.
+    // The cap is global because it protects the machine. The refusal states no count, since the count holds other tenants' jobs.
     const active = [...jobs.values()].filter((j) => j.kind === start.kind && j.phase !== 'finished').length;
     if (active >= maxJobs[start.kind]) {
       const what = start.kind === 'generate' ? 'generation runs' : 'agent episodes';
-      return fail(429, start.kind === 'generate' ? 'generate.concurrent_limit' : 'episode.concurrent_limit', `${active} ${what} are already active; the studio runs at most ${maxJobs[start.kind]} at once, so stop one first`);
+      return fail(429, start.kind === 'generate' ? 'generate.concurrent_limit' : 'episode.concurrent_limit', `the studio runs at most ${maxJobs[start.kind]} ${what} at once; wait for one to finish`);
     }
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-    let runId = `${stamp}-${start.label}`;
-    for (let n = 2; jobs.has(runId); n++) runId = `${stamp}-${start.label}-${n}`;
+    // A random suffix, so an id never counts another tenant's starts.
+    let runId = `${stamp}-${start.label}-${randomBytes(3).toString('hex')}`;
+    while (jobs.has(runId)) runId = `${stamp}-${start.label}-${randomBytes(3).toString('hex')}`;
     const { outDir, argv } = start.launch(runId);
     const job: Job = {
-      runId, kind: start.kind, key, fingerprint, outDir, knownRuns: start.knownRuns, startedAt: new Date().toISOString(),
+      runId, kind: start.kind, tenant: start.tenant, key, fingerprint, outDir, knownRuns: start.knownRuns, startedAt: new Date().toISOString(),
       episode: start.episode, phase: 'intent', lease: leaseFrom(now()), recovery: undefined, pid: null, exitCode: null, child: null,
     };
     jobs.set(runId, job);
@@ -1082,7 +1158,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return startAnswer(job, false);
   }
 
-  async function generate(body: unknown, rawKey: RawKey): Promise<Reply> {
+  async function generate(body: unknown, who: User, rawKey: RawKey): Promise<Reply> {
     if (!isObject(body)) return fail(400, 'generate.body', 'the body must be a JSON object');
     const kind = body['kind'];
     if (kind !== 'description' && kind !== 'openapi' && kind !== 'csv') {
@@ -1105,7 +1181,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       return fail(400, 'generate.minutes', 'maxMinutes must be a positive integer');
     }
     const flags = [...(budget === undefined ? [] : ['--budget-usd', String(budget)]), ...(minutes === undefined ? [] : ['--max-minutes', String(minutes)])];
-    const outDir = path.join(worldsDir, `gen-${slug}`);
+    // `default` keeps the old layout, so open mode and the token admin write where they always did.
+    const outDir = path.join(who.tenant === DEFAULT_TENANT ? worldsDir : shelfOf(who.tenant).root, `gen-${slug}`);
     let args: string[];
     if (kind === 'description') {
       if (text.trim() === '') return fail(400, 'generate.text', 'a description needs text');
@@ -1135,6 +1212,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       args = ['--csv', ...csv, '--out', outDir, ...flags];
     }
+    await mkdir(path.dirname(outDir), { recursive: true });
     const runDir = path.join(outDir, 'runs');
     const knownRuns = new Set([
       ...await readdir(runDir).catch((): string[] => []),
@@ -1142,7 +1220,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     ]);
     const transport = opts.transport === undefined ? [] : ['--transport', opts.transport];
     const request = ['bun', 'src/cli/worldgen.ts', ...args];
-    return startJob({ kind: 'generate', rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...request, ...transport] }) });
+    return startJob({ kind: 'generate', tenant: who.tenant, rawKey, request, label: slug, knownRuns, episode: undefined, launch: () => ({ outDir, argv: [...request, ...transport] }) });
   }
 
   /**
@@ -1216,8 +1294,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { state: 'failed', reason: `the worldgen process exited ${exitCode ?? 'by a signal'} before it logged run_finished${said === '' ? '' : `: ${said}`}` };
   }
 
-  async function runStatus(p: Params): Promise<Reply> {
-    const run = runOf(p['runId'] ?? '');
+  async function runStatus(p: Params, who: User, filter: string | null): Promise<Reply> {
+    const run = runOf(p['runId'] ?? '', who, filter);
     if (run === undefined) return fail(404, 'run.unknown', `No run ${p['runId'] ?? ''}`);
     const events = await readEvents(run);
     const running = run.phase !== 'finished';
@@ -1234,8 +1312,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     };
   }
 
-  async function stopRun(p: Params): Promise<Reply> {
-    const run = runOf(p['runId'] ?? '');
+  async function stopRun(p: Params, who: User, filter: string | null): Promise<Reply> {
+    const run = runOf(p['runId'] ?? '', who, filter);
     if (run === undefined) return fail(404, 'run.unknown', `No run ${p['runId'] ?? ''}`);
     if (run.phase === 'finished') return fail(409, 'run.finished', `Run ${run.runId} already finished`);
     if (run.child === null) return fail(409, 'run.unheld', `Run ${run.runId} has no process this studio watches; its lease is held by ${run.lease?.holder ?? 'no studio'}`);
@@ -1243,28 +1321,32 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { runId: run.runId, stopped: gone.exited, signal: gone.signal } };
   }
 
-  async function listRuns(): Promise<Reply> {
+  /** The run history of every dir on the caller's shelves: the library's, which everyone sees, and its tenants'. */
+  async function listRuns(who: User, filter: string | null): Promise<Reply> {
     const out: {
-      name: string; runId: string; model: string | null; transport: string | null;
+      name: string; tenant: string | null; runId: string; model: string | null; transport: string | null;
       costUsd: number | null; ms: number | null; outcome: 'done' | 'stopped' | null; hasReport: boolean;
     }[] = [];
-    for (const name of await dirsOf(worldsDir)) {
-      const dir = path.join(worldsDir, name);
-      const capsule = await readCapsule(dir);
-      const hasReport = await file(path.join(dir, 'REPORT.md'));
-      for (const runId of await dirsOf(path.join(dir, 'runs'))) {
-        if (!await file(path.join(dir, 'runs', runId, 'events.jsonl'))) continue;
-        const mine = capsule !== null && capsule.runId === runId;
-        out.push({
-          name,
-          runId,
-          model: mine ? capsule.model : null,
-          transport: mine ? capsule.transport : null,
-          costUsd: mine ? capsule.costUsd : null,
-          ms: mine ? capsule.ms : null,
-          outcome: mine ? (capsule.worldId !== null ? 'done' : 'stopped') : null,
-          hasReport,
-        });
+    for (const shelf of shelvesOf(who, filter)) {
+      for (const name of await dirsOn(shelf)) {
+        const dir = path.join(shelf.root, name);
+        const capsule = await readCapsule(dir);
+        const hasReport = await file(path.join(dir, 'REPORT.md'));
+        for (const runId of await dirsOf(path.join(dir, 'runs'))) {
+          if (!await file(path.join(dir, 'runs', runId, 'events.jsonl'))) continue;
+          const mine = capsule !== null && capsule.runId === runId;
+          out.push({
+            name,
+            tenant: shelf.tenant,
+            runId,
+            model: mine ? capsule.model : null,
+            transport: mine ? capsule.transport : null,
+            costUsd: mine ? capsule.costUsd : null,
+            ms: mine ? capsule.ms : null,
+            outcome: mine ? (capsule.worldId !== null ? 'done' : 'stopped') : null,
+            hasReport,
+          });
+        }
       }
     }
     return { status: 200, body: { runs: out } };
@@ -1314,7 +1396,6 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   // ---------------------------------------------------------------- agent playground (YOS-190)
 
-  let episodeSeq = 0;
   let commit: string | null = null;
   /** The commit of the code the studio runs, recorded on every episode as its engine. Read once, through the injected runner. */
   async function engineCommit(): Promise<string | null> {
@@ -1326,17 +1407,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return sha;
   }
 
-  /** A world dir by its route name, or the reply that refuses it. */
-  async function worldDirOf(name: string): Promise<{ ok: true; dir: string } | { ok: false; reply: Reply }> {
-    if (!safeSegment(name)) return { ok: false, reply: fail(400, 'world.name_unsafe', 'a world name must be one plain path segment') };
-    const dir = path.join(worldsDir, name);
-    if (!await isDir(dir)) return { ok: false, reply: fail(404, 'world.unknown', `No world ${name} under ${worldsDir}`) };
-    return { ok: true, dir };
-  }
-
   /** The tasks of a world, public fields only: id, difficulty and the instruction an agent gets. Never a grader, solution or decoy. */
-  async function worldTasks(p: Params): Promise<Reply> {
-    const w = await worldDirOf(p['name'] ?? '');
+  async function worldTasks(p: Params, who: User, filter: string | null): Promise<Reply> {
+    const w = await worldDirOf(p['name'] ?? '', who, filter);
     if (!w.ok) return w.reply;
     const loaded = await loadWorld(w.dir);
     if (!loaded.ok || !isObject(loaded.value) || !isObject(loaded.value['tasks'])) return fail(422, 'world.unloadable', `${p['name'] ?? ''} has no loadable tasks`);
@@ -1348,28 +1421,30 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
 
   // A proof runs inside the request through the runner and costs nothing, so it gets in-memory dedupe only: no lease,
   // no registry record. Requests with one key share one runner call while it runs, and a client key keeps its reply.
+  // Both maps are keyed by tenant and key, so a key another tenant used is unused here, as it is for jobs.
   const proofsRunning = new Map<string, { readonly fingerprint: string; readonly reply: Promise<Reply> }>();
   const proofsDone = new Map<string, { readonly fingerprint: string; readonly reply: Reply }>();
 
   /** The engine's proof of every task: reference 1, doing nothing 0, every decoy and near miss below 1. `worldplay verify --json`, never a model. */
-  async function worldProof(p: Params, rawKey: RawKey): Promise<Reply> {
-    const w = await worldDirOf(p['name'] ?? '');
+  async function worldProof(p: Params, who: User, ctx: Ctx): Promise<Reply> {
+    const w = await worldDirOf(p['name'] ?? '', who, ctx.filter);
     if (!w.ok) return w.reply;
-    const clientKey = idempotencyKeyOf(rawKey);
+    const clientKey = idempotencyKeyOf(ctx.key);
     if (!clientKey.ok) return clientKey.reply;
     const fingerprint = fingerprintOf('proof', [w.dir]);
     const key = clientKey.key ?? `derived:${fingerprint}`;
-    const known = proofsDone.get(key) ?? proofsRunning.get(key);
+    const slot = `${who.tenant} ${key}`;
+    const known = proofsDone.get(slot) ?? proofsRunning.get(slot);
     if (known !== undefined) {
       if (known.fingerprint === fingerprint) return known.reply;
       return fail(422, 'idempotency.mismatch', `Idempotency-Key ${key} was used for a different request (the proof of another world)`);
     }
     const reply = proveWorld(w.dir, p['name'] ?? '');
-    proofsRunning.set(key, { fingerprint, reply });
+    proofsRunning.set(slot, { fingerprint, reply });
     try {
       const done = await reply;
       if (clientKey.key !== undefined) {
-        proofsDone.set(key, { fingerprint, reply: done });
+        proofsDone.set(slot, { fingerprint, reply: done });
         for (const oldest of proofsDone.keys()) {
           if (proofsDone.size <= PROOF_REPLIES) break;
           proofsDone.delete(oldest);
@@ -1377,7 +1452,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       }
       return done;
     } finally {
-      proofsRunning.delete(key);
+      proofsRunning.delete(slot);
     }
   }
 
@@ -1400,10 +1475,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   /** Starts one agent episode as a child `episode` CLI. The studio never calls a model itself. */
-  async function startEpisode(body: unknown, rawKey: RawKey): Promise<Reply> {
+  async function startEpisode(body: unknown, who: User, ctx: Ctx): Promise<Reply> {
     if (!isObject(body)) return fail(400, 'episode.body', 'body must be {"world": ..., "task": ..., "agent": "noop" | "sonnet"}');
     const world = typeof body['world'] === 'string' ? body['world'] : '';
-    const w = await worldDirOf(world);
+    const w = await worldDirOf(world, who, ctx.filter);
     if (!w.ok) return w.reply;
     const task = body['task'];
     if (typeof task !== 'string' || !KEBAB.test(task.replace(/_/g, '-'))) return fail(400, 'episode.task', 'task must be a task id of the world');
@@ -1420,9 +1495,10 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     if (sha === null) return fail(500, 'episode.commit', 'git rev-parse HEAD failed in the code directory, so the episode would have no engine identity');
     return startJob({
       kind: 'episode',
-      rawKey,
+      tenant: who.tenant,
+      rawKey: ctx.key,
       request: ['bun', 'src/cli/episode.ts', '--world', w.dir, '--task', task, '--agent', agent, ...flags],
-      label: `${agent}-${++episodeSeq}`,
+      label: agent,
       knownRuns: new Set(),
       episode: { world, task, agent },
       launch: (runId) => {
@@ -1449,13 +1525,21 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return null;
   }
 
-  async function episodeStatus(p: Params): Promise<Reply> {
+  /** An episode's tenant is its job's. An episode dir with no job record counts as `default`. */
+  const episodeTenant = (runId: string): string => {
+    const job = jobs.get(runId);
+    return isEpisode(job) ? job.tenant : DEFAULT_TENANT;
+  };
+
+  async function episodeStatus(p: Params, who: User, filter: string | null): Promise<Reply> {
     const runId = p['runId'] ?? '';
     if (!safeSegment(runId)) return fail(400, 'episode.name_unsafe', 'an episode run id must be one plain path segment');
+    const unknown = fail(404, 'episode.unknown', `No episode run ${runId}`);
+    if (!visible(episodeTenant(runId), who, filter)) return unknown;
     const job = jobs.get(runId);
     const run = isEpisode(job) ? job : undefined;
     const out = run?.outDir ?? path.join(episodesDir, runId);
-    if (run === undefined && !await isDir(out)) return fail(404, 'episode.unknown', `No episode run ${runId}`);
+    if (run === undefined && !await isDir(out)) return unknown;
     const episode = await exportedEpisode(out, runId);
     const output = run?.child?.output() ?? '';
     const running = run !== undefined && run.phase !== 'finished';
@@ -1470,11 +1554,14 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     };
   }
 
-  /** Every exported episode under eval/episodes, each parsed by the dataset schema. A run with no export yet is skipped. */
-  async function allEpisodes(): Promise<{ episodes: Episode[]; unreadable: string[] }> {
+  /** The episode dirs under eval/episodes that `who` sees. */
+  const episodeDirs = async (who: User, filter: string | null): Promise<string[]> => (await dirsOf(episodesDir)).filter((runId) => visible(episodeTenant(runId), who, filter));
+
+  /** Every exported episode `who` sees, each parsed by the dataset schema. A run with no export yet is skipped. */
+  async function allEpisodes(who: User, filter: string | null): Promise<{ episodes: Episode[]; unreadable: string[] }> {
     const episodesOut: Episode[] = [];
     const unreadable: string[] = [];
-    for (const runId of await dirsOf(episodesDir)) {
+    for (const runId of await episodeDirs(who, filter)) {
       for (const name of ['dataset.jsonl', 'failures.jsonl']) {
         const text = await readFile(path.join(episodesDir, runId, name), 'utf8').catch(() => '');
         for (const [i, line] of text.split('\n').entries()) {
@@ -1491,13 +1578,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   }
 
   /** Episodes compared by world, task and agent model: success rate, failure causes, cost per success, provenance. */
-  async function episodeAnalytics(): Promise<Reply> {
-    const { episodes: list, unreadable } = await allEpisodes();
+  async function episodeAnalytics(who: User, filter: string | null): Promise<Reply> {
+    const { episodes: list, unreadable } = await allEpisodes(who, filter);
     return { status: 200, body: { episodes: list.length, groups: summarizeEpisodes(list), unreadable } };
   }
 
-  async function listEpisodes(): Promise<Reply> {
-    const ids = new Set([...(await dirsOf(episodesDir)), ...[...jobs.values()].filter(isEpisode).map((j) => j.runId)]);
+  async function listEpisodes(who: User, filter: string | null): Promise<Reply> {
+    const ids = new Set([...(await episodeDirs(who, filter)), ...[...jobs.values()].filter(isEpisode).filter((j) => visible(j.tenant, who, filter)).map((j) => j.runId)]);
     const rows = await Promise.all([...ids].sort().reverse().map(async (runId) => {
       const job = jobs.get(runId);
       const run = isEpisode(job) ? job : undefined;
@@ -1516,9 +1603,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     return { status: 200, body: { episodes: rows } };
   }
 
-  async function stopEpisode(p: Params): Promise<Reply> {
+  async function stopEpisode(p: Params, who: User, filter: string | null): Promise<Reply> {
     const run = jobs.get(p['runId'] ?? '');
-    if (!isEpisode(run)) return fail(404, 'episode.unknown', `No running episode ${p['runId'] ?? ''}`);
+    if (!isEpisode(run) || !visible(run.tenant, who, filter)) return fail(404, 'episode.unknown', `No running episode ${p['runId'] ?? ''}`);
     if (run.phase === 'finished') return fail(409, 'episode.finished', `Episode ${run.runId} already finished`);
     if (run.child === null) return fail(409, 'episode.unheld', `Episode ${run.runId} has no process this studio watches; its lease is held by ${run.lease?.holder ?? 'no studio'}`);
     const gone = await signalAndWait(run.child, ['SIGINT', 'SIGTERM']);
@@ -1528,33 +1615,33 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   const routes: readonly Route[] = [
     { method: 'GET', need: 'public', parts: [], run: () => ({ status: 200, body: studioPage(), type: 'text/html; charset=utf-8' }) },
     { method: 'GET', need: 'public', parts: ['api', 'health'], run: () => health() },
-    { method: 'GET', need: 'viewer', parts: ['api', 'worlds'], run: () => worlds() },
-    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'report'], run: (p) => worldReport(p) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'export'], run: (p) => worldExport(p) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'explorer'], run: (p) => explorer(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b, who) => serveWorld(p, b, who) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'services'], run: () => ({ status: 200, body: { services: [...services.values()].map((s) => s.record) } }) },
-    { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'stop'], run: (p) => stopService(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'call'], run: (p, b) => callService(p, b) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds'], run: (_p, _b, who, ctx) => worlds(who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'report'], run: (p, _b, who, ctx) => worldReport(p, who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'export'], run: (p, _b, who, ctx) => worldExport(p, who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'explorer'], run: (p, _b, who, ctx) => explorer(p, who, ctx.filter) },
+    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'serve'], run: (p, b, who, ctx) => serveWorld(p, b, who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'services'], run: (_p, _b, who, ctx) => ({ status: 200, body: { services: [...services.values()].filter((s) => visible(s.record.tenant, who, ctx.filter)).map((s) => s.record) } }) },
+    { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'stop'], run: (p, _b, who, ctx) => stopService(p, who, ctx.filter) },
+    { method: 'POST', need: 'operator', parts: ['api', 'services', ':id', 'call'], run: (p, b, who, ctx) => callService(p, b, who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'inputs'], run: () => inputs() },
     { method: 'GET', need: 'viewer', parts: ['api', 'inputs', ':spec', 'paths'], run: (p) => specPaths(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'generate'], run: (_p, b, _w, key) => generate(b, key) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId'], run: (p) => runStatus(p) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId', 'events'], run: (p) => runStatus(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'generate', ':runId', 'stop'], run: (p) => stopRun(p) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'runs'], run: () => listRuns() },
+    { method: 'POST', need: 'operator', parts: ['api', 'generate'], run: (_p, b, who, ctx) => generate(b, who, ctx.key) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId'], run: (p, _b, who, ctx) => runStatus(p, who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'generate', ':runId', 'events'], run: (p, _b, who, ctx) => runStatus(p, who, ctx.filter) },
+    { method: 'POST', need: 'operator', parts: ['api', 'generate', ':runId', 'stop'], run: (p, _b, who, ctx) => stopRun(p, who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'runs'], run: (_p, _b, who, ctx) => listRuns(who, ctx.filter) },
     { method: 'GET', need: 'viewer', parts: ['api', 'eval'], run: () => listEval() },
     { method: 'GET', need: 'viewer', parts: ['api', 'eval', ':dir'], run: (p) => evalSummary(p) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'costs'], run: () => costs() },
-    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'tasks'], run: (p) => worldTasks(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p, _b, _w, key) => worldProof(p, key) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'episodes'], run: () => listEpisodes() },
-    { method: 'POST', need: 'operator', parts: ['api', 'episodes'], run: (_p, b, _w, key) => startEpisode(b, key) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'episodes', 'analytics'], run: () => episodeAnalytics() },
-    { method: 'GET', need: 'viewer', parts: ['api', 'episodes', ':runId'], run: (p) => episodeStatus(p) },
-    { method: 'POST', need: 'operator', parts: ['api', 'episodes', ':runId', 'stop'], run: (p) => stopEpisode(p) },
-    { method: 'GET', need: 'viewer', parts: ['api', 'me'], run: (_p, _b, who) => ({ status: 200, body: { name: who.kind === 'user' ? who.name : null, role: who.kind === 'user' ? who.role : null, signIn } }) },
-    { method: 'GET', need: 'admin', parts: ['api', 'audit'], run: () => auditTail() },
+    { method: 'GET', need: 'admin', parts: ['api', 'costs'], run: () => costs() },
+    { method: 'GET', need: 'viewer', parts: ['api', 'worlds', ':name', 'tasks'], run: (p, _b, who, ctx) => worldTasks(p, who, ctx.filter) },
+    { method: 'POST', need: 'operator', parts: ['api', 'worlds', ':name', 'proof'], run: (p, _b, who, ctx) => worldProof(p, who, ctx) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'episodes'], run: (_p, _b, who, ctx) => listEpisodes(who, ctx.filter) },
+    { method: 'POST', need: 'operator', parts: ['api', 'episodes'], run: (_p, b, who, ctx) => startEpisode(b, who, ctx) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'episodes', 'analytics'], run: (_p, _b, who, ctx) => episodeAnalytics(who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'episodes', ':runId'], run: (p, _b, who, ctx) => episodeStatus(p, who, ctx.filter) },
+    { method: 'POST', need: 'operator', parts: ['api', 'episodes', ':runId', 'stop'], run: (p, _b, who, ctx) => stopEpisode(p, who, ctx.filter) },
+    { method: 'GET', need: 'viewer', parts: ['api', 'me'], run: (_p, _b, who) => ({ status: 200, body: { name: who.name, role: who.role, tenant: who.tenant, signIn } }) },
+    { method: 'GET', need: 'admin', parts: ['api', 'audit'], run: (_p, _b, _w, ctx) => auditTail(ctx.filter) },
   ];
   const ROUTE_LIST = routes.map((r) => `${r.method} /${r.parts.filter((p) => !p.startsWith(':')).join('/')}`).join(', ');
 
@@ -1610,39 +1697,43 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
       const missing = `No studio route ${method} /${segments.join('/')}`;
       return fail(404, 'route.not_found', signIn ? missing : `${missing}. Studio routes: ${ROUTE_LIST}`);
     }
-    const need = hit.route.need;
+    const route = hit.route;
+    if (route.need === 'public') return route.run();
     const client = req.socket.remoteAddress ?? 'unknown';
-    if (need !== 'public') {
-      const what = `${method} /${segments.join('/')}`;
-      // A throttled client is refused whether its token is right or wrong, so a guesser learns nothing.
-      // The cost is that a valid user on the same address waits too.
-      if (who.kind !== 'anonymous') {
-        const seconds = failedSignIns.wait(client);
-        if (seconds > 0) return fail(429, 'auth.throttled', `Too many failed sign-ins from ${client}: wait ${seconds} s before the next bearer token is checked`, { 'retry-after': String(seconds) });
-      }
-      if (who.kind === 'anonymous') {
-        return fail(401, 'auth.required', `${what} needs sign-in: send Authorization: Bearer <token>, or sign in on the page`, AUTH_CHALLENGE);
-      }
-      if (who.kind === 'rejected') {
-        failedSignIns.draw(client);
-        return fail(401, 'auth.invalid', `${what}: the bearer token matches no studio user; check it, or sign in again on the page`, AUTH_CHALLENGE);
-      }
-      if (roleRank(who.role) < roleRank(need)) {
-        return fail(403, 'auth.forbidden', `${what} needs the ${need} role; ${who.name} is ${who.role === 'viewer' ? 'a' : 'an'} ${who.role}`);
-      }
+    const what = `${method} /${segments.join('/')}`;
+    // A throttled client is refused whether its token is right or wrong, so a guesser learns nothing.
+    // The cost is that a valid user on the same address waits too.
+    if (who.kind !== 'anonymous') {
+      const seconds = failedSignIns.wait(client);
+      if (seconds > 0) return fail(429, 'auth.throttled', `Too many failed sign-ins from ${client}: wait ${seconds} s before the next bearer token is checked`, { 'retry-after': String(seconds) });
+    }
+    if (who.kind === 'anonymous') {
+      return fail(401, 'auth.required', `${what} needs sign-in: send Authorization: Bearer <token>, or sign in on the page`, AUTH_CHALLENGE);
+    }
+    if (who.kind === 'rejected') {
+      failedSignIns.draw(client);
+      return fail(401, 'auth.invalid', `${what}: the bearer token matches no studio user; check it, or sign in again on the page`, AUTH_CHALLENGE);
+    }
+    if (roleRank(who.role) < roleRank(route.need)) {
+      return fail(403, 'auth.forbidden', `${what} needs the ${route.need} role; ${who.name} is ${who.role === 'viewer' ? 'a' : 'an'} ${who.role}`);
     }
     if (method === 'POST') {
-      const route = hit.route.parts.join('/');
-      const key = `POST ${route} ${client}`;
+      const joined = route.parts.join('/');
+      const key = `POST ${joined} ${client} ${who.tenant}`;
       const seconds = postBuckets.wait(key);
       if (seconds > 0) {
-        return fail(429, 'studio.rate_limited', `Too many POST /${route} requests from ${client}: the studio allows a burst of ${rateLimit.capacity}, refilled ${rateLimit.refillPerSecond} per second`, { 'retry-after': String(seconds) });
+        return fail(429, 'studio.rate_limited', `Too many POST /${joined} requests from ${client}: the studio allows a burst of ${rateLimit.capacity}, refilled ${rateLimit.refillPerSecond} per second`, { 'retry-after': String(seconds) });
       }
       postBuckets.draw(key);
     }
-    const body = hit.route.method === 'POST' ? await readBody(req) : { ok: true as const, value: undefined };
+    // An admin's ?tenant=, read only after sign-in and the throttle, so a malformed one cannot tell a guesser that a token
+    // is an admin's. No other role narrows.
+    const at = (req.url ?? '').indexOf('?');
+    const filter = who.role === 'admin' ? new URLSearchParams(at < 0 ? '' : (req.url ?? '').slice(at + 1)).get('tenant') : null;
+    if (filter !== null && !TENANT.test(filter)) return fail(400, 'tenant.invalid', `?tenant=${filter} is refused: ${TENANT_RULE}`);
+    const body = route.method === 'POST' ? await readBody(req) : { ok: true as const, value: undefined };
     if (!body.ok) return fail(body.status, body.code, body.message);
-    return hit.route.run(hit.params, body.value, who, req.headers['idempotency-key']);
+    return route.run(hit.params, body.value, who, { key: req.headers['idempotency-key'], filter });
   };
 
   const answer = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -1666,6 +1757,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         at: new Date().toISOString(),
         user: who.kind === 'user' ? who.name : null,
         role: who.kind === 'user' ? who.role : null,
+        tenant: who.kind === 'user' ? who.tenant : null,
         method: 'POST',
         path: (req.url ?? '/').split('?')[0],
         status: reply.status,
