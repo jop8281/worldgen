@@ -1,0 +1,1243 @@
+format: 1
+meta:
+  name: gen_it_asset_tracker
+  description: An IT asset tracker. Laptops move between in-stock, assigned, in-repair, lost and retired. Employees check laptops out and back in. Repair tickets take a laptop out of service until complete. Quarterly audits snapshot the laptops at a location, record whether each was found, and close by flagging missing laptops as lost.
+  resembles: Snipe-IT style IT asset management (laptops, checkouts, maintenance, audits)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-07T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  employee:
+    description: A person who can hold laptops. active false means offboarded.
+    idPrefix: emp
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      department:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      active:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  laptop:
+    description: A tracked laptop with a lifecycle state and a location. asset_tag and serial are unique.
+    idPrefix: lap
+    fields:
+      asset_tag:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 40
+      serial:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 60
+      model:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      location:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      purchased_on:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: Lifecycle. assign_laptop, return_laptop, open_repair, complete_repair, retire_laptop and close_audit move it. retired is final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - in_stock
+          - assigned
+          - in_repair
+          - lost
+          - retired
+        initial: in_stock
+        transitions:
+          in_stock:
+            - assigned
+            - in_repair
+            - lost
+            - retired
+          assigned:
+            - in_stock
+            - in_repair
+            - lost
+          in_repair:
+            - in_stock
+            - lost
+          lost:
+            - retired
+          retired: []
+  assignment:
+    description: A checkout of a laptop to an employee. active until the laptop is returned, repaired or found missing.
+    idPrefix: asg
+    fields:
+      laptop_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: laptop
+        onDelete: restrict
+      employee_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: employee
+        onDelete: restrict
+      assigned_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: now
+      returned_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      active:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  repair_ticket:
+    description: A repair job on a laptop. Open until completed. Open tickets older than 7 days are flagged stale by a daily job.
+    idPrefix: rep
+    fields:
+      laptop_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: laptop
+        onDelete: restrict
+      issue:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: open until complete_repair, then completed.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - open
+          - completed
+        initial: open
+        transitions:
+          open:
+            - completed
+          completed: []
+      stale:
+        type: bool
+        description: Set by the flag_stale_repairs job.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+      cost:
+        type: money
+        description: Repair cost in cents, recorded on completion.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      resolution:
+        type: text
+        description: What was done, recorded on completion.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  audit:
+    description: A quarterly audit of the laptops at one location.
+    idPrefix: aud
+    fields:
+      quarter:
+        type: string
+        description: Such as 2026-Q4.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 20
+      location:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      status:
+        type: state
+        description: planned until start_audit, in_progress until close_audit, then closed.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - planned
+          - in_progress
+          - closed
+        initial: planned
+        transitions:
+          planned:
+            - in_progress
+          in_progress:
+            - closed
+          closed: []
+      found_count:
+        type: int
+        description: Set on close.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+      missing_count:
+        type: int
+        description: Set on close.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+  audit_item:
+    description: One laptop line in an audit with its expected holder and verification result.
+    idPrefix: aui
+    fields:
+      audit_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: audit
+        onDelete: cascade
+      laptop_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: laptop
+        onDelete: restrict
+      expected_holder_id:
+        type: ref
+        description: Who held the laptop when the audit started. null when it was in stock.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: employee
+        onDelete: nullify
+      result:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - pending
+          - found
+          - missing
+          - mismatch
+        default: pending
+routes:
+  list_employees:
+    op: list
+    entity: employee
+    filters:
+      - active
+      - department
+    search:
+      - name
+      - email
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /employees
+  get_employee:
+    op: get
+    entity: employee
+    method: GET
+    path: /employees/{id}
+  create_employee:
+    op: create
+    entity: employee
+    method: POST
+    path: /employees
+  update_employee:
+    op: update
+    entity: employee
+    method: PATCH
+    path: /employees/{id}
+  list_laptops:
+    op: list
+    entity: laptop
+    filters:
+      - status
+      - location
+      - model
+    search:
+      - asset_tag
+      - serial
+    sort:
+      - asset_tag
+      - purchased_on
+    pageSize: 25
+    method: GET
+    path: /laptops
+  get_laptop:
+    op: get
+    entity: laptop
+    method: GET
+    path: /laptops/{id}
+  create_laptop:
+    op: create
+    entity: laptop
+    method: POST
+    path: /laptops
+  update_laptop:
+    op: update
+    entity: laptop
+    method: PATCH
+    path: /laptops/{id}
+  list_assignments:
+    op: list
+    entity: assignment
+    filters:
+      - laptop_id
+      - employee_id
+      - active
+    search: []
+    sort:
+      - assigned_at
+    pageSize: 25
+    method: GET
+    path: /assignments
+  get_assignment:
+    op: get
+    entity: assignment
+    method: GET
+    path: /assignments/{id}
+  list_repair_tickets:
+    op: list
+    entity: repair_ticket
+    filters:
+      - status
+      - laptop_id
+      - stale
+    search:
+      - issue
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /repair_tickets
+  get_repair_ticket:
+    op: get
+    entity: repair_ticket
+    method: GET
+    path: /repair_tickets/{id}
+  list_audits:
+    op: list
+    entity: audit
+    filters:
+      - status
+      - quarter
+      - location
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /audits
+  get_audit:
+    op: get
+    entity: audit
+    method: GET
+    path: /audits/{id}
+  create_audit:
+    op: create
+    entity: audit
+    method: POST
+    path: /audits
+  list_audit_items:
+    op: list
+    entity: audit_item
+    filters:
+      - audit_id
+      - result
+      - laptop_id
+      - expected_holder_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /audit_items
+  get_audit_item:
+    op: get
+    entity: audit_item
+    method: GET
+    path: /audit_items/{id}
+actions:
+  assign_laptop:
+    method: POST
+    path: /laptops/{id}/assign
+    description: Check an in_stock laptop out to an active employee.
+    input:
+      employee_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: employee
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const l = ctx.db.get('laptop', ctx.params.id);
+        if (l === null) ctx.fail(404, 'not_found', 'laptop ' + ctx.params.id + ' not found');
+        if (l.status !== 'in_stock') ctx.fail(409, 'invalid_state', 'laptop ' + l.id + ' is ' + l.status + '. Only in_stock laptops can be assigned.');
+        const e = ctx.db.get('employee', ctx.body.employee_id);
+        if (e === null) ctx.fail(422, 'unknown_employee', 'employee ' + ctx.body.employee_id + ' not found');
+        if (e.active !== true) ctx.fail(409, 'employee_inactive', 'employee ' + e.id + ' is inactive.');
+        ctx.db.create('assignment', { laptop_id: l.id, employee_id: e.id, assigned_at: ctx.now(), active: true });
+        const updated = ctx.db.update('laptop', l.id, { status: 'assigned' });
+        return { status: 200, body: updated };
+      }
+  return_laptop:
+    method: POST
+    path: /laptops/{id}/return
+    description: Check an assigned laptop back in.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const l = ctx.db.get('laptop', ctx.params.id);
+        if (l === null) ctx.fail(404, 'not_found', 'laptop ' + ctx.params.id + ' not found');
+        if (l.status !== 'assigned') ctx.fail(409, 'invalid_state', 'laptop ' + l.id + ' is ' + l.status + '. Only assigned laptops can be returned.');
+        const now = ctx.now();
+        for (const a of ctx.db.list('assignment', { where: { laptop_id: l.id, active: true } })) {
+          ctx.db.update('assignment', a.id, { active: false, returned_at: now });
+        }
+        const updated = ctx.db.update('laptop', l.id, { status: 'in_stock' });
+        return { status: 200, body: updated };
+      }
+  retire_laptop:
+    method: POST
+    path: /laptops/{id}/retire
+    description: Retire an in_stock or lost laptop. Final.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const l = ctx.db.get('laptop', ctx.params.id);
+        if (l === null) ctx.fail(404, 'not_found', 'laptop ' + ctx.params.id + ' not found');
+        if (l.status !== 'in_stock' && l.status !== 'lost') ctx.fail(409, 'invalid_state', 'laptop ' + l.id + ' is ' + l.status + '. Only in_stock or lost laptops can be retired.');
+        const updated = ctx.db.update('laptop', l.id, { status: 'retired' });
+        return { status: 200, body: updated };
+      }
+  open_repair:
+    method: POST
+    path: /laptops/{id}/repair
+    description: Open a repair ticket on an in_stock or assigned laptop, ending any active assignment.
+    input:
+      issue:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const l = ctx.db.get('laptop', ctx.params.id);
+        if (l === null) ctx.fail(404, 'not_found', 'laptop ' + ctx.params.id + ' not found');
+        if (l.status !== 'in_stock' && l.status !== 'assigned') ctx.fail(409, 'invalid_state', 'laptop ' + l.id + ' is ' + l.status + '. Only in_stock or assigned laptops can go to repair.');
+        const issue = ctx.body.issue.trim();
+        if (issue === '') ctx.fail(400, 'input.invalid', 'Invalid input for open_repair: issue expected a non-blank text, found ""');
+        const now = ctx.now();
+        for (const a of ctx.db.list('assignment', { where: { laptop_id: l.id, active: true } })) {
+          ctx.db.update('assignment', a.id, { active: false, returned_at: now });
+        }
+        const ticket = ctx.db.create('repair_ticket', { laptop_id: l.id, issue, stale: false });
+        ctx.db.update('laptop', l.id, { status: 'in_repair' });
+        return { status: 200, body: ticket };
+      }
+  complete_repair:
+    method: POST
+    path: /repair_tickets/{id}/complete
+    description: Complete an open repair ticket and return the laptop to stock.
+    input:
+      resolution:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      cost:
+        type: money
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+    handler: |-
+      (ctx) => {
+        const t = ctx.db.get('repair_ticket', ctx.params.id);
+        if (t === null) ctx.fail(404, 'not_found', 'repair ticket ' + ctx.params.id + ' not found');
+        if (t.status !== 'open') ctx.fail(409, 'invalid_state', 'repair ticket ' + t.id + ' is ' + t.status + '. Only open tickets can be completed.');
+        const cost = ctx.body.cost === undefined ? null : ctx.body.cost;
+        const updated = ctx.db.update('repair_ticket', t.id, { status: 'completed', resolution: ctx.body.resolution, cost });
+        const l = ctx.db.get('laptop', t.laptop_id);
+        if (l !== null && l.status === 'in_repair') ctx.db.update('laptop', l.id, { status: 'in_stock' });
+        return { status: 200, body: updated };
+      }
+  start_audit:
+    method: POST
+    path: /audits/{id}/start
+    description: Snapshot non-retired, non-lost laptops at the audit location into pending items.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const a = ctx.db.get('audit', ctx.params.id);
+        if (a === null) ctx.fail(404, 'not_found', 'audit ' + ctx.params.id + ' not found');
+        if (a.status !== 'planned') ctx.fail(409, 'invalid_state', 'audit ' + a.id + ' is ' + a.status + '. Only planned audits can be started.');
+        for (const l of ctx.db.list('laptop', { where: { location: a.location } })) {
+          if (l.status === 'retired' || l.status === 'lost') continue;
+          const act = ctx.db.list('assignment', { where: { laptop_id: l.id, active: true } })[0];
+          ctx.db.create('audit_item', { audit_id: a.id, laptop_id: l.id, expected_holder_id: act ? act.employee_id : null, result: 'pending' });
+        }
+        const updated = ctx.db.update('audit', a.id, { status: 'in_progress' });
+        return { status: 200, body: updated };
+      }
+  verify_audit_item:
+    method: POST
+    path: /audit_items/{id}/verify
+    description: Record found, missing or mismatch on a pending item of an in-progress audit.
+    input:
+      result:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - found
+          - missing
+          - mismatch
+    handler: |-
+      (ctx) => {
+        const item = ctx.db.get('audit_item', ctx.params.id);
+        if (item === null) ctx.fail(404, 'not_found', 'audit item ' + ctx.params.id + ' not found');
+        const a = ctx.db.get('audit', item.audit_id);
+        if (a.status !== 'in_progress') ctx.fail(409, 'invalid_state', 'audit ' + a.id + ' is ' + a.status + '. Items can only be verified in an in_progress audit.');
+        if (item.result !== 'pending') ctx.fail(409, 'invalid_state', 'audit item ' + item.id + ' is already verified as ' + item.result + '.');
+        const updated = ctx.db.update('audit_item', item.id, { result: ctx.body.result });
+        return { status: 200, body: updated };
+      }
+  close_audit:
+    method: POST
+    path: /audits/{id}/close
+    description: Close an audit with every item verified; missing laptops become lost.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const a = ctx.db.get('audit', ctx.params.id);
+        if (a === null) ctx.fail(404, 'not_found', 'audit ' + ctx.params.id + ' not found');
+        if (a.status !== 'in_progress') ctx.fail(409, 'invalid_state', 'audit ' + a.id + ' is ' + a.status + '. Only in_progress audits can be closed.');
+        const items = ctx.db.list('audit_item', { where: { audit_id: a.id } });
+        const pending = items.filter((i) => i.result === 'pending').length;
+        if (pending > 0) ctx.fail(409, 'audit_incomplete', 'audit ' + a.id + ' still has ' + pending + ' pending items.');
+        const now = ctx.now();
+        let found = 0;
+        let missing = 0;
+        for (const i of items) {
+          if (i.result === 'found') found += 1;
+          if (i.result === 'missing') {
+            missing += 1;
+            for (const s of ctx.db.list('assignment', { where: { laptop_id: i.laptop_id, active: true } })) {
+              ctx.db.update('assignment', s.id, { active: false, returned_at: now });
+            }
+            const l = ctx.db.get('laptop', i.laptop_id);
+            if (l !== null && l.status !== 'lost' && l.status !== 'retired') ctx.db.update('laptop', l.id, { status: 'lost' });
+          }
+        }
+        const updated = ctx.db.update('audit', a.id, { status: 'closed', found_count: found, missing_count: missing });
+        return { status: 200, body: updated };
+      }
+jobs:
+  flag_stale_repairs:
+    description: Daily. Flags open repair tickets created at least 7 days ago as stale.
+    every: 1d
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const t of ctx.db.list('repair_ticket', { where: { status: 'open', stale: false } })) {
+          if (ctx.time.minutesBetween(t.created_at, now) >= 7 * 24 * 60) ctx.db.update('repair_ticket', t.id, { stale: true });
+        }
+      }
+fixtures: {}
+seed:
+  employee: |-
+    (ctx) => {
+      const first = ['Maya','Daniel','Priya','Tomas','Aiko','Carlos','Helen','Omar','Sofia','Liam','Nina','Raj','Elena','Victor','Grace','Hugo','Ines','Jonas','Kara','Leo','Mira','Noah','Olga','Pavel','Quinn','Rosa','Sven','Tara','Umar','Vera'];
+      const last = ['Alvarez','Brandt','Chen','Dubois','Eriksen','Farouk','Gupta','Hansen','Ito','Jensen','Kowalski','Lindqvist','Moreau','Nakamura','Okafor','Petrov','Quiroga','Rossi','Singh','Tanaka','Ullman','Varga','Weber','Xu','Yilmaz','Zhou','Abbott','Becker','Castro','Doyle'];
+      const depts = ['Engineering','Sales','Finance','Support','IT','Marketing','HR'];
+      const rows = [];
+      for (let i = 0; i < 30; i++) {
+        const f = first[i];
+        const l = last[(i * 7) % 30];
+        const created = ctx.time.plus('2024-01-08T09:00:00.000Z', (i * 20 + 5) + 'd');
+        rows.push({
+          name: f + ' ' + l,
+          email: f.toLowerCase() + '.' + l.toLowerCase() + '@northbridge.example',
+          department: depts[i % depts.length],
+          active: i < 24,
+          created_at: created,
+          updated_at: created,
+        });
+      }
+      return rows;
+    }
+  laptop: |-
+    (ctx) => {
+      const statuses = [];
+      const add = (s, n) => { for (let i = 0; i < n; i++) statuses.push(s); };
+      add('assigned', 26); add('in_stock', 13); add('in_repair', 10); add('lost', 5); add('retired', 6);
+      for (let i = statuses.length - 1; i > 0; i--) {
+        const j = ctx.int(0, i);
+        const x = statuses[i]; statuses[i] = statuses[j]; statuses[j] = x;
+      }
+      const models = ['ThinkPad T14','ThinkPad X1','MacBook Air','MacBook Pro','Dell XPS 13'];
+      let elig = 0;
+      return statuses.map((s, i) => {
+        let location;
+        if (s === 'lost' || s === 'retired') location = 'Warehouse';
+        else { elig += 1; location = elig <= 45 ? 'HQ Floor 2' : 'Warehouse'; }
+        const purchased = ctx.time.plus('2022-03-01T09:00:00.000Z', (i * 17 + ctx.int(0, 10)) + 'd');
+        return {
+          asset_tag: 'LT-' + String(1001 + i),
+          serial: 'SN' + String(7300000 + i * 137),
+          model: models[(i * 3) % models.length],
+          location,
+          purchased_on: purchased,
+          status: s,
+          created_at: purchased,
+          updated_at: purchased,
+        };
+      });
+    }
+  assignment: |-
+    (ctx) => {
+      const now = ctx.now();
+      const laptops = ctx.rows('laptop');
+      const employees = ctx.rows('employee');
+      const active = employees.filter((e) => e.active);
+      const inactive = employees.filter((e) => !e.active);
+      const rows = [];
+      const assigned = laptops.filter((l) => l.status === 'assigned');
+      assigned.forEach((l, k) => {
+        const emp = k % 5 === 4 ? inactive[Math.floor(k / 5) % inactive.length] : active[k % active.length];
+        const at = ctx.time.minus(now, (5 + k * 10) + 'd');
+        rows.push({ laptop_id: l.id, employee_id: emp.id, assigned_at: at, returned_at: null, active: true, created_at: at, updated_at: at });
+      });
+      const others = laptops.filter((l) => l.status !== 'assigned');
+      for (let j = 0; j < 24; j++) {
+        const l = others[j % others.length];
+        const emp = j === 0 ? employees[0] : employees[(j * 5 + 3) % employees.length];
+        const at = ctx.time.minus(now, (330 - j * 5) + 'd');
+        const ret = ctx.time.plus(at, (30 + j * 2) + 'd');
+        rows.push({ laptop_id: l.id, employee_id: emp.id, assigned_at: at, returned_at: ret, active: false, created_at: at, updated_at: ret });
+      }
+      return rows;
+    }
+  repair_ticket: |-
+    (ctx) => {
+      const now = ctx.now();
+      const laptops = ctx.rows('laptop');
+      const openIssues = ['Screen flickering on boot','Battery drains within an hour','Keyboard keys unresponsive','Fan noise and overheating','Cracked display after drop','Screen flickering','Will not charge with original adapter','Trackpad click not registering','Wi-Fi card drops connection','Liquid damage near the keyboard'];
+      const doneIssues = ['Screen flickering on boot','Battery swollen','Keyboard keys unresponsive','Hinge loose','Cracked display after drop','Fan failure','Trackpad not registering','SSD errors on startup'];
+      const fixes = ['Replaced display panel','Replaced battery','Replaced keyboard assembly','Tightened and replaced hinge','Replaced cooling fan','Replaced SSD and reimaged'];
+      const rows = [];
+      const inRepair = laptops.filter((l) => l.status === 'in_repair');
+      inRepair.forEach((l, k) => {
+        const stale = k < 6;
+        const age = stale ? 9 + k * 3 : 1 + (k - 6);
+        const created = ctx.time.minus(now, age + 'd');
+        rows.push({ laptop_id: l.id, issue: openIssues[k % openIssues.length], status: 'open', stale, cost: null, resolution: null, created_at: created, updated_at: created });
+      });
+      const pool = laptops.filter((l) => l.status !== 'in_repair' && l.status !== 'retired');
+      for (let j = 0; j < 20; j++) {
+        const l = pool[j % pool.length];
+        const created = ctx.time.minus(now, (40 + j * 7) + 'd');
+        rows.push({ laptop_id: l.id, issue: doneIssues[j % doneIssues.length], status: 'completed', stale: false, cost: 5000 + j * 1500, resolution: fixes[j % fixes.length], created_at: created, updated_at: ctx.time.plus(created, (2 + (j % 5)) + 'd') });
+      }
+      return rows;
+    }
+  audit: |-
+    (ctx) => {
+      const now = ctx.now();
+      const c0 = ctx.time.minus(now, '120d');
+      const c1 = ctx.time.minus(now, '210d');
+      const c2 = ctx.time.minus(now, '3d');
+      const c3 = ctx.time.minus(now, '1d');
+      return [
+        { quarter: '2026-Q2', location: 'Warehouse', status: 'closed', found_count: 10, missing_count: 5, created_at: c0, updated_at: ctx.time.plus(c0, '5d') },
+        { quarter: '2026-Q1', location: 'Branch Office', status: 'closed', found_count: 0, missing_count: 0, created_at: c1, updated_at: ctx.time.plus(c1, '4d') },
+        { quarter: '2026-Q4', location: 'HQ Floor 2', status: 'in_progress', found_count: 0, missing_count: 0, created_at: c2, updated_at: c2 },
+        { quarter: '2026-Q4', location: 'Warehouse', status: 'planned', found_count: 0, missing_count: 0, created_at: c3, updated_at: c3 },
+      ];
+    }
+  audit_item: |-
+    (ctx) => {
+      const audits = ctx.rows('audit');
+      const laptops = ctx.rows('laptop');
+      const employees = ctx.rows('employee');
+      const inactiveIds = new Set(employees.filter((e) => !e.active).map((e) => e.id));
+      const holder = {};
+      for (const a of ctx.rows('assignment')) if (a.active) holder[a.laptop_id] = a.employee_id;
+      const rows = [];
+      const live = audits.find((a) => a.status === 'in_progress');
+      const done = audits.find((a) => a.status === 'closed' && a.location === 'Warehouse');
+      const hq = laptops.filter((l) => l.location === live.location && l.status !== 'retired' && l.status !== 'lost');
+      let v = 0;
+      hq.forEach((l, i) => {
+        const h = holder[l.id] === undefined ? null : holder[l.id];
+        let result = 'pending';
+        if (!(h !== null && inactiveIds.has(h)) && i % 3 === 0) {
+          result = v % 7 === 3 ? 'missing' : v % 7 === 5 ? 'mismatch' : 'found';
+          v += 1;
+        }
+        rows.push({ audit_id: live.id, laptop_id: l.id, expected_holder_id: h, result, created_at: live.created_at, updated_at: result === 'pending' ? live.created_at : ctx.time.plus(live.created_at, '1d') });
+      });
+      const wh = laptops.filter((l) => l.location === done.location);
+      for (const l of wh) {
+        const h = holder[l.id] === undefined ? null : holder[l.id];
+        rows.push({ audit_id: done.id, laptop_id: l.id, expected_holder_id: h, result: l.status === 'lost' ? 'missing' : 'found', created_at: done.created_at, updated_at: done.updated_at });
+      }
+      return rows;
+    }
+tests:
+  t_assign:
+    description: Create an employee and a laptop, assign it, check state and assignment, then check the refusals.
+    script: |-
+      (ctx) => {
+        const e = ctx.api('POST','/employees',{name:'Assign Tester',email:'assign.tester@test.example',department:'Engineering'});
+        ctx.assert(e.status===201,'employee create '+JSON.stringify(e.body));
+        const l = ctx.api('POST','/laptops',{asset_tag:'TST-A-001',serial:'TSTSN-A-001',model:'ThinkPad T14',location:'Test Lab A'});
+        ctx.assert(l.status===201 && l.body.status==='in_stock','laptop create '+JSON.stringify(l.body));
+        const r = ctx.api('POST','/laptops/'+l.body.id+'/assign',{employee_id:e.body.id});
+        ctx.assert(r.status===200 && r.body.status==='assigned','assign '+JSON.stringify(r.body));
+        const as = ctx.api('GET','/assignments?laptop_id='+l.body.id+'&active=true').body.data;
+        ctx.assert(as.length===1 && as[0].employee_id===e.body.id,'one active assignment for the employee');
+        const again = ctx.api('POST','/laptops/'+l.body.id+'/assign',{employee_id:e.body.id});
+        ctx.assert(again.status===409 && again.body.error.code==='invalid_state','second assign '+JSON.stringify(again.body));
+        const l2 = ctx.api('POST','/laptops',{asset_tag:'TST-A-002',serial:'TSTSN-A-002',model:'ThinkPad T14',location:'Test Lab A'});
+        const bad = ctx.api('POST','/laptops/'+l2.body.id+'/assign',{employee_id:'emp_9999'});
+        ctx.assert(bad.status===400 && bad.body.error.code==='input.invalid','unknown employee '+JSON.stringify(bad.body));
+        ctx.assert(ctx.api('GET','/laptops/'+l2.body.id).body.status==='in_stock','laptop unchanged after refusal');
+      }
+  t_return:
+    description: Assign then return a laptop, check assignment and laptop, and that a second return is refused.
+    script: |-
+      (ctx) => {
+        const e = ctx.api('POST','/employees',{name:'Return Tester',email:'return.tester@test.example',department:'Sales'});
+        const l = ctx.api('POST','/laptops',{asset_tag:'TST-R-001',serial:'TSTSN-R-001',model:'MacBook Air',location:'Test Lab R'});
+        ctx.assert(ctx.api('POST','/laptops/'+l.body.id+'/assign',{employee_id:e.body.id}).status===200,'assign');
+        const r = ctx.api('POST','/laptops/'+l.body.id+'/return',{});
+        ctx.assert(r.status===200 && r.body.status==='in_stock','return '+JSON.stringify(r.body));
+        const as = ctx.api('GET','/assignments?laptop_id='+l.body.id).body.data;
+        ctx.assert(as.length===1 && as[0].active===false && as[0].returned_at!==null,'assignment closed '+JSON.stringify(as));
+        const again = ctx.api('POST','/laptops/'+l.body.id+'/return',{});
+        ctx.assert(again.status===409 && again.body.error.code==='invalid_state','second return '+JSON.stringify(again.body));
+      }
+  t_retire:
+    description: Retire an in-stock laptop, then check it cannot be retired or assigned again, and an assigned laptop cannot be retired.
+    script: |-
+      (ctx) => {
+        const e = ctx.api('POST','/employees',{name:'Retire Tester',email:'retire.tester@test.example',department:'Finance'});
+        const l = ctx.api('POST','/laptops',{asset_tag:'TST-T-001',serial:'TSTSN-T-001',model:'Dell XPS 13',location:'Test Lab T'});
+        const r = ctx.api('POST','/laptops/'+l.body.id+'/retire',{});
+        ctx.assert(r.status===200 && r.body.status==='retired','retire '+JSON.stringify(r.body));
+        const again = ctx.api('POST','/laptops/'+l.body.id+'/retire',{});
+        ctx.assert(again.status===409 && again.body.error.code==='invalid_state','retire twice '+JSON.stringify(again.body));
+        const as = ctx.api('POST','/laptops/'+l.body.id+'/assign',{employee_id:e.body.id});
+        ctx.assert(as.status===409 && as.body.error.code==='invalid_state','assign retired '+JSON.stringify(as.body));
+        const l2 = ctx.api('POST','/laptops',{asset_tag:'TST-T-002',serial:'TSTSN-T-002',model:'Dell XPS 13',location:'Test Lab T'});
+        ctx.api('POST','/laptops/'+l2.body.id+'/assign',{employee_id:e.body.id});
+        const busy = ctx.api('POST','/laptops/'+l2.body.id+'/retire',{});
+        ctx.assert(busy.status===409 && busy.body.error.code==='invalid_state','retire assigned '+JSON.stringify(busy.body));
+      }
+  t_open_repair:
+    description: Assign a laptop, open a repair, check ticket, laptop and assignment, and that a second repair is refused.
+    script: |-
+      (ctx) => {
+        const e = ctx.api('POST','/employees',{name:'Repair Tester',email:'repair.tester@test.example',department:'Support'});
+        const l = ctx.api('POST','/laptops',{asset_tag:'TST-P-001',serial:'TSTSN-P-001',model:'ThinkPad X1',location:'Test Lab P'});
+        ctx.api('POST','/laptops/'+l.body.id+'/assign',{employee_id:e.body.id});
+        const r = ctx.api('POST','/laptops/'+l.body.id+'/repair',{issue:'Cracked screen'});
+        ctx.assert(r.status===200 && r.body.status==='open' && r.body.laptop_id===l.body.id && r.body.issue==='Cracked screen','open repair '+JSON.stringify(r.body));
+        ctx.assert(ctx.api('GET','/laptops/'+l.body.id).body.status==='in_repair','laptop in_repair');
+        const as = ctx.api('GET','/assignments?laptop_id='+l.body.id).body.data;
+        ctx.assert(as.length===1 && as[0].active===false,'assignment ended');
+        const again = ctx.api('POST','/laptops/'+l.body.id+'/repair',{issue:'Another'});
+        ctx.assert(again.status===409 && again.body.error.code==='invalid_state','repair while in repair '+JSON.stringify(again.body));
+      }
+  t_complete_repair:
+    description: Open and complete a repair, check ticket and laptop, and that a second completion is refused.
+    script: |-
+      (ctx) => {
+        const l = ctx.api('POST','/laptops',{asset_tag:'TST-C-001',serial:'TSTSN-C-001',model:'ThinkPad X1',location:'Test Lab C'});
+        const t = ctx.api('POST','/laptops/'+l.body.id+'/repair',{issue:'Keyboard dead'});
+        ctx.assert(t.status===200,'open repair '+JSON.stringify(t.body));
+        const r = ctx.api('POST','/repair_tickets/'+t.body.id+'/complete',{resolution:'Replaced keyboard',cost:12000});
+        ctx.assert(r.status===200 && r.body.status==='completed' && r.body.cost===12000 && r.body.resolution==='Replaced keyboard','complete '+JSON.stringify(r.body));
+        ctx.assert(ctx.api('GET','/laptops/'+l.body.id).body.status==='in_stock','laptop back in stock');
+        const again = ctx.api('POST','/repair_tickets/'+t.body.id+'/complete',{resolution:'x',cost:1});
+        ctx.assert(again.status===409 && again.body.error.code==='invalid_state','complete twice '+JSON.stringify(again.body));
+      }
+  t_stale:
+    description: Open a repair, confirm it is fresh, advance 8 days, confirm it is stale.
+    script: |-
+      (ctx) => {
+        const l = ctx.api('POST','/laptops',{asset_tag:'TST-S-001',serial:'TSTSN-S-001',model:'ThinkPad T14',location:'Test Lab S'});
+        const t = ctx.api('POST','/laptops/'+l.body.id+'/repair',{issue:'Battery drains fast'});
+        ctx.assert(t.status===200 && t.body.stale===false,'new ticket not stale '+JSON.stringify(t.body));
+        ctx.advance('8d');
+        const after = ctx.api('GET','/repair_tickets/'+t.body.id).body;
+        ctx.assert(after.stale===true && after.status==='open','stale after 8 days '+JSON.stringify(after));
+      }
+  t_audit_start:
+    description: Build two laptops in one location, one assigned, start the audit and check the items.
+    script: |-
+      (ctx) => {
+        const e = ctx.api('POST','/employees',{name:'Audit Start Tester',email:'auditstart.tester@test.example',department:'IT'});
+        const a = ctx.api('POST','/laptops',{asset_tag:'TST-U-001',serial:'TSTSN-U-001',model:'ThinkPad T14',location:'Audit Lab 1'});
+        const b = ctx.api('POST','/laptops',{asset_tag:'TST-U-002',serial:'TSTSN-U-002',model:'ThinkPad T14',location:'Audit Lab 1'});
+        ctx.api('POST','/laptops/'+a.body.id+'/assign',{employee_id:e.body.id});
+        const au = ctx.api('POST','/audits',{quarter:'2026-Q4',location:'Audit Lab 1'});
+        ctx.assert(au.status===201 && au.body.status==='planned','audit create '+JSON.stringify(au.body));
+        const s = ctx.api('POST','/audits/'+au.body.id+'/start',{});
+        ctx.assert(s.status===200 && s.body.status==='in_progress','start '+JSON.stringify(s.body));
+        const items = ctx.api('GET','/audit_items?audit_id='+au.body.id).body.data;
+        ctx.assert(items.length===2 && items.every((i)=>i.result==='pending'),'two pending items');
+        const ia = items.find((i)=>i.laptop_id===a.body.id);
+        const ib = items.find((i)=>i.laptop_id===b.body.id);
+        ctx.assert(ia && ia.expected_holder_id===e.body.id,'assigned laptop records holder');
+        ctx.assert(ib && ib.expected_holder_id===null,'stock laptop has no holder');
+        const again = ctx.api('POST','/audits/'+au.body.id+'/start',{});
+        ctx.assert(again.status===409 && again.body.error.code==='invalid_state','start twice '+JSON.stringify(again.body));
+      }
+  t_audit_verify:
+    description: Verify before start is refused, verify once after start, then repeat and bad results are refused.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST','/laptops',{asset_tag:'TST-V-001',serial:'TSTSN-V-001',model:'MacBook Pro',location:'Audit Lab 2'});
+        const au = ctx.api('POST','/audits',{quarter:'2026-Q4',location:'Audit Lab 2'});
+        ctx.assert(ctx.api('GET','/audit_items?audit_id='+au.body.id).body.data.length===0,'no items before start');
+        ctx.api('POST','/audits/'+au.body.id+'/start',{});
+        const item = ctx.api('GET','/audit_items?audit_id='+au.body.id).body.data[0];
+        ctx.assert(item && item.laptop_id===a.body.id,'item for laptop');
+        const bad = ctx.api('POST','/audit_items/'+item.id+'/verify',{result:'bogus'});
+        ctx.assert(bad.status===400 && bad.body.error.code==='input.invalid','bad result '+JSON.stringify(bad.body));
+        const r = ctx.api('POST','/audit_items/'+item.id+'/verify',{result:'found'});
+        ctx.assert(r.status===200 && r.body.result==='found','verify '+JSON.stringify(r.body));
+        const again = ctx.api('POST','/audit_items/'+item.id+'/verify',{result:'missing'});
+        ctx.assert(again.status===409 && again.body.error.code==='invalid_state','verify twice '+JSON.stringify(again.body));
+      }
+  t_audit_close:
+    description: Audit two laptops, one found and one missing and assigned. Check the refusal, counts, lost laptop and ended assignment.
+    script: |-
+      (ctx) => {
+        const e = ctx.api('POST','/employees',{name:'Audit Close Tester',email:'auditclose.tester@test.example',department:'IT'});
+        const a = ctx.api('POST','/laptops',{asset_tag:'TST-X-001',serial:'TSTSN-X-001',model:'ThinkPad T14',location:'Audit Lab 3'});
+        const b = ctx.api('POST','/laptops',{asset_tag:'TST-X-002',serial:'TSTSN-X-002',model:'ThinkPad T14',location:'Audit Lab 3'});
+        ctx.assert(a.status===201 && b.status===201,'laptops created');
+        ctx.api('POST','/laptops/'+b.body.id+'/assign',{employee_id:e.body.id});
+        const au = ctx.api('POST','/audits',{quarter:'2026-Q4',location:'Audit Lab 3'});
+        ctx.assert(au.status===201,'audit created '+JSON.stringify(au.body));
+        const st = ctx.api('POST','/audits/'+au.body.id+'/start',{});
+        ctx.assert(st.status===200,'audit started '+JSON.stringify(st.body));
+        const items = ctx.api('GET','/audit_items?audit_id='+au.body.id).body.data || [];
+        const ia = items.find((i)=>i.laptop_id===a.body.id);
+        const ib = items.find((i)=>i.laptop_id===b.body.id);
+        ctx.assert(ia && ib,'audit has an item for each laptop '+JSON.stringify(items));
+        ctx.api('POST','/audit_items/'+ia.id+'/verify',{result:'found'});
+        const early = ctx.api('POST','/audits/'+au.body.id+'/close',{});
+        ctx.assert(early.status===409 && early.body.error.code==='audit_incomplete','close early '+JSON.stringify(early.body));
+        ctx.api('POST','/audit_items/'+ib.id+'/verify',{result:'missing'});
+        const c = ctx.api('POST','/audits/'+au.body.id+'/close',{});
+        ctx.assert(c.status===200 && c.body.status==='closed' && c.body.found_count===1 && c.body.missing_count===1,'close '+JSON.stringify(c.body));
+        ctx.assert(ctx.api('GET','/laptops/'+b.body.id).body.status==='lost','missing laptop lost');
+        ctx.assert(ctx.api('GET','/laptops/'+a.body.id).body.status==='in_stock','found laptop unchanged');
+        const as = ctx.api('GET','/assignments?laptop_id='+b.body.id).body.data;
+        ctx.assert(as.length===1 && as[0].active===false,'assignment ended');
+        const verify = ctx.api('POST','/audit_items/'+ia.id+'/verify',{result:'found'});
+        ctx.assert(verify.status===409,'closed audit refuses verify');
+      }
+tasks:
+  assign_spare_laptop:
+    difficulty: easy
+    instruction: Check out the in-stock laptop with the lowest asset tag to the employee Priya Okafor.
+    grader: |-
+      (ctx) => {
+        const priya = ctx.seed.list('employee', { where: { name: 'Priya Okafor' } })[0];
+        if (!priya) return 0;
+        const stock = ctx.seed.list('laptop', { where: { status: 'in_stock' } });
+        if (stock.length === 0) return 0;
+        let target = stock[0];
+        for (const l of stock) if (l.asset_tag < target.asset_tag) target = l;
+        const fresh = ctx.db.list('assignment', { where: { laptop_id: target.id } }).filter((a) => ctx.seed.get('assignment', a.id) === null);
+        ctx.guardChanges('only the target laptop status and its new assignment changed', [
+          { entity: 'laptop', id: target.id, kind: 'updated', fields: ['status'] },
+          ...fresh.map((a) => ({ entity: 'assignment', id: a.id, kind: 'created', fields: ['laptop_id', 'employee_id', 'assigned_at', 'returned_at', 'active'] })),
+        ]);
+        const end = ctx.db.get('laptop', target.id);
+        ctx.goal(0.4, 'target laptop is assigned', end.status === 'assigned');
+        ctx.goal(0.6, 'one active assignment to Priya Okafor', fresh.length === 1 && fresh[0].employee_id === priya.id && fresh[0].active === true);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const emp = ctx.api('GET', '/employees?q=Okafor').body.data.find((e) => e.name === 'Priya Okafor');
+        ctx.assert(emp, 'employee Priya Okafor not found');
+        const first = ctx.api('GET', '/laptops?status=in_stock&sort=asset_tag&limit=1').body.data[0];
+        ctx.assert(first, 'no in-stock laptop found');
+        const r = ctx.api('POST', '/laptops/' + first.id + '/assign', { employee_id: emp.id });
+        ctx.assert(r.status === 200, 'assign failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: assigns the in-stock laptop with the highest asset tag instead of the lowest
+        script: |-
+          (ctx) => {
+            const emp = ctx.api('GET', '/employees?q=Okafor').body.data.find((e) => e.name === 'Priya Okafor');
+            const rows = ctx.api('GET', '/laptops?status=in_stock&sort=asset_tag').body.data;
+            const last = rows[rows.length - 1];
+            ctx.api('POST', '/laptops/' + last.id + '/assign', { employee_id: emp.id });
+          }
+      - why: PATCHes the laptop status to assigned instead of calling assign, so no assignment exists for the employee
+        script: |-
+          (ctx) => {
+            const first = ctx.api('GET', '/laptops?status=in_stock&sort=asset_tag&limit=1').body.data[0];
+            ctx.api('PATCH', '/laptops/' + first.id, { status: 'assigned' });
+          }
+    alternatives: []
+    allows:
+      - entity: laptop
+        kind: updated
+        fields:
+          - status
+        where:
+          status: in_stock
+      - entity: assignment
+        kind: created
+        fields: []
+        where:
+          active: true
+  send_assigned_laptop_to_repair:
+    difficulty: medium
+    instruction: Maya Alvarez has had more than one laptop over time. Open a repair ticket with the issue "Hinge snapped after a drop" for the laptop she currently holds. Do not touch any other laptop.
+    grader: |-
+      (ctx) => {
+        const ISSUE = 'Hinge snapped after a drop';
+        const maya = ctx.seed.list('employee', { where: { name: 'Maya Alvarez' } })[0];
+        if (!maya) return 0;
+        const act = ctx.seed.list('assignment', { where: { employee_id: maya.id, active: true } });
+        if (act.length !== 1) return 0;
+        const target = act[0].laptop_id;
+        const fresh = ctx.db.list('repair_ticket').filter((t) => ctx.seed.get('repair_ticket', t.id) === null);
+        const onTarget = fresh.filter((t) => t.laptop_id === target);
+        ctx.guardChanges('only the target laptop, its assignment and the new repair ticket changed', [
+          { entity: 'laptop', id: target, kind: 'updated', fields: ['status'] },
+          { entity: 'assignment', id: act[0].id, kind: 'updated', fields: ['active', 'returned_at'] },
+          ...onTarget.map((t) => ({ entity: 'repair_ticket', id: t.id, kind: 'created', fields: ['laptop_id', 'issue', 'status', 'stale', 'cost', 'resolution'] })),
+        ]);
+        ctx.goal(0.4, 'one open repair ticket on the laptop Maya holds', onTarget.length === 1 && onTarget[0].status === 'open');
+        ctx.goal(0.3, 'the ticket carries the requested issue', onTarget.some((t) => typeof t.issue === 'string' && t.issue.trim() === ISSUE));
+        const lap = ctx.db.get('laptop', target);
+        const asg = ctx.db.get('assignment', act[0].id);
+        ctx.goal(0.3, 'laptop is in repair and the assignment ended', lap.status === 'in_repair' && asg.active === false && asg.returned_at !== null);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const emp = ctx.api('GET', '/employees?q=Alvarez').body.data.find((e) => e.name === 'Maya Alvarez');
+        ctx.assert(emp, 'employee Maya Alvarez not found');
+        const held = ctx.api('GET', '/assignments?employee_id=' + emp.id + '&active=true').body.data;
+        ctx.assert(held.length === 1, 'expected one active assignment, found ' + held.length);
+        const r = ctx.api('POST', '/laptops/' + held[0].laptop_id + '/repair', { issue: 'Hinge snapped after a drop' });
+        ctx.assert(r.status === 200, 'open repair failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: opens the repair on the employee's earlier, already returned laptop (or any stock laptop if that one cannot go to repair)
+        script: |-
+          (ctx) => {
+            const emp = ctx.api('GET', '/employees?q=Alvarez').body.data.find((e) => e.name === 'Maya Alvarez');
+            const all = ctx.api('GET', '/assignments?employee_id=' + emp.id).body.data;
+            const old = all.find((a) => a.active === false);
+            const r = ctx.api('POST', '/laptops/' + old.laptop_id + '/repair', { issue: 'Hinge snapped after a drop' });
+            if (r.status !== 200) {
+              const s = ctx.api('GET', '/laptops?status=in_stock').body.data[0];
+              ctx.api('POST', '/laptops/' + s.id + '/repair', { issue: 'Hinge snapped after a drop' });
+            }
+          }
+      - why: opens the repair on the right laptop but with a different issue text than requested
+        script: |-
+          (ctx) => {
+            const emp = ctx.api('GET', '/employees?q=Alvarez').body.data.find((e) => e.name === 'Maya Alvarez');
+            const held = ctx.api('GET', '/assignments?employee_id=' + emp.id + '&active=true').body.data;
+            ctx.api('POST', '/laptops/' + held[0].laptop_id + '/repair', { issue: 'Needs repair' });
+          }
+      - why: PATCHes the laptop status to in_repair instead of opening a repair ticket, leaving the assignment active and no ticket
+        script: |-
+          (ctx) => {
+            const emp = ctx.api('GET', '/employees?q=Alvarez').body.data.find((e) => e.name === 'Maya Alvarez');
+            const held = ctx.api('GET', '/assignments?employee_id=' + emp.id + '&active=true').body.data;
+            ctx.api('PATCH', '/laptops/' + held[0].laptop_id, { status: 'in_repair' });
+          }
+    alternatives:
+      - why: reads the employee's whole assignment history and picks the one with no returned_at, instead of filtering on active
+        script: |-
+          (ctx) => {
+            const emp = ctx.api('GET', '/employees?q=Alvarez').body.data.find((e) => e.name === 'Maya Alvarez');
+            ctx.assert(emp, 'employee Maya Alvarez not found');
+            const all = ctx.api('GET', '/assignments?employee_id=' + emp.id).body.data;
+            const current = all.filter((a) => a.returned_at === null);
+            ctx.assert(current.length === 1, 'expected one open assignment, found ' + current.length);
+            const r = ctx.api('POST', '/laptops/' + current[0].laptop_id + '/repair', { issue: 'Hinge snapped after a drop' });
+            ctx.assert(r.status === 200, 'open repair failed: ' + JSON.stringify(r.body));
+          }
+    allows:
+      - entity: laptop
+        kind: updated
+        fields:
+          - status
+        where:
+          status: assigned
+      - entity: assignment
+        kind: updated
+        fields:
+          - active
+          - returned_at
+        where:
+          active: true
+      - entity: repair_ticket
+        kind: created
+        fields: []
+        where:
+          status: open
+  close_in_progress_audit:
+    difficulty: hard
+    instruction: The quarterly audit that is currently in progress still has unverified items. Mark every pending item as found, except items whose expected holder is an inactive (offboarded) employee, which must be marked missing. Then close the audit. Do not change anything else.
+    grader: |-
+      (ctx) => {
+        const audit = ctx.seed.list('audit', { where: { status: 'in_progress' } })[0];
+        if (!audit) return 0;
+        const inactive = new Set(ctx.seed.list('employee', { where: { active: false } }).map((e) => e.id));
+        const items = ctx.seed.list('audit_item', { where: { audit_id: audit.id } });
+        const isInactiveHolder = (i) => i.expected_holder_id !== null && inactive.has(i.expected_holder_id);
+        const expected = {};
+        for (const i of items) expected[i.id] = i.result !== 'pending' ? i.result : (isInactiveHolder(i) ? 'missing' : 'found');
+        const pending = items.filter((i) => i.result === 'pending');
+        const lostLaptops = new Set(items.filter((i) => expected[i.id] === 'missing').map((i) => i.laptop_id));
+        const assignIds = [];
+        for (const lid of lostLaptops) {
+          for (const a of ctx.seed.list('assignment', { where: { laptop_id: lid, active: true } })) assignIds.push(a.id);
+        }
+        ctx.guardChanges('only the pending items, the audit, and the lost laptops with their assignments changed', [
+          ...pending.map((i) => ({ entity: 'audit_item', id: i.id, kind: 'updated', fields: ['result'] })),
+          { entity: 'audit', id: audit.id, kind: 'updated', fields: ['status', 'found_count', 'missing_count'] },
+          ...Array.from(lostLaptops).map((lid) => ({ entity: 'laptop', id: lid, kind: 'updated', fields: ['status'] })),
+          ...assignIds.map((id) => ({ entity: 'assignment', id, kind: 'updated', fields: ['active', 'returned_at'] })),
+        ]);
+        const toFound = pending.filter((i) => expected[i.id] === 'found');
+        const toMissing = pending.filter((i) => expected[i.id] === 'missing');
+        ctx.goal(0.25, 'every pending item with an active holder is found', toFound.length > 0 && toFound.every((i) => ctx.db.get('audit_item', i.id).result === 'found'));
+        ctx.goal(0.25, 'every pending item held by an inactive employee is missing', toMissing.length > 0 && toMissing.every((i) => ctx.db.get('audit_item', i.id).result === 'missing'));
+        const foundCount = items.filter((i) => expected[i.id] === 'found').length;
+        const missingCount = items.filter((i) => expected[i.id] === 'missing').length;
+        const end = ctx.db.get('audit', audit.id);
+        ctx.goal(0.25, 'audit is closed with the right counts', end.status === 'closed' && end.found_count === foundCount && end.missing_count === missingCount);
+        let lostOk = lostLaptops.size > 0;
+        for (const lid of lostLaptops) {
+          if (ctx.db.get('laptop', lid).status !== 'lost') lostOk = false;
+          if (ctx.db.list('assignment', { where: { laptop_id: lid, active: true } }).length > 0) lostOk = false;
+        }
+        ctx.goal(0.25, 'missing laptops are lost and their assignments ended', lostOk);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const pages = (path) => {
+          const rows = [];
+          let cursor = null;
+          do {
+            const r = ctx.api('GET', path + (cursor === null ? '' : '&cursor=' + cursor));
+            ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body));
+            rows.push(...r.body.data);
+            cursor = r.body.next_cursor;
+          } while (cursor !== null);
+          return rows;
+        };
+        const audits = pages('/audits?status=in_progress');
+        ctx.assert(audits.length === 1, 'expected one in-progress audit, found ' + audits.length);
+        const audit = audits[0];
+        const inactive = new Set(pages('/employees?active=false').map((e) => e.id));
+        const pending = pages('/audit_items?audit_id=' + audit.id + '&result=pending');
+        ctx.assert(pending.length > 0, 'no pending items');
+        for (const i of pending) {
+          const result = i.expected_holder_id !== null && inactive.has(i.expected_holder_id) ? 'missing' : 'found';
+          const r = ctx.api('POST', '/audit_items/' + i.id + '/verify', { result });
+          ctx.assert(r.status === 200, 'verify ' + i.id + ' failed: ' + JSON.stringify(r.body));
+        }
+        const c = ctx.api('POST', '/audits/' + audit.id + '/close', {});
+        ctx.assert(c.status === 200, 'close failed: ' + JSON.stringify(c.body));
+      }
+    decoys:
+      - why: reads only the first page of pending items, verifies those, and tries to close, so the rest stay pending and the close is refused
+        script: |-
+          (ctx) => {
+            const audit = ctx.api('GET', '/audits?status=in_progress').body.data[0];
+            const inactive = new Set(ctx.api('GET', '/employees?active=false').body.data.map((e) => e.id));
+            const page = ctx.api('GET', '/audit_items?audit_id=' + audit.id + '&result=pending').body.data;
+            for (const i of page) {
+              const result = i.expected_holder_id !== null && inactive.has(i.expected_holder_id) ? 'missing' : 'found';
+              ctx.api('POST', '/audit_items/' + i.id + '/verify', { result });
+            }
+            ctx.api('POST', '/audits/' + audit.id + '/close', {});
+          }
+      - why: marks every pending item found without checking whether the expected holder is inactive, then closes
+        script: |-
+          (ctx) => {
+            const audit = ctx.api('GET', '/audits?status=in_progress').body.data[0];
+            const ids = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/audit_items?audit_id=' + audit.id + '&result=pending' + (cursor === null ? '' : '&cursor=' + cursor));
+              for (const i of r.body.data) ids.push(i.id);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            for (const id of ids) ctx.api('POST', '/audit_items/' + id + '/verify', { result: 'found' });
+            ctx.api('POST', '/audits/' + audit.id + '/close', {});
+          }
+      - why: verifies every pending item correctly across all pages but never closes the audit
+        script: |-
+          (ctx) => {
+            const audit = ctx.api('GET', '/audits?status=in_progress').body.data[0];
+            const inactive = new Set(ctx.api('GET', '/employees?active=false').body.data.map((e) => e.id));
+            const rows = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/audit_items?audit_id=' + audit.id + '&result=pending' + (cursor === null ? '' : '&cursor=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            for (const i of rows) {
+              const result = i.expected_holder_id !== null && inactive.has(i.expected_holder_id) ? 'missing' : 'found';
+              ctx.api('POST', '/audit_items/' + i.id + '/verify', { result });
+            }
+          }
+    alternatives: []
+    allows:
+      - entity: audit_item
+        kind: updated
+        fields:
+          - result
+        where:
+          result: pending
+      - entity: audit
+        kind: updated
+        fields:
+          - status
+          - found_count
+          - missing_count
+        where:
+          status: in_progress
+      - entity: laptop
+        kind: updated
+        fields:
+          - status
+        where:
+          location: HQ Floor 2
+      - entity: assignment
+        kind: updated
+        fields:
+          - active
+          - returned_at
+        where:
+          active: true

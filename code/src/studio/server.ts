@@ -1574,8 +1574,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         server.close(() => resolve());
         server.closeAllConnections();
       }).then(async () => {
-        // A registry write queued before close lands before close returns; none is queued after.
+        // Writes queued before close land before close returns; none is queued after (#28).
         await persisting;
+        await auditing;
       });
       return closing;
     },
