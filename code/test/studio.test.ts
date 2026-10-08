@@ -281,7 +281,7 @@ describe('studio', () => {
       costsCalls.push({ argv: [...argv], cwd: opts?.cwd });
       return costsResult;
     };
-    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, build: 'test-sha', startupGraceMs: 1500, runStopWaitMs: 1000 });
+    server = await studioServer({ port: 0, repoRoot: root, worldsDir, spawner, runner, build: 'test-sha', startupGraceMs: 1500, runStopWaitMs: 1000, maxConcurrentRuns: 1000, maxConcurrentEpisodes: 1000 });
     base = server.url;
   });
 
