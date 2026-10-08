@@ -51,6 +51,10 @@ Jobs (2):
 - `billing_cycle`: every 1h
 - `dunning_retry`: every 1h
 
+## Changes
+
+No changes.
+
 ## Assumed and why
 
 - clock.start is 2026-10-06T09:00:00.000Z with tick 0s. All seeded history (created invoices, payments, events, past failures) precedes it. All next_retry_at and current_period_end values in the seed are after it.
@@ -130,11 +134,15 @@ Jobs (2):
 
 The engine check passed: 9 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix |
-|---|---|---|---|---|---|
-| cancel_harbor_dental_subscription | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a |
-| recover_bluefin_labs_with_backup_card | medium | 1.000 | 0.000 | 0.000, 0.300, 0.000, 0.000 | 0.300 |
-| cancel_final_retry_business_subscriptions | hard | 1.000 | 0.000 | 0.750, 0.000, 0.000, 0.000, 0.000 | 0.750 |
+World id (WID): `wid_f1ab4b835b50b73aacdea8192b6e7ff0b2e1ac745ba09a5086621dbb0fc818c1`.
+
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| cancel_harbor_dental_subscription | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 3/7 | `tid_9fb55867c2764862e2831b5f2f3fe30e3bebfdde8e1dfc3dd63ebbb0147fa3f0` |
+| recover_bluefin_labs_with_backup_card | medium | 1.000 | 0.000 | 0.000, 0.300, 0.000, 0.000 | 0.300 | legacy; mutants 3/7 | `tid_e7d7247850627631246ad12bb1342a0bb1073897a6a1d6e92e6e18519e24fee7` |
+| cancel_final_retry_business_subscriptions | hard | 1.000 | 0.000 | 0.750, 0.000, 0.000, 0.000, 0.000 | 0.750 | legacy; mutants 3/7 | `tid_7cb3b0529af197657ad6623172e75413a173bf5cd82f8e1e83876050e9a1bc34` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -150,17 +158,30 @@ Decoys:
 - `cancel_final_retry_business_subscriptions` 0.000: tries to collect the target invoices by paying them instead of cancelling the subscriptions
 - `cancel_final_retry_business_subscriptions` 0.000: cancels every correct target and then also cancels one Business subscription that is still at an earlier dunning stage
 
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| cancel_harbor_dental_subscription | easy | 2 | none | none | none declared |
+| recover_bluefin_labs_with_backup_card | medium | 6 | none | none | none declared |
+| cancel_final_retry_business_subscriptions | hard | 12 | none | invoice, subscription | hard: met |
+
 ## Run
 
-Mode: create from description. Model: claude-sonnet-5-5 over the claude -p transport. Budget: $3.50.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $2.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 3.48 | 0.3487 |
-| model | 1 | 0.56 | 0.2097 |
-| workflow | 3 | 3.11 | 0.8444 |
-| seed | 2 | 3.35 | 0.8650 |
-| tasks | 1 | 2.05 | 0.4013 |
-| Total | 8 | 12.56 | 2.6691 |
+| plan | 1 | 0.11 | 0.3077 |
+| Total | 1 | 0.11 | 0.3077 |
 
-Run total: 14.31 minutes, $2.6691.
+Skipped:
+
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures; it keeps 3 issue(s) the world had before this iterate: plan.seed_rows_short
+- `tasks`: no planned change reaches tasks, entities, routes, actions, jobs, seed
+
+Run total: 0.39 minutes, $0.3077.

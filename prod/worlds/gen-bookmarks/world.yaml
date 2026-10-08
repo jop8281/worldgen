@@ -10,10 +10,14 @@ meta:
     tick: 0s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -1212,6 +1216,7 @@ tasks:
         script: (ctx) => { const dev = ctx.api('GET', '/users?q=Dev').body.data.find((u) => u.name === 'Dev Patel'); const list = ctx.api('GET', '/bookmarks?owner_id=' + dev.id + '&status=unread').body.data; const b = list.find((x) => x.title === 'Postgres Index-Only Scans Explained'); ctx.api('POST', '/bookmarks/' + b.id + '/read', {}); }
       - why: archives Maya's bookmark instead of marking it read
         script: (ctx) => { const maya = ctx.api('GET', '/users?q=Maya').body.data.find((u) => u.name === 'Maya Chen'); const list = ctx.api('GET', '/bookmarks?owner_id=' + maya.id + '&status=unread').body.data; const b = list.find((x) => x.title === 'Postgres Index-Only Scans Explained'); ctx.api('POST', '/bookmarks/' + b.id + '/archive', {}); }
+    alternatives: []
   merge_maya_ml_tags:
     difficulty: medium
     instruction: Maya Chen has two tags, 'ml' and 'machine-learning'. Merge her 'ml' tag into 'machine-learning' so every bookmark that carried 'ml' now carries 'machine-learning' (once only) and her 'ml' tag no longer exists. Do not touch any other user's tags.
@@ -1228,6 +1233,7 @@ tasks:
         script: "(ctx) => { const maya = ctx.api('GET', '/users?q=Maya').body.data.find((u) => u.name === 'Maya Chen'); const ml = ctx.api('GET', '/tags?owner_id=' + maya.id).body.data.find((t) => t.name === 'ml'); const links = ctx.api('GET', '/bookmark_tags?tag_id=' + ml.id).body.data; for (const l of links) ctx.api('POST', '/bookmarks/' + l.bookmark_id + '/tag', { name: 'machine-learning' }); }"
       - why: merges correctly, then also recolors the machine-learning tag, an unrequested edit
         script: "(ctx) => { const maya = ctx.api('GET', '/users?q=Maya').body.data.find((u) => u.name === 'Maya Chen'); const tags = ctx.api('GET', '/tags?owner_id=' + maya.id).body.data; const ml = tags.find((t) => t.name === 'ml'); const target = tags.find((t) => t.name === 'machine-learning'); ctx.api('POST', '/tags/' + ml.id + '/merge', { into_tag_id: target.id }); ctx.api('PATCH', '/tags/' + target.id, { color: '#ff0000' }); }"
+    alternatives: []
   trash_maya_broken_links:
     difficulty: hard
     instruction: Maya Chen has bookmarks whose links are broken. Move every broken-link bookmark of hers that is still unread or read (not archived) to the trash. Leave her archived bookmarks as they are, and do not touch anyone else's bookmarks.
@@ -1242,6 +1248,7 @@ tasks:
         script: (ctx) => { const maya = ctx.api('GET', '/users?q=Maya').body.data.find((u) => u.name === 'Maya Chen'); const rows = ctx.api('GET', '/bookmarks?owner_id=' + maya.id + '&link_status=broken').body.data; for (const b of rows) { if (b.status === 'unread' || b.status === 'read') ctx.api('POST', '/bookmarks/' + b.id + '/archive', {}); } }
       - why: only looks at unread bookmarks and misses the broken ones that are already read
         script: (ctx) => { const maya = ctx.api('GET', '/users?q=Maya').body.data.find((u) => u.name === 'Maya Chen'); const rows = ctx.api('GET', '/bookmarks?owner_id=' + maya.id + '&link_status=broken&status=unread').body.data; for (const b of rows) ctx.api('POST', '/bookmarks/' + b.id + '/trash', {}); }
+    alternatives: []
   share_maya_big_private_collections:
     difficulty: hard
     instruction: Acting as Maya Chen, the owner, share every private collection of hers that holds at least 3 bookmarks with Dev Patel as an editor. Leave her smaller private collection and her already-shared collection alone, and do not change anything else.
@@ -1258,3 +1265,4 @@ tasks:
         script: "(ctx) => { const maya = ctx.api('GET', '/users?q=Maya').body.data.find((u) => u.name === 'Maya Chen'); const cols = ctx.api('GET', '/collections?owner_id=' + maya.id + '&visibility=private').body.data; for (const c of cols) { const items = ctx.api('GET', '/collection_items?collection_id=' + c.id).body.data; if (items.length >= 3) ctx.api('POST', '/collections/' + c.id + '/publish', { actor_id: maya.id }); } }"
       - why: uses a threshold of more than 3 bookmarks, so it shares only the biggest private collection and misses the one with exactly 3
         script: "(ctx) => { const maya = ctx.api('GET', '/users?q=Maya').body.data.find((u) => u.name === 'Maya Chen'); const dev = ctx.api('GET', '/users?q=Dev').body.data.find((u) => u.name === 'Dev Patel'); const cols = ctx.api('GET', '/collections?owner_id=' + maya.id + '&visibility=private').body.data; for (const c of cols) { const items = ctx.api('GET', '/collection_items?collection_id=' + c.id).body.data; if (items.length > 3) ctx.api('POST', '/collections/' + c.id + '/share', { actor_id: maya.id, user_id: dev.id, role: 'editor' }); } }"
+    alternatives: []

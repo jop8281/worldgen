@@ -11,18 +11,19 @@ import fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
-import { checkWorld, diffWorlds, loadWorld, saveWorld, type CheckedWorld, type TaskVerdict, type World } from '#engine';
+import { checkWorld, diffWorlds, loadWorld, saveWorld, worldIdOf, worldSchema, type CheckedWorld, type TaskVerdict, type World } from '#engine';
 import { CAPSULE_FILE, capsuleSchema } from '../src/worldgen/capsule.ts';
 import { configSchema, type Config } from '../src/worldgen/config.ts';
 import type { RunEvent } from '../src/worldgen/events.ts';
-import { changedSections, iteratePlanSchema } from '../src/worldgen/iterate.ts';
+import { applyPlanPatch, changedSections, iteratePlanSchema, planPatchSchema, planWithWorldTests } from '../src/worldgen/iterate.ts';
 import { ModelError, type Model, type ProposeRequest } from '../src/worldgen/llm.ts';
-import { parsePlanYaml, renderPlanYaml, type Plan } from '../src/worldgen/plan.ts';
+import { parsePlanYaml, renderPlanYaml, workflowIssues, type Plan } from '../src/worldgen/plan.ts';
 import { runWorldGen, stagePrompt, systemPrompt, type RunFs, type RunResult } from '../src/worldgen/run.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 const HELPDESK = resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
 const TODO = resolve(import.meta.dirname, '../../prod/worlds/gen-todo-projects');
+const BILLING = resolve(import.meta.dirname, '../../prod/worlds/gen-billing-dunning');
 const REQUEST = 'add refunds: an agent can refund a resolved ticket, and each refund is tracked';
 
 // ------------------------------------------------------------------ the refunds change, as the fake model proposes it
@@ -515,8 +516,9 @@ describe('runWorldGen iterate: a change that reaches only some stages', () => {
     assert.ok(prompt.includes('## Existing plan') && prompt.includes('tickets are the only workflow'));
     assert.equal(prompt.includes('\n## Existing world\n'), false);
     assert.ok(prompt.includes('\n## Existing world clock\n'));
-    // The accepted plan replaces the old one only after the run succeeded.
-    assert.equal(parsePlanYaml(readFileSync(join(dir, 'plan.yaml'), 'utf8'))?.workflows[0]?.name, 'notes');
+    // The accepted plan replaces the old one only after the run succeeded. The answer is a patch (A-345), so the old
+    // support workflow, which it neither gives nor removes, stays, and the notes workflow is added.
+    assert.deepEqual(parsePlanYaml(readFileSync(join(dir, 'plan.yaml'), 'utf8'))?.workflows.map((w) => w.name), ['support', 'notes']);
   });
 
   it('treats a plan.yaml that does not parse as no plan, and says so by showing the world', async () => {
@@ -811,6 +813,18 @@ describe('runWorldGen iterate: frozen acceptance tests (A-99)', () => {
     assert.deepEqual(events.flatMap((e) => (e.t === 'backtracked' ? [[e.from, e.to]] : [])), [['workflow', 'plan']]);
     assert.equal(calls[2]?.prompt.includes('- code: edit.out_of_scope\n  path: tests\n'), true);
     assert.deepEqual(snapshot(dir), before);
+  });
+
+  it('after a backtrack, shows the plan accepted in this run and asks for a patch on it (A-345)', async () => {
+    const dir = await minimalDir({ ...bound(RESOLVE_SCRIPT, []), revision: 1 }, world());
+    const weaken = { note: 'relax the bound test', patch: { tests: { resolve_pending_ticket: { script: "(ctx) => { ctx.assert(true, 'always'); }" } } } };
+    const { calls } = await iterate(dir, [
+      { input: bound(STRONGER_SCRIPT, ['tests.resolve_pending_ticket']) }, { input: weaken }, new ModelError('stop here'),
+    ]);
+    const shown = calls[2]?.prompt ?? '';
+    assert.equal(shown.includes('## Existing plan\n\n```yaml\nrevision: 2\n'), true);
+    assert.equal(shown.includes('Answer again with a patch on the plan above, and fix every issue below.'), true);
+    assert.equal(shown.includes('Answer again in full'), false);
   });
 });
 
@@ -1118,5 +1132,116 @@ describe('iteratePlanSchema: a pressure claim the old plan lacks needs the seed 
     assert.deepEqual(problems(world, null, withPressure(old, { paging: 'task' }, [`tasks.${HARD}`])), [
       `tasks.2.pressure: task ${HARD} adds pressure the existing plan does not have (paging: task), but no planned change reaches the seed, so no step would seed for it: keep the task's existing pressure, or, if the request asks for harder tasks, name seed.task in changes`,
     ]);
+  });
+});
+
+describe('applyPlanPatch: an iterate plan answer is a patch on the existing plan (A-345)', () => {
+  const wf = (name: string, entity: string) => ({ name, entity, states: ['open'], rules: [], actions: [] });
+  const TEST_A = { id: 'a', intent: 'i', actions: ['x'], description: 'd', script: 's' };
+  const base = planFor(minimalWorld(), { revision: 3, workflows: [wf('support', 'ticket'), wf('billing', 'invoice')], acceptanceTests: [TEST_A], assumptions: [{ decision: 'kept', why: 'old' }] });
+
+  it('replaces a given item by its key, adds a new one, keeps what it leaves out, and drops what remove lists', () => {
+    const lifecycle = { representation: 'descriptive' as const, reason: 'derived from a flag' };
+    const patch = planPatchSchema.parse({
+      revision: 4, changes: [], remove: ['workflows.billing'],
+      workflows: [{ ...wf('support', 'ticket'), lifecycle }, wf('refunds', 'refund')],
+      assumptions: [{ decision: 'kept', why: 'old' }, { decision: 'new', why: 'the request' }],
+    });
+    const merged = applyPlanPatch(base, patch);
+    assert.deepEqual(merged.workflows.map((w) => [w.name, w.lifecycle?.representation ?? null]), [['support', 'descriptive'], ['refunds', null]]);
+    assert.deepEqual(merged.assumptions, [{ decision: 'kept', why: 'old' }, { decision: 'new', why: 'the request' }]);
+    assert.deepEqual([merged.revision, merged.changes, merged.acceptanceTests], [4, ['workflows.billing'], [TEST_A]]);
+    const rest = (p: Plan) => ({ ...p, revision: 0, changes: [], workflows: [], assumptions: [] });
+    assert.deepEqual(rest(merged), rest(base));
+  });
+
+  it('drops only what remove lists, records it in changes, and keeps a task that changes merely names', () => {
+    const tasks = ['t1', 't2', 't3', 't4'].map((id) => ({ id, difficulty: 'easy' as const, intent: id, decoyIdea: 'none' }));
+    const merged = applyPlanPatch({ ...base, tasks }, planPatchSchema.parse({ revision: 4, changes: ['tasks.t1'], remove: ['tasks.t2'] }));
+    assert.deepEqual([merged.tasks.map((t) => t.id), merged.changes], [['t1', 't3', 't4'], ['tasks.t1', 'tasks.t2']]);
+  });
+
+  it('drops an acceptance test that changes names and the patch leaves out, a quoted reason included', () => {
+    const plan = { ...base, acceptanceTests: [TEST_A, { ...TEST_A, id: 'b' }] };
+    const drop = (entry: string) => applyPlanPatch(plan, planPatchSchema.parse({ revision: 4, changes: [entry] })).acceptanceTests.map((t) => t.id);
+    assert.deepEqual([drop('tests.a'), drop('tests.a because the request drops it')], [['b'], ['b']]);
+  });
+
+  it('refuses a key it does not know and an item given twice, instead of dropping or picking one', () => {
+    const issues = (input: unknown) => (planPatchSchema.safeParse(input).error?.issues ?? []).map((i) => [i.path.join('.'), i.message]);
+    assert.deepEqual(issues({ revision: 4, tests: [] }).map(([p]) => p), ['']);
+    assert.deepEqual(issues({ revision: 4, workflows: [wf('support', 'ticket'), wf('support', 'ticket')] }), [['workflows', 'workflows gives support more than once: give each item once']]);
+  });
+
+  it('takes each acceptance test the world holds from world.tests, and keeps a test the world lacks as planned', () => {
+    const world = minimalWorld({ tests: { a: { description: 'D', script: 'S' } } });
+    const plan = planFor(world, { acceptanceTests: [TEST_A, { ...TEST_A, id: 'b' }] });
+    assert.deepEqual(planWithWorldTests(plan, world).acceptanceTests, [{ ...TEST_A, description: 'D', script: 'S' }, { ...TEST_A, id: 'b' }]);
+  });
+});
+
+describe('runWorldGen iterate: a plan patch on gen-billing-dunning, whose plan.yaml is stale against its world tests (A-345)', () => {
+  const REQUEST_LIFECYCLE = 'Plan-only revision: give workflow default_card a descriptive lifecycle. Change nothing in the world.';
+  const billingCopy = (): string => {
+    const dir = tmp();
+    copyFileSync(join(BILLING, 'world.yaml'), join(dir, 'world.yaml'));
+    copyFileSync(join(BILLING, 'plan.yaml'), join(dir, 'plan.yaml'));
+    return dir;
+  };
+  const planIn = (dir: string): Plan => parsePlanYaml(readFileSync(join(dir, 'plan.yaml'), 'utf8'))!;
+  const worldIn = async (dir: string): Promise<World> => {
+    const loaded = await loadWorld(dir);
+    if (!loaded.ok) throw new Error(`${dir} does not load`);
+    return worldSchema.parse(loaded.value);
+  };
+
+  it('converges on a 1-key lifecycle patch in one plan call: every other key carries over, and plan.yaml\'s tests equal world.tests', async () => {
+    const dir = billingCopy();
+    const old = planIn(dir);
+    const widBefore = worldIdOf(await worldIn(dir));
+    const card = old.workflows.find((w) => w.name === 'default_card')!;
+    const lifecycle = { representation: 'descriptive' as const, reason: 'no_default and has_default derive from whether the customer has a default payment method' };
+    const { result, events, calls } = await iterate(dir, [{ input: { revision: old.revision + 1, changes: [], workflows: [{ ...card, lifecycle }] } }], { request: REQUEST_LIFECYCLE });
+    assert.equal(result.kind, 'done');
+    assert.equal(calls.length, 1);
+    assert.deepEqual(attempts(events), [['plan', 1, 'accepted']]);
+    const after = planIn(dir);
+    const world = await worldIn(dir);
+    assert.equal(worldIdOf(world), widBefore);
+    const withoutLifecycle = after.workflows.map((w) => {
+      if (w.name !== 'default_card') return w;
+      const { lifecycle: _declared, ...plain } = w;
+      return plain;
+    });
+    assert.deepEqual(withoutLifecycle, old.workflows);
+    assert.deepEqual(after.workflows.find((w) => w.name === 'default_card')?.lifecycle, lifecycle);
+    assert.deepEqual(after.acceptanceTests.map((t) => [t.id, { description: t.description, script: t.script }]), after.acceptanceTests.map((t) => [t.id, world.tests[t.id]]));
+    assert.deepEqual(after.acceptanceTests.map((t) => [t.id, t.intent, t.actions]), old.acceptanceTests.map((t) => [t.id, t.intent, t.actions]));
+    const rest = (p: Plan) => ({ ...p, revision: 0, changes: [], workflows: [], acceptanceTests: [] });
+    assert.deepEqual(rest(after), rest(old));
+    assert.deepEqual(workflowIssues(after, world), []);
+  });
+
+  it('stops input_rejected on an empty patch: the world-synced base, not the stale plan.yaml, decides that nothing changed', async () => {
+    const dir = billingCopy();
+    const before = snapshot(dir);
+    const { result } = await iterate(dir, [{ input: { revision: planIn(dir).revision + 1, changes: [] } }], { request: REQUEST_LIFECYCLE });
+    assert.equal(stoppedReason(result)?.kind, 'input_rejected');
+    assert.deepEqual(snapshot(dir), before);
+  });
+
+  it('refuses a patch that rewords a frozen test without naming tests.<id> in changes, and leaves both files as they were', async () => {
+    const dir = billingCopy();
+    const before = snapshot(dir);
+    const old = planIn(dir);
+    const id = 'dunning_retries_at_1_3_7_days_then_cancels';
+    const frozen = old.acceptanceTests.find((t) => t.id === id)!;
+    const reworded = { revision: old.revision + 1, changes: [], acceptanceTests: [{ ...frozen, description: `${frozen.description} (reworded)` }] };
+    const { result, events } = await iterate(dir, [{ input: reworded }, new ModelError('stop here')], { request: REQUEST_LIFECYCLE });
+    assert.equal(stoppedReason(result)?.kind, 'model_error');
+    assert.deepEqual(attempts(events), [['plan', 1, 'invalid_output'], ['plan', 2, 'model_error']]);
+    const refused = events.flatMap((e) => (e.t === 'attempt' && e.step === 'plan' && e.n === 1 && e.outcome.kind === 'invalid_output' ? e.outcome.issues : []));
+    assert.deepEqual(refused.map((i) => i.expected), [`acceptance test ${id} rewrites the existing tests.${id}: copy it unchanged, or name tests.${id} in changes`]);
+    assert.deepEqual(snapshot(dir), before);
   });
 });

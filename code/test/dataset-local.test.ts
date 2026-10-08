@@ -10,6 +10,7 @@ import { after, before, describe, it } from 'node:test';
 import type { NextTurn } from '../src/dataset/episode.ts';
 import { finishAtOnce, runLocalEpisode, type LocalEpisodeResult } from '../src/dataset/local.ts';
 import { redactor } from '../src/dataset/schema.ts';
+import { nodeRunner, nodeSpawn, type Runner, type Spawner } from '../src/sandboxes/backend.ts';
 
 const HELPDESK = path.resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
 
@@ -66,6 +67,45 @@ describe('runLocalEpisode: the noop agent', () => {
         nextTurn: finishAtOnce, maxTurns: 3, budgetUsd: 0.01, maxMinutes: 2, redact: redactor([]),
       });
       assert.deepEqual([e.model, e.usage.model_calls, e.usage.cost_usd, e.stop_reason, e.score], [null, 0, 0, 'done', 0]);
+    } finally {
+      await rm(out, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('runLocalEpisode: the world runs in children with an allowlisted environment', () => {
+  it('prepares, serves and grades in children that hold only TZ and PATH', async () => {
+    const out = await mkdtemp(path.join(tmpdir(), 'wg-local-env-'));
+    const runs: { argv: readonly string[]; env: unknown }[] = [];
+    const spawns: { argv: readonly string[]; env: unknown }[] = [];
+    const runner: Runner = (argv, opts) => {
+      runs.push({ argv, env: opts?.env });
+      return nodeRunner(argv, opts);
+    };
+    const spawner: Spawner = (argv, opts) => {
+      spawns.push({ argv, env: opts?.env });
+      return nodeSpawn(argv, opts);
+    };
+    const allow = { TZ: 'UTC', PATH: process.env.PATH ?? '' };
+    try {
+      const { episode: e } = await runLocalEpisode({
+        worldDir: HELPDESK, taskId: 'assign_newest_acme_ticket', out, runId: 'iso', engineCommit: 'abcdef1', model: null,
+        nextTurn: finishAtOnce, maxTurns: 3, budgetUsd: 0.01, maxMinutes: 2, redact: redactor([]), runner, spawner,
+        env: { PATH: process.env.PATH ?? '', HOME: '/home/op', LLM_KEY: 'sk-live-1', BOAT_API_KEY: 'boat-3', WORLDGEN_STUDIO_TOKEN: 'tok-4' },
+      });
+      assert.deepEqual([e.stop_reason, e.score], ['done', 0]);
+      const prepare = runs.find((r) => r.argv.includes('src/cli/episode-prepare.ts'));
+      const serve = spawns.find((r) => r.argv.includes('src/cli/worldplay.ts') && r.argv.includes('serve'));
+      const verify = runs.find((r) => r.argv.includes('src/cli/verifier.ts'));
+      assert.deepEqual(prepare?.env, allow);
+      assert.deepEqual(serve?.env, allow);
+      assert.equal(verify?.argv[0], 'bun');
+      assert.deepEqual(verify?.env, allow);
+      for (const r of [...runs, ...spawns]) {
+        const env = r.env as Record<string, string> | undefined;
+        assert.equal(env?.['LLM_KEY'], undefined);
+        assert.equal(env?.['BOAT_API_KEY'], undefined);
+      }
     } finally {
       await rm(out, { recursive: true, force: true });
     }
