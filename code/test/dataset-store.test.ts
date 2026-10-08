@@ -86,9 +86,11 @@ describe('the Episode schema', () => {
     assert.equal(ok(withMessages([instruction, call, result, final], { final_reply: null })), false);
     assert.equal(ok(withMessages([instruction, call, result], { final_reply: 'Done.' })), false);
   });
-  it('is strict: no extra keys anywhere, only the pinned provider and model, only version 1', () => {
+  it('is strict: no extra keys anywhere, only the Anthropic provider and a Claude model id (A-283), only version 1', () => {
     assert.equal(ok({ ...episode(), extra: 1 }), false);
-    assert.equal(ok({ ...episode(), model: 'claude-opus-5-5' }), false);
+    assert.equal(ok({ ...episode(), model: 'claude-opus-5-5' }), true);
+    assert.equal(ok({ ...episode(), model: 'gpt-5' }), false);
+    assert.equal(ok({ ...episode(), model: 'claude-opus-5-5 --fallback-model x' }), false);
     assert.equal(ok({ ...episode(), provider: 'openai' }), false);
     assert.equal(ok({ ...episode(), schema_version: 2 }), false);
     assert.equal(ok({ ...episode(), thinking: 'hidden' }), false);
