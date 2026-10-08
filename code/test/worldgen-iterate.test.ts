@@ -1085,7 +1085,7 @@ describe('runWorldGen iterate: a pressure claim on a world built before the pres
 
     assert.equal(result.kind, 'done');
     assert.deepEqual(attempts(events), [
-      ['plan', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'rejected'], ['tasks', 2, 'rejected'], ['plan', 1, 'accepted'], ['tasks', 3, 'accepted'],
+      ['plan', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'rejected'], ['tasks', 2, 'rejected'], ['plan', 1, 'accepted'], ['tasks', 1, 'accepted'],
     ]);
     const back = events.flatMap((e) => (e.t === 'backtracked' ? [[e.from, e.to, e.because.map((i) => `${i.code}@${i.path.join('/')}: ${i.found}`)] as const] : []));
     assert.deepEqual(back, [['tasks', 'plan', [`task.pressure_unmet@tasks/${HARD}: 130 task rows over 25-row pages, and the reference changed no row it reached only past the first page`]]]);
