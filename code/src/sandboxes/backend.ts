@@ -7,7 +7,6 @@
  * `bun install --frozen-lockfile`, start `worldplay serve` on that Bun detached, wait for the port, and expose the world port only.
  */
 import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
 import { constants } from 'node:os';
 
 /** One file to place in a sandbox. `path` is relative and POSIX, under the sandbox workdir. */
@@ -412,15 +411,16 @@ export function isolatedEnv(env: Readonly<Record<string, string | undefined>>): 
   return { TZ: 'UTC', PATH: env['PATH'] ?? '', ...(env['WORLDGEN_GUARD_SCALE'] === undefined ? {} : { WORLDGEN_GUARD_SCALE: env['WORLDGEN_GUARD_SCALE'] }) };
 }
 
-/** A loopback port that was free a moment ago, from the OS. */
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const a = probe.address();
-      const port = a !== null && typeof a === 'object' ? a.port : 0;
-      probe.close(() => resolve(port));
-    });
-  });
+/** The ports `worldplay serve` reports once both listen: its `{"listening":{"world":W,"admin":A}}` line, or null before it. */
+export function listeningPorts(output: string): { readonly world: number; readonly admin: number } | null {
+  for (const line of output.split('\n')) {
+    if (!line.startsWith('{"listening"')) continue;
+    try {
+      const l = (JSON.parse(line) as { listening?: { world?: unknown; admin?: unknown } } | null)?.listening;
+      if (l !== undefined && Number.isInteger(l.world) && Number.isInteger(l.admin)) return { world: l.world as number, admin: l.admin as number };
+    } catch {
+      // a line still being written
+    }
+  }
+  return null;
 }

@@ -20,6 +20,7 @@ import {
 import { collectBundle, dirWorkspace, type Workspace } from '../src/sandboxes/files.ts';
 import { openshellBackend } from '../src/sandboxes/openshell.ts';
 import { sbxBackend } from '../src/sandboxes/sbx.ts';
+import { quietPort } from './helpers/ports.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const HELPDESK = path.resolve(CODE_DIR, '..', 'prod', 'worlds', 'helpdesk');
@@ -180,12 +181,7 @@ describe('WAIT_FOR_PORT probe', () => {
   });
 
   it('exits 1 when nothing listens before the deadline', async () => {
-    const closed = createServer();
-    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
-    const addr = closed.address();
-    assert.ok(addr !== null && typeof addr === 'object');
-    await new Promise<void>((resolve) => closed.close(() => resolve()));
-    const res = await nodeRunner([process.execPath, '-e', WAIT_FOR_PORT, String(addr.port), '0']);
+    const res = await nodeRunner([process.execPath, '-e', WAIT_FOR_PORT, String(await quietPort()), '0']);
     assert.equal(res.code, 1);
   });
 });

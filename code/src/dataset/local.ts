@@ -12,7 +12,7 @@
  * agents need the YOS-159/191 boundary that pipeline.ts runs in Boat.
  */
 import type { CallRecord } from '#engine';
-import { freePort, isolatedEnv, nodeRunner, nodeSpawn, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
+import { isolatedEnv, listeningPorts, nodeRunner, nodeSpawn, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import path from 'node:path';
 import { runEpisode, type NextTurn, type SendableRequest, type WorldPort } from './episode.ts';
 import { stateFromAdmin, type PreparedWorld } from './pipeline.ts';
@@ -104,18 +104,15 @@ async function prepareInChild(o: LocalEpisodeOptions, runner: Runner, env: Recor
   }
 }
 
-/** Waits until the serve child answers `/openapi.json`, and fails with its last output when it exits first or 120 s pass. */
-async function untilServing(child: SpawnedChild, port: number): Promise<void> {
+/** The serve child's ports once it reports both listening, or an error with its last output when it exits first or 120 s pass. */
+async function untilServing(child: SpawnedChild): Promise<{ readonly world: number; readonly admin: number }> {
   const tail = (): string => child.output().trim().split('\n').slice(-5).join('\n');
   let gone = false;
   void child.exited.then(() => (gone = true));
   const deadline = Date.now() + 120_000;
   while (!gone && Date.now() < deadline) {
-    try {
-      if ((await fetch(`http://127.0.0.1:${port}/openapi.json`)).status === 200) return;
-    } catch {
-      // not listening yet
-    }
+    const ports = listeningPorts(child.output());
+    if (ports !== null) return ports;
     await sleep(100);
   }
   throw new Error(`the world did not start serving (${gone ? 'the serve process exited' : 'timed out'}):\n${tail()}`);
@@ -133,14 +130,13 @@ export async function runLocalEpisode(o: LocalEpisodeOptions): Promise<LocalEpis
   const task = prep.tasks.find((t) => t.id === o.taskId);
   if (task === undefined) throw new Error(`task ${o.taskId} is not a proven task of ${prep.worldId}: ${prep.tasks.map((t) => t.id).join(', ')}`);
   if (!(await startRunLog(o.out, o.runId))) throw new Error(`run id ${o.runId} is already used in ${o.out}`);
-  const port = await freePort();
-  const child = (o.spawner ?? nodeSpawn)(['bun', 'src/cli/worldplay.ts', 'serve', prep.frozenDir, '--port', String(port)], { cwd: CODE_DIR, env: isolatedEnv(src) });
+  const child = (o.spawner ?? nodeSpawn)(['bun', 'src/cli/worldplay.ts', 'serve', prep.frozenDir, '--port', '0'], { cwd: CODE_DIR, env: isolatedEnv(src) });
   try {
-    await untilServing(child, port);
+    const ports = await untilServing(child);
     const grade = childGrader({ codeDir: CODE_DIR, out: o.out, runner, launcher: ['bun'] })({
       wid: prep.wid, worldVersion: prep.worldVersion, frozenDir: prep.frozenDir, engine: o.engineCommit,
     });
-    const server = { url: `http://127.0.0.1:${port}`, adminUrl: `http://127.0.0.1:${port + 1}` };
+    const server = { url: `http://127.0.0.1:${ports.world}`, adminUrl: `http://127.0.0.1:${ports.admin}` };
     const { episode, artifacts } = await runEpisode({
       runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION,
       configVersion: configVersion({ maxTurns: o.maxTurns, budgetUsd: o.budgetUsd, maxMinutes: o.maxMinutes }), model: o.model,
