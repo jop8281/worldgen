@@ -100,14 +100,14 @@ export const SENSITIVE_WITHHELD = '[withheld: the response could not be read as 
 
 const obj = (v: unknown): v is Readonly<Record<string, unknown>> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** Each entity's sensitive field names, keyed by its idPrefix, from a loaded world definition. A row id is `<idPrefix>_…`. */
+/** Each entity's sensitive field names, keyed by its idPrefix, from a loaded world definition. A row id is `<idPrefix>_…`; entities sharing a prefix share the union. */
 export function sensitiveOf(world: unknown): ReadonlyMap<string, ReadonlySet<string>> {
-  const out = new Map<string, ReadonlySet<string>>();
+  const out = new Map<string, Set<string>>();
   const entities = obj(world) && obj(world['entities']) ? world['entities'] : {};
   for (const entity of Object.values(entities)) {
     if (!obj(entity) || typeof entity['idPrefix'] !== 'string' || !obj(entity['fields'])) continue;
     const names = Object.entries(entity['fields']).filter(([, def]) => obj(def) && def['sensitive'] === true).map(([name]) => name);
-    if (names.length > 0) out.set(entity['idPrefix'], new Set(names));
+    if (names.length > 0) out.set(entity['idPrefix'], new Set([...(out.get(entity['idPrefix']) ?? []), ...names]));
   }
   return out;
 }
@@ -130,4 +130,37 @@ export function maskSensitiveText(text: string, sensitive: ReadonlyMap<string, R
   } catch {
     return SENSITIVE_WITHHELD;
   }
+}
+
+/** Each entity's sensitive fields by idPrefix, or null when the world's definition could not be read, so its values are withheld (A-356). */
+export type Sensitivity = ReadonlyMap<string, ReadonlySet<string>> | null;
+/** What a role below admin sees in place of a world's answer when the world's sensitive fields could not be read. */
+export const SENSITIVITY_UNREAD = "[withheld: the world's sensitive fields could not be read]";
+
+/** A world response body as a role below admin sees it: as is with no sensitive field, masked with some, withheld when unread. */
+export function bodyBelowAdmin(text: string, sensitive: Sensitivity): string {
+  if (sensitive === null) return text === '' ? text : SENSITIVITY_UNREAD;
+  return sensitive.size === 0 ? text : maskSensitiveText(text, sensitive);
+}
+
+/** Sensitive fields of several worlds in one map, or null when any of them is unread or there is none. */
+export function mergeSensitivity(all: readonly Sensitivity[]): Sensitivity {
+  if (all.length === 0 || all.includes(null)) return null;
+  const out = new Map<string, Set<string>>();
+  for (const s of all) for (const [prefix, fields] of s ?? []) out.set(prefix, new Set([...(out.get(prefix) ?? []), ...fields]));
+  return out;
+}
+
+/**
+ * An exported episode as a role below admin sees it: each tool result body masked like a console answer. A body
+ * stored as text (not JSON, or cut at the size limit) is withheld, and so is every body when the world is unread.
+ */
+export function episodeBelowAdmin(episode: unknown, sensitive: Sensitivity): unknown {
+  if (!obj(episode) || !Array.isArray(episode['messages']) || sensitive?.size === 0) return episode;
+  const messages = episode['messages'].map((m: unknown) => {
+    if (!obj(m) || m['type'] !== 'tool_result' || m['body'] === null || m['body'] === undefined) return m;
+    if (sensitive === null) return { ...m, body: SENSITIVITY_UNREAD };
+    return { ...m, body: typeof m['body'] === 'string' ? SENSITIVE_WITHHELD : maskSensitive(m['body'], sensitive) };
+  });
+  return { ...episode, messages };
 }
