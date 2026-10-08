@@ -126,6 +126,7 @@ const EARLIEST = {
   'plan.lifecycle_unrepresented': null,
   'plan.pressure_unreachable': null,
   'plan.rule_unanswered': null,
+  'plan.job_as_action': null,
   'plan.seed_mix_off': null,
   'edit.out_of_scope': null,
   'iterate.unplanned_change': null,

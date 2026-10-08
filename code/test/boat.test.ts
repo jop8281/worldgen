@@ -64,7 +64,7 @@ const sandboxJson = (state: string, extra: Record<string, unknown> = {}) =>
 const createdReply: Reply = { status: 201, json: { ok: true, type: 'sandbox.created', status: 'provisioning', ttlSeconds: 600, sandbox: sandboxJson('provisioning') } };
 const stateReply = (state: string, extra: Record<string, unknown> = {}): Reply =>
   ({ status: 200, json: { ok: true, type: 'sandbox', sandbox: sandboxJson(state, extra) } });
-const finishedReply: Reply = { status: 200, json: { ok: true, type: 'command.finished', success: true, exitCode: 0, stdout: 'v22.1.0\n', stderr: '', timedOut: false } };
+const finishedReply: Reply = { status: 200, json: { ok: true, type: 'command.finished', success: true, exitCode: 0, stdout: 'x86_64\n', stderr: '', timedOut: false } };
 const startedReply: Reply = { status: 200, json: { ok: true, type: 'command.started', success: true, processId: 7, pid: 1234, command: 'npm run x', startedAt: '2026-10-06T00:00:00Z' } };
 const writtenReply: Reply = { status: 200, json: { ok: true, type: 'file.written', success: true, path: '/tmp/a.txt', encoding: 'base64', size: 2 } };
 const hostReply: Reply = { status: 200, json: { ok: true, type: 'host', success: true, port: 4000, url: 'https://sb-1-4000.boat.test', access: 'public' } };
@@ -117,9 +117,9 @@ describe('boatClient: each method is one SDK call with bearer auth', () => {
 
   it('exec posts a synchronous command and returns its result', async () => {
     const sent: Sent[] = [];
-    const res = await client([finishedReply], sent).exec('sb_1', 'node -v', { cwd: '/tmp', timeoutSeconds: 30 });
-    assert.deepEqual(res, { exitCode: 0, stdout: 'v22.1.0\n', stderr: '', timedOut: false });
-    assert.deepEqual(sent, [{ method: 'POST', url: 'https://boat.test/api/v1/sandboxes/sb_1/commands', auth: 'Bearer boat-test-key-0001', body: { command: 'node -v', cwd: '/tmp', timeoutSeconds: 30 } }]);
+    const res = await client([finishedReply], sent).exec('sb_1', 'uname -m', { cwd: '/tmp', timeoutSeconds: 30 });
+    assert.deepEqual(res, { exitCode: 0, stdout: 'x86_64\n', stderr: '', timedOut: false });
+    assert.deepEqual(sent, [{ method: 'POST', url: 'https://boat.test/api/v1/sandboxes/sb_1/commands', auth: 'Bearer boat-test-key-0001', body: { command: 'uname -m', cwd: '/tmp', timeoutSeconds: 30 } }]);
   });
 
   it('start posts a detached command and returns its process id', async () => {
@@ -353,7 +353,7 @@ function fakeBoat(script: FakeScript = {}): { client: BoatClient; calls: Call[] 
       log('waitReady', [id], undefined);
     },
     async exec(id, command, o) {
-      return log('exec', [id, command, o], (script.exec ?? ((c) => (c === 'node -v' ? done(0, 'v22.1.0\n') : done(0))))(command));
+      return log('exec', [id, command, o], (script.exec ?? (() => done(0)))(command));
     },
     async start(id, command, o) {
       return log('start', [id, command, o], { processId: 7 });
@@ -384,11 +384,10 @@ describe('boatBackend.up', () => {
     const { client, calls } = fakeBoat();
     const sb = await boatBackend({ client }).up([{ path: 'code/src/a.ts', data: bytes('hi') }, { path: 'world/world.yaml', data: bytes('x') }], { name: 'demo-1' });
     assert.deepEqual(sb, { id: 'sb_1', workdir: '/tmp/worldgen' });
-    assert.deepEqual(calls.map((c) => c[0]), ['create', 'waitReady', 'exec', 'exec', 'writeFile', 'writeFile']);
+    assert.deepEqual(calls.map((c) => c[0]), ['create', 'waitReady', 'exec', 'writeFile', 'writeFile']);
     assert.deepEqual(calls[0], ['create', { type: 'small', ttlSeconds: 1800 }]);
-    assert.deepEqual(calls[2], ['exec', 'sb_1', 'node -v', {}]);
-    assert.deepEqual(calls[3], ['exec', 'sb_1', 'mkdir -p /tmp/worldgen /tmp/worldgen/code /tmp/worldgen/code/src /tmp/worldgen/world', {}]);
-    assert.deepEqual(calls[4], ['writeFile', 'sb_1', '/tmp/worldgen/code/src/a.ts', 'base64', 'aGk=']);
+    assert.deepEqual(calls[2], ['exec', 'sb_1', 'mkdir -p /tmp/worldgen /tmp/worldgen/code /tmp/worldgen/code/src /tmp/worldgen/world', {}]);
+    assert.deepEqual(calls[3], ['writeFile', 'sb_1', '/tmp/worldgen/code/src/a.ts', 'base64', 'aGk=']);
   });
 
   it('maps sizes to boat types and refuses a size boat does not sell', async () => {
@@ -441,35 +440,8 @@ describe('boatBackend.up', () => {
     ]);
   });
 
-  it('installs Node 22 from NodeSource when the image has an older node, then checks again', async () => {
-    let installed = false;
-    const { client, calls } = fakeBoat({
-      exec: (c) => {
-        if (c === 'node -v') return done(0, installed ? 'v22.1.0\n' : 'v18.19.0\n');
-        if (c.includes('setup_22.x')) installed = true;
-        return done(0);
-      },
-    });
-    await boatBackend({ client }).up([], { name: 'demo-1' });
-    const execs = calls.filter((c) => c[0] === 'exec').map((c) => c[2]);
-    assert.deepEqual(execs.slice(0, 3), ['node -v', "sh -c 'if [ \"$(id -u)\" -eq 0 ]; then S=; else S=sudo; fi; curl -fsSL https://deb.nodesource.com/setup_22.x | $S bash - && $S apt-get install -y nodejs'", 'node -v']);
-    assert.deepEqual(calls.filter((c) => c[0] === 'exec' && String(c[2]).startsWith('sh -c')).map((c) => c[3]), [{ timeoutSeconds: 600 }]);
-  });
-
-  it('installs Node when it is missing, and stops the VM when it is still below 22 afterwards', async () => {
-    const { client, calls } = fakeBoat({ exec: (c) => (c === 'node -v' ? done(127, '', 'node: not found') : done(0)) });
-    await assert.rejects(boatBackend({ client }).up([], { name: 'demo-1' }), /boat sandbox sb_1 still has no Node 22 after the install/);
-    assert.deepEqual(calls.slice(-2).map((c) => c[0]), ['stop', 'waitStopped']);
-  });
-
-  it('stops the VM and names the install failure when the NodeSource install fails', async () => {
-    const { client, calls } = fakeBoat({ exec: (c) => (c === 'node -v' ? done(0, 'v18.0.0\n') : c.includes('setup_22.x') ? done(1, '', 'curl: (6) could not resolve host') : done(0)) });
-    await assert.rejects(boatBackend({ client }).up([], { name: 'demo-1' }), /installing Node 22 in boat sandbox sb_1 failed \(exit 1\): curl: \(6\) could not resolve host/);
-    assert.deepEqual(calls.slice(-2).map((c) => c[0]), ['stop', 'waitStopped']);
-  });
-
   it('fails when mkdir exits non-zero', async () => {
-    const { client } = fakeBoat({ exec: (c) => (c === 'node -v' ? done(0, 'v22.1.0\n') : done(1, '', 'read-only file system')) });
+    const { client } = fakeBoat({ exec: () => done(1, '', 'read-only file system') });
     await assert.rejects(boatBackend({ client }).up([], { name: 'demo-1' }), /mkdir in boat sandbox sb_1 failed \(exit 1\): read-only file system/);
   });
 });

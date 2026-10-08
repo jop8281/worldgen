@@ -40,7 +40,7 @@ flowchart TD
 
 ## Executables
 
-Package scripts and tests run on Bun. A snippet subprocess starts `process.execPath`, so it uses whichever runtime runs the command. CI runs the same tests under `node:test` on Node 22 as well, because that job gates the snippet heap bound, which Bun ignores (A-87).
+Package scripts and tests run on Bun, the only runtime (A-379, A-381). A snippet subprocess starts `process.execPath`, so it uses Bun too. Bun ignores Worker `resourceLimits`, so CI no longer enforces the snippet heap bound that the retired Node job gated (A-87, replaced by A-379).
 
 ## Limits
 

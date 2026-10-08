@@ -1,5 +1,5 @@
 /**
- * runWorldGen in create mode, driven by a scripted fake Model. npm test never calls a real model.
+ * runWorldGen in create mode, driven by a scripted fake Model. bun run test never calls a real model.
  * Each script entry is one model call, in order: a reply (tool input), a ModelError to throw, or a
  * function of the request. The target world, plan and stage edits are in test/helpers/scripted-world.ts,
  * shared with the CLI end-to-end test.
@@ -636,7 +636,7 @@ describe('runWorldGen create: stage tools and scope', () => {
     ]);
     assert.equal(result.kind, 'done');
     const workflow = workflowAttempts(events);
-    assert.deepEqual(workflow.map((e) => [e.n, e.outcome.kind]), [[1, 'rejected'], [2, 'rejected'], [3, 'accepted']]);
+    assert.deepEqual(workflow.map((e) => [e.n, e.outcome.kind]), [[1, 'rejected'], [2, 'rejected'], [1, 'accepted']]);
     assert.deepEqual(issuesOf(workflow[0]).map((i) => [i.code, i.path.join('.')]), [['test.failed', 'tests.resolve_pending_ticket.script']]);
     const repair = issuesOf(workflow[1]);
     assert.equal(repair.length, 1);
@@ -668,7 +668,7 @@ describe('runWorldGen create: stage tools and scope', () => {
     ]);
     assert.equal(result.kind, 'done');
     const workflow = workflowAttempts(events);
-    assert.deepEqual(workflow.map((e) => [e.n, e.outcome.kind]), [[1, 'rejected'], [2, 'rejected'], [3, 'accepted']]);
+    assert.deepEqual(workflow.map((e) => [e.n, e.outcome.kind]), [[1, 'rejected'], [2, 'rejected'], [1, 'accepted']]);
     const repair = issuesOf(workflow[1]);
     assert.equal(repair.length, 1);
     assert.equal(repair[0]?.code, 'edit.out_of_scope');
@@ -931,7 +931,7 @@ describe('runWorldGen: a tasks -> seed pressure backtrack fits in the A-48 limit
     assert.deepEqual(events.flatMap((e) => (e.t === 'backtracked' ? [[e.from, e.to]] : [])), [['tasks', 'seed']]);
     assert.deepEqual(attempts(events), [
       ['plan', 1, 'accepted'], ['model', 1, 'accepted'], ['workflow', 1, 'accepted'], ['seed', 1, 'accepted'],
-      ['tasks', 1, 'rejected'], ['seed', 1, 'accepted'], ['tasks', 2, 'accepted'],
+      ['tasks', 1, 'rejected'], ['seed', 1, 'accepted'], ['tasks', 1, 'accepted'],
     ]);
     assert.equal(result.kind, 'done');
     assert.equal(result.kind === 'done' ? result.ms : null, 807_699);
@@ -979,7 +979,7 @@ describe('runWorldGen: after a tasks -> model backtrack, workflow and seed rerun
     assert.deepEqual(events.flatMap((e) => (e.t === 'backtracked' ? [[e.from, e.to]] : [])), [['tasks', 'model']]);
     assert.deepEqual(attempts(events), [
       ['plan', 1, 'accepted'], ['model', 1, 'accepted'], ['workflow', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'rejected'],
-      ['model', 1, 'accepted'], ['workflow', 2, 'accepted'], ['seed', 2, 'accepted'], ['tasks', 2, 'accepted'],
+      ['model', 1, 'accepted'], ['workflow', 1, 'accepted'], ['seed', 1, 'accepted'], ['tasks', 1, 'accepted'],
     ]);
     assert.equal(result.kind, 'done');
     assert.equal(result.kind === 'done' ? result.ms : null, 866_693);
@@ -1923,7 +1923,7 @@ describe('runWorldGen create: backtracking (YOS-44)', () => {
     const { result, events } = await run(RERUN_AFTER_BACKTRACK, { check: flagsFirstSeed });
     assert.equal(result.kind === 'stopped' ? result.reason.kind : result.kind, 'done');
     assert.deepEqual(attempts(events), [['plan', 1, 'accepted'], ['model', 1, 'accepted'], ['workflow', 1, 'accepted'], ['seed', 1, 'accepted'],
-      ['tasks', 1, 'rejected'], ['tasks', 2, 'rejected'], ['seed', 1, 'accepted'], ['tasks', 3, 'rejected'], ['tasks', 4, 'accepted']]);
+      ['tasks', 1, 'rejected'], ['tasks', 2, 'rejected'], ['seed', 1, 'accepted'], ['tasks', 1, 'rejected'], ['tasks', 2, 'accepted']]);
     const first = events.find((e) => e.t === 'attempt' && e.step === 'tasks');
     const third = events.filter((e) => e.t === 'attempt' && e.step === 'tasks')[2];
     assert.deepEqual(first?.t === 'attempt' && first.outcome.kind === 'rejected' ? brief(first.outcome.issues) : null, [

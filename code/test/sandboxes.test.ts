@@ -61,8 +61,8 @@ function fakeWorkspace() {
 
 const ends = (argv: readonly string[], ...tail: string[]): boolean => argv.slice(-tail.length).join(' ') === tail.join(' ');
 
-/** A sandbox that has Node 22 and where every other command succeeds. */
-const healthy = (argv: readonly string[]): Reply | undefined => (ends(argv, 'node', '-v') ? { stdout: 'v22.11.0\n' } : ends(argv, 'sh', '-c', BOOT) ? { stdout: '1.4.2\n' } : undefined);
+/** A sandbox where the pinned Bun installs and every other command succeeds. It needs no Node (A-385). */
+const healthy = (argv: readonly string[]): Reply | undefined => (ends(argv, 'sh', '-c', BOOT) ? { stdout: '1.4.2\n' } : undefined);
 
 const BUNDLE: WorldBundle = {
   files: [
@@ -86,22 +86,20 @@ const WAIT_LITERAL =
 const OS_EXEC = ['openshell', 'sandbox', 'exec', '-n', 'w1', '--no-login-shell', '--no-tty', '--workdir', '/sandbox/work/w1'];
 const OPENSHELL_UP: string[][] = [
   ['openshell', 'sandbox', 'create', '--name', 'w1', '--cpu', '2', '--memory', '4Gi', '--upload', '/tmp/wg/w1:/sandbox/work', '--no-git-ignore', '--detach', '--no-auto-providers'],
-  [...OS_EXEC, '--', 'node', '-v'],
   [...OS_EXEC.slice(0, 7), '--timeout', '900', '--', 'sh', '-c', BOOT],
   [...OS_EXEC, '--timeout', '900', '--', BUN, 'install', '--frozen-lockfile'],
   [...OS_EXEC, '--', 'sh', '-c', SERVE_SH],
-  [...OS_EXEC, '--', 'node', '-e', WAIT_LITERAL, '4000', '60'],
+  [...OS_EXEC, '--', BUN, '-e', WAIT_LITERAL, '4000', '60'],
   ['openshell', 'forward', 'start', '4000', 'w1', '-d'],
 ];
 
 const SBX_EXEC = ['sbx', 'exec', '--workdir', '/tmp/wg/w1', 'w1'];
 const SBX_UP: string[][] = [
   ['sbx', 'create', '--name=w1', '--cpus', '2', 'shell', '/tmp/wg/w1'],
-  [...SBX_EXEC, 'node', '-v'],
   ['sbx', 'exec', 'w1', 'sh', '-c', BOOT],
   [...SBX_EXEC, BUN, 'install', '--frozen-lockfile'],
   [...SBX_EXEC, 'sh', '-c', SERVE_SH],
-  [...SBX_EXEC, 'node', '-e', WAIT_LITERAL, '4000', '60'],
+  [...SBX_EXEC, BUN, '-e', WAIT_LITERAL, '4000', '60'],
   ['sbx', 'ports', 'w1', '--publish', '4000:4000'],
 ];
 
@@ -377,7 +375,7 @@ describe('upWorld', () => {
       name: 'SandboxError',
       message: 'bun install failed in openshell sandbox w1 (exit 1):\nnpm error code E404\nnpm error 404 Not Found - zod',
     });
-    assert.deepEqual(calls, [...OPENSHELL_UP.slice(0, 4), ['openshell', 'sandbox', 'delete', 'w1']]);
+    assert.deepEqual(calls, [...OPENSHELL_UP.slice(0, 3), ['openshell', 'sandbox', 'delete', 'w1']]);
   });
 
   it('tears the sbx sandbox down when bun install fails', async () => {
@@ -386,21 +384,8 @@ describe('upWorld', () => {
     await assert.rejects(upWorld(sbxBackend({ runner, workspace }), BUNDLE, { name: 'w1', port: 4000 }), {
       message: 'bun install failed in sbx sandbox w1 (exit 1):\nENOSPC',
     });
-    assert.deepEqual(calls, [...SBX_UP.slice(0, 4), ['sbx', 'stop', 'w1'], ['sbx', 'rm', '--force', 'w1']]);
+    assert.deepEqual(calls, [...SBX_UP.slice(0, 3), ['sbx', 'stop', 'w1'], ['sbx', 'rm', '--force', 'w1']]);
     assert.deepEqual(events, ['write w1 package.json,worlds/helpdesk/world.yaml', 'remove w1']);
-  });
-
-  it('stops at an old or missing node and tears down', async () => {
-    const old = fakeRunner((argv) => (ends(argv, 'node', '-v') ? { stdout: 'v20.11.1\n' } : undefined));
-    await assert.rejects(upWorld(openshellBackend({ runner: old.runner, workspace: fakeWorkspace().workspace }), BUNDLE, { name: 'w1', port: 4000 }), {
-      message: 'the openshell sandbox has node v20.11.1: need Node 22 or later',
-    });
-    assert.deepEqual(old.calls, [...OPENSHELL_UP.slice(0, 2), ['openshell', 'sandbox', 'delete', 'w1']]);
-
-    const none = fakeRunner((argv) => (ends(argv, 'node', '-v') ? { code: 127, stderr: 'sh: node: not found' } : undefined));
-    await assert.rejects(upWorld(sbxBackend({ runner: none.runner, workspace: fakeWorkspace().workspace }), BUNDLE, { name: 'w1', port: 4000 }), {
-      message: 'node not found in the sbx sandbox: use an image with Node 22 or later',
-    });
   });
 
   it('reports the serve log and tears down when the world port never opens', async () => {
@@ -414,7 +399,7 @@ describe('upWorld', () => {
       message: 'worldplay serve did not listen on port 4000 within 60s in openshell sandbox w1:\nError: world.yaml: 3 issues',
     });
     assert.deepEqual(calls, [
-      ...OPENSHELL_UP.slice(0, 6),
+      ...OPENSHELL_UP.slice(0, 5),
       [...OS_EXEC.slice(0, 7), '--', 'tail', '-n', '20', '/tmp/worldplay.log'],
       ['openshell', 'sandbox', 'delete', 'w1'],
     ]);

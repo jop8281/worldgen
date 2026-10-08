@@ -29,7 +29,7 @@
  *   WeakRef, FinalizationRegistry, SharedArrayBuffer, Atomics, process, timers or fetch.
  *   Math.random throws "use ctx.rng". Code generation from strings is off.
  * - test/sandbox.test.ts snapshots `Object.getOwnPropertyNames(globalThis)` inside the
- *   context against SANDBOX_GLOBALS, so a Node upgrade that adds a global fails `npm test`.
+ *   context against SANDBOX_GLOBALS, so a runtime upgrade that adds a global fails `bun run test`.
  * - SNIPPET_LIMITS.ctxCallsPerRun bounds ctx calls; guardMs bounds CPU between them. Node meters
  *   the worker with Worker.cpuUsage. Bun meters the isolated supervisor process synchronously,
  *   conservatively including its worker, supervisor and GC. Host ctx work runs outside that process.
@@ -621,7 +621,7 @@ for (;;) {
 `;
 
 /**
- * The snippet process: run with `node -e`, it opens the two FIFOs, says hello, and starts the
+ * The snippet process: run with `-e` on the running runtime, it opens the two FIFOs, says hello, and starts the
  * snippet worker with resourceLimits. Its own thread keeps an event loop, so it hears the worker
  * die and reports it as a 'dead' frame, then exits. A watchdog reports a worker that stays busy
  * past its wait (guardMs for a run, guardMs + slack for a compile) with no ctx call as stuck. When main closes the lane the worker reads EOF

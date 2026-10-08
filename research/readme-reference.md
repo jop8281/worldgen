@@ -60,7 +60,7 @@ Everything below is built and merged into the trunk. Each row names the PRs that
 | Rehearsal suite and `bun run eval` | `eval/suite.yaml`, `code/src/cli/eval.ts` | #30 |
 | Spend ledger, separate LLM and sandbox meters, `bun run costs` | `code/src/costs/` | #34, #138 |
 | Sandbox backends: OpenShell, sbx and Boat | `code/src/sandboxes/` | #35, #94, #97, #110 |
-| Bun as the default runtime, Node 22 as the second gate | `code/bun.lock`, `scripts/runner.sh` | #164, #237, #359 |
+| Bun as the only runtime (A-379, A-381) | `code/bun.lock`, `scripts/runner.sh` | #164, #237, #359 |
 | Live runner | `code/src/cli/live.ts`, `scripts/live.sh` | #107, #182 |
 | `qualify-main.sh`, the gate on a fresh clone | `scripts/qualify-main.sh` | #324, #362 |
 | Engine demo and solve demo | `scripts/demo.sh`, `scripts/solve-demo.sh` | #38, #149, #328 |
@@ -241,7 +241,7 @@ Model metering records a durable pending claim before starting a request. Applic
 
 The admitted CLI estimate allowance uses the tightest applicable daily, total or LLM cap after subtracting settled spending and active VM reservations. It is computed from the journal prefix that admitted the request. The production CLI receives the smaller of that allowance and the run's remaining estimate budget as `--max-budget-usd`; a sandbox-only cap does not limit model calls. This requires the matching CLI transport implementation. Provider invoices can differ from client estimates.
 
-`npm run costs` lists pending obligations separately from settled spending, even when no spending caps are configured. `npm run costs -- --json` includes a `pending` array with each claim's ID, provider/account, start time, run/model/stage, VM ID and known remaining reservation or unknown billing. `--since` filters settled spending; it does not hide current obligations. Model stage identity is captured before the request starts. An old pending claim is not evidence that no request started; reconciliation requires evidence of the actual provider outcome.
+`bun run costs` lists pending obligations separately from settled spending, even when no spending caps are configured. `bun run costs --json` includes a `pending` array with each claim's ID, provider/account, start time, run/model/stage, VM ID and known remaining reservation or unknown billing. `--since` filters settled spending; it does not hide current obligations. Model stage identity is captured before the request starts. An old pending claim is not evidence that no request started; reconciliation requires evidence of the actual provider outcome.
 
 ## Boat recovery and inventory
 

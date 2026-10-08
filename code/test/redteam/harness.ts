@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 /**
  * Red-team harness: capability probe, seeded PRNG, ddmin, freezing, and an HTTP harness
- * around `npm run worldplay -- serve`.
+ * around `bun run worldplay serve`.
  *
  * Capabilities. Importing this module probes every capability in CAPABILITY_UNITS once:
  * #engine functions and Runtime methods with minimal arguments, each check layer with the
@@ -579,7 +579,7 @@ export function failWithRepro<T>(label: string, seed: number, calls: readonly T[
   const min = ddmin(calls, fails);
   const message = [
     `[redteam] ${label}`,
-    `  reproduce: REDTEAM_SEED=${seed} REDTEAM_ITER=1 npm test`,
+    `  reproduce: REDTEAM_SEED=${seed} REDTEAM_ITER=1 bun run test`,
     `  minimized ${min.length} of ${calls.length} calls:`,
     ...min.map((c, i) => `    ${i + 1}. ${JSON.stringify(c)}`),
     ...(detail ? [`  ${detail}`] : []),

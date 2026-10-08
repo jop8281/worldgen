@@ -9,7 +9,7 @@
  * When the ref has scripts/factory-check.sh it runs too, and its .factory/junit.xml is copied to junit-out.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { SANDBOX_BUN_VERSION, nodeRunner } from '../src/sandboxes/backend.ts';
+import { BUN_BOOTSTRAP, SANDBOX_BUN_VERSION, nodeRunner } from '../src/sandboxes/backend.ts';
 import { backendFor } from '../src/sandboxes/registry.ts';
 
 const [archive, label = 'ref', junitOut] = process.argv.slice(2);
@@ -59,7 +59,7 @@ try {
     return r.stdout;
   };
   await sh('mkdir -p repo && tar -xzf repo.tgz -C repo');
-  await sh(`npm install --silent --no-audit --no-fund --prefix ${BUN_DIR} bun@${SANDBOX_BUN_VERSION}`);
+  await sh(BUN_BOOTSTRAP); // the same pinned Bun as upWorld, by curl, so the VM needs no Node or npm (A-385)
   await sh(`${PATHS} && bun --version && bun install --frozen-lockfile >/tmp/install.log 2>&1`);
   log(`installed bun ${SANDBOX_BUN_VERSION}, ${(await sh('nproc')).trim()} cpus, WORLDGEN_GUARD_SCALE=${GUARD_SCALE}`);
   if ((await sh('test -f repo/scripts/factory-check.sh && echo yes || true')).trim() === 'yes') RUNS['factory'] = 'cd .. && bash scripts/factory-check.sh';

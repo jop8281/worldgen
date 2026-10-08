@@ -124,9 +124,38 @@ describe('planCoverage', () => {
     });
   }
 
+  it('names a planned job built as an action, and leaves its repair to workflow (YOS-257, bookmarks)', () => {
+    const jobPlan: Plan = { ...plan, jobs: [{ name: 'close_stale', every: '1d', rule: 'close tickets solved a week ago' }] };
+    const job = { description: 'close stale tickets', every: '1d', run: '(ctx) => null' };
+    assert.deepEqual(planCoverage(jobPlan, world({ jobs: { close_stale: job } })), []);
+    const issues = planCoverage(jobPlan, world({ jobs: { close_stale: job }, actions: { ...world().actions, close_stale: action('/maintenance/close_stale') } }));
+    assert.deepEqual(summary(issues), [['plan.job_as_action', 'error', ['plan', 'jobs', 0]]]);
+    assert.equal(issues[0]?.expected, 'the planned job close_stale only under jobs, with no action of that name');
+    assert.equal(issues[0]?.found, 'actions.close_stale');
+    assert.equal(issues[0]?.hint, 'Remove actions.close_stale and keep jobs.close_stale. A job runs on the clock, so a test reaches it with ctx.advance and no test calls an action of that name.');
+    assert.deepEqual(issues.map(ownerOf), ['workflow']);
+  });
+
   it('accepts a claimed action route only when its method and path match', () => {
     const actionPlan: Plan = { ...plan, routes: [{ id: 'solve', method: 'POST', path: '/tickets/{id}/solve', purpose: 'solve a ticket' }] };
     assert.deepEqual(planCoverage(actionPlan, world()), []);
+  });
+
+  // stress-6 stripe-charges (YOS-258): the plan said GET /v1/charges/{charge}, the model built GET /v1/charges/{id}.
+  it('accepts a planned route or claimed action whose path names its params differently', () => {
+    const renamed: Plan = { ...plan, routes: [
+      { id: 'get_ticket', method: 'GET', path: '/tickets/{ticket}', purpose: 'read one ticket' },
+      { id: 'solve', method: 'POST', path: '/tickets/{ticket_id}/solve', purpose: 'solve a ticket' },
+    ] };
+    assert.deepEqual(planCoverage(renamed, world()), []);
+  });
+
+  it('still rejects a renamed param path whose literal segments differ', () => {
+    const renamed: Plan = { ...plan, routes: [{ id: 'get_ticket', method: 'GET', path: '/ticket/{ticket}', purpose: 'read one ticket' }] };
+    const issues = planCoverage(renamed, world());
+    assert.deepEqual(summary(issues), [['plan.not_covered', 'error', ['routes', 'get_ticket']]]);
+    assert.equal(issues[0]?.expected, 'the planned route "get_ticket" at GET /ticket/{ticket} exists in the world');
+    assert.equal(issues[0]?.found, 'GET /tickets/{id}');
   });
 
   it('reports a missing claimed action once and assigns its repair to workflow', () => {
@@ -559,6 +588,38 @@ describe('acceptance test actions are declared workflow actions (YOS-53)', () =>
       message: 'acceptance test solve_ticket names create_ticket, which no workflow declares in its actions: add create_ticket to the actions of the workflow it belongs to, or name an action a workflow declares',
       path: ['acceptanceTests', 0, 'actions'],
     }]);
+  });
+  it('refuses a plan job listed as a workflow action or a test action, which the workflow step would have to build twice (YOS-257, bookmarks)', () => {
+    const doubled: unknown = {
+      ...plan,
+      workflows: [{ ...plan.workflows[0]!, actions: ['assign', 'solve', 'close_stale'] }],
+      jobs: [{ name: 'close_stale', every: '1d', rule: 'close tickets solved a week ago' }],
+      acceptanceTests: [{ ...plan.acceptanceTests[0]!, actions: ['solve', 'close_stale'] }],
+    };
+    const r = planSchema.safeParse(doubled);
+    assert.deepEqual(r.success ? [] : r.error.issues.map((i) => ({ message: i.message, path: i.path })), [{
+      message: "workflow triage lists close_stale in its actions, but close_stale is a job: a job runs on the clock, so list it only under jobs and in a rule's by, and let the test call the workflow action that sets up the job's rows through ctx.api, name that action in its actions, then reach the job with ctx.advance",
+      path: ['workflows', 0, 'actions', 2],
+    }, {
+      message: "acceptance test solve_ticket names close_stale in its actions, but close_stale is a job: a job runs on the clock, so list it only under jobs and in a rule's by, and let the test call the workflow action that sets up the job's rows through ctx.api, name that action in its actions, then reach the job with ctx.advance",
+      path: ['acceptanceTests', 0, 'actions'],
+    }]);
+  });
+  it('accepts the fixed shape: the job only under jobs and a rule\'s by, its test naming the action that sets it up (YOS-257)', () => {
+    const fixed: unknown = {
+      ...plan,
+      workflows: [{ ...plan.workflows[0]!, rules: [{ rule: 'solved tickets close after a week', by: ['close_stale'], test: 'close_stale_week' }] }],
+      jobs: [{ name: 'close_stale', every: '1d', rule: 'close tickets solved a week ago' }],
+      acceptanceTests: [...plan.acceptanceTests, {
+        id: 'close_stale_week',
+        intent: 'A solved ticket closes a week later.',
+        actions: ['solve'],
+        description: 'solve a ticket, advance eight days, it is closed',
+        script: "(ctx) => { ctx.api('POST', '/tickets/tk_0001/solve'); ctx.advance('8d'); ctx.assert(ctx.api('GET', '/tickets/tk_0001').body.status === 'closed', 'not closed'); }",
+      }],
+    };
+    const r = planSchema.safeParse(fixed);
+    assert.deepEqual(r.success ? [] : r.error.issues.map((i) => i.message), []);
   });
   it('tells the model in the tool schema that a test names only declared workflow actions', () => {
     const json = JSON.stringify(z.toJSONSchema(planSchema, { io: 'input' }));

@@ -367,7 +367,7 @@ export type SpawnLimits = { readonly timeoutMs: number; readonly idleMs: number;
 export type SpawnResult = { readonly code: number | null; readonly signal: string | null; readonly killed: null | 'share' | 'stall' | 'answered' | 'aborted'; readonly stdout: string; readonly stderr: string };
 /**
  * Runs `bin` with `args` (no shell), writes `stdin` and closes it, and stops it at `limits`. Resolves with whatever
- * the process printed; rejects only when it cannot start. Tests inject a fake with this shape, so `npm test` never
+ * the process printed; rejects only when it cannot start. Tests inject a fake with this shape, so `bun run test` never
  * runs the real CLI.
  */
 export type SpawnClaude = (bin: string, args: readonly string[], stdin: string, limits: SpawnLimits) => Promise<SpawnResult>;

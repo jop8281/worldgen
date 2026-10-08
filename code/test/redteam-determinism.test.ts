@@ -7,7 +7,7 @@
  *   catalog issue (or a deterministic failure). None may give ok:true.
  * - Runaway snippets (busy loops, ctx loops, recursion, promises) end in their catalog code.
  *   Anything that can hang the process runs in a child process with a kill timer, so a
- *   broken engine fails these tests instead of hanging `npm test`.
+ *   broken engine fails these tests instead of hanging `bun run test`.
  *
  * Expected values are literals (codes, SNIPPET_LIMITS numbers copied from ctx.ts, FACTS)
  * or before/after comparisons of engine output.

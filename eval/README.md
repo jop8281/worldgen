@@ -22,10 +22,10 @@ The unseen bank in `research/rehearsal-prompts.md` stays out of `suite.yaml` so 
 From `code/`:
 
 ```sh
-npm run eval -- --dry-run                       # validate the suite and every input file; no model call, nothing written
-npm run eval -- --only helpdesk-sla,orders-csv,linear-backlog-csv  # run some cases
-npm run eval -- --tag cheap                     # run every case with that tag (--tag a,b takes either)
-npm run eval                                    # run every case
+bun run eval --dry-run                          # validate the suite and every input file; no model call, nothing written
+bun run eval --only helpdesk-sla,orders-csv,linear-backlog-csv  # run some cases
+bun run eval --tag cheap                        # run every case with that tag (--tag a,b takes either)
+bun run eval                                    # run every case
 ```
 
 Other flags: `--suite <file>`, `--model <id>`, `--budget-usd <n>` and `--max-minutes <n>` (per run, over `worldgen.config.json`), `--out-dir <dir>`, and `--transport claude-cli|sdk` (`claude-cli` is the default; `sdk` reads `LLM_KEY` from the environment). `--backend local|boat` and `--parallel <n>` are parsed and checked, but only `local` with `--parallel 1` runs today. Boat fan-out lands with the sandbox backends.
@@ -48,10 +48,10 @@ Running a case again deletes its `<case-id>/` directory first. `summary.md` list
 
 ## summary.md
 
-There is one row per case, with these columns: case, expect, result (`done`, `stopped` or `crashed`), stop reason, attempts per step (attempts in the change run are prefixed `change:`), minutes, $, verify, fidelity (only when a case has a reference), log and pass. Below the table come totals and the pass rate, followed by why each case is unlogged or crashed.
+There is one row per case, with these columns: case, expect, result (`done`, `stopped` or `crashed`), stop reason, attempts per step (attempts in the change run are prefixed `change:`), minutes, $, verify, fidelity (only when a case has a reference), log and pass. Below the table come totals, the pass rate and a one-line legend of what each outcome means, followed by why each case is unlogged or crashed.
 
 - A case marked `expect: done` passes when it ends `done` and verify passes.
-- A case marked `expect: stopped` passes on any stop except `model_error`.
+- A case marked `expect: stopped` passes only on an `input_rejected` stop: only an input_rejected stop counts as an expected refusal (A-384). Any other verdict stop on it, such as `attempts_exhausted`, `no_progress` or a budget or time stop, is a product failure. A machinery stop, such as `model_error`, is an infra failure on any case.
 - A case is `unlogged` when a step ran without an `attempt` event that carries `ms` and `costUsd`, when any attempt lacks either value, when a line in `events.jsonl` is broken, or when the run returned without a `run_finished` event. This enforces the AGENTS.md invariant that every stage, attempt, time and cost is logged.
 
 ## Fidelity
@@ -70,4 +70,4 @@ The target is 0.80 on each referenced case by stress run 2 (YOS-54). See `resear
 
 When a case fails, fix the generic cause (prompts, hints, issue texts), never the one prompt. Move a world to `prod/` only when it is a deliverable.
 
-`eval/` holds no code. The runner is `code/src/cli/eval.ts`, and its logic is in `code/src/worldgen/eval.ts`. Engine acceptance lives in `code/test` (node:test, run through npm from `code/`), so the engine and WorldGen are each runnable with one command, through npm only. Decision A-45 in `research/decisions.md` records why the Python acceptance harness was retired.
+`eval/` holds no code. The runner is `code/src/cli/eval.ts`, and its logic is in `code/src/worldgen/eval.ts`. Engine acceptance lives in `code/test` (node:test files that `bun run test` runs from `code/`), so the engine and WorldGen are each runnable with one command, through Bun only (A-381). Decision A-45 in `research/decisions.md` records why the Python acceptance harness was retired.

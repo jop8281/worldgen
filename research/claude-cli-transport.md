@@ -121,7 +121,7 @@ On this machine, `which -a claude` lists the cmux shim **before** the real binar
 
 The shim is a bash script that hands off to `/Applications/cmux.app/.../cmux-claude-wrapper`. The report that it **fails non-interactively** came from worldgen-27 and was not reproduced here **[unverified]**. Either way, do not depend on whatever `claude` resolves to first:
 
-- Shell usage (README, demo, eval scripts): `export PATH="$HOME/.local/bin:$PATH"` before `npm run worldgen`.
+- Shell usage (README, demo, eval scripts): `export PATH="$HOME/.local/bin:$PATH"` before `bun run worldgen`.
 - In code: resolve the binary once at startup. Use `config.transports["claude-cli"].bin` if set, otherwise `$HOME/.local/bin/claude` if it exists, otherwise `claude` from PATH. Log the resolved absolute path and `--version` in `run_started`. Spawn that absolute path.
 - `models.json` currently has `"command": "claude -p --json-schema"`, a single shell string. Replace it with `{ "bin": "claude", "args": [...] }`, or let code own the flag list and keep only `bin` in config, so nothing goes through a shell.
 

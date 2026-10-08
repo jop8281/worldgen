@@ -1051,7 +1051,7 @@ for (const w of WORLDS) {
           cases.push({ label: `seed ${seed} #${k}`, method, path, ...(body !== undefined ? { o: { body } } : {}), kind: 'safe', envelope: method !== 'OPTIONS', check: notAdmin });
         }
         const found = await runCases(live, info, cases);
-        if (found.length) problems.push(`REDTEAM_SEED=${seed} REDTEAM_ITER=1 npm test (base seed ${SEED})`, ...found);
+        if (found.length) problems.push(`REDTEAM_SEED=${seed} REDTEAM_ITER=1 bun run test (base seed ${SEED})`, ...found);
         await pristine(live);
       }
       assert.deepEqual(problems, [], report(problems));

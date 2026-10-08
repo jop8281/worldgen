@@ -4,15 +4,14 @@ From `code/`, run the offline reader against the suite used for the run:
 
 ```sh
 bun scripts/analyze-eval.ts ../eval/suite.yaml ../eval/runs/<run-directory>
-# Node alternative:
-node --import tsx scripts/analyze-eval.ts ../eval/suite.yaml ../eval/runs/<run-directory>
 ```
 
 The JSON report keeps one slot for every manifest case, in manifest order. The success
 denominator is always the number of expected cases. Invalid, missing and duplicate slots
 cannot pass. Unexpected records are listed separately and prevent a complete-suite verdict.
 The manifest must be nonempty with unique lowercase kebab-case IDs. An expected stopped
-case passes only with a recorded known stop reason other than `model_error`.
+case passes only on a recorded `input_rejected` stop: only an input_rejected stop counts as
+an expected refusal (A-384).
 
 The reader reads the existing `<case>/case.json`, `<case>/events.jsonl` and
 `<case>/change/events.jsonl` layout. It never executes a world, invokes a provider, reads
@@ -34,7 +33,8 @@ Percentiles use nearest-rank over measured case totals: sort ascending and selec
 Attempts count logged completed `attempt` events, not unlogged or abandoned provider calls.
 Coverage requires a single identified run bounded by start and finish, matching active step
 invocations, consecutive per-step attempt numbers and consistency with step completion counts.
-Backtracking resets the target step's attempt number; completion counts belong to one invocation.
+Backtracking resets the target step's attempt number, and since YOS-258 (A-383) every step it reruns restarts at 1;
+a rerun step may also continue its count, as runs recorded before that do. Completion counts belong to one invocation.
 Create/change logs must have their respective create/iterate modes and distinct run identities.
 A preflight refusal may have zero
 attempts. A started step with neither attempt nor refusal has unknown attempt coverage.

@@ -18,9 +18,9 @@ function docs(...args: string[]): { status: number | null; stdout: string; stder
 }
 
 describe('world-format.md', () => {
-  it('R16 prod/world-format.md is what `npm run docs` writes', async () => {
+  it('R16 prod/world-format.md is what `bun run docs` writes', async () => {
     const onDisk = await readFile(WORLD_FORMAT, 'utf8').catch(() => '(missing)');
-    assert.equal(onDisk, worldFormatDoc(), 'prod/world-format.md is stale. Run `npm run docs` in code/ and commit prod/world-format.md.');
+    assert.equal(onDisk, worldFormatDoc(), 'prod/world-format.md is stale. Run `bun run docs` in code/ and commit prod/world-format.md.');
   });
 
   it('R14 starts with a generated-file header, then the format reference', () => {
@@ -208,7 +208,7 @@ function shLines(file: string): DocLine[] {
   return out;
 }
 
-const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md', 'prod/system.md'];
+const DOC_FILES = ['README.md', 'research/readme-reference.md', 'AGENTS.md', 'prod/README.md', 'prod/design.md', 'prod/system.md', 'eval/README.md'];
 
 describe('documented worldplay subcommands, worldgen flags and runner', () => {
   const lines = DOC_FILES.flatMap(shLines);

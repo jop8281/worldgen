@@ -24,12 +24,14 @@ function files(id: string, expect: Expect, result: 'done' | 'stopped' | null, ve
 }
 
 const stopped = (kind: string): object => ({ kind: 'stopped', reason: { kind, step: 'plan' } });
+const REFUSED = { kind: 'stopped', reason: { kind: 'input_rejected', why: 'a video codec is not a stateful API' } };
 const PASS = { kind: 'pass', tasks: 3 };
 const NOT_RUN = { kind: 'not_run' };
 
 const FIXTURE: readonly Files[] = [
   files('builds-helpdesk', 'done', 'done', PASS, { kind: 'done' }),
-  files('refuses-codec', 'stopped', 'stopped', NOT_RUN, stopped('attempts_exhausted')),
+  files('refuses-codec', 'stopped', 'stopped', NOT_RUN, REFUSED),
+  files('gives-up-on-codec', 'stopped', 'stopped', NOT_RUN, stopped('attempts_exhausted')),
   files('stops-on-a-done-case', 'done', 'stopped', NOT_RUN, stopped('no_progress')),
   files('fails-verify', 'done', 'done', { kind: 'fail', codes: ['task.noop_nonzero'] }, { kind: 'done' }),
   files('overloaded', 'stopped', 'stopped', NOT_RUN, stopped('model_error')),
@@ -50,6 +52,7 @@ function summaryEntry(f: Files): SummaryEntry {
 const EXPECTED: readonly [string, string, boolean][] = [
   ['builds-helpdesk', 'success', true],
   ['refuses-codec', 'expected refusal', true],
+  ['gives-up-on-codec', 'product failure', false],
   ['stops-on-a-done-case', 'product failure', false],
   ['fails-verify', 'product failure', false],
   ['overloaded', 'infra failure', false],
@@ -78,10 +81,10 @@ describe('one outcome classifier for summary.md and eval-outcomes (A-340)', () =
   it('counts the same classes and publishes the same pass rate over every expected case', () => {
     const lines = renderSummary({ run: 'agree', suite: 'agree', model: 'claude-sonnet-5-5', budgetUsd: 1, maxMinutes: 1 }, entries).split('\n');
     const totals = lines.find((l) => l.startsWith('**Totals:**')) ?? '';
-    assert.equal(totals.startsWith('**Totals:** 9 expected cases: 1 success, 1 expected refusal, 2 product failure, 4 infra failure, 1 not run; '), true, totals);
-    assert.equal(lines.find((l) => l.startsWith('**Pass rate:**')), '**Pass rate:** 2/9 (22%), success and expected refusal over all 9 expected cases (1 not run).');
-    assert.deepEqual(analysis.outcomes, { success: 1, 'expected refusal': 1, 'product failure': 2, 'infra failure': 4, 'not run': 1 });
+    assert.equal(totals.startsWith('**Totals:** 10 expected cases: 1 success, 1 expected refusal, 3 product failure, 4 infra failure, 1 not run; '), true, totals);
+    assert.equal(lines.find((l) => l.startsWith('**Pass rate:**')), '**Pass rate:** 2/10 (20%), success and expected refusal over all 10 expected cases (1 not run).');
+    assert.deepEqual(analysis.outcomes, { success: 1, 'expected refusal': 1, 'product failure': 3, 'infra failure': 4, 'not run': 1 });
     assert.equal(analysis.passed, 2);
-    assert.equal(analysis.passRate, 2 / 9);
+    assert.equal(analysis.passRate, 2 / 10);
   });
 });

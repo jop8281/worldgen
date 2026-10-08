@@ -35,7 +35,7 @@ export const suiteCaseSchema = z.strictObject({
   input: inputSchema,
   /** A change request, run as an iterate job on the world the create phase saved. */
   change: z.string().trim().min(1).optional(),
-  /** `stopped` marks a prompt WorldGen should refuse. Such a case passes on an honest stop. */
+  /** `stopped` marks a prompt WorldGen should refuse. Only an `input_rejected` stop counts as an expected refusal (A-384). */
   expect: expectSchema.default('done'),
   /** What a good result looks like, for the person triaging. The runner never reads it. */
   note: z.string().optional(),
@@ -443,7 +443,7 @@ function verifyCell(v: VerifyResult): string {
 
 /**
  * Whether a stop is a verdict on the prompt (true) or a failure of the machinery around the model (false).
- * Only a verdict can pass an `expect: stopped` case. A Record, so a new stop kind must be classified here.
+ * A machinery stop is an infra failure on any case. A Record, so a new stop kind must be classified here.
  */
 const STOP_IS_VERDICT: Record<StopReason['kind'], boolean> = {
   input_rejected: true,
@@ -462,21 +462,36 @@ const STOP_IS_VERDICT: Record<StopReason['kind'], boolean> = {
   cancelled: false,
 };
 const VERDICT_STOPS = new Set<string>(Object.entries(STOP_IS_VERDICT).flatMap(([kind, verdict]) => (verdict ? [kind] : [])));
+/**
+ * The stops that are WorldGen refusing the prompt itself: the only end an `expect: stopped` case passes on (A-384). The
+ * plan's own verdict stops a run as `input_rejected`; running out of attempts, progress, budget or time on an impossible
+ * prompt is not a refusal but a run that tried to build it.
+ */
+const REFUSAL_STOPS: ReadonlySet<string> = new Set<StopReason['kind']>(['input_rejected']);
 
 /**
  * What a suite case's end says (A-336), in the order summary.md counts them. A success or an expected refusal is a
- * pass. A product failure is the wrong verdict on the prompt. An infra failure is a crash, a machinery stop, a stop
- * whose reason was never logged (A-340), a done world the harness never verified, or an unreadable case.json, and is
- * never a pass. Not run is a suite case with no case output.
+ * pass; an expected refusal is an `expect: stopped` case stopped by `input_rejected` (A-384). A product failure is the
+ * wrong verdict on the prompt, including any other verdict stop on an `expect: stopped` case. An infra failure is a
+ * crash, a machinery stop, a stop whose reason was never logged (A-340), a done world the harness never verified, or an
+ * unreadable case.json, and is never a pass. Not run is a suite case with no case output.
  */
 export const OUTCOMES = ['success', 'expected refusal', 'product failure', 'infra failure', 'not run'] as const;
 export type Outcome = (typeof OUTCOMES)[number];
+/** summary.md's one-line legend: what each outcome means, in OUTCOMES order. A Record, so a new outcome needs a meaning. */
+const OUTCOME_MEANING: Record<Outcome, string> = {
+  success: 'an `expect: done` case that ended done and passed verify',
+  'expected refusal': 'an input_rejected stop on an impossible case (A-384)',
+  'product failure': 'the wrong verdict on the prompt: any other verdict stop, an impossible case that ended done, or a failed verify',
+  'infra failure': 'a crash, a machinery stop, a stop with no logged reason, an unverified done world or an unreadable case.json',
+  'not run': 'a suite case with no case output',
+};
 export type RunOutcome = Exclude<Outcome, 'not run'>;
 
 /** The one classifier of a case that left a readable record: summary.md and eval-outcomes.ts both call it (A-340). */
 export function outcomeOf(expect: Expect, status: PhaseStatus, stopKind: string | null, verify: VerifyResult): RunOutcome {
   if (status === 'crashed' || (status === 'stopped' && (stopKind === null || !VERDICT_STOPS.has(stopKind)))) return 'infra failure';
-  if (expect === 'stopped') return status === 'stopped' ? 'expected refusal' : 'product failure';
+  if (expect === 'stopped') return status === 'stopped' && stopKind !== null && REFUSAL_STOPS.has(stopKind) ? 'expected refusal' : 'product failure';
   if (status === 'stopped') return 'product failure';
   if (verify.kind === 'not_run') return 'infra failure';
   return verify.kind === 'pass' ? 'success' : 'product failure';
@@ -613,6 +628,8 @@ export function renderSummary(meta: SummaryMeta, entries: readonly SummaryEntry[
       `${percentile(rows.map((r) => r.costUsd), 50, (n) => `$${usd(n)}`, expected)} and ${percentile(rows.map((r) => r.costUsd), 95, (n) => `$${usd(n)}`, expected)}.`,
     '',
     `**Pass rate:** ${passed}/${expected}${expected === 0 ? '' : ` (${Math.round((100 * passed) / expected)}%)`}, success and expected refusal over all ${expected} expected cases (${count('not run')} not run).`,
+    '',
+    `**Outcomes:** ${OUTCOMES.map((o) => `${o} = ${OUTCOME_MEANING[o]}`).join('; ')}.`,
   ];
   if (absent.length > 0) {
     out.push('', '## Missing or invalid', '', ...absent.map((a) => `- \`${a.id}\`: ${a.kind === 'missing' ? 'no case.json in the run directory' : `case.json is invalid: ${cell(a.why)}`}`));

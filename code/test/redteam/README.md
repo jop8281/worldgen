@@ -148,7 +148,7 @@ Every guarantee from G-00 to G-58 has at least one firm test. Counts as of 2026-
 
 These guarantees have few firm tests, because they need the CLI or a full server:
 - G-03, G-14, G-38, G-40, G-41, G-44 and G-49 have one or two each.
-- G-41 and G-44 run only over HTTP (`npm run worldplay -- serve`, `src/cli/worldplay.ts`).
+- G-41 and G-44 run only over HTTP (`bun run worldplay serve`, `src/cli/worldplay.ts`).
 
 The spec-call proposals (`research/spec-calls/*.md`) reserve the ids G-59 to G-93. These have no tests until a proposal is accepted. The tests already written against a proposal are the `todo` tests RT-65, RT-66 and RT-67.
 

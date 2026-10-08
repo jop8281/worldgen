@@ -2,7 +2,7 @@
  * The boat.dev adapter. The only importer of `@boatdev/sdk`.
  *
  * Everything else talks to boat.dev through the narrow `BoatClient` interface, so tests pass
- * a fake and `npm test` never reaches the network. The key comes from `BOAT_API_KEY` only and
+ * a fake and `bun run test` never reaches the network. The key comes from `BOAT_API_KEY` only and
  * is scrubbed from every error this module raises. It is sent only to https on boat.dev, and read
  * only where Bun cannot have loaded it from a .env file (A-350).
  */

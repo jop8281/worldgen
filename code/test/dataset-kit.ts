@@ -14,7 +14,7 @@ import type { EpisodeInput, NextTurn, TurnResult, WorldPort } from '../src/datas
 import { prepareWorld, stateFromAdmin, type PreparedWorld } from '../src/dataset/pipeline.ts';
 import { engineGrader } from '../src/dataset/verifier.ts';
 import { PROMPT_VERSION, SCHEMA_VERSION, redactor, type Episode, type PublicMessage } from '../src/dataset/schema.ts';
-import { WAIT_FOR_PORT, type ExecOpts, type ExecResult, type SandboxBackend, type SandboxFile } from '../src/sandboxes/backend.ts';
+import { SANDBOX_BUN, WAIT_FOR_PORT, type ExecOpts, type ExecResult, type SandboxBackend, type SandboxFile } from '../src/sandboxes/backend.ts';
 
 export const HELPDESK_DIR = path.resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
 export const EASY = 'assign_newest_acme_ticket';
@@ -225,9 +225,9 @@ class ScriptExit extends Error {
 }
 
 /**
- * Runs one of the controller's `node -e` scripts the way node does (argv from index 1, `require`,
+ * Runs one of the controller's `bun -e` scripts the way the sandbox's Bun does (argv from index 1, `require`,
  * `fetch`, stdout and stderr, `process.exit`), inside a vm context in this process, so the real
- * script text runs without spawning a node per call.
+ * script text runs without spawning a process per call.
  */
 async function runScript(script: string, args: readonly string[]): Promise<ExecResult> {
   let stdout = '';
@@ -238,7 +238,7 @@ async function runScript(script: string, args: readonly string[]): Promise<ExecR
       if (!Object.hasOwn(modules, name)) throw new Error(`Cannot find module '${name}'`);
       return modules[name];
     },
-    process: { argv: ['node', ...args], stdout: { write: (t: string) => void (stdout += t) }, stderr: { write: (t: string) => void (stderr += t) }, exit: (c = 0) => { throw new ScriptExit(c); } },
+    process: { argv: ['bun', ...args], stdout: { write: (t: string) => void (stdout += t) }, stderr: { write: (t: string) => void (stderr += t) }, exit: (c = 0) => { throw new ScriptExit(c); } },
     fetch, Buffer, JSON, Number, String, Math, Promise,
   });
   try {
@@ -255,8 +255,8 @@ export const randomPort = (): number => 20000 + Math.floor(Math.random() * 30000
 
 /**
  * Behaves like the Boat backend `upWorld` drives: `start` serves the world on the requested
- * ports, `expose` returns the world URL only, `exec` runs the controller's `node -e` scripts with
- * a real node (their `/tmp/` paths mapped into a private directory), and `down` stops the servers.
+ * ports, `expose` returns the world URL only, `exec` runs the controller's `bun -e` scripts on the
+ * sandbox's pinned Bun path (their `/tmp/` paths mapped into a private directory), and `down` stops the servers.
  */
 export function fakeBackend(world: CheckedWorld, o: FakeBackendOptions): FakeBackend {
   const events: string[] = [];
@@ -283,14 +283,13 @@ export function fakeBackend(world: CheckedWorld, o: FakeBackendOptions): FakeBac
       events.push(`exec ${cmd[0]}${cmd[1] === '-e' ? ` -e ${cmd[2] === WAIT_FOR_PORT ? 'wait' : cmd[2]?.slice(0, 20)}` : ''}`);
       const forced = o.failExec?.(cmd);
       if (forced !== undefined) return { exitCode: forced, stdout: '', stderr: 'injected failure' };
-      if (cmd[0] === 'node' && cmd[1] === '-v') return { exitCode: 0, stdout: 'v22.4.0\n', stderr: '' };
-      if (cmd.join(' ').includes('bun-linux-')) return { exitCode: 0, stdout: '1.4.2\n', stderr: '' };
-      if (cmd[0] === 'npm' || cmd[0]?.endsWith('/bun')) return { exitCode: 0, stdout: '', stderr: '' };
-      if (cmd[0] === 'tail') return { exitCode: 0, stdout: 'serving\n', stderr: '' };
-      if (cmd[0] === 'node' && cmd[1] === '-e') {
+      if (cmd[0] === SANDBOX_BUN && cmd[1] === '-e') {
         if (cmd[2] === WAIT_FOR_PORT) return { exitCode: 0, stdout: '', stderr: '' };
         return runScript(cmd[2] ?? '', cmd.slice(3).map(map));
       }
+      if (cmd.join(' ').includes('bun-linux-')) return { exitCode: 0, stdout: '1.4.2\n', stderr: '' };
+      if (cmd[0] === SANDBOX_BUN) return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'tail') return { exitCode: 0, stdout: 'serving\n', stderr: '' };
       return { exitCode: 127, stdout: '', stderr: `unexpected command ${cmd.join(' ')}` };
     },
     async start(_id, cmd, opts) {

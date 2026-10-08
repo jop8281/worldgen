@@ -17,14 +17,14 @@ On this machine, Node 22 and npm 10 are installed. Python is system 3.9 with no 
 A reviewer runs these from `code/`:
 
 ```sh
-npm install
-npm run worldplay -- check  ../prod/worlds/helpdesk
-npm run worldplay -- verify ../prod/worlds/helpdesk      # each task: solution 1.000, noop 0.000, decoys below 1
-npm run worldplay -- serve  ../prod/worlds/helpdesk --port 4000
+bun install
+bun run worldplay check  ../prod/worlds/helpdesk
+bun run worldplay verify ../prod/worlds/helpdesk      # each task: solution 1.000, noop 0.000, decoys below 1
+bun run worldplay serve  ../prod/worlds/helpdesk --port 4000
 curl 'localhost:4000/tickets?status=open&priority=urgent&limit=20'
 curl -XPOST localhost:4001/_world/clock -d '{"advance":"4h"}'     # admin port, fires due jobs
-npm run worldgen -- "A helpdesk with SLA tiers and on-call escalation" --out ../prod/worlds/gen-helpdesk
-npm run worldgen -- "add refunds" --world ../prod/worlds/gen-helpdesk
+bun run worldgen "A helpdesk with SLA tiers and on-call escalation" --out ../prod/worlds/gen-helpdesk
+bun run worldgen "add refunds" --world ../prod/worlds/gen-helpdesk
 ```
 
 A WorldGen run leaves `world.yaml` (only ever written from a `CheckedWorld`), `plan.yaml`, `REPORT.md` and `runs/<runId>/events.jsonl` plus one attempt dump per attempt.
@@ -225,14 +225,14 @@ Three candidates ran. A cross-judge scored them on six rubric criteria, R1 to R6
 - We accept untyped JS strings in YAML in exchange for one self-contained, diffable world file a model can write. Compile, tests, verification and replay stand in for a type checker.
 - We accept `node:vm` not being a security boundary in exchange for no native dependencies and errors in the model's own language.
 - We accept a `SnippetHost` parameter on core functions in exchange for an engine core that compiles without Node types.
-- We accept a package boundary built from a tsconfig, an import map and a test, instead of separate packages, in exchange for one `npm install` and no build order.
+- We accept a package boundary built from a tsconfig, an import map and a test, instead of separate packages, in exchange for one `bun install` and no build order.
 - We accept hand-written `sig` strings in the ctx registries, checked by `test/ctx.test.ts`, in exchange for docs a model reads easily.
 - We accept WorldGen codes in the engine's issue catalog in exchange for one minter and one place to look up any code.
 - We accept extra model round trips from the iterate gate and required decoys in exchange for iteration that preserves meaning and graders that discriminate.
 - We accept twice the verification cost from replay in exchange for determinism shown per world rather than assumed.
 - We accept that every task starts from seed in exchange for a smaller format. Time-dependent tasks rely on the seed's start time.
 - We accept in-memory state with no persistence in exchange for trivial atomicity, dump and reset.
-- We accept that `prod/worlds/*` are test fixtures. A deliverable cannot rot, and a broken generated world breaks `npm test` on purpose.
+- We accept that `prod/worlds/*` are test fixtures. A deliverable cannot rot, and a broken generated world breaks `bun run test` on purpose.
 
 ## Alternatives considered
 
@@ -254,4 +254,4 @@ Three candidates ran. A cross-judge scored them on six rubric criteria, R1 to R6
 
 ## Next implementation step
 
-Hand-write `prod/worlds/helpdesk/world.yaml` against `format.ts`, then implement the schema and references layers of `check.ts` until `npm run worldplay -- check ../prod/worlds/helpdesk` first reports precise issues and then reports `ok`.
+Hand-write `prod/worlds/helpdesk/world.yaml` against `format.ts`, then implement the schema and references layers of `check.ts` until `bun run worldplay check ../prod/worlds/helpdesk` first reports precise issues and then reports `ok`.
