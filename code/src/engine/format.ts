@@ -328,6 +328,7 @@ const ISSUE_EXAMPLES: { readonly [C in IssueCode]: CheckIssue } = {
   'plan.state_missing': issue('plan.state_missing', ['format'], { workflow: '<workflow>', entity: '<entity>', state: '<state>' }, '<found>'),
   'plan.state_field_missing': issue('plan.state_field_missing', ['format'], { workflow: '<workflow>', entity: '<entity>', states: ['<state>'] }, '<found>'),
   'plan.lifecycle_unrepresented': issue('plan.lifecycle_unrepresented', ['format'], { workflow: '<workflow>', entity: '<entity>', states: ['<state>'] }, '<found>'),
+  'plan.pressure_unreachable': issue('plan.pressure_unreachable', ['format'], { task: '<task>', entity: '<entity>', state: '<state>', workflows: ['<workflow>'] }, '<found>'),
   'plan.rule_unanswered': issue('plan.rule_unanswered', ['format'], { workflow: '<workflow>', rule: '<rule>', by: ['<action or job>'] }, '<found>'),
   'task.difficulty_unproven': issue('task.difficulty_unproven', ['format'], { task: '<task>', rows: 1 }, '<found>'),
   'task.pressure_unmet': issue('task.pressure_unmet', ['format'], { task: '<task>', need: '<need>' }, '<found>'),

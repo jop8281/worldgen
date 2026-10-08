@@ -12,7 +12,7 @@
 import { ENGINE_ERROR_CODES, OP_SUCCESS_STATUS, issue, machineOf, routeKey, type CheckIssue, type CheckReport, type Difficulty, type IssueCode, type Section, type World, type WorldStats } from '#engine';
 import { assertNever } from '#lib/never';
 import { fixtureFed } from './input-coverage.ts';
-import { MIX_WITHIN, actionRouteIds, planCoverage, plannedItems, seedPlanIssues, type Plan, type PlanList } from './plan.ts';
+import { MIX_WITHIN, actionRouteIds, planCoverage, plannedItems, pressurePlanIssues, pressureUnreachable, seedPlanIssues, type Plan, type PlanList } from './plan.ts';
 
 export const STAGE_IDS = ['model', 'workflow', 'seed', 'tasks'] as const;
 export type StageId = (typeof STAGE_IDS)[number];
@@ -126,7 +126,7 @@ export function seedNeeds(plan: Plan, world: World): readonly SeedNeed[] {
       ...(p.paging !== undefined && !fed.has(p.paging) && pageSize > 0 ? [{ task: t.id, entity: p.paging, kind: 'paging' as const, pageSize }] : []),
       ...(p.states ?? []).flatMap((es) => {
         const [entity = '', state = ''] = es.split('.');
-        return fed.has(entity) ? [] : [{ task: t.id, entity, kind: 'state' as const, state }];
+        return fed.has(entity) || pressureUnreachable(plan, es) ? [] : [{ task: t.id, entity, kind: 'state' as const, state }];
       }),
       ...(p.distractors !== undefined && !fed.has(p.distractors) ? [{ task: t.id, entity: p.distractors, kind: 'distractors' as const }] : []),
     ];
@@ -170,9 +170,12 @@ export function taskPressureLines(plan: Plan, world: World): string[] {
   });
 }
 
-/** The `seedNeeds` the seed alone can meet, checked at the seed step so a shortfall is repaired there, not at tasks. */
+/**
+ * The `seedNeeds` the seed alone can meet, checked at the seed step so a shortfall is repaired there, not at tasks,
+ * and plan.pressure_unreachable for a pressed state no seed can meet, which goes back to the plan (A-369).
+ */
 export function seedNeedIssues(plan: Plan, world: World, stats: Pick<WorldStats, 'rows' | 'states'>): readonly CheckIssue[] {
-  return seedNeeds(plan, world).flatMap((n): CheckIssue[] => {
+  return [...pressurePlanIssues(plan), ...seedNeeds(plan, world).flatMap((n): CheckIssue[] => {
     if (n.kind === 'paging') {
       const rows = stats.rows[n.entity] ?? 0;
       return rows > n.pageSize ? [] : [issue('seed.too_few_rows_for_paging', ['seed', n.entity], { entity: n.entity, rows, pageSize: n.pageSize }, `${rows} rows`)];
@@ -183,14 +186,15 @@ export function seedNeedIssues(plan: Plan, world: World, stats: Pick<WorldStats,
       ];
     }
     return [];
-  });
+  })];
 }
 
 /**
  * Every pressure claim of the built world's tasks. A hard task must change more than one row or reach a
  * row past the first list page (A-225). A task's planned pressure.paging entity must show such a
- * later-page row, and each pressure.states entry must have seeded rows (A-226, A-227). An entity fed
- * from an input fixture is exempt, with the reason recorded, because its rows come from the input (A-221).
+ * later-page row, and each pressure.states entry a state field can hold must have seeded rows (A-226, A-227,
+ * A-369). An entity fed from an input fixture is exempt, with the reason recorded, because its rows come from the
+ * input (A-221).
  */
 export function pressureChecks(report: OkReport, plan: Plan): readonly PressureCheck[] {
   const fed = fixtureFed(report.world);
@@ -230,7 +234,7 @@ export function pressureChecks(report: OkReport, plan: Plan): readonly PressureC
           : `${rows} ${e} rows seeded; seed at least 2 that one filtered list returns`,
       });
     }
-    for (const es of p?.states ?? []) {
+    for (const es of (p?.states ?? []).filter((pressed) => !pressureUnreachable(plan, pressed))) {
       const [e = '', s = ''] = es.split('.');
       const n = rowsInState(report.world, report.stats, e, s);
       out.push({
@@ -243,14 +247,17 @@ export function pressureChecks(report: OkReport, plan: Plan): readonly PressureC
   return out;
 }
 
-/** task.difficulty_unproven for an unmet hard label, task.pressure_unmet for every other unmet, unexempt claim. */
+/**
+ * task.difficulty_unproven for an unmet hard label, task.pressure_unmet for every other unmet, unexempt claim, and
+ * plan.pressure_unreachable for a pressed state no seed can meet, which `pressureChecks` leaves out (A-369).
+ */
 export function pressureIssues(report: OkReport, plan: Plan): readonly CheckIssue[] {
-  return pressureChecks(report, plan).filter((c) => !c.met && c.exempt === null).map((c) => {
+  return [...pressurePlanIssues(plan), ...pressureChecks(report, plan).filter((c) => !c.met && c.exempt === null).map((c) => {
     if (c.need.startsWith('hard:')) {
       return issue('task.difficulty_unproven', ['tasks', c.task], { task: c.task, rows: report.verdicts[c.task]!.solutionRowsChanged }, c.found);
     }
     return issue('task.pressure_unmet', [...c.path], { task: c.task, need: c.need }, c.found);
-  });
+  })];
 }
 
 /**
@@ -273,7 +280,7 @@ export const PLAN_BRIEF =
   'Read the input and write revision 1 of the plan that every later stage follows, saved as plan.yaml, and raise revision by one each time the plan step runs again. ' +
   "Decide feasibility first by asking what the request's core value is: it is feasible only when that value is stateful records an agent reads and changes through an API, with actions it performs on them, such as a job queue or an order desk; if the core value is the computation itself, such as encoding media, rendering, training a model, or a user interface, or if the request is harmful, refuse with verdict refuse, why naming the reason, feasibleIf naming a request about records that would be feasible, and empty workflows and tasks, and never reinterpret the request as a management or control-plane service for the thing it names, since a request named for the thing wants the thing. " +
 
-  'Name the real software it mirrors, then list its entities, workflows with their actions, jobs, routes (for an OpenAPI input, every operation in scope by method and path, one that a workflow action builds taking that action\'s name as its id), acceptanceTests, a small seed (rowsPerEntity just over one list page on the main entity and a handful elsewhere, except that an imported CSV table keeps exactly its rows and values: its rowsPerEntity is the CSV row count, every value of its status column is a workflow state, and generated rows go only to entities with no fixture, with a mix that spreads every state and a stateMix giving, per workflow entity, the percent of its rows in each state), and at least three tasks graded easy, medium and hard; write a rule enforced by actions or jobs as { rule, by, test }, by naming the enforcing action or job keys and test naming the id of the acceptance test that exercises the rule through that enforcement, each acceptance test bound by at most one rule and, when by names actions, its bound test exercising one of them; write a rule only the data model enforces as { rule, schema } with the reason the schema enforces it; keep plain text only for context neither enforces. ' +
+  'Name the real software it mirrors, then list its entities, workflows with their actions, jobs, routes (for an OpenAPI input, every operation in scope by method and path, one that a workflow action builds taking that action\'s name as its id), acceptanceTests, a small seed (rowsPerEntity just over one list page on the main entity and a handful elsewhere, except that an imported CSV table keeps exactly its rows and values: its rowsPerEntity is the CSV row count, every value of its status column is a workflow state, and generated rows go only to entities with no fixture, with a mix that spreads every state and a stateMix giving, per workflow entity whose states a state field holds, the percent of its rows in each state, and none for an entity whose every workflow declares a removal or descriptive lifecycle), and at least three tasks graded easy, medium and hard; write a rule enforced by actions or jobs as { rule, by, test }, by naming the enforcing action or job keys and test naming the id of the acceptance test that exercises the rule through that enforcement, each acceptance test bound by at most one rule and, when by names actions, its bound test exercising one of them; write a rule only the data model enforces as { rule, schema } with the reason the schema enforces it; keep plain text only for context neither enforces. ' +
   'Declare lifecycle: { representation: descriptive or removal, reason } on a workflow whose states no state field holds, such as a derived flag or deletion by removal, because a state-named workflow with no machine and no declaration is rejected. ' +
   'Set clock.start and clock.tick explicitly, choosing deterministic time after imported historical events, distinguish future scheduled events, and record the clock choice in assumptions. ' +
   'Write acceptanceTests now, before implementation: each needs a unique id, observable intent, the workflow actions it exercises, a human-readable description and a ctx.api/ctx.assert script that checks the public behavior and creates every row it needs through the API, never relying on seed rows, because the workflow stage runs the tests before any seed exists, and never counting or listing rows it did not create, because the same tests run again after the seed adds rows; they become the world\'s tests exactly as written, and no later stage can edit them. ' +

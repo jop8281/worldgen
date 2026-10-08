@@ -86,7 +86,7 @@ describe('studio isolation: the check and proof children', () => {
     assert.deepEqual(proof.opts?.env, expected);
   });
 
-  it('gives a served world the allowlist and an episode the whole environment', async () => {
+  it('gives a served world the allowlist, an episode the whole environment, and a generation only GENERATION_ENV (A-372)', async () => {
     const spawned: { argv: readonly string[]; env: SpawnOpts['env'] }[] = [];
     const spawner: Spawner = (argv, o) => {
       spawned.push({ argv: [...argv], env: o?.env });
@@ -128,7 +128,8 @@ describe('studio isolation: the check and proof children', () => {
     assert.deepEqual(serve.env, { TZ: 'UTC', PATH: '/usr/bin:/bin', WORLDGEN_GUARD_SCALE: '4' });
     const model = { PATH: '/usr/bin:/bin', HOME: '/home/op', LLM_KEY: 'sk-live-1', BOAT_API_KEY: 'boat-3', WORLDPLAY_HOST: '0.0.0.0', WORLDPLAY_ADMIN_HOST: '0.0.0.0', WORLDGEN_GUARD_SCALE: '4' };
     assert.deepEqual(ep.env, model);
-    assert.deepEqual(gen.env, model);
+    // A generate child runs candidate-world snippets: no LLM_KEY on the default transport, no BOAT_API_KEY, no studio token.
+    assert.deepEqual(gen.env, { TZ: 'UTC', PATH: '/usr/bin:/bin', HOME: '/home/op', WORLDGEN_GUARD_SCALE: '4' });
   });
 
   it('starts one check child for concurrent requests to the same unchecked world', async () => {

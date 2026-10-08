@@ -39,7 +39,7 @@ import { ITERATE_PLAN_BRIEF, applyPlanPatch, changedSections, iteratePlanBlocks,
 import { FIDELITY_FLOOR, fidelityGate, fidelityScore, parseFidelityReference } from './fidelity.ts';
 import { blockingIssues, checkJudgeable, infraIssues, preservationIssues, requestScopeIssues, unplannedChanges } from './judge.ts';
 import { CallStalled, ModelError, StepShareExpired, estimateCallUsd, type CallProgress, type Model, type Proposal, type ProposeRequest, type Usage } from './llm.ts';
-import { frozenTests, parsePlanYaml, planSchemaFor, renderPlanYaml, type Plan, type planSchema } from './plan.ts';
+import { frozenTests, parsePlanYaml, planSchemaFor, pressurePlanIssues, renderPlanYaml, type Plan, type planSchema } from './plan.ts';
 import { renderPlanMd } from './plan-md.ts';
 import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
 import { renderReport } from './report.ts';
@@ -412,7 +412,10 @@ function judgePlan(schema: PlanSchema, input: unknown, approved: Plan | null, di
       const problem = issue('schema.invalid', ['plan', 'revision'], { message: `revision must be greater than the approved revision ${approved.revision}` }, String(parsed.data.revision));
       return { ok: false, outcome: { kind: 'invalid_output', issues: [problem] }, issues: [problem] };
     }
-    const conflicts = digest === undefined ? [] : [...fixturePlanIssues(parsed.data, digest), ...operationPlanIssues(parsed.data, digest)];
+    const conflicts = [
+      ...pressurePlanIssues(parsed.data),
+      ...(digest === undefined ? [] : [...fixturePlanIssues(parsed.data, digest), ...operationPlanIssues(parsed.data, digest)]),
+    ];
     if (conflicts.length > 0) return { ok: false, outcome: { kind: 'rejected', issues: conflicts }, issues: conflicts };
     return { ok: true, outcome: { kind: 'accepted', warnings: 0 }, value: parsed.data };
   }
