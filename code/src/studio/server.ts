@@ -61,7 +61,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { assertNever } from '#lib/never';
 import { loadWorld } from '#engine';
-import { maskSensitiveText, sensitiveOf } from './explorer.ts';
+import { bodyBelowAdmin, episodeBelowAdmin, mergeSensitivity, sensitiveOf, type Sensitivity } from './explorer.ts';
 import { CAPSULE_FILE, capsuleSchema, type RunCapsule } from '../worldgen/capsule.ts';
 import { isolatedEnv, listeningPorts, type RunResult, type Runner, type SpawnedChild, type Spawner } from '../sandboxes/backend.ts';
 import { parseEpisode, type Episode } from '../dataset/schema.ts';
@@ -453,6 +453,12 @@ type Route =
   | { readonly method: 'GET' | 'POST'; readonly need: StudioRole; readonly parts: readonly string[]; readonly run: Handler };
 
 /** The capsule.json of one world dir, parsed, or null when absent or foreign. */
+/** The sensitive fields of the world at `dir`, or null when its world.yaml cannot be read, so the caller fails closed (A-356). */
+async function sensitivityOf(dir: string): Promise<Sensitivity> {
+  const loaded = await loadWorld(dir);
+  return loaded.ok ? sensitiveOf(loaded.value) : null;
+}
+
 async function readCapsule(dir: string): Promise<RunCapsule | null> {
   const text = await readFile(path.join(dir, CAPSULE_FILE), 'utf8').catch(() => null);
   if (text === null) return null;
@@ -609,7 +615,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     child: SpawnedChild | null;
   };
 
-  type Service = { record: ServiceRecord; dir: string; child: SpawnedChild; sensitive: ReadonlyMap<string, ReadonlySet<string>> };
+  type Service = { record: ServiceRecord; dir: string; child: SpawnedChild; sensitive: Sensitivity };
   const services = new Map<string, Service>();
   /** `<tenant> <world dir>` of each `worldplay serve` that has not reported its ports yet. */
   const starting = new Set<string>();
@@ -885,6 +891,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
     if (!await file(path.join(w.dir, 'world.yaml'))) return fail(404, 'export.no_world', `${name} has no world.yaml to export`);
+    // The seed holds a sensitive field's values, so only an admin exports such a world, or one that cannot be read (A-356).
+    if (who.role !== 'admin') {
+      const sensitive = await sensitivityOf(w.dir);
+      if (sensitive === null || sensitive.size > 0) {
+        return fail(403, 'export.sensitive', `${name} ${sensitive === null ? 'cannot be read to find its sensitive fields' : 'has sensitive fields'}, so only an admin may export it`);
+      }
+    }
     const checked = await reportOf(name, w.dir);
     if (checked.status !== 200) return checked;
     const entries: { name: string; data: Buffer }[] = [];
@@ -1003,7 +1016,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         request: { method, path: `${url.pathname}${url.search}`, body: payload ?? null },
         status: res.status, contentType: res.headers.get('content-type'), ms: Date.now() - started,
         // A sensitive field's value never reaches a role below admin (A-356).
-        body: who.role === 'admin' || hit.sensitive.size === 0 ? text : maskSensitiveText(text, hit.sensitive), truncated,
+        body: who.role === 'admin' ? text : bodyBelowAdmin(text, hit.sensitive), truncated,
       },
     };
   }
@@ -1034,7 +1047,8 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const w = await worldDirOf(name, who, filter);
     if (!w.ok) return w.reply;
     const dir = w.dir;
-    const sensitive = sensitiveOf(await loadWorld(dir).then((l) => (l.ok ? l.value : null)));
+    // A world whose definition cannot be read now relays withheld bodies to roles below admin, never unmasked ones.
+    const sensitive = await sensitivityOf(dir);
     // An admin serving with ?tenant=t serves the world for t, so t's own operators see and stop it.
     const owner = filter ?? who.tenant;
     const startKey = `${owner} ${dir}`;
@@ -1653,7 +1667,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const run = isEpisode(job) ? job : undefined;
     const out = run?.outDir ?? path.join(episodesDir, runId);
     if (run === undefined && !await isDir(out)) return unknown;
-    const episode = await exportedEpisode(out, runId);
+    const exported = await exportedEpisode(out, runId);
+    // Tool results hold the world's answers, so a role below admin sees them masked like the console's (A-356).
+    const episode = exported === null || who.role === 'admin' ? exported : episodeBelowAdmin(exported, await episodeSensitivity(exported, run, who, filter));
     const output = run?.child?.output() ?? '';
     const running = run !== undefined && run.phase !== 'finished';
     return {
@@ -1665,6 +1681,21 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
         ...(run !== undefined && !running && run.exitCode !== 0 ? { failure: output.split('\n').filter((l) => l.trim() !== '').slice(-3) } : {}),
       },
     };
+  }
+
+  /** The sensitive fields of the world an episode ran on: its job's world, and every world `who` sees whose meta.name is the episode's world_id. */
+  async function episodeSensitivity(episode: unknown, run: Job | undefined, who: User, filter: string | null): Promise<Sensitivity> {
+    const dirs = new Set<string>();
+    if (isEpisode(run)) {
+      const w = await worldDirOf(run.episode.world, who, filter);
+      if (w.ok) dirs.add(w.dir);
+    }
+    const name = isObject(episode) ? episode['world_id'] : undefined;
+    for (const { dir } of await worldEntries(shelvesOf(who, filter))) {
+      const loaded = await loadWorld(dir);
+      if (loaded.ok && isObject(loaded.value) && isObject(loaded.value['meta']) && loaded.value['meta']['name'] === name) dirs.add(dir);
+    }
+    return mergeSensitivity(await Promise.all([...dirs].map(sensitivityOf)));
   }
 
   /** The episode dirs under eval/episodes that `who` sees. */
