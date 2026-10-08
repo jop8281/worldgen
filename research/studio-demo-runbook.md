@@ -2,32 +2,34 @@
 
 How to show WorldGen Studio in a browser in 15 minutes, on one seeded repository, with no terminal after setup. This is the YOS-193 click path. The offline terminal demo stays in [demo-runbook.md](demo-runbook.md) and is the fallback for every step here.
 
-`code/scripts/studio-rehearse.ts` drives the same path in headless Chrome and prints one line per step. It ran clean 3 times in a row on stabilize 0b00d191 plus this change, with 0 page errors.
+`code/scripts/studio-rehearse.ts` drives the same path in headless Chrome and prints one line per step. It ran clean on jop8281/worldgen `1420f8e6`: 14 of 14 steps `ok`, 0 page errors, including the engine proof and the noop episode.
 
 ## Setup (terminal, before the talk)
 
 1. Check out the release sha, then run `cd code && bun install --frozen-lockfile`.
 2. Start the studio with `bun run studio`. It prints `studio on http://127.0.0.1:8787`. Or use the container: `docker build -f Dockerfile.studio --build-arg WORLDGEN_BUILD_SHA=$(git rev-parse HEAD) -t worldgen-studio .`, then `docker run -d -p 127.0.0.1:8787:8787 worldgen-studio`.
 3. Check readiness: `curl -s 127.0.0.1:8787/api/health` shows the sha you checked out, `bun 1.4.2`, and the world count (25 today).
-4. Rehearse once: `bun scripts/studio-rehearse.ts`. Every line should read `ok`, then `page errors total: 0`. It serves and stops helpdesk, so it leaves nothing running.
+4. Rehearse once: `bun scripts/studio-rehearse.ts`. Every line should read `ok`, then `page errors total: 0`. It serves and stops helpdesk, so it leaves nothing running. It also runs one free noop episode into `eval/episodes/`, which git ignores.
 5. Open http://127.0.0.1:8787 in the browser. The studio has no login yet, so keep it on loopback (YOS-187 adds sign-in).
 
 ## Click path
 
-Times are the rehearsal's measured page times. The minutes are talk time.
+Times are the rehearsal's measured page times. The minutes are talk time. Each step names the `studio-rehearse.ts` step that checks it.
 
 | Min | Step | Click | What the audience sees | Measured |
 |---|---|---|---|---|
-| 0 to 1 | 1. Dashboard | Load the page | Worlds table: 25 worlds, each with kind (hand-built or generated), task count, wid, model, cost and attempts. Generated worlds show the Sonnet run's dollar cost. | 0.2 s |
-| 1 to 3 | 2. Serve | `serve` on the **helpdesk** row | The row turns to `stop`, `world` and `api console`, and the header says `1 served`. The world runs on its own port with its admin port kept private. | 0.15 s |
-| 3 to 5 | 3. Explorer | World `helpdesk`, then `explore` | The definition wid and clock, 7 entities with fields and references, 17 routes and actions, 3 jobs, and 3 tasks with difficulty and tid. No grader source is shown. | 1.8 s |
-| 5 to 7 | 4. API call | Console `GET /tickets?status=open&limit=3`, then `send` | The world's real HTTP 200 with three `tkt_` rows. The console only ever reaches the world port. | 0.15 s |
-| 7 to 8 | 5. A wrong write | Console `PATCH /tickets/tkt_0001` with body `{"status":"new","priority":"low"}`, then `send` | HTTP 422 `state.transition`, "ticket tkt_0001 status cannot move from open to new". The legal half (priority) was not applied either. | 0.15 s |
-| 8 to 10 | 6. A generated world | World `gen-library-loans`, then `explore` | A world WorldGen built from two CSV files: books, members and loans, with its routes, jobs and tasks. | instant |
-| 10 to 12 | 7. Its report | `report` on the **gen-library-loans** row | REPORT.md: what was built, what was assumed and why, what was left out, plus the run's cost and minutes. | **8.5 s**, the one visible pause, so talk over it |
-| 12 to 13 | 8. Eval | Scroll to Eval | Seven rehearsal runs with their pass rates (live-segment 2/3, stress-1b 7/14). `view` opens a summary. | instant |
-| 13 to 14 | 9. Spend | `refresh` under Spend | Today's LLM and sandbox spend, by day, and the caps (each says when it is unset). | instant |
-| 14 to 15 | 10. Clean up | `stop` on helpdesk, then reload the page | The served count returns to 0, and the reload shows the same state. | 0.2 s |
+| 0 to 1 | 1. Dashboard (`01-dashboard`) | Load the page | Worlds table: 25 worlds, each with kind (hand-built or generated), task count, wid, model, cost and attempts. Generated worlds show the Sonnet run's dollar cost. | 0.2 s |
+| 1 to 2 | 2. Serve (`02-serve-helpdesk`) | `serve` on the **helpdesk** row | The row turns to `stop`, `world` and `api console`, and the header says `1 served`. The world runs on its own port with its admin port kept private. | 0.15 s |
+| 2 to 4 | 3. Explorer (`03-explorer-helpdesk`) | World `helpdesk`, then `explore` | The definition wid and clock, 7 entities with fields and references, 17 routes and actions, 3 jobs, and 3 tasks with difficulty and tid. No grader source is shown. | 1.8 s |
+| 4 to 5 | 4. API call (`04-console-get`) | Console `GET /tickets?status=open&limit=3`, then `send` | The world's real HTTP 200 with three `tkt_` rows. The console only ever reaches the world port. | 0.15 s |
+| 5 to 6 | 5. A wrong write (`05-console-illegal-write`) | Console `PATCH /tickets/tkt_0001` with body `{"status":"new","priority":"low"}`, then `send` | HTTP 422 `state.transition`, "ticket tkt_0001 status cannot move from open to new". The legal half (priority) was not applied either. | 0.15 s |
+| 6 to 7 | 6. A generated world (`06-explorer-generated`) | World `gen-library-loans`, then `explore` | A world WorldGen built from two CSV files: books, members and loans, with its routes, jobs and tasks. | instant |
+| 7 to 9 | 7. Its report (`07-report`) | `report` on the **gen-library-loans** row | REPORT.md: what was built, what was assumed and why, what was left out, plus the run's cost and minutes. | **8.5 s**, the one visible pause, so talk over it |
+| 9 to 10 | 8. Eval (`09-eval`) | Scroll to Eval | Seven rehearsal runs with their pass rates (live-segment 2/3, stress-1b 7/14). `view` opens a summary. | instant |
+| 10 to 11 | 9. Engine proof (`10-proof`) | Agent Playground: world `helpdesk`, then `engine proof` | "engine proof: every task verified". For each of the 3 tasks, the reference solution scores 1 and doing nothing scores 0. The near miss and the decoys score below 1, and the replay is identical. | 1.2 to 1.5 s |
+| 11 to 13 | 10. A noop episode (`11-noop-episode`) | Agent `noop`, then `run episode` | One episode on `assign_newest_acme_ticket`. The free noop agent replies "No action taken.", and the engine scores the end state 0 at $0.0000. The seed and end state hashes match, because nothing changed. The engine grades the end state, not the reply. | 4.1 s |
+| 13 to 14 | 11. Spend (`12-spend`) | `refresh` under Spend | Today's LLM and sandbox spend, by day, and the caps (each says when it is unset). | instant |
+| 14 to 15 | 12. Clean up (`13-stop-helpdesk`, `14-reload`) | `stop` on helpdesk, then reload the page | The served count returns to 0, and the reload shows the same state. | 0.2 s |
 
 ## Fresh generation (optional, labeled live)
 
@@ -45,3 +47,4 @@ Generation runs → kind `description`, a one-line prompt, out slug, budget `3`,
 - No sign-in (YOS-187). The studio must stay on loopback until then.
 - Opening a big world's report takes about 8.5 s.
 - Generation, cancellation and export were not rehearsed live: no model calls in this pass.
+- Analytics still files a noop episode under `claude-sonnet-5-5`, so a free noop run counts as a Sonnet failure. The YOS-190 follow-up records it as noop with no model.
