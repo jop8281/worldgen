@@ -232,12 +232,24 @@ describe('worldgen CLI: exit', () => {
  * A stand-in for the claude binary, found through WORLDGEN_CLAUDE_BIN. It answers `--version` for the probe and each
  * `-p` call with the next entry of the JSON script in FAKE_CLAUDE_SCRIPT, as the one result line claudeCliModel parses.
  * The call count lives in FAKE_CLAUDE_COUNT. A prompt that does not name the entry's step exits 3, so order drift fails loudly.
+ * Like Linux, it refuses an argv string of 131072 bytes or more, which macOS would pass (A-378), and like the real CLI it
+ * needs a readable --system-prompt-file.
  */
 const FAKE_CLAUDE = `#!/usr/bin/env node
 const fs = require('node:fs');
 if (process.argv.includes('--version')) {
   process.stdout.write('0.0.0 (fake claude)\\n');
   process.exit(0);
+}
+const long = process.argv.findIndex((a) => Buffer.byteLength(a) >= 131072);
+if (long >= 0) {
+  process.stderr.write('fake claude: argument ' + process.argv[long - 1] + ' is ' + Buffer.byteLength(process.argv[long]) + ' bytes: spawn E2BIG on Linux\\n');
+  process.exit(7);
+}
+const systemFile = process.argv[process.argv.indexOf('--system-prompt-file') + 1];
+if (!process.argv.includes('--system-prompt-file') || fs.readFileSync(systemFile, 'utf8') === '') {
+  process.stderr.write('fake claude: no system prompt file\\n');
+  process.exit(3);
 }
 const script = JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_SCRIPT, 'utf8'));
 const countFile = process.env.FAKE_CLAUDE_COUNT;
