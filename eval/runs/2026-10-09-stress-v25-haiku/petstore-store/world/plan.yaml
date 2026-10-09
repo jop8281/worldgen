@@ -1,0 +1,240 @@
+revision: 1
+software: Swagger Petstore OpenAPI 3.0 (store orders and inventory)
+summary: "A world of the Petstore store API: customers' purchase orders for pets (place, find, delete) and an inventory count of pets by status. Core value is stateful order records an agent reads and changes through the API, so it is feasible. Pet CRUD and user routes are dropped by the source scope; pets exist only as seeded rows that the inventory reads."
+clock:
+  start: 2026-10-09T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: order
+    purpose: A purchase order for a pet, the Petstore Order schema. Carries petId, quantity, shipDate, complete and a lifecycle status.
+    keyFields:
+      - petId
+      - status
+  - name: pet
+    purpose: A pet listed for sale, seeded only. Its status feeds the inventory count. No pet routes are in scope.
+    keyFields:
+      - name
+      - status
+workflows:
+  - name: order
+    entity: order
+    states:
+      - placed
+      - approved
+      - delivered
+    rules:
+      - rule: An order quantity is at least 1; 0 or less is refused with 400 input.invalid and nothing is stored
+        by:
+          - place_order
+        test: order_quantity_refused
+      - rule: POST /store/orders with status approved or delivered walks the order through placed to that state in one call
+        by:
+          - place_order
+        test: place_order_status_walks
+      - rule: 'A deleted order cannot be fetched again: GET answers 404 row.not_found'
+        by:
+          - delete_order
+        test: delete_then_get_404
+      - rule: Deleting an unknown order id answers 404 row.not_found
+        by:
+          - delete_order
+        test: delete_missing_404
+      - rule: Looking up an unknown order id answers 404 row.not_found
+        by:
+          - get_order
+        test: get_order_missing
+      - rule: Order status moves only placed to approved and approved to delivered; the engine refuses any other write with state.transition
+        schema: status is a state field whose transitions list allows only placed to approved and approved to delivered
+      - Orders carry no customer and petId is not checked against pets, as in the spec. Plain context only.
+    actions:
+      - place_order
+      - get_order
+      - delete_order
+  - name: pet
+    entity: pet
+    states:
+      - available
+      - pending
+      - sold
+    rules:
+      - rule: The inventory counts every pet under each of the three statuses
+        by:
+          - get_inventory
+        test: inventory_counts_statuses
+      - rule: A pet status moves available to pending, pending to available or sold; the engine refuses any other write
+        schema: status is a state field whose transitions list allows only those moves
+    actions:
+      - get_inventory
+jobs: []
+acceptanceTests:
+  - id: place_order_defaults
+    intent: A new order is placed and not complete, and can be read back.
+    actions:
+      - place_order
+      - get_order
+    description: POST with petId and quantity answers 200 placed, complete false; GET returns the same order.
+    script: "(ctx) => { const r = ctx.api('POST', '/store/orders', { petId: 8801, quantity: 2 }); ctx.assert(r.status === 200, 'place order returned ' + r.status + ' ' + JSON.stringify(r.body)); ctx.assert(r.body.status === 'placed' && r.body.complete === false, 'new order is placed and not complete, got ' + JSON.stringify(r.body)); ctx.assert(r.body.petId === 8801 && r.body.quantity === 2, 'petId and quantity are kept, got ' + JSON.stringify(r.body)); const g = ctx.api('GET', '/store/orders/' + r.body.id); ctx.assert(g.status === 200 && g.body.id === r.body.id, 'GET returns the order, got ' + g.status); }"
+  - id: order_quantity_refused
+    intent: An order for fewer than one unit is refused and not stored.
+    actions:
+      - place_order
+    description: POST with quantity 0 answers 400 input.invalid.
+    script: "(ctx) => { const r = ctx.api('POST', '/store/orders', { petId: 8801, quantity: 0 }); ctx.assert(r.status === 400 && r.body.type === 'input.invalid', 'quantity 0 refused with input.invalid, got ' + r.status + ' ' + JSON.stringify(r.body)); }"
+  - id: place_order_status_walks
+    intent: An order placed with status delivered is walked through approved and ends delivered.
+    actions:
+      - place_order
+      - get_order
+    description: POST with status delivered answers 200 delivered, and GET agrees.
+    script: "(ctx) => { const r = ctx.api('POST', '/store/orders', { petId: 8802, quantity: 1, status: 'delivered' }); ctx.assert(r.status === 200 && r.body.status === 'delivered', 'delivered on create, got ' + r.status + ' ' + JSON.stringify(r.body)); const g = ctx.api('GET', '/store/orders/' + r.body.id); ctx.assert(g.status === 200 && g.body.status === 'delivered', 'GET shows delivered, got ' + JSON.stringify(g.body)); }"
+  - id: delete_then_get_404
+    intent: A deleted order is gone for good.
+    actions:
+      - place_order
+      - delete_order
+      - get_order
+    description: DELETE answers 204 and a later GET answers 404 row.not_found.
+    script: "(ctx) => { const c = ctx.api('POST', '/store/orders', { petId: 8801, quantity: 4 }); ctx.assert(c.status === 200, 'create ' + c.status); const d = ctx.api('DELETE', '/store/orders/' + c.body.id); ctx.assert(d.status === 204, 'delete returned ' + d.status + ' ' + JSON.stringify(d.body)); const g = ctx.api('GET', '/store/orders/' + c.body.id); ctx.assert(g.status === 404 && g.body.type === 'row.not_found', 'GET after delete is 404 row.not_found, got ' + g.status + ' ' + JSON.stringify(g.body)); }"
+  - id: delete_missing_404
+    intent: Deleting an order that does not exist is refused.
+    actions:
+      - delete_order
+    description: DELETE of an unknown id answers 404 row.not_found.
+    script: (ctx) => { const d = ctx.api('DELETE', '/store/orders/ord_9999'); ctx.assert(d.status === 404 && d.body.type === 'row.not_found', 'unknown order delete is 404 row.not_found, got ' + d.status + ' ' + JSON.stringify(d.body)); }
+  - id: get_order_missing
+    intent: Looking up an unknown order is refused.
+    actions:
+      - get_order
+    description: GET of an unknown id answers 404 row.not_found.
+    script: (ctx) => { const g = ctx.api('GET', '/store/orders/ord_9998'); ctx.assert(g.status === 404 && g.body.type === 'row.not_found', 'unknown order is 404 row.not_found, got ' + g.status + ' ' + JSON.stringify(g.body)); }
+  - id: inventory_counts_statuses
+    intent: The inventory reports a non-negative whole count for each pet status.
+    actions:
+      - get_inventory
+    description: GET /store/inventory answers 200 with integer available, pending and sold counts.
+    script: (ctx) => { const r = ctx.api('GET', '/store/inventory'); ctx.assert(r.status === 200, 'inventory returned ' + r.status); for (const k of ['available', 'pending', 'sold']) ctx.assert(Number.isInteger(r.body[k]) && r.body[k] >= 0, k + ' is a non-negative integer, got ' + JSON.stringify(r.body[k])); }
+  - id: list_orders_by_pet
+    intent: An order can be found by its pet through the order list.
+    actions:
+      - place_order
+    description: After placing an order for pet 8803, GET /store/orders?petId=8803 lists it.
+    script: "(ctx) => { const c = ctx.api('POST', '/store/orders', { petId: 8803, quantity: 3 }); ctx.assert(c.status === 200, 'create ' + c.status); const l = ctx.api('GET', '/store/orders?petId=8803'); ctx.assert(l.status === 200, 'list returned ' + l.status + ' ' + JSON.stringify(l.body)); ctx.assert(l.body.data.some((o) => o.id === c.body.id), 'the created order is listed'); ctx.assert(l.body.data.every((o) => o.petId === 8803), 'the filter only returns pet 8803'); }"
+routes:
+  - id: get_inventory
+    method: GET
+    path: /store/inventory
+    purpose: 'Built as the get_inventory action: counts pets under each status (available, pending, sold).'
+  - id: place_order
+    method: POST
+    path: /store/orders
+    purpose: 'Built as the place_order action: creates an order in placed status, optionally walked to the requested status, and answers 200 with the Order.'
+  - id: get_order
+    method: GET
+    path: /store/orders/{orderId}
+    purpose: 'Built as the get_order action: returns the order or 404 row.not_found.'
+  - id: delete_order
+    method: DELETE
+    path: /store/orders/{orderId}
+    purpose: 'Built as the delete_order action: deletes the order and answers 204, or 404 row.not_found.'
+  - id: list_orders
+    method: GET
+    path: /store/orders
+    purpose: "Added on purpose (extra to the spec, flagged in assumptions): list orders, filterable by petId, status and complete, so an agent can find an order without knowing its id. A list route, not an action, so it is not in any workflow's actions."
+seed:
+  rowsPerEntity:
+    order: 28
+    pet: 12
+  mix: 'Orders: 28 rows, placed/approved/delivered roughly 43/29/28. Pets: 12 rows, available/pending/sold roughly 58/25/17. Pet ids for orders are 1000 to 7999 except the task rows: 3003 (one delivered incomplete order for quantity 9, plus a placed quantity 9 decoy and a delivered complete quantity 4 decoy) and 3004 (a placed quantity 1 stale order plus a placed quantity 2 neighbour). Task target rows sit after the first 25 orders in id order so they fall on page 2. No seeded petId is in 8800 to 8899, which the tests use.'
+  stateMix:
+    order:
+      placed: 43
+      approved: 29
+      delivered: 28
+    pet:
+      available: 58
+      pending: 25
+      sold: 17
+tasks:
+  - id: place_order_for_pet
+    difficulty: easy
+    kind: permissions
+    intent: Place an order for pet 8801 for 2 units and confirm it is placed.
+    actions:
+      - place_order
+    decoyIdea: places the order for the wrong quantity, or PATCHes an existing order instead of placing a new one
+  - id: delete_delivered_incomplete_order
+    difficulty: medium
+    kind: irreversible
+    intent: Pet 3003 has a delivered but incomplete order for 9 units. Delete that order and leave the others for the pet alone.
+    actions:
+      - delete_order
+    decoyIdea: deletes the placed order for the same pet and quantity instead of the delivered one, or reads only page 1 and misses the target on page 2
+    pressure:
+      paging: order
+      states:
+        - order.delivered
+        - order.placed
+      distractors: order
+  - id: replace_stale_order
+    difficulty: hard
+    kind: irreversible
+    intent: Pet 3004 has a stale placed order for 1 unit. Place a replacement for 4 units first, then delete the stale order. Change nothing else.
+    actions:
+      - place_order
+      - delete_order
+    decoyIdea: deletes the stale order before placing the replacement, so a failed place leaves the pet with nothing; or deletes the wrong order or skips page 2
+    pressure:
+      paging: order
+      states:
+        - order.placed
+      distractors: order
+open_questions:
+  - question: Should ids be the spec's int64 integers?
+    default_answer: No. Engine string ids are used; the id is an opaque string.
+  - question: Should the dropped /pet and /user operations be modelled?
+    default_answer: No. They are out of the kept /store scope.
+  - question: Should a list of orders exist, which the spec does not declare?
+    default_answer: Yes, as list_orders, flagged as an extra operation so agents can find orders without ids.
+  - question: Should POST with status approved or delivered be accepted?
+    default_answer: Yes. The create walks the order through placed to that state in one call.
+  - question: Should quantity 0 or negative be refused?
+    default_answer: Yes, with 400 input.invalid.
+  - question: Should orders move on from placed through an API operation?
+    default_answer: No. The spec has no such operation, so only seeded rows hold approved and delivered.
+assumptions:
+  - decision: Row ids are engine strings (ord_0001, pet_0001). The spec's int64 id is not reproduced; {orderId} in the path takes an engine id.
+    why: Engine ids are prefixed strings. Renaming them to integers would break the engine's id model.
+  - decision: Order.petId is a plain int, not a ref to pet.
+    why: The spec types petId as a bare integer and the pet routes are out of scope, so petIds need not resolve to pet rows.
+  - decision: POST /store/orders is the place_order action. It creates the order in placed and, when the body names approved or delivered, walks it through the transitions in the same call.
+    why: A state field refuses a create to a non-initial state with state.initial, but the spec accepts status in the body, so the handler walks it instead.
+  - decision: quantity below 1 is refused with 400 input.invalid and nothing is stored.
+    why: The spec says quantity is an integer and the 400 response covers invalid orders; a zero-unit order is not a valid order.
+  - decision: DELETE /store/orders/{orderId} is the delete_order action answering 204, and GET /store/orders/{orderId} is get_order.
+    why: Tests and tasks must name workflow actions, and a standard route cannot be declared as one.
+  - decision: Adds GET /store/orders (list_orders) with filters petId, status and complete, flagged as an extra operation.
+    why: Tasks must find an order by pet without being given its id, and the Petstore spec has no listing. The openapi.operation_extra warning is accepted on purpose.
+  - decision: Pets are seeded rows only. No pet routes. The inventory counts them by status.
+    why: GET /store/inventory needs a pet status count, and the pet routes are dropped by scope.
+  - decision: 'Error bodies use the proposed meta.api.error: code becomes the status, type the engine code, message the message. Tests assert body.type.'
+    why: The spec's ApiResponse schema is {code, type, message}.
+  - decision: Clock starts at 2026-10-09T09:00:00.000Z with tick 0s and no jobs.
+    why: Petstore has no time-driven behaviour, and an explicit start with no drift keeps replays deterministic.
+  - decision: shipDate is an optional datetime stored as given, with no shipping logic. complete is a bool defaulting to false, set only by input.
+    why: The spec gives no operation that changes them.
+  - decision: No API action moves order or pet status after creation. Non-initial statuses exist only in seeded rows and in the create walk.
+    why: The spec has no operation for updating orders or pets.
+outOfScope:
+  - what: Pet CRUD, findByStatus, pet photos and tags (the dropped /pet operations)
+    why: Outside the kept /store scope; pets are only seeded to back the inventory count.
+  - what: User routes and authentication
+    why: Dropped by scope and not in the store API.
+  - what: Category and Tag schemas
+    why: Only referenced by pets, which are out of scope.
+  - what: int64 ids
+    why: Engine string ids replace them, see assumptions.
+  - what: Customer on an order
+    why: The spec's Order carries no customer.
+changes: []

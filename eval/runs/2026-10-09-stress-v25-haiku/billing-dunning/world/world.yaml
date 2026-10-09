@@ -1,0 +1,728 @@
+format: 1
+meta:
+  name: world
+  description: "A subscription billing API. Customers hold cards and subscribe to plans; each subscription bills an invoice per period. A declined charge moves the invoice and subscription to past_due and starts dunning: retries run 1, 3 and 7 days after the first failure, and when the last retry fails the subscription is cancelled and its invoice voided. Agents charge invoices, change a subscription's card, cancel subscriptions and read invoices and payments. Feasible: the core value is stateful billing records that an agent reads and changes through actions."
+  resembles: Stripe Billing subscriptions with invoices, card payments and dunning
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  customer:
+    description: A paying account with a name and a unique email.
+    idPrefix: cus
+    fields:
+      first_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      last_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+  plan:
+    description: A price list entry that subscriptions bill against.
+    idPrefix: pln
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      price:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      interval:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - monthly
+          - yearly
+  payment_method:
+    description: A card on file for a customer. card_state declined simulates an issuer decline.
+    idPrefix: pm
+    fields:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - card
+      last_four:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        pattern: ^[0-9]{4}$
+      card_state:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - good
+          - declined
+  subscription:
+    description: A customer's recurring subscription to a plan, with its status state machine.
+    idPrefix: sub
+    fields:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      plan_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: plan
+        onDelete: restrict
+      payment_method_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+      status:
+        type: state
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - active
+          - past_due
+          - cancelled
+        initial: active
+        transitions:
+          active:
+            - past_due
+            - cancelled
+          past_due:
+            - active
+            - past_due
+            - cancelled
+          cancelled: []
+      cancelled_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  invoice:
+    description: One bill of a subscription, with dunning fields attempts, first_failed_at and next_retry_at.
+    idPrefix: inv
+    fields:
+      subscription_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: subscription
+        onDelete: restrict
+      number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      status:
+        type: state
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - open
+          - paid
+          - past_due
+          - void
+        initial: open
+        transitions:
+          open:
+            - paid
+            - past_due
+            - void
+          past_due:
+            - paid
+            - past_due
+            - void
+          paid: []
+          void: []
+      attempts:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+      first_failed_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      next_retry_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      paid_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  payment:
+    description: One charge attempt against an invoice, succeeded or failed, on a payment method.
+    idPrefix: pay
+    fields:
+      invoice_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: invoice
+        onDelete: restrict
+      payment_method_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      outcome:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - succeeded
+          - failed
+routes:
+  create_customer:
+    op: create
+    entity: customer
+    method: POST
+    path: /customers
+    description: Create a customer for tests and agents.
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - email
+      - last_name
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /customers
+    description: List customers, filter by email or last_name.
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /customers/{id}
+    description: Read one customer.
+  create_plan:
+    op: create
+    entity: plan
+    method: POST
+    path: /plans
+    description: Create a plan.
+  list_plans:
+    op: list
+    entity: plan
+    filters: []
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /plans
+    description: List plans.
+  get_plan:
+    op: get
+    entity: plan
+    method: GET
+    path: /plans/{id}
+    description: Read one plan.
+  create_payment_method:
+    op: create
+    entity: payment_method
+    method: POST
+    path: /payment_methods
+    description: Add a card to a customer.
+  list_payment_methods:
+    op: list
+    entity: payment_method
+    filters:
+      - customer_id
+      - kind
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /payment_methods
+    description: List cards, filter by customer_id.
+  get_payment_method:
+    op: get
+    entity: payment_method
+    method: GET
+    path: /payment_methods/{id}
+    description: Read one card.
+  list_subscriptions:
+    op: list
+    entity: subscription
+    filters:
+      - customer_id
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /subscriptions
+    description: List subscriptions, filter by customer_id and status.
+  get_subscription:
+    op: get
+    entity: subscription
+    method: GET
+    path: /subscriptions/{id}
+    description: Read one subscription.
+  list_invoices:
+    op: list
+    entity: invoice
+    filters:
+      - subscription_id
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /invoices
+    description: List invoices, filter by subscription_id and status.
+  get_invoice:
+    op: get
+    entity: invoice
+    method: GET
+    path: /invoices/{id}
+    description: Read one invoice.
+  list_payments:
+    op: list
+    entity: payment
+    filters:
+      - invoice_id
+      - outcome
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /payments
+    description: List payment attempts, filter by invoice_id and outcome.
+  get_payment:
+    op: get
+    entity: payment
+    method: GET
+    path: /payments/{id}
+    description: Read one payment attempt.
+actions:
+  create_subscription:
+    method: POST
+    path: /subscriptions
+    description: Subscribe a customer to a plan on one of their cards. The subscription starts active and opens one invoice at the plan price.
+    input:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      plan_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: plan
+        onDelete: restrict
+      payment_method_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+    handler: "(ctx) => { const b = ctx.body; const cus = ctx.db.get('customer', b.customer_id); if (cus === null) ctx.fail(404, 'not_found', 'customer ' + b.customer_id + ' not found'); const plan = ctx.db.get('plan', b.plan_id); if (plan === null) ctx.fail(404, 'not_found', 'plan ' + b.plan_id + ' not found'); const pm = ctx.db.get('payment_method', b.payment_method_id); if (pm === null) ctx.fail(404, 'not_found', 'payment method ' + b.payment_method_id + ' not found'); if (pm.customer_id !== cus.id) ctx.fail(422, 'payment_method.not_owned', 'payment method ' + pm.id + ' does not belong to customer ' + cus.id); const sub = ctx.db.create('subscription', { customer_id: cus.id, plan_id: plan.id, payment_method_id: pm.id, status: 'active', cancelled_at: null }); ctx.db.create('invoice', { subscription_id: sub.id, number: 'INV-' + sub.id, amount: plan.price, status: 'open', attempts: 0, first_failed_at: null, next_retry_at: null, paid_at: null }); return { status: 201, body: sub }; }"
+  cancel_subscription:
+    method: POST
+    path: /subscriptions/{id}/cancel
+    description: Cancel a subscription. Its open and past_due invoices are voided and cancelled_at is set. A cancelled subscription cannot be cancelled again.
+    input: {}
+    handler: "(ctx) => { const s = ctx.db.get('subscription', ctx.params.id); if (s === null) ctx.fail(404, 'not_found', 'subscription ' + ctx.params.id + ' not found'); if (s.status === 'cancelled') ctx.fail(409, 'invalid_state', 'subscription ' + s.id + ' is already cancelled'); const now = ctx.now(); const invs = ctx.db.list('invoice', { where: { subscription_id: s.id } }); for (const i of invs) { if (i.status === 'open' || i.status === 'past_due') ctx.db.update('invoice', i.id, { status: 'void', next_retry_at: null }); } return { status: 200, body: ctx.db.update('subscription', s.id, { status: 'cancelled', cancelled_at: now }) }; }"
+  update_subscription_payment_method:
+    method: POST
+    path: /subscriptions/{id}/payment_method
+    description: Put another card on a subscription. The card must belong to the subscription customer.
+    input:
+      payment_method_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+    handler: "(ctx) => { const s = ctx.db.get('subscription', ctx.params.id); if (s === null) ctx.fail(404, 'not_found', 'subscription ' + ctx.params.id + ' not found'); if (s.status === 'cancelled') ctx.fail(409, 'invalid_state', 'subscription ' + s.id + ' is cancelled'); const pm = ctx.db.get('payment_method', ctx.body.payment_method_id); if (pm === null) ctx.fail(404, 'not_found', 'payment method ' + ctx.body.payment_method_id + ' not found'); if (pm.customer_id !== s.customer_id) ctx.fail(422, 'payment_method.not_owned', 'payment method ' + pm.id + ' does not belong to the subscription customer'); return { status: 200, body: ctx.db.update('subscription', s.id, { payment_method_id: pm.id }) }; }"
+  charge_invoice:
+    method: POST
+    path: /invoices/{id}/charge
+    description: "Charge an invoice on the subscription card. A success marks it paid and returns a past_due subscription to active. A decline starts or continues dunning: retries follow 1, 3 and 7 days after the first failure, and the fourth failed attempt cancels the subscription and voids the invoice. Paid, void and cancelled-subscription invoices answer 409."
+    input: {}
+    handler: "(ctx) => { const inv = ctx.db.get('invoice', ctx.params.id); if (inv === null) ctx.fail(404, 'not_found', 'invoice ' + ctx.params.id + ' not found'); if (inv.status === 'paid' || inv.status === 'void') ctx.fail(409, 'invalid_state', 'invoice ' + inv.number + ' is ' + inv.status + ' and cannot be charged'); const sub = ctx.db.get('subscription', inv.subscription_id); if (sub.status === 'cancelled') ctx.fail(409, 'invalid_state', 'subscription ' + sub.id + ' is cancelled'); const pm = ctx.db.get('payment_method', sub.payment_method_id); const now = ctx.now(); const attempts = inv.attempts + 1; if (pm.card_state === 'good') { ctx.db.create('payment', { invoice_id: inv.id, payment_method_id: pm.id, amount: inv.amount, outcome: 'succeeded' }); ctx.db.update('invoice', inv.id, { status: 'paid', attempts: attempts, paid_at: now, next_retry_at: null }); if (sub.status === 'past_due') ctx.db.update('subscription', sub.id, { status: 'active' }); return { status: 200, body: ctx.db.get('invoice', inv.id) }; } ctx.db.create('payment', { invoice_id: inv.id, payment_method_id: pm.id, amount: inv.amount, outcome: 'failed' }); if (attempts >= 4) { ctx.db.update('invoice', inv.id, { status: 'void', attempts: attempts, next_retry_at: null }); ctx.db.update('subscription', sub.id, { status: 'cancelled', cancelled_at: now }); return { status: 200, body: ctx.db.get('invoice', inv.id) }; } const first = inv.first_failed_at === null ? now : inv.first_failed_at; const days = attempts === 1 ? '1d' : attempts === 2 ? '3d' : '7d'; ctx.db.update('invoice', inv.id, { status: 'past_due', attempts: attempts, first_failed_at: first, next_retry_at: ctx.time.plus(first, days) }); if (sub.status !== 'past_due') ctx.db.update('subscription', sub.id, { status: 'past_due' }); return { status: 200, body: ctx.db.get('invoice', inv.id) }; }"
+jobs:
+  dunning_retry:
+    description: "Retry each past_due invoice whose next_retry_at has come, on the subscription card. Same outcome rules as charge_invoice: success pays the invoice and reactivates the subscription; the fourth failed attempt cancels the subscription and voids the invoice."
+    every: 1h
+    run: "(ctx) => { const now = ctx.now(); const due = ctx.db.list('invoice', { where: { status: 'past_due' } }).filter((i) => i.next_retry_at !== null && i.next_retry_at <= now); for (const inv of due) { const sub = ctx.db.get('subscription', inv.subscription_id); if (sub === null || sub.status === 'cancelled') continue; const pm = ctx.db.get('payment_method', sub.payment_method_id); const attempts = inv.attempts + 1; if (pm.card_state === 'good') { ctx.db.create('payment', { invoice_id: inv.id, payment_method_id: pm.id, amount: inv.amount, outcome: 'succeeded' }); ctx.db.update('invoice', inv.id, { status: 'paid', attempts: attempts, paid_at: now, next_retry_at: null }); if (sub.status === 'past_due') ctx.db.update('subscription', sub.id, { status: 'active' }); continue; } ctx.db.create('payment', { invoice_id: inv.id, payment_method_id: pm.id, amount: inv.amount, outcome: 'failed' }); if (attempts >= 4) { ctx.db.update('invoice', inv.id, { status: 'void', attempts: attempts, next_retry_at: null }); ctx.db.update('subscription', sub.id, { status: 'cancelled', cancelled_at: now }); continue; } const first = inv.first_failed_at === null ? now : inv.first_failed_at; const days = attempts === 1 ? '1d' : attempts === 2 ? '3d' : '7d'; ctx.db.update('invoice', inv.id, { status: 'past_due', attempts: attempts, first_failed_at: first, next_retry_at: ctx.time.plus(first, days) }); } }"
+fixtures: {}
+seed:
+  customer: "(ctx) => [{ first_name: 'Ruth', last_name: 'Adeyemi', email: 'ruth.adeyemi@example.com' }, { first_name: 'Marco', last_name: 'Bellini', email: 'marco.bellini@example.com' }, { first_name: 'Hana', last_name: 'Kowalski', email: 'hana.kowalski@example.com' }, { first_name: 'Elena', last_name: 'Vasquez', email: 'elena.vasquez@example.com' }, { first_name: 'Tobias', last_name: 'Lindqvist', email: 'tobias.lindqvist@example.com' }, { first_name: 'Priyanka', last_name: 'Rao', email: 'priyanka.rao@example.com' }, { first_name: 'Samuel', last_name: 'Okafor', email: 'samuel.okafor@example.com' }, { first_name: 'Chloe', last_name: 'Dubois', email: 'chloe.dubois@example.com' }, { first_name: 'Kenji', last_name: 'Mori', email: 'kenji.mori@example.com' }, { first_name: 'Grace', last_name: 'Whitfield', email: 'grace.whitfield@example.com' }, { first_name: 'Diego', last_name: 'Ramirez', email: 'diego.ramirez@example.com' }, { first_name: 'Amara', last_name: 'Nwosu', email: 'amara.nwosu@example.com' }]"
+  plan: "(ctx) => [{ name: 'Basic', price: 1200, interval: 'monthly' }, { name: 'Plus', price: 2900, interval: 'monthly' }, { name: 'Pro', price: 9900, interval: 'yearly' }]"
+  payment_method: "(ctx) => { const cus = (email) => ctx.rows('customer').find((c) => c.email === email).id; const card = (email, last_four, card_state) => ({ customer_id: cus(email), kind: 'card', last_four: last_four, card_state: card_state }); return [card('ruth.adeyemi@example.com', '3318', 'good'), card('marco.bellini@example.com', '5523', 'declined'), card('marco.bellini@example.com', '4417', 'good'), card('hana.kowalski@example.com', '6610', 'declined'), card('hana.kowalski@example.com', '2208', 'good'), card('elena.vasquez@example.com', '1184', 'good'), card('elena.vasquez@example.com', '8827', 'good'), card('tobias.lindqvist@example.com', '5046', 'good'), card('priyanka.rao@example.com', '3975', 'declined'), card('priyanka.rao@example.com', '6289', 'good'), card('samuel.okafor@example.com', '2741', 'good'), card('chloe.dubois@example.com', '9934', 'good'), card('kenji.mori@example.com', '4105', 'good'), card('grace.whitfield@example.com', '1648', 'declined'), card('diego.ramirez@example.com', '5572', 'good'), card('amara.nwosu@example.com', '8390', 'good')]; }"
+  subscription: "(ctx) => { const cus = (email) => ctx.rows('customer').find((c) => c.email === email).id; const plan = (name) => ctx.rows('plan').find((p) => p.name === name).id; const pm = (last) => ctx.rows('payment_method').find((m) => m.last_four === last).id; const sub = (email, planName, last, status, cancelled_at) => ({ customer_id: cus(email), plan_id: plan(planName), payment_method_id: pm(last), status: status, cancelled_at: cancelled_at }); return [sub('ruth.adeyemi@example.com', 'Basic', '3318', 'active', null), sub('marco.bellini@example.com', 'Plus', '5523', 'past_due', null), sub('hana.kowalski@example.com', 'Plus', '6610', 'past_due', null), sub('hana.kowalski@example.com', 'Basic', '2208', 'active', null), sub('elena.vasquez@example.com', 'Pro', '1184', 'active', null), sub('elena.vasquez@example.com', 'Basic', '8827', 'cancelled', '2026-07-01T10:00:00.000Z'), sub('tobias.lindqvist@example.com', 'Basic', '5046', 'active', null), sub('priyanka.rao@example.com', 'Plus', '6289', 'active', null), sub('samuel.okafor@example.com', 'Pro', '2741', 'active', null), sub('chloe.dubois@example.com', 'Basic', '9934', 'cancelled', '2026-08-01T10:00:00.000Z'), sub('kenji.mori@example.com', 'Plus', '4105', 'active', null), sub('grace.whitfield@example.com', 'Basic', '1648', 'past_due', null)]; }"
+  invoice: "(ctx) => { const subs = ctx.rows('subscription'); const plans = ctx.rows('plan'); const price = (s) => plans.find((p) => p.id === s.plan_id).price; const spec = [[0,'paid',1,null,null,'2026-07-10T09:05:00.000Z'],[0,'paid',2,null,null,'2026-08-10T09:05:00.000Z'],[0,'paid',2,null,null,'2026-09-10T09:05:00.000Z'],[0,'open',0,null,null,null],[1,'paid',1,null,null,'2026-08-10T09:05:00.000Z'],[1,'past_due',1,'2026-10-08T15:00:00.000Z','2026-10-09T15:00:00.000Z',null],[2,'paid',1,null,null,'2026-08-05T09:05:00.000Z'],[2,'past_due',2,'2026-10-07T09:00:00.000Z','2026-10-10T09:00:00.000Z',null],[3,'paid',2,null,null,'2026-09-20T09:05:00.000Z'],[3,'open',0,null,null,null],[4,'paid',1,null,null,'2025-10-15T09:05:00.000Z'],[5,'void',0,null,null,null],[6,'paid',2,null,null,'2026-09-02T09:05:00.000Z'],[6,'open',0,null,null,null],[7,'paid',2,null,null,'2026-09-01T09:05:00.000Z'],[8,'open',0,null,null,null],[9,'paid',1,null,null,'2026-07-01T09:05:00.000Z'],[9,'void',0,null,null,null],[10,'paid',2,null,null,'2026-09-15T09:05:00.000Z'],[10,'open',0,null,null,null],[11,'paid',1,null,null,'2026-08-08T09:05:00.000Z'],[11,'past_due',2,'2026-10-07T15:00:00.000Z','2026-10-10T15:00:00.000Z',null],[0,'paid',1,null,null,'2026-06-10T09:05:00.000Z'],[1,'paid',1,null,null,'2026-07-10T09:05:00.000Z'],[6,'paid',2,null,null,'2026-08-02T09:05:00.000Z'],[10,'paid',2,null,null,'2026-08-15T09:05:00.000Z'],[7,'paid',1,null,null,'2026-08-01T09:05:00.000Z'],[5,'void',0,null,null,null]]; return spec.map((r, i) => ({ subscription_id: subs[r[0]].id, number: 'INV-' + (1001 + i), amount: price(subs[r[0]]), status: r[1], attempts: r[2], first_failed_at: r[3], next_retry_at: r[4], paid_at: r[5] })); }"
+  payment: "(ctx) => { const invs = ctx.rows('invoice'); const card = (last) => ctx.rows('payment_method').find((m) => m.last_four === last).id; const spec = [[0,['succeeded'],'3318'],[1,['failed','succeeded'],'3318'],[2,['failed','succeeded'],'3318'],[4,['succeeded'],'4417'],[5,['failed'],'5523'],[6,['succeeded'],'2208'],[7,['failed','failed'],'6610'],[8,['failed','succeeded'],'2208'],[10,['succeeded'],'1184'],[12,['failed','succeeded'],'5046'],[14,['failed','succeeded'],'6289'],[16,['succeeded'],'9934'],[18,['failed','succeeded'],'4105'],[20,['succeeded'],'1648'],[21,['failed','failed'],'1648'],[22,['succeeded'],'3318'],[23,['succeeded'],'4417'],[24,['failed','succeeded'],'5046'],[25,['failed','succeeded'],'4105'],[26,['succeeded'],'6289']]; const rows = []; for (const s of spec) { const inv = invs[s[0]]; for (const o of s[1]) rows.push({ invoice_id: inv.id, payment_method_id: card(s[2]), amount: inv.amount, outcome: o }); } return rows; }"
+tests:
+  create_subscription_opens_invoice:
+    description: Create a customer, plan and card, subscribe, and check the subscription and its single open invoice.
+    script: "(ctx) => { const cus = ctx.api('POST', '/customers', { first_name: 'Ines', last_name: 'Opener', email: 'ines.opener.t1@example.test' }); ctx.assert(cus.status === 201, 'create customer: ' + JSON.stringify(cus.body)); const plan = ctx.api('POST', '/plans', { name: 'Test Plan T1', price: 1500, interval: 'monthly' }); ctx.assert(plan.status === 201, 'create plan: ' + JSON.stringify(plan.body)); const card = ctx.api('POST', '/payment_methods', { customer_id: cus.body.id, kind: 'card', last_four: '7001', card_state: 'good' }); ctx.assert(card.status === 201, 'create card: ' + JSON.stringify(card.body)); const sub = ctx.api('POST', '/subscriptions', { customer_id: cus.body.id, plan_id: plan.body.id, payment_method_id: card.body.id }); ctx.assert(sub.status === 201 && sub.body.status === 'active', 'subscribe: ' + JSON.stringify(sub.body)); const inv = ctx.api('GET', '/invoices?subscription_id=' + sub.body.id).body.data; ctx.assert(inv.length === 1 && inv[0].status === 'open' && inv[0].amount === 1500, 'one open invoice of 1500 expected: ' + JSON.stringify(inv)); }"
+  declined_charge_starts_dunning:
+    description: Charge an invoice on a declined card and check the past_due state, the attempt count, the scheduled retry and the failed payment.
+    script: "(ctx) => { const cus = ctx.api('POST', '/customers', { first_name: 'Ravi', last_name: 'Declined', email: 'ravi.declined.t2@example.test' }).body; const plan = ctx.api('POST', '/plans', { name: 'Test Plan T2', price: 2000, interval: 'monthly' }).body; const card = ctx.api('POST', '/payment_methods', { customer_id: cus.id, kind: 'card', last_four: '7002', card_state: 'declined' }).body; const sub = ctx.api('POST', '/subscriptions', { customer_id: cus.id, plan_id: plan.id, payment_method_id: card.id }).body; const inv = ctx.api('GET', '/invoices?subscription_id=' + sub.id).body.data[0]; const r = ctx.api('POST', '/invoices/' + inv.id + '/charge'); ctx.assert(r.status === 200 && r.body.status === 'past_due' && r.body.attempts === 1, 'charge should fail and start dunning: ' + JSON.stringify(r.body)); ctx.assert(r.body.first_failed_at !== null && r.body.next_retry_at !== null, 'the retry is scheduled'); ctx.assert(ctx.api('GET', '/subscriptions/' + sub.id).body.status === 'past_due', 'subscription should be past_due'); const pays = ctx.api('GET', '/payments?invoice_id=' + inv.id).body.data; ctx.assert(pays.length === 1 && pays[0].outcome === 'failed', 'one failed payment expected: ' + JSON.stringify(pays)); }"
+  dunning_retries_then_cancels:
+    description: Start dunning on a declined card, advance 1, 3 and 7 days so the dunning job fires, and check each retry, the cancellation, the void invoice and four failed payments.
+    script: "(ctx) => { const cus = ctx.api('POST', '/customers', { first_name: 'Dana', last_name: 'Retry', email: 'dana.retry.t3@example.test' }).body; const plan = ctx.api('POST', '/plans', { name: 'Test Plan T3', price: 2500, interval: 'monthly' }).body; const card = ctx.api('POST', '/payment_methods', { customer_id: cus.id, kind: 'card', last_four: '7003', card_state: 'declined' }).body; const sub = ctx.api('POST', '/subscriptions', { customer_id: cus.id, plan_id: plan.id, payment_method_id: card.id }).body; const inv = ctx.api('GET', '/invoices?subscription_id=' + sub.id).body.data[0]; ctx.api('POST', '/invoices/' + inv.id + '/charge'); ctx.advance('1d'); let i = ctx.api('GET', '/invoices/' + inv.id).body; ctx.assert(i.attempts === 2 && i.status === 'past_due', 'day 1 retry should fail: ' + JSON.stringify(i)); ctx.advance('2d'); i = ctx.api('GET', '/invoices/' + inv.id).body; ctx.assert(i.attempts === 3 && i.status === 'past_due', 'day 3 retry should fail: ' + JSON.stringify(i)); ctx.advance('4d'); i = ctx.api('GET', '/invoices/' + inv.id).body; ctx.assert(i.attempts === 4 && i.status === 'void', 'day 7 retry should fail and void: ' + JSON.stringify(i)); ctx.assert(ctx.api('GET', '/subscriptions/' + sub.id).body.status === 'cancelled', 'subscription should be cancelled'); const pays = ctx.api('GET', '/payments?invoice_id=' + inv.id).body.data; ctx.assert(pays.length === 4 && pays.every((p) => p.outcome === 'failed'), 'four failed attempts expected'); }"
+  retry_after_card_fix_restores:
+    description: Fail a charge, move the subscription to a good card, advance one day so the dunning job fires, and check the paid invoice, the active subscription and a succeeded payment.
+    script: "(ctx) => { const cus = ctx.api('POST', '/customers', { first_name: 'Fay', last_name: 'Recovered', email: 'fay.recovered.t4@example.test' }).body; const plan = ctx.api('POST', '/plans', { name: 'Test Plan T4', price: 1800, interval: 'monthly' }).body; const bad = ctx.api('POST', '/payment_methods', { customer_id: cus.id, kind: 'card', last_four: '7004', card_state: 'declined' }).body; const good = ctx.api('POST', '/payment_methods', { customer_id: cus.id, kind: 'card', last_four: '7014', card_state: 'good' }).body; const sub = ctx.api('POST', '/subscriptions', { customer_id: cus.id, plan_id: plan.id, payment_method_id: bad.id }).body; const inv = ctx.api('GET', '/invoices?subscription_id=' + sub.id).body.data[0]; ctx.api('POST', '/invoices/' + inv.id + '/charge'); const u = ctx.api('POST', '/subscriptions/' + sub.id + '/payment_method', { payment_method_id: good.id }); ctx.assert(u.status === 200, 'card change failed: ' + JSON.stringify(u.body)); ctx.advance('1d'); const i = ctx.api('GET', '/invoices/' + inv.id).body; ctx.assert(i.status === 'paid' && i.paid_at !== null, 'retry should pay the invoice: ' + JSON.stringify(i)); ctx.assert(ctx.api('GET', '/subscriptions/' + sub.id).body.status === 'active', 'subscription should be active again'); const pays = ctx.api('GET', '/payments?invoice_id=' + inv.id).body.data; ctx.assert(pays.some((p) => p.outcome === 'succeeded' && p.payment_method_id === good.id), 'a succeeded payment on the good card is expected'); }"
+  cancel_voids_open_invoices:
+    description: Cancel an active subscription, check the cancelled subscription, the void invoice and the refused second cancel.
+    script: "(ctx) => { const cus = ctx.api('POST', '/customers', { first_name: 'Gus', last_name: 'Cancel', email: 'gus.cancel.t5@example.test' }).body; const plan = ctx.api('POST', '/plans', { name: 'Test Plan T5', price: 900, interval: 'yearly' }).body; const card = ctx.api('POST', '/payment_methods', { customer_id: cus.id, kind: 'card', last_four: '7005', card_state: 'good' }).body; const sub = ctx.api('POST', '/subscriptions', { customer_id: cus.id, plan_id: plan.id, payment_method_id: card.id }).body; const inv = ctx.api('GET', '/invoices?subscription_id=' + sub.id).body.data[0]; const r = ctx.api('POST', '/subscriptions/' + sub.id + '/cancel'); ctx.assert(r.status === 200 && r.body.status === 'cancelled' && r.body.cancelled_at !== null, 'cancel failed: ' + JSON.stringify(r.body)); ctx.assert(ctx.api('GET', '/invoices/' + inv.id).body.status === 'void', 'open invoice should be void'); const again = ctx.api('POST', '/subscriptions/' + sub.id + '/cancel'); ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second cancel should answer 409 invalid_state: ' + JSON.stringify(again.body)); }"
+  cancelled_refuses_charge:
+    description: Cancel a subscription and try to charge its invoice; the charge answers 409 invalid_state.
+    script: "(ctx) => { const cus = ctx.api('POST', '/customers', { first_name: 'Hugo', last_name: 'Frozen', email: 'hugo.frozen.t6@example.test' }).body; const plan = ctx.api('POST', '/plans', { name: 'Test Plan T6', price: 700, interval: 'monthly' }).body; const card = ctx.api('POST', '/payment_methods', { customer_id: cus.id, kind: 'card', last_four: '7006', card_state: 'good' }).body; const sub = ctx.api('POST', '/subscriptions', { customer_id: cus.id, plan_id: plan.id, payment_method_id: card.id }).body; const inv = ctx.api('GET', '/invoices?subscription_id=' + sub.id).body.data[0]; ctx.assert(ctx.api('POST', '/subscriptions/' + sub.id + '/cancel').status === 200, 'cancel should succeed'); const r = ctx.api('POST', '/invoices/' + inv.id + '/charge'); ctx.assert(r.status === 409 && r.body.error.code === 'invalid_state', 'charge should be refused with invalid_state: ' + JSON.stringify(r.body)); ctx.assert(ctx.api('GET', '/payments?invoice_id=' + inv.id).body.data.length === 0, 'no payment row should be written'); }"
+  paid_invoice_refuses_charge:
+    description: Charge an invoice on a good card so it is paid, then charge it again and check the 409 invalid_state refusal and the single succeeded payment.
+    script: "(ctx) => { const cus = ctx.api('POST', '/customers', { first_name: 'Iris', last_name: 'Settled', email: 'iris.settled.t8@example.test' }).body; const plan = ctx.api('POST', '/plans', { name: 'Test Plan T8', price: 1200, interval: 'monthly' }).body; const card = ctx.api('POST', '/payment_methods', { customer_id: cus.id, kind: 'card', last_four: '7008', card_state: 'good' }).body; const sub = ctx.api('POST', '/subscriptions', { customer_id: cus.id, plan_id: plan.id, payment_method_id: card.id }).body; const inv = ctx.api('GET', '/invoices?subscription_id=' + sub.id).body.data[0]; const paid = ctx.api('POST', '/invoices/' + inv.id + '/charge'); ctx.assert(paid.status === 200 && paid.body.status === 'paid', 'first charge should pay: ' + JSON.stringify(paid.body)); const again = ctx.api('POST', '/invoices/' + inv.id + '/charge'); ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'a paid invoice cannot be charged again: ' + JSON.stringify(again.body)); ctx.assert(ctx.api('GET', '/payments?invoice_id=' + inv.id).body.data.length === 1, 'only the first payment row should exist'); }"
+  payment_method_must_belong:
+    description: Try to put another customer's card on a subscription; the call answers 422 payment_method.not_owned and the subscription keeps its card.
+    script: "(ctx) => { const a = ctx.api('POST', '/customers', { first_name: 'Ada', last_name: 'Owner', email: 'ada.owner.t7@example.test' }).body; const b = ctx.api('POST', '/customers', { first_name: 'Bo', last_name: 'Stranger', email: 'bo.stranger.t7@example.test' }).body; const plan = ctx.api('POST', '/plans', { name: 'Test Plan T7', price: 1100, interval: 'monthly' }).body; const cardA = ctx.api('POST', '/payment_methods', { customer_id: a.id, kind: 'card', last_four: '7007', card_state: 'good' }).body; const cardB = ctx.api('POST', '/payment_methods', { customer_id: b.id, kind: 'card', last_four: '7017', card_state: 'good' }).body; const sub = ctx.api('POST', '/subscriptions', { customer_id: a.id, plan_id: plan.id, payment_method_id: cardA.id }).body; const r = ctx.api('POST', '/subscriptions/' + sub.id + '/payment_method', { payment_method_id: cardB.id }); ctx.assert(r.status === 422 && r.body.error.code === 'payment_method.not_owned', 'foreign card should be refused: ' + JSON.stringify(r.body)); ctx.assert(ctx.api('GET', '/subscriptions/' + sub.id).body.payment_method_id === cardA.id, 'the subscription keeps its card'); }"
+tasks:
+  cancel_ruth_subscription:
+    difficulty: easy
+    instruction: Ruth Adeyemi (ruth.adeyemi@example.com) wants to stop her subscription. Cancel her active subscription.
+    grader: |-
+      (ctx) => {
+       const cus = ctx.seed.list('customer', { where: { email: 'ruth.adeyemi@example.com' } })[0];
+       if (!cus) return 0;
+       const sub = ctx.seed.list('subscription', { where: { customer_id: cus.id, status: 'active' } })[0];
+       if (!sub) return 0;
+       const open = ctx.seed.list('invoice', { where: { subscription_id: sub.id, status: 'open' } })[0];
+       const allowed = (c) => {
+        if (c.entity === 'subscription') return c.id === sub.id;
+        if (c.entity === 'invoice') return ctx.db.get('invoice', c.id).subscription_id === sub.id;
+        return false;
+       };
+       ctx.guard('only Ruth subscription and its open invoices changed', ctx.changes().every(allowed));
+       const end = ctx.db.get('subscription', sub.id);
+       ctx.goal(0.6, 'the subscription is cancelled with cancelled_at set', end.status === 'cancelled' && end.cancelled_at !== null);
+       ctx.goal(0.4, 'its open invoice is void', open !== undefined && ctx.db.get('invoice', open.id).status === 'void');
+       return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+       const customer = ctx.api('GET', '/customers?email=ruth.adeyemi@example.com').body.data[0];
+       ctx.assert(customer, 'customer not found');
+       const subs = ctx.api('GET', '/subscriptions?customer_id=' + customer.id + '&status=active').body.data;
+       ctx.assert(subs.length === 1, 'expected one active subscription, found ' + subs.length);
+       const r = ctx.api('POST', '/subscriptions/' + subs[0].id + '/cancel');
+       ctx.assert(r.status === 200 && r.body.status === 'cancelled', 'cancel failed: ' + JSON.stringify(r.body));
+      }
+    decoys: []
+    alternatives: []
+    allows:
+      - entity: subscription
+        kind: updated
+        fields:
+          - status
+          - cancelled_at
+        where:
+          status: active
+      - entity: invoice
+        kind: updated
+        fields:
+          - status
+          - next_retry_at
+        where:
+          status: open
+  collect_marco_with_new_card:
+    difficulty: medium
+    instruction: Marco Bellini's subscription is past due because his card was declined. He has added a new card ending in 4417. Put that card on his subscription and collect the unpaid invoice.
+    grader: |-
+      (ctx) => {
+       const cus = ctx.seed.list('customer', { where: { email: 'marco.bellini@example.com' } })[0];
+       const sub = cus ? ctx.seed.list('subscription', { where: { customer_id: cus.id, status: 'past_due' } })[0] : undefined;
+       if (!sub) return 0;
+       const inv = ctx.seed.list('invoice', { where: { subscription_id: sub.id, status: 'past_due' } })[0];
+       const good = ctx.seed.list('payment_method', { where: { customer_id: cus.id, last_four: '4417' } })[0];
+       if (!inv || !good) return 0;
+       const allowed = (c) => {
+        if (c.entity === 'subscription') return c.id === sub.id;
+        if (c.entity === 'invoice') return c.id === inv.id;
+        if (c.entity === 'payment') return c.kind === 'created' && ctx.db.get('payment', c.id).invoice_id === inv.id;
+        return false;
+       };
+       ctx.guard('only Marco subscription, his unpaid invoice and the new payment rows changed', ctx.changes().every(allowed));
+       const endSub = ctx.db.get('subscription', sub.id);
+       const endInv = ctx.db.get('invoice', inv.id);
+       ctx.goal(0.4, 'the subscription takes the card ending 4417', endSub.payment_method_id === good.id);
+       ctx.goal(0.3, 'the invoice is paid', endInv.status === 'paid' && endInv.paid_at !== null);
+       ctx.goal(0.3, 'the subscription is active again', endSub.status === 'active');
+       return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+       const customer = ctx.api('GET', '/customers?email=marco.bellini@example.com').body.data[0];
+       ctx.assert(customer, 'customer not found');
+       const card = ctx.api('GET', '/payment_methods?customer_id=' + customer.id).body.data.find((m) => m.last_four === '4417');
+       ctx.assert(card, 'no card ending 4417');
+       const subs = ctx.api('GET', '/subscriptions?customer_id=' + customer.id + '&status=past_due').body.data;
+       ctx.assert(subs.length === 1, 'expected one past_due subscription, found ' + subs.length);
+       const r1 = ctx.api('POST', '/subscriptions/' + subs[0].id + '/payment_method', { payment_method_id: card.id });
+       ctx.assert(r1.status === 200, 'card change failed: ' + JSON.stringify(r1.body));
+       const invs = ctx.api('GET', '/invoices?subscription_id=' + subs[0].id + '&status=past_due').body.data;
+       ctx.assert(invs.length === 1, 'expected one past_due invoice, found ' + invs.length);
+       const r2 = ctx.api('POST', '/invoices/' + invs[0].id + '/charge');
+       ctx.assert(r2.status === 200 && r2.body.status === 'paid', 'charge failed: ' + JSON.stringify(r2.body));
+      }
+    decoys:
+      - why: charges the unpaid invoice on the declined card without changing the subscription's card
+        script: |-
+          (ctx) => {
+           const customer = ctx.api('GET', '/customers?email=marco.bellini@example.com').body.data[0];
+           const sub = ctx.api('GET', '/subscriptions?customer_id=' + customer.id + '&status=past_due').body.data[0];
+           const inv = ctx.api('GET', '/invoices?subscription_id=' + sub.id + '&status=past_due').body.data[0];
+           ctx.api('POST', '/invoices/' + inv.id + '/charge');
+          }
+      - why: moves the subscription to the 4417 card but never collects the unpaid invoice, which stays past_due
+        script: |-
+          (ctx) => {
+           const customer = ctx.api('GET', '/customers?email=marco.bellini@example.com').body.data[0];
+           const sub = ctx.api('GET', '/subscriptions?customer_id=' + customer.id + '&status=past_due').body.data[0];
+           const card = ctx.api('GET', '/payment_methods?customer_id=' + customer.id).body.data.find((m) => m.last_four === '4417');
+           ctx.api('POST', '/subscriptions/' + sub.id + '/payment_method', { payment_method_id: card.id });
+          }
+    alternatives: []
+    allows:
+      - entity: subscription
+        kind: updated
+        fields:
+          - payment_method_id
+          - status
+        where:
+          status: past_due
+      - entity: invoice
+        kind: updated
+        fields:
+          - status
+          - attempts
+          - paid_at
+          - next_retry_at
+        where:
+          status: past_due
+      - entity: payment
+        kind: created
+        fields: []
+  move_hana_plus_and_cancel_basic:
+    difficulty: hard
+    instruction: Hana Kowalski's Plus subscription is past due. Put her card ending in 2208 on the Plus subscription and collect its unpaid invoice. Then cancel her other subscription, the Basic one, which she no longer wants.
+    grader: |-
+      (ctx) => {
+       const cus = ctx.seed.list('customer', { where: { email: 'hana.kowalski@example.com' } })[0];
+       if (!cus) return 0;
+       const plusSub = ctx.seed.list('subscription', { where: { customer_id: cus.id, status: 'past_due' } })[0];
+       const basicSub = ctx.seed.list('subscription', { where: { customer_id: cus.id, status: 'active' } })[0];
+       if (!plusSub || !basicSub) return 0;
+       const plusInv = ctx.seed.list('invoice', { where: { subscription_id: plusSub.id, status: 'past_due' } })[0];
+       const basicInv = ctx.seed.list('invoice', { where: { subscription_id: basicSub.id, status: 'open' } })[0];
+       const good = ctx.seed.list('payment_method', { where: { customer_id: cus.id, last_four: '2208' } })[0];
+       if (!plusInv || !basicInv || !good) return 0;
+       const allowed = (c) => {
+        if (c.entity === 'subscription') return c.id === plusSub.id || c.id === basicSub.id;
+        if (c.entity === 'invoice') return c.id === plusInv.id || c.id === basicInv.id;
+        if (c.entity === 'payment') return c.kind === 'created' && ctx.db.get('payment', c.id).invoice_id === plusInv.id;
+        return false;
+       };
+       ctx.guard('only the two subscriptions, their two invoices and the new payment rows changed', ctx.changes().every(allowed));
+       const plus = ctx.db.get('subscription', plusSub.id);
+       const basic = ctx.db.get('subscription', basicSub.id);
+       const pInv = ctx.db.get('invoice', plusInv.id);
+       ctx.goal(0.25, 'the Plus subscription takes the card ending 2208', plus.payment_method_id === good.id);
+       ctx.goal(0.25, 'the Plus invoice is paid and the Plus subscription is active', pInv.status === 'paid' && pInv.paid_at !== null && plus.status === 'active');
+       ctx.goal(0.2, 'a succeeded payment on the 2208 card for the Plus invoice', ctx.db.list('payment', { where: { invoice_id: plusInv.id, outcome: 'succeeded', payment_method_id: good.id } }).length > 0);
+       ctx.goal(0.3, 'the Basic subscription is cancelled and its open invoice is void', basic.status === 'cancelled' && basic.cancelled_at !== null && ctx.db.get('invoice', basicInv.id).status === 'void');
+       return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+       const customer = ctx.api('GET', '/customers?email=hana.kowalski@example.com').body.data[0];
+       ctx.assert(customer, 'customer not found');
+       const past = ctx.api('GET', '/subscriptions?status=past_due').body.data.filter((s) => s.customer_id === customer.id);
+       ctx.assert(past.length === 1, 'expected one past_due subscription of Hana, found ' + past.length);
+       const plus = past[0];
+       const good = ctx.api('GET', '/payment_methods?customer_id=' + customer.id).body.data.find((m) => m.last_four === '2208');
+       ctx.assert(good, 'no card ending 2208');
+       const basic = ctx.api('GET', '/subscriptions?customer_id=' + customer.id + '&status=active').body.data;
+       ctx.assert(basic.length === 1, 'expected one active subscription, found ' + basic.length);
+       const invs = ctx.api('GET', '/invoices?subscription_id=' + plus.id + '&status=past_due').body.data;
+       ctx.assert(invs.length === 1, 'expected one past_due invoice, found ' + invs.length);
+       const r1 = ctx.api('POST', '/subscriptions/' + plus.id + '/payment_method', { payment_method_id: good.id });
+       ctx.assert(r1.status === 200, 'card change failed: ' + JSON.stringify(r1.body));
+       const r2 = ctx.api('POST', '/invoices/' + invs[0].id + '/charge');
+       ctx.assert(r2.status === 200 && r2.body.status === 'paid', 'charge failed: ' + JSON.stringify(r2.body));
+       const r3 = ctx.api('POST', '/subscriptions/' + basic[0].id + '/cancel');
+       ctx.assert(r3.status === 200 && r3.body.status === 'cancelled', 'cancel failed: ' + JSON.stringify(r3.body));
+      }
+    decoys:
+      - why: skips the card change, charges the declined Plus card, then cancels the Basic subscription
+        script: |-
+          (ctx) => {
+           const customer = ctx.api('GET', '/customers?email=hana.kowalski@example.com').body.data[0];
+           const plus = ctx.api('GET', '/subscriptions?status=past_due').body.data.filter((s) => s.customer_id === customer.id)[0];
+           const inv = ctx.api('GET', '/invoices?subscription_id=' + plus.id + '&status=past_due').body.data[0];
+           ctx.api('POST', '/invoices/' + inv.id + '/charge');
+           const basic = ctx.api('GET', '/subscriptions?customer_id=' + customer.id + '&status=active').body.data[0];
+           ctx.api('POST', '/subscriptions/' + basic.id + '/cancel');
+          }
+      - why: cancels the past_due Plus subscription instead of the Basic one
+        script: |-
+          (ctx) => {
+           const customer = ctx.api('GET', '/customers?email=hana.kowalski@example.com').body.data[0];
+           const plus = ctx.api('GET', '/subscriptions?status=past_due').body.data.filter((s) => s.customer_id === customer.id)[0];
+           ctx.api('POST', '/subscriptions/' + plus.id + '/cancel');
+          }
+      - why: moves the card and collects the Plus invoice but never cancels the Basic subscription
+        script: |-
+          (ctx) => {
+           const customer = ctx.api('GET', '/customers?email=hana.kowalski@example.com').body.data[0];
+           const plus = ctx.api('GET', '/subscriptions?status=past_due').body.data.filter((s) => s.customer_id === customer.id)[0];
+           const good = ctx.api('GET', '/payment_methods?customer_id=' + customer.id).body.data.find((m) => m.last_four === '2208');
+           ctx.api('POST', '/subscriptions/' + plus.id + '/payment_method', { payment_method_id: good.id });
+           const inv = ctx.api('GET', '/invoices?subscription_id=' + plus.id + '&status=past_due').body.data[0];
+           ctx.api('POST', '/invoices/' + inv.id + '/charge');
+          }
+    alternatives: []
+    allows:
+      - entity: subscription
+        kind: updated
+        fields:
+          - payment_method_id
+          - status
+          - cancelled_at
+        where:
+          status: past_due
+      - entity: subscription
+        kind: updated
+        fields:
+          - status
+          - cancelled_at
+        where:
+          status: active
+      - entity: invoice
+        kind: updated
+        fields:
+          - status
+          - attempts
+          - paid_at
+          - next_retry_at
+      - entity: payment
+        kind: created
+        fields: []

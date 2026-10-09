@@ -1,0 +1,315 @@
+revision: 2
+software: Linear issue tracker API (issues and comments), as in the imported WorldGen backlog
+summary: 'A Linear-style issue tracker seeded from the 123-row linear_backlog CSV. Agents read issues, create and update them, comment on them, and move them through a status machine (backlog, in_progress, in_review, done, canceled, duplicate) with actions that guard each transition. Feasible: the core value is stateful issue records changed through an API, not computation.'
+clock:
+  start: 2026-10-09T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: issue
+    purpose: A tracked work item. Seeded from the CSV rows verbatim; status is a state field holding the workflow states.
+    keyFields:
+      - identifier
+      - title
+      - status
+      - priority
+      - parent
+      - completed_at
+  - name: comment
+    purpose: A comment on an issue, created by agents through the API.
+    keyFields:
+      - issue_id
+      - body
+      - author
+workflows:
+  - name: issue_status
+    entity: issue
+    states:
+      - backlog
+      - in_progress
+      - in_review
+      - done
+      - canceled
+      - duplicate
+    rules:
+      - rule: start_issue moves only a backlog issue to in_progress; any other status answers 409
+        by:
+          - start_issue
+        test: start_only_from_backlog
+      - rule: request_review moves only an in_progress issue to in_review
+        by:
+          - request_review
+        test: review_only_from_in_progress
+      - rule: complete_issue moves an in_progress or in_review issue to done and sets completed_at; any other status answers 409
+        by:
+          - complete_issue
+        test: lifecycle_start_review_complete
+      - rule: cancel_issue moves a backlog, in_progress or in_review issue to canceled, which is terminal
+        by:
+          - cancel_issue
+        test: cancel_is_terminal
+      - rule: mark_duplicate needs an existing duplicate_of identifier (404 otherwise) and moves a backlog or in_progress issue to duplicate
+        by:
+          - mark_duplicate
+        test: duplicate_needs_existing_target
+      - rule: reopen_issue moves a duplicate issue back to backlog; a canceled or done issue answers 409
+        by:
+          - reopen_issue
+        test: reopen_only_duplicate
+      - rule: 'status is readonly: a standard create or update that sets it answers field.readonly'
+        schema: status is declared readonly, so the engine refuses it on every standard write
+      - rule: every status write follows the declared transitions
+        schema: status is a state field whose transitions the engine enforces on every write
+      - rule: identifier is unique across issues
+        schema: identifier is a unique field, so the data model rejects a duplicate
+      - rule: a comment must name an existing issue
+        schema: issue_id is a ref to issue, which must resolve on every write
+      - Seeded issues keep the CSV dates and parent as history before the clock start; only the actions move them afterwards.
+    actions:
+      - start_issue
+      - request_review
+      - complete_issue
+      - cancel_issue
+      - mark_duplicate
+      - reopen_issue
+jobs: []
+acceptanceTests:
+  - id: lifecycle_start_review_complete
+    intent: The forward path of the status machine works and a finished issue cannot complete again.
+    actions:
+      - start_issue
+      - request_review
+      - complete_issue
+    description: Create an issue, start it, request review, complete it; completed_at is set; a second complete answers 409.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/issues', { identifier: 'QA-9001', title: 'QA lifecycle check', priority: 'High' });
+        ctx.assert(c.status === 201, 'create failed: ' + JSON.stringify(c.body));
+        const id = c.body.id;
+        const s = ctx.api('POST', '/issues/' + id + '/start');
+        ctx.assert(s.status === 200 && s.body.status === 'in_progress', 'start failed: ' + JSON.stringify(s.body));
+        const r = ctx.api('POST', '/issues/' + id + '/review');
+        ctx.assert(r.status === 200 && r.body.status === 'in_review', 'review failed: ' + JSON.stringify(r.body));
+        const d = ctx.api('POST', '/issues/' + id + '/complete');
+        ctx.assert(d.status === 200 && d.body.status === 'done' && d.body.completed_at != null, 'complete failed: ' + JSON.stringify(d.body));
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/complete').status === 409, 'a done issue cannot complete again');
+      }
+  - id: start_only_from_backlog
+    intent: start_issue moves only a backlog issue.
+    actions:
+      - start_issue
+    description: Starting a fresh issue succeeds; starting it again answers 409.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/issues', { identifier: 'QA-9002', title: 'QA start guard', priority: 'Low' });
+        ctx.assert(c.status === 201, 'create failed: ' + JSON.stringify(c.body));
+        const id = c.body.id;
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/start').status === 200, 'first start should succeed');
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/start').status === 409, 'second start should answer 409');
+      }
+  - id: review_only_from_in_progress
+    intent: request_review moves only an in_progress issue.
+    actions:
+      - request_review
+      - start_issue
+    description: Requesting review of a backlog issue answers 409; after start it succeeds.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/issues', { identifier: 'QA-9003', title: 'QA review guard', priority: 'Medium' });
+        ctx.assert(c.status === 201, 'create failed: ' + JSON.stringify(c.body));
+        const id = c.body.id;
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/review').status === 409, 'a backlog issue cannot go to review');
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/start').status === 200, 'start should succeed');
+        const r = ctx.api('POST', '/issues/' + id + '/review');
+        ctx.assert(r.status === 200 && r.body.status === 'in_review', 'review failed: ' + JSON.stringify(r.body));
+      }
+  - id: cancel_is_terminal
+    intent: cancel_issue moves an open issue to canceled, and canceled is terminal.
+    actions:
+      - cancel_issue
+      - start_issue
+      - complete_issue
+    description: Cancelling a fresh issue succeeds; start, complete and a second cancel each answer 409.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/issues', { identifier: 'QA-9004', title: 'QA cancel check', priority: 'Urgent' });
+        ctx.assert(c.status === 201, 'create failed: ' + JSON.stringify(c.body));
+        const id = c.body.id;
+        const x = ctx.api('POST', '/issues/' + id + '/cancel');
+        ctx.assert(x.status === 200 && x.body.status === 'canceled', 'cancel failed: ' + JSON.stringify(x.body));
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/start').status === 409, 'a canceled issue cannot start');
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/complete').status === 409, 'a canceled issue cannot complete');
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/cancel').status === 409, 'a canceled issue cannot cancel again');
+      }
+  - id: duplicate_needs_existing_target
+    intent: mark_duplicate requires a real canonical issue.
+    actions:
+      - mark_duplicate
+      - start_issue
+    description: An unknown duplicate_of answers 404; a real identifier marks the issue duplicate; a duplicate cannot start.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { identifier: 'QA-9005', title: 'QA duplicate source', priority: 'Low' });
+        const b = ctx.api('POST', '/issues', { identifier: 'QA-9006', title: 'QA duplicate target', priority: 'Low' });
+        ctx.assert(a.status === 201 && b.status === 201, 'create failed');
+        ctx.assert(ctx.api('POST', '/issues/' + a.body.id + '/duplicate', { duplicate_of: 'QA-9999' }).status === 404, 'an unknown target answers 404');
+        const m = ctx.api('POST', '/issues/' + a.body.id + '/duplicate', { duplicate_of: 'QA-9006' });
+        ctx.assert(m.status === 200 && m.body.status === 'duplicate', 'mark_duplicate failed: ' + JSON.stringify(m.body));
+        ctx.assert(ctx.api('POST', '/issues/' + a.body.id + '/start').status === 409, 'a duplicate cannot start');
+      }
+  - id: reopen_only_duplicate
+    intent: reopen_issue reopens only a duplicate issue; canceled stays closed.
+    actions:
+      - reopen_issue
+      - cancel_issue
+      - mark_duplicate
+    description: A duplicate reopens to backlog; a canceled issue answers 409 on reopen.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { identifier: 'QA-9007', title: 'QA reopen source', priority: 'Medium' });
+        const b = ctx.api('POST', '/issues', { identifier: 'QA-9008', title: 'QA reopen target', priority: 'Medium' });
+        const k = ctx.api('POST', '/issues', { identifier: 'QA-9009', title: 'QA reopen canceled', priority: 'Medium' });
+        ctx.assert(a.status === 201 && b.status === 201 && k.status === 201, 'create failed');
+        ctx.assert(ctx.api('POST', '/issues/' + a.body.id + '/duplicate', { duplicate_of: 'QA-9008' }).status === 200, 'mark duplicate failed');
+        const r = ctx.api('POST', '/issues/' + a.body.id + '/reopen');
+        ctx.assert(r.status === 200 && r.body.status === 'backlog', 'reopen failed: ' + JSON.stringify(r.body));
+        ctx.assert(ctx.api('POST', '/issues/' + k.body.id + '/cancel').status === 200, 'cancel failed');
+        ctx.assert(ctx.api('POST', '/issues/' + k.body.id + '/reopen').status === 409, 'a canceled issue cannot reopen');
+      }
+  - id: standard_routes_contract
+    intent: 'Standard routes behave: create, get, filtered list, update, readonly status refusal, comments.'
+    actions:
+      - start_issue
+    description: Create an issue, read it, filter by its identifier, update priority, refuse a status PATCH with field.readonly, start it, comment on it and list the comment.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/issues', { identifier: 'QA-9010', title: 'QA standard routes', priority: 'High' });
+        ctx.assert(c.status === 201, 'create should answer 201: ' + JSON.stringify(c.body));
+        const id = c.body.id;
+        const g = ctx.api('GET', '/issues/' + id);
+        ctx.assert(g.status === 200 && g.body.identifier === 'QA-9010', 'get failed');
+        const l = ctx.api('GET', '/issues?identifier=QA-9010');
+        ctx.assert(l.status === 200 && l.body.data.length === 1 && l.body.data[0].id === id, 'filtered list failed');
+        const u = ctx.api('PATCH', '/issues/' + id, { priority: 'Low' });
+        ctx.assert(u.status === 200 && u.body.priority === 'Low', 'update failed: ' + JSON.stringify(u.body));
+        const bad = ctx.api('PATCH', '/issues/' + id, { status: 'done' });
+        ctx.assert(bad.status === 422 && bad.body.error.code === 'field.readonly', 'status PATCH should answer field.readonly');
+        ctx.assert(ctx.api('POST', '/issues/' + id + '/start').status === 200, 'start failed');
+        const m = ctx.api('POST', '/issues/' + id + '/comments', { body: 'Picked up for the QA run', author: 'QA bot' });
+        ctx.assert(m.status === 201, 'comment should answer 201: ' + JSON.stringify(m.body));
+        const cs = ctx.api('GET', '/comments?issue_id=' + id);
+        ctx.assert(cs.status === 200 && cs.body.data.length === 1, 'comment list failed');
+        ctx.assert(ctx.api('GET', '/issues/iss_9999').status === 404, 'unknown issue answers 404');
+      }
+routes:
+  - id: list_issues
+    method: GET
+    path: /issues
+    purpose: Page through issues; filter by status, priority, identifier, project, milestone, parent; search titles.
+  - id: get_issue
+    method: GET
+    path: /issues/{id}
+    purpose: Read one issue.
+  - id: create_issue
+    method: POST
+    path: /issues
+    purpose: Open a new issue in backlog.
+  - id: update_issue
+    method: PATCH
+    path: /issues/{id}
+    purpose: Change title, priority, project, milestone, labels or parent. Status is refused.
+  - id: list_comments
+    method: GET
+    path: /comments
+    purpose: List comments filtered by issue_id.
+  - id: create_comment
+    method: POST
+    path: /issues/{issue_id}/comments
+    purpose: Comment on an existing issue.
+seed:
+  rowsPerEntity:
+    issue: 123
+    comment: 6
+  mix: issue rows are the 123 linear_backlog CSV rows, each status snake_cased into the workflow states; 6 generated comments on existing issues.
+  stateMix:
+    issue:
+      backlog: 30
+      in_progress: 15
+      in_review: 10
+      done: 35
+      canceled: 5
+      duplicate: 5
+tasks:
+  - id: create_and_start_issue
+    difficulty: easy
+    intent: 'Open a new issue and start it: a create followed by the start action.'
+    actions:
+      - start_issue
+    decoyIdea: Creates the issue but never starts it, leaving it in backlog.
+  - id: cancel_unneeded_issue
+    difficulty: medium
+    kind: irreversible
+    intent: Cancel a seeded issue the team no longer needs, after checking it is still open (backlog, in_progress or in_review). Cancelling is final.
+    actions:
+      - cancel_issue
+    decoyIdea: Marks the issue as a duplicate instead of cancelling it, which writes a different end state.
+    pressure:
+      states:
+        - issue.backlog
+      distractors: issue
+  - id: request_review_then_complete
+    difficulty: hard
+    kind: two_actors
+    intent: An engineer asks for review of an in_progress issue, and the reviewer then completes it. Both calls must happen in that order, after finding the issue in a later page of the list.
+    actions:
+      - request_review
+      - complete_issue
+    decoyIdea: Completes the issue directly, skipping the review request, so the trace shows no request_review before complete_issue.
+    pressure:
+      paging: issue
+      states:
+        - issue.in_progress
+      distractors: issue
+open_questions:
+  - question: Should the world mirror Linear's GraphQL API or its REST-style issue resource?
+    default_answer: REST-style issue and comment routes, since the tasks are single-resource status changes.
+  - question: What are the actual counts of each status in the CSV, to fix the seed mix?
+    default_answer: Use the planning estimate 30/15/10/35/5/5 and let the seed stage measure the CSV; the mix must land within 10 points of the built seed.
+assumptions:
+  - decision: Clock starts 2026-10-09T09:00:00Z with tick 0s.
+    why: The latest imported created or updated timestamp is 2026-10-07T02:07Z, so the start is after all history, and time moves only by explicit advance, which keeps grading deterministic.
+  - decision: Status values are snake_cased into backlog, in_progress, in_review, done, canceled, duplicate; the CSV's six distinct values map one to one.
+    why: State names must match a snake_case pattern, and the fixture rule requires every status value to be a workflow state.
+  - decision: The CSV id column becomes identifier (unique, pattern ^[A-Z]+-[0-9]+$); engine ids are issue ids such as iss_0001.
+    why: Engine ids are prefix plus number, but the backlog identifiers such as YOS-1 are what agents read and search by.
+  - decision: parent is stored as the parent's identifier string, not a ref.
+    why: Parent values name YOS-91, YOS-105 or YOS-114, which may not be among the 123 rows; a ref would fail to resolve and would create a seed cycle.
+  - decision: labels, project and milestone are plain strings, not entities.
+    why: Labels are semicolon-joined lists in the CSV, and project and milestone have one or twelve values; separate entities add no behaviour the tasks need.
+  - decision: source_created_at, source_updated_at and completed_at are fields, because created_at and updated_at are engine-maintained and cannot take the CSV dates.
+    why: Seeded history must keep the CSV timestamps, all before the clock start, so the time-order check holds.
+  - decision: canceled and done are terminal; duplicate may be reopened to backlog; no action reopens a canceled issue.
+    why: Cancelling is the irreversible step the medium task needs, so its precondition check matters.
+  - decision: status is readonly and changes only through workflow actions; PATCH on status answers field.readonly.
+    why: Every status change must pass the action's guard, not a generic update.
+  - decision: No authentication and no assignee field; the two-actor task is modelled by call order (request review, then complete), checked through the trace.
+    why: The world has no actor identity, so a separate reviewer role would be invented rather than read from the request.
+  - decision: stateMix for issue is a planning estimate of 30/15/10/35/5/5 across the six states, summing to 100, with every state present and none above 70%.
+    why: The input gives the six distinct status values but not their counts; the seed stage must measure the CSV's own status counts and match this mix within 10 points, and the plan must not claim more precision than that.
+  - decision: Pressure states are written as entity.state (issue.backlog, issue.in_progress), the form the plan schema requires.
+    why: The previous pressure entries named bare states, which are not entity.state of a planned workflow.
+  - decision: Acceptance tests create every row they use with QA-9xxx identifiers, which the seed never uses.
+    why: Tests run before the seed exists and again after it, so they must not depend on seed rows or collide with them.
+outOfScope:
+  - what: GraphQL API and Linear's exact response envelope
+    why: The world mirrors the issue resource through REST routes; the GraphQL surface adds no state the tasks need.
+  - what: Authentication, teams, users and assignees
+    why: The input carries no actor data, and inventing roles would add behaviour the CSV cannot support.
+  - what: Labels, projects and milestones as their own entities
+    why: They are flat strings in the CSV and tasks do not change them.
+  - what: Cycles, attachments, notifications, webhooks and archiving
+    why: None appear in the input and none is needed for the status workflow.
+  - what: Issue deletion
+    why: Linear archives rather than deletes, and no task needs deletion.
+changes: []

@@ -1,0 +1,279 @@
+revision: 3
+software: Stripe API (refunds and charges subset, version 2024-06-20)
+summary: "A Stripe-style refunds desk. Charges hold the money taken from a customer. Refunds draw on a charge's unrefunded balance, move through a status state machine, can be canceled while open, and can have their metadata updated. Lists use Stripe paging: newest first by created_at, with limit, starting_after, ending_before and a charge filter. All five kept operations under /v1/refunds are routes or actions, each with the spec's method and path. Charge create, list and get routes are added so the world can hold charges and tests can build their own rows."
+clock:
+  start: 2026-10-09T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: charge
+    purpose: A card payment that money can be refunded from. Its unrefunded balance is its amount minus the refunds still open or succeeded against it.
+    keyFields:
+      - id
+      - amount
+      - currency
+      - description
+  - name: refund
+    purpose: A refund of part or all of a charge. Its status is a state field that moves only along Stripe's refund transitions.
+    keyFields:
+      - id
+      - charge
+      - status
+      - amount
+workflows:
+  - name: refund
+    entity: refund
+    states:
+      - pending
+      - requires_action
+      - succeeded
+      - failed
+      - canceled
+    rules:
+      - rule: a refund may not exceed the unrefunded balance of its charge
+        by:
+          - create_refund
+        test: refund_within_balance
+      - rule: a charge with no unrefunded balance accepts no further refund
+        by:
+          - create_refund
+        test: fully_refunded_refused
+      - rule: only a pending or requires_action refund can be canceled; a second cancel answers 409
+        by:
+          - cancel_refund
+        test: cancel_only_open_refunds
+      - rule: a canceled refund stops counting against its charge, so its amount can be refunded again
+        by:
+          - cancel_refund
+        test: cancel_frees_balance
+      - rule: a refund must name an existing charge
+        by:
+          - create_refund
+        test: unknown_charge_refused
+      - rule: a refund names a charge or a payment intent
+        by:
+          - create_refund
+        test: refund_needs_charge_or_intent
+      - rule: update changes metadata only and leaves status and amount unchanged
+        by:
+          - update_refund
+        test: update_changes_metadata_only
+      - rule: a refund's status moves only along the declared refund transitions
+        schema: status is a state field whose transitions the engine enforces on every write
+      - rule: amount is a whole number of at least 1
+        schema: amount is an int field with min 1, which input validation enforces
+      - list_refunds returns rows newest first by created_at, ties by id descending, with starting_after and ending_before paging
+    actions:
+      - create_refund
+      - update_refund
+      - cancel_refund
+  - name: charge
+    entity: charge
+    states: []
+    rules:
+      - 'a created charge is captured in full: amount_captured equals amount and paid is true'
+    lifecycle:
+      representation: descriptive
+      reason: charge.status is an enum that never moves after create, so no state field holds a workflow state; a charge is created already succeeded and captured in full.
+    actions:
+      - create_charge
+jobs: []
+acceptanceTests:
+  - id: refund_within_balance
+    intent: A refund may not exceed the charge's unrefunded balance.
+    actions:
+      - create_charge
+      - create_refund
+    description: Refund 3000 of a 5000 charge succeeds as pending; a further 2001 is refused with amount_too_large.
+    script: "(ctx) => { const ch = ctx.api('POST', '/v1/charges', { amount: 5000, currency: 'usd', description: 'plan test within balance' }).body; const first = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 3000 }); ctx.assert(first.status === 200 && first.body.status === 'pending' && first.body.amount === 3000, 'refund within balance failed: ' + JSON.stringify(first.body)); const over = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 2001 }); ctx.assert(over.status === 400 && over.body.error.code === 'amount_too_large', 'expected amount_too_large, got ' + JSON.stringify(over.body)); }"
+  - id: fully_refunded_refused
+    intent: A charge with no unrefunded balance accepts no further refund.
+    actions:
+      - create_charge
+      - create_refund
+    description: After a full refund of a 1000 charge, one more unit is refused with charge_already_refunded.
+    script: "(ctx) => { const ch = ctx.api('POST', '/v1/charges', { amount: 1000, currency: 'usd', description: 'plan test fully refunded' }).body; const full = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 1000 }); ctx.assert(full.status === 200, 'full refund failed: ' + JSON.stringify(full.body)); const again = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 1 }); ctx.assert(again.status === 400 && again.body.error.code === 'charge_already_refunded', 'expected charge_already_refunded, got ' + JSON.stringify(again.body)); }"
+  - id: cancel_only_open_refunds
+    intent: Only an open refund can be canceled, and only once.
+    actions:
+      - create_charge
+      - create_refund
+      - cancel_refund
+    description: A pending refund cancels to canceled; canceling it again answers 409 invalid_state.
+    script: "(ctx) => { const ch = ctx.api('POST', '/v1/charges', { amount: 1000, currency: 'usd', description: 'plan test cancel once' }).body; const r = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 1000 }).body; const c1 = ctx.api('POST', '/v1/refunds/' + r.id + '/cancel'); ctx.assert(c1.status === 200 && c1.body.status === 'canceled', 'cancel failed: ' + JSON.stringify(c1.body)); const c2 = ctx.api('POST', '/v1/refunds/' + r.id + '/cancel'); ctx.assert(c2.status === 409 && c2.body.error.code === 'invalid_state', 'expected invalid_state on second cancel, got ' + JSON.stringify(c2.body)); }"
+  - id: cancel_frees_balance
+    intent: A canceled refund no longer counts against its charge.
+    actions:
+      - create_charge
+      - create_refund
+      - cancel_refund
+    description: After canceling a 2000 refund of a 2000 charge, refunding 2000 again succeeds.
+    script: "(ctx) => { const ch = ctx.api('POST', '/v1/charges', { amount: 2000, currency: 'usd', description: 'plan test frees balance' }).body; const r = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 2000 }).body; const c = ctx.api('POST', '/v1/refunds/' + r.id + '/cancel'); ctx.assert(c.status === 200, 'cancel failed: ' + JSON.stringify(c.body)); const again = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 2000 }); ctx.assert(again.status === 200 && again.body.amount === 2000, 'balance not freed: ' + JSON.stringify(again.body)); }"
+  - id: unknown_charge_refused
+    intent: A refund must name an existing charge.
+    actions:
+      - create_refund
+    description: A refund naming charge ch_9999 is refused with resource_missing.
+    script: "(ctx) => { const r = ctx.api('POST', '/v1/refunds', { charge: 'ch_9999', amount: 100 }); ctx.assert(r.status === 400 && r.body.error.code === 'resource_missing', 'expected resource_missing, got ' + JSON.stringify(r.body)); }"
+  - id: refund_needs_charge_or_intent
+    intent: A refund names a charge or a payment intent.
+    actions:
+      - create_refund
+    description: A refund body with an amount but neither charge nor payment_intent is refused with input.invalid.
+    script: "(ctx) => { const r = ctx.api('POST', '/v1/refunds', { amount: 100 }); ctx.assert(r.status === 400 && r.body.error.code === 'input.invalid', 'expected input.invalid, got ' + JSON.stringify(r.body)); }"
+  - id: update_changes_metadata_only
+    intent: Updating a refund changes its metadata and nothing else.
+    actions:
+      - create_charge
+      - create_refund
+      - update_refund
+    description: Setting metadata on a pending 500 refund keeps status pending and amount 500.
+    script: '(ctx) => { const ch = ctx.api(''POST'', ''/v1/charges'', { amount: 1500, currency: ''usd'', description: ''plan test metadata'' }).body; const r = ctx.api(''POST'', ''/v1/refunds'', { charge: ch.id, amount: 500 }).body; const u = ctx.api(''POST'', ''/v1/refunds/'' + r.id, { metadata: ''{"order":"1042"}'' }); ctx.assert(u.status === 200 && u.body.metadata === ''{"order":"1042"}'', ''metadata not set: '' + JSON.stringify(u.body)); ctx.assert(u.body.status === ''pending'' && u.body.amount === 500, ''update changed status or amount: '' + JSON.stringify(u.body)); }'
+  - id: list_refunds_pages_newest_first
+    intent: Stripe paging returns newest first with has_more and starting_after.
+    actions:
+      - create_charge
+      - create_refund
+    description: Three refunds on one charge list newest first; limit 2 returns two with has_more true, and starting_after the second returns the oldest with has_more false.
+    script: "(ctx) => { const ch = ctx.api('POST', '/v1/charges', { amount: 1000, currency: 'usd', description: 'plan test paging' }).body; const a = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 100 }).body; const b = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 100 }).body; const c = ctx.api('POST', '/v1/refunds', { charge: ch.id, amount: 100 }).body; const p1 = ctx.api('GET', '/v1/refunds?charge=' + ch.id + '&limit=2'); ctx.assert(p1.status === 200 && p1.body.data.length === 2 && p1.body.has_more === true, 'page 1 wrong: ' + JSON.stringify(p1.body)); ctx.assert(p1.body.data[0].id === c.id && p1.body.data[1].id === b.id, 'page 1 not newest first: ' + JSON.stringify(p1.body.data.map((r) => r.id))); const p2 = ctx.api('GET', '/v1/refunds?charge=' + ch.id + '&limit=2&starting_after=' + b.id); ctx.assert(p2.status === 200 && p2.body.data.length === 1 && p2.body.data[0].id === a.id && p2.body.has_more === false, 'page 2 wrong: ' + JSON.stringify(p2.body)); }"
+routes:
+  - id: list_refunds
+    method: GET
+    path: /v1/refunds
+    purpose: List refunds newest first with Stripe paging, filterable by charge (spec operation GET /v1/refunds).
+  - id: create_refund
+    method: POST
+    path: /v1/refunds
+    purpose: Create a refund against a charge (spec operation POST /v1/refunds). Built as the create_refund action.
+  - id: get_refund
+    method: GET
+    path: /v1/refunds/{id}
+    purpose: Retrieve one refund (spec operation GET /v1/refunds/{refund}).
+  - id: update_refund
+    method: POST
+    path: /v1/refunds/{id}
+    purpose: Update a refund's metadata (spec operation POST /v1/refunds/{refund}). Built as the update_refund action.
+  - id: cancel_refund
+    method: POST
+    path: /v1/refunds/{id}/cancel
+    purpose: Cancel an open refund (spec operation POST /v1/refunds/{refund}/cancel). Built as the cancel_refund action.
+  - id: create_charge
+    method: POST
+    path: /v1/charges
+    purpose: 'Added, not in the kept spec operations: creates a charge already captured in full, so tests and agents can hold charges. Built as the create_charge action. Listed in assumptions.'
+  - id: list_charges
+    method: GET
+    path: /v1/charges
+    purpose: 'Added, not in the kept spec operations: lets an agent find a charge id. Listed in assumptions.'
+  - id: get_charge
+    method: GET
+    path: /v1/charges/{id}
+    purpose: 'Added, not in the kept spec operations: reads one charge. Listed in assumptions.'
+seed:
+  rowsPerEntity:
+    charge: 8
+    refund: 12
+  mix: Eight charges in usd, each described as an order number (order 1003, 1005, 1008, 1011, 1014, 1017, 1020, 1026). Twelve refunds spread over them so that the list needs two pages at pageSize 10. The requires_action refund on order 1003 is the oldest refund, so it sits on page 2 of the unfiltered list. Order 1011 has a pending refund and order 1020 has a succeeded refund, so each still has balance. All created_at values lie before the clock start, and every charge's active refunds fit within its amount.
+  stateMix:
+    refund:
+      pending: 25
+      requires_action: 8
+      succeeded: 42
+      failed: 8
+      canceled: 17
+tasks:
+  - id: cancel_pending_refund
+    difficulty: easy
+    kind: irreversible
+    intent: The customer on the charge for order 1011 changed their mind about the refund still pending on that charge. Cancel that pending refund. The charge also has a succeeded refund that must stay as it is.
+    actions:
+      - cancel_refund
+    decoyIdea: Files a second refund for the pending amount instead of canceling it; the remaining balance is too small, so it is refused or leaves the pending refund open.
+    pressure:
+      states:
+        - refund.pending
+      distractors: refund
+  - id: refund_remaining_balance
+    difficulty: medium
+    kind: scarce_resource
+    intent: Refund everything still refundable on the charge for order 1020, as requested by the customer. The succeeded refund already on that charge stays.
+    actions:
+      - create_refund
+    decoyIdea: Refunds the full charge amount, which overbooks the balance already refunded and is refused with amount_too_large.
+    pressure:
+      states:
+        - refund.succeeded
+      distractors: refund
+  - id: cancel_and_reissue_refund
+    difficulty: hard
+    intent: A refund on the charge for order 1003 is stuck waiting for action. Cancel that stuck refund, then refund the same amount on that charge as requested by the customer. The succeeded refund on the same charge stays.
+    actions:
+      - cancel_refund
+      - create_refund
+    decoyIdea: Refunds the amount again without canceling the stuck refund, leaving it open so two refunds for the amount now exist.
+    pressure:
+      paging: refund
+      states:
+        - refund.requires_action
+      distractors: refund
+open_questions:
+  - question: Should request bodies be form-encoded as in the Stripe spec, or JSON?
+    default_answer: JSON objects using the spec's field names, since the engine takes JSON bodies.
+  - question: Should charge create/list/get routes be added even though the kept spec operations omit them?
+    default_answer: Yes, as deliberate extras so tests can create charges and agents can find charge ids; recorded as openapi.operation_extra.
+  - question: Should pending refunds settle to succeeded on their own over time?
+    default_answer: No. A job would change state without an agent call; pending refunds stay pending until canceled, and seed rows supply succeeded refunds.
+  - question: Is payment_intent resolved to a real entity?
+    default_answer: No. It is stored as an opaque string on the refund, since payment intents are out of scope.
+  - question: Is metadata a real map?
+    default_answer: No. The engine has no map type, so metadata is a nullable text field holding a JSON object string.
+assumptions:
+  - decision: Request bodies are JSON objects using the spec's field names, not form-encoded.
+    why: The engine takes JSON bodies; the form encoding carries no state the world must model.
+  - decision: Refund metadata is a text field holding a JSON object string, nullable.
+    why: The engine has no map type, so the spec's metadata map cannot be declared. Update_refund needs an input to be a real operation, and a text field keeps it so.
+  - decision: Adds POST /v1/charges (create_charge), GET /v1/charges (list_charges) and GET /v1/charges/{id} (get_charge), which the kept spec operations do not include.
+    why: Charges exist only as seed rows otherwise, so acceptance tests could not create their own charges and agents could not discover charge ids. These are deliberate extras, so openapi.operation_extra is expected.
+  - decision: "The five kept spec operations are routes or actions with the spec's method and path: POST /v1/refunds is create_refund, POST /v1/refunds/{id} is update_refund, POST /v1/refunds/{id}/cancel is cancel_refund, and the two GETs are list_refunds and get_refund. Path params are named {id} for the per-refund routes."
+    why: Each planned operation must exist in the world by method and path. Naming the params {id}, as get_refund already does, keeps the routes consistent; the spec's {refund} name is only a param name.
+  - decision: 'Refunds are never settled by a job: a pending refund stays pending until canceled, and no job moves refunds to succeeded.'
+    why: A job would change state with no agent call, which breaks the idle check and the collateral grading. Seed rows supply succeeded refunds.
+  - decision: A charge's unrefunded balance is computed in the handlers from its refund rows; the charge stores no amount_refunded total.
+    why: A stored total would have to equal the seed's refund rows, and seed order (refund refs charge) makes computing it in the charge seed a cycle. Deriving it avoids both.
+  - decision: A refund counts against its charge while pending, requires_action or succeeded; canceled and failed refunds do not count.
+    why: This is Stripe's behavior for returned money and is what makes cancel free the balance for a new refund.
+  - decision: create_refund takes charge or payment_intent (both optional in the body), and refuses a body with neither (input.invalid). Without an amount the refund covers the charge's whole unrefunded balance.
+    why: Stripe's refund body has no required field, so the spec does not require charge. The handler carries the 'one of them' rule itself.
+  - decision: Charge is looked up by charge id only; payment_intent is stored on the refund as given and not resolved, since no payment intent entity is modeled.
+    why: Keeps the model to the entities in scope. Payment intents are listed as out of scope.
+  - decision: Refund error codes used by ctx.fail are resource_missing (400), amount_too_large (400), charge_already_refunded (400) and invalid_state (409).
+    why: These follow Stripe's error vocabulary and are the codes the acceptance tests assert.
+  - decision: The list envelope keeps data and has_more and drops the object and url keys.
+    why: The engine builds the envelope from the list config; object and url carry no state.
+  - decision: Refund object is an enum field with the single value refund and default refund; charge.created and refund.created are unix_time fields defaulted to now.
+    why: The spec gives object as a constant and created as unix time, and the engine offers those types.
+  - decision: Amounts are integer minor units in an int field, not money fields.
+    why: The spec types amount as integer, and an int field matches the JSON type.
+  - decision: List pageSize is 10 for list_refunds and list_charges, matching Stripe's default limit, with 12 refunds seeded.
+    why: Two pages is the smallest seed that makes paging matter, consistent with 'just over one list page'.
+  - decision: Clock starts at 2026-10-09T09:00:00.000Z with tick 0s, after all seeded history. Ties in created_at resolve by id descending, as Stripe does.
+    why: Deterministic time with no drift. Refunds created in one test at the same engine time have a fixed newest-first order, which the paging test depends on.
+outOfScope:
+  - what: Customer entity and its routes
+    why: The spec's customer schema is not among the kept operations; charge.customer is kept as a plain string.
+  - what: Payment intents and their entity
+    why: Not in the kept operations; payment_intent is stored as an opaque string.
+  - what: Expandable fields (charge expanded inside refund, refunds list expanded inside charge)
+    why: Expansion is a Stripe-wide convention that needs nested responses; ids are returned instead.
+  - what: Metadata as a real map
+    why: The engine has no map field type; a JSON text field stands in.
+  - what: Form-encoded request bodies, idempotency keys, livemode, doc_url and webhooks
+    why: Transport and platform features with no stored state of their own.
+  - what: Background settlement of pending refunds
+    why: Would change state without an agent call; see assumptions.
+  - what: Disputes, failure_code and receipt fields beyond the refund fields listed, and charge capture flows
+    why: Outside the charges and refunds subset the request keeps; charges are created already captured.
+  - what: The eight dropped spec operations
+    why: The request keeps five operations under /v1/refunds; the other operations were dropped on purpose.
+changes: []
