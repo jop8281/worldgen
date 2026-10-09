@@ -39,7 +39,7 @@ import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { prepareWorld, runPipeline, type PreparedWorld } from '../src/dataset/pipeline.ts';
 import { childGrader, type HeldWorld } from '../src/dataset/verifier.ts';
 import { checkedForTest, minimalWorld } from './helpers/world.ts';
-import { COMMIT, EASY, HELPDESK_DIR, fakeBackend, randomPort, solveAll, tmp } from './dataset-kit.ts';
+import { COMMIT, EASY, HELPDESK_DIR, fakeBackend, freePortPair, solveAll, tmp } from './dataset-kit.ts';
 import type { World } from '../src/engine/format.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
@@ -410,7 +410,7 @@ describe('the verifier child process', () => {
 describe('the pipeline grades through the verifier with bounded failure', () => {
   it('a failing grader fails every episode as grade_error and still tears the sandbox down', async () => {
     const world = await checkedHelpdesk();
-    const port = randomPort();
+    const port = await freePortPair();
     const backend = fakeBackend(world, { port });
     const out = tmp('verify-pipeline');
     const result = await runPipeline(

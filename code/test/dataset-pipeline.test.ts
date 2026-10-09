@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { PreflightError, checkForRun, prepareWorld, runPipeline, type PipelineDeps, type PipelineOptions } from '../src/dataset/pipeline.ts';
@@ -8,7 +9,7 @@ import { episodeSchema, hashState, sha256Hex } from '../src/dataset/schema.ts';
 import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { engineGrader } from '../src/dataset/verifier.ts';
 import { collectBundle } from '../src/sandboxes/files.ts';
-import { turn, COMMIT, HELPDESK_DIR, easyOnly, fakeBackend, helpdesk, lazySolver, randomPort, RUN_BUDGET, solveAll, tmp, type FakeBackendOptions } from './dataset-kit.ts';
+import { turn, COMMIT, HELPDESK_DIR, easyOnly, fakeBackend, helpdesk, lazySolver, freePortPair, RUN_BUDGET, solveAll, tmp, type FakeBackendOptions } from './dataset-kit.ts';
 import type { NextTurn } from '../src/dataset/episode.ts';
 import { checkWorld, dumpSha256, loadWorld, saveWorld, worldIdOf, type StateDump } from '#engine';
 
@@ -29,7 +30,7 @@ const tinyBundle: PipelineDeps['makeBundle'] = async (dir) => ({ files: [{ path:
 
 async function run(s: Setup = {}) {
   const world = await helpdesk();
-  const port = randomPort();
+  const port = await freePortPair();
   const backend = fakeBackend(world, { port, ...s.backend });
   const out = s.out ?? tmp('run');
   const logs: string[] = [];
@@ -164,7 +165,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       if (argv.includes('--check')) await saveWorld(dir, edited.world);
       return res;
     };
-    const backend = fakeBackend(original.world, { port: randomPort() });
+    const backend = fakeBackend(original.world, { port: await freePortPair() });
     await assert.rejects(runPipeline({
       worldDir: dir, out: tmp('changed-out'), runId: 'changed', engineCommit: COMMIT, model: 'claude-sonnet-5-5',
       maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'changed-abc123',
@@ -196,7 +197,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     const report = checkWorld({ ...world, meta: { ...world.meta, description: secret } });
     assert.equal(report.ok, true);
     if (!report.ok) throw new Error('secret-bearing fixture did not check');
-    const port = randomPort();
+    const port = await freePortPair();
     const backend = fakeBackend(report.world, { port });
     const out = path.join(tmp('reject-secret'), 'out');
     let bundleCalls = 0;
@@ -313,7 +314,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     let publicCalls = 0;
     let modelCalls = 0;
     const world = await helpdesk();
-    const port = randomPort();
+    const port = await freePortPair();
     const backend = fakeBackend(world, { port });
     const originalUp = backend.up.bind(backend);
     backend.up = async (...args) => {
@@ -356,7 +357,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
 
 describe('cleanup and evidence', () => {
   it('stops the sandbox when the post-start logger throws', RUN_BUDGET, async () => {
-    const backend = fakeBackend(await helpdesk(), { port: randomPort() });
+    const backend = fakeBackend(await helpdesk(), { port: await freePortPair() });
     try {
       const { result, out } = await run({ deps: {
         backend,
@@ -482,7 +483,7 @@ describe('cleanup and evidence', () => {
 describe('refusals before anything starts', () => {
   const idle = async (s: Setup, re: RegExp | string) => {
     const world = await helpdesk();
-    const backend = fakeBackend(world, { port: randomPort() });
+    const backend = fakeBackend(world, { port: await freePortPair() });
     const out = s.out ?? tmp('refused');
     await assert.rejects(
       runPipeline({ worldDir: HELPDESK_DIR, out, runId: 'run-1', engineCommit: COMMIT, model: 'claude-sonnet-5-5', maxTurns: 3, budgetUsd: 1, maxMinutes: 1, secrets: [], sandboxName: 'x-abc123', ...s.opts }, { backend, nextTurn: lazySolver, makeBundle: tinyBundle, grader: engineGrader }),
@@ -588,5 +589,30 @@ describe('stateFromAdmin', () => {
   it('refuses an answer that is not a state dump', () => {
     assert.throws(() => stateFromAdmin({ ok: true }), /did not return a state dump/);
     assert.throws(() => stateFromAdmin(null), /did not return a state dump/);
+  });
+});
+
+describe('the dataset test kit picks free ports (J146)', () => {
+  const listenOn = (port: number): Promise<Server> =>
+    new Promise((resolve, reject) => {
+      const s = createServer();
+      s.once('error', reject);
+      s.listen(port, '127.0.0.1', () => resolve(s));
+    });
+
+  it('skips a pair whose port, or whose port + 1, another listener holds', async () => {
+    // The random draws land on 27000 (held), then 28999 (its admin port 29000 is held), then 26000.
+    const held = [await listenOn(27000), await listenOn(29000)];
+    const draws = [7000.5 / 12000, 8999.5 / 12000, 6000.5 / 12000];
+    const real = Math.random;
+    let drawn = 0;
+    Math.random = () => draws[drawn++]!;
+    try {
+      assert.equal(await freePortPair(), 26000);
+      assert.equal(drawn, 3);
+    } finally {
+      Math.random = real;
+      for (const s of held) s.close();
+    }
   });
 });

@@ -6,6 +6,7 @@
 import crypto from 'node:crypto';
 import fs, { mkdtempSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
+import { createServer as netServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -250,8 +251,26 @@ async function runScript(script: string, args: readonly string[]): Promise<ExecR
   }
 }
 
-/** Free port pair for a fake sandbox: `port` and `port + 1`. Retries on collision inside `localWorld`. */
-export const randomPort = (): number => 20000 + Math.floor(Math.random() * 30000);
+/** Whether 127.0.0.1:`port`, where the engine serves both ports, can be bound right now. */
+const canBind = (port: number): Promise<boolean> =>
+  new Promise((resolve) => {
+    const s = netServer();
+    s.once('error', () => resolve(false));
+    s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)));
+  });
+
+/**
+ * A port pair for a fake sandbox, `port` and `port + 1` (the pipeline puts the admin port at port + 1), both free on
+ * 127.0.0.1 when it returns. Candidates lie in 20000-32000, below the Linux (32768+) and macOS (49152+) ephemeral
+ * ranges, so neither a `listen(0)` nor an outbound socket elsewhere can be handed one between this check and the bind.
+ */
+export async function freePortPair(): Promise<number> {
+  for (let tries = 0; tries < 50; tries++) {
+    const port = 20000 + Math.floor(Math.random() * 12000);
+    if ((await canBind(port)) && (await canBind(port + 1))) return port;
+  }
+  throw new Error('no free port pair in 20000-32000 after 50 tries');
+}
 
 /**
  * Behaves like the Boat backend `upWorld` drives: `start` serves the world on the requested
