@@ -41,7 +41,7 @@ import { blockingIssues, checkJudgeable, infraIssues, preservationIssues, reques
 import { CallStalled, ModelError, StepShareExpired, estimateCallUsd, type CallProgress, type Model, type Proposal, type ProposeRequest, type Usage } from './llm.ts';
 import { actionKey, frozenTests, parsePlanYaml, planSchemaFor, pressurePlanIssues, renderPlanYaml, type Plan, type planSchema } from './plan.ts';
 import { renderPlanMd } from './plan-md.ts';
-import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, operationKey, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
+import { attemptInputOperations, attemptIssueSet, decide, estimateCallMs, namedOperation, nextIsRepair, operationKey, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
 import { renderReport } from './report.ts';
 import { PLAN_BRIEF, SECTION_OWNER, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, dateOnlyColumnLines, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
 
@@ -181,9 +181,6 @@ export function testOperations(plan: Plan): ReadonlyMap<string, readonly string[
 
 /** Whether `i` is a frozen test that failed or threw; `layer.blocked` only follows a failure. */
 const failedTest = (i: CheckIssue): boolean => isTestRun(i) && i.code !== 'layer.blocked';
-/** The operation an input issue names at `input/openapi/<METHOD path>`, as `operationKey` writes it, or null. */
-const namedOperation = (i: CheckIssue): string | null =>
-  (i.path[0] === 'input' && i.path[1] === 'openapi' && typeof i.path[2] === 'string' ? i.path[2].replace(/\{[^}]*\}/g, '{}') : null);
 /** The operations the frozen test an issue sits on exercises (`testOperations`), or none. */
 const exercisedBy = (i: CheckIssue, tests: ReadonlyMap<string, readonly string[]>): readonly string[] => tests.get(String(i.path[1])) ?? [];
 
@@ -213,17 +210,25 @@ function tradedSide(tried: readonly TriedAttempt[], issues: readonly CheckIssue[
 }
 
 /**
- * What the plan is told on a traded backtrack: the step's last issues, each failing test among them kept only when it
- * exercises an operation the trade's input check names, then the other side (`tradedSide`). When no other side is found,
- * the step's issues go whole. The step that backtracked still gets its whole last rejection when it runs again (J192,
- * follow-up to A-416).
+ * What the plan is told on a traded backtrack: the step's last issues, then the other side (`tradedSide`), each failing test
+ * and each input issue kept only when it concerns a traded operation, one an input issue names and a failing test
+ * exercises on either side. So whichever side decides, the plan sees only the conflict (A-416, J193). When no other side
+ * is found, the step's issues go whole. The step that backtracked still gets its whole last rejection when it runs again
+ * (J192).
  */
 function tradedForTarget(tried: readonly TriedAttempt[], issues: readonly CheckIssue[], tests: ReadonlyMap<string, readonly string[]>): readonly CheckIssue[] {
   const other = tradedSide(tried, issues, tests);
   // With no other side found there is nothing to narrow against, so the plan gets the step's issues whole, never none.
   if (other.length === 0) return issues;
-  const ops = new Set([...issues, ...other].map(namedOperation).filter((op): op is string => op !== null));
-  return [...issues.filter((i) => !failedTest(i) || exercisedBy(i, tests).some((op) => ops.has(op))), ...other];
+  const both = [...issues, ...other];
+  const named = new Set(both.map(namedOperation).filter((op): op is string => op !== null));
+  const traded = new Set(both.filter(failedTest).flatMap((i) => exercisedBy(i, tests)).filter((op) => named.has(op)));
+  const kept = (i: CheckIssue): boolean => {
+    const op = namedOperation(i);
+    if (op !== null) return traded.has(op);
+    return !failedTest(i) || exercisedBy(i, tests).some((o) => traded.has(o));
+  };
+  return [...issues.filter(kept), ...other];
 }
 
 /** The owned items an edit writes, as `section.key`. A plan answer is always whole, so it writes none here. */
@@ -866,6 +871,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
   const at = () => ({ at: new Date(now()).toISOString(), runId });
   const zero = <T>(v: T): Record<StepId, T> => ({ plan: v, model: v, workflow: v, seed: v, tasks: v });
   let ledger: Ledger = { startedAtMs: started, spentUsd: 0, attempts: zero(0), backtracks: 0, seenIssueSets: zero<readonly string[]>([]), stallRetries: zero(0) };
+  /** For each issue-set key recorded in the ledger, the operations its input issues name, for decide's trade test (J193). */
+  const inputOperations = new Map<string, readonly string[]>();
   let seq = 0;
   let unknownCostCalls = 0;
   /** Each step's call durations, for the time preflight. */
@@ -1029,7 +1036,9 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
       const ms = proposal?.ms ?? failure?.ms ?? 0;
       const issues = judged.ok ? [] : judged.issues;
       const owned = issues.map((i) => ({ issue: i, owner: ownerIn(step, i, world) }));
-      ledger = record(ledger, step, costUsd ?? 0, attemptIssueSet(judged.outcome, owned));
+      const issueSet = attemptIssueSet(judged.outcome, owned);
+      ledger = record(ledger, step, costUsd ?? 0, issueSet);
+      if (issueSet !== null) inputOperations.set(issueSet, attemptInputOperations(judged.outcome, owned));
       stepCost += costUsd ?? 0;
       // A stalled call's time is the transport's silence, not how long this step's calls take.
       if (judged.outcome.kind !== 'stalled') callMs[step].push({ ms, repair });
@@ -1050,7 +1059,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
         return { kind: 'stop', reason: { kind: 'transport_stalled', step, idleMs: judged.outcome.idleMs } };
       }
 
-      const decision = decide(config, { step, ledger, nowMs: now(), last: step === LAST_STEP, ...(plan === null ? {} : { testOperations: testOperations(plan) }) }, judged.outcome, owned);
+      const decision = decide(config, { step, ledger, nowMs: now(), last: step === LAST_STEP, ...(plan === null ? {} : { testOperations: testOperations(plan), inputOperations }) }, judged.outcome, owned);
       switch (decision.kind) {
         case 'advance':
           if (!judged.ok) throw new Error(`policy advanced ${step} on a ${judged.outcome.kind} attempt`);
