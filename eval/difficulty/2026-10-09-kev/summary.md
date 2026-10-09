@@ -1,4 +1,4 @@
-# Kev as a difficulty predictor, 2026-10-09 (J182, A-407)
+# Kev as a difficulty predictor, 2026-10-09 (J182, A-415, extends A-407)
 
 **Question:** can Kev, zero-shot, predict whether Claude Haiku 5.5 passes a WorldGen task, from the task instruction and a one-line world summary alone?
 
@@ -52,13 +52,13 @@ Kev's `noul` probabilities run from 0.39 to 0.87, with a median of 0.63. It give
 - **Calibration:** Kev is too pessimistic for this distribution. Haiku passes 94% of episodes, while Kev's median P(pass) is 0.63, so a constant 0.963 beats it on Brier by roughly 3×.
 - **Ranking:** Kev puts 4 of the 6 failing tasks in the bottom third (AUC 0.74 to 0.80). But 6 positives give a wide interval, and the held-out AUC rests on 3 tasks. It isn't a usable "hard task" filter on this evidence.
 - **Size:** Kev-0.8B does much better than local Kev-4B with the same prompt. The 4B model answered "fail" for most tasks, at chance ranking.
-- **No wiring:** per A-407, Kev is not wired into the tasks stage, since it doesn't beat the baseline. Kev never grades.
+- **No wiring:** per A-415, which extends A-407, Kev is not wired into the tasks stage, since it doesn't beat the baseline. Kev never grades.
 - **What would change this:** a set with more failing tasks, for instance the stress worlds or harder generated tasks, so AUC can be measured with a usable interval. Or few-shot prompts that state the base rate. Both are listed as next work, not done here.
 
 <details><summary>kev_eval.py (stdlib Python, run as <code>KEV_QUESTION=noul python3 -I kev_eval.py episodes.jsonl &lt;repo&gt; out.json &lt;endpoint&gt; &lt;token-file&gt;</code>)</summary>
 
 ```python
-"""J182 (A-407): Kev zero-shot as a predictor of "will Haiku 5.5 pass this task?".
+"""J182 (A-415, extends A-407): Kev zero-shot as a predictor of "will Haiku 5.5 pass this task?".
 
 usage: python3 -I kev_eval.py <labels.jsonl> <repo-root> <out.json> [endpoint] [token]
 
