@@ -665,11 +665,25 @@ describe('runWorldGen create: stage tools and scope', () => {
   it('drops the sections another stage owns from a stage edit, and the owner writes them in its turn (A-409)', async () => {
     const stray = { ...TARGET.tasks.resolve_password_ticket!, instruction: 'STRAY-TASK-FROM-THE-MODEL-STAGE' };
     const eager = { note: 'entities, routes and a task', upsert: { entities: TARGET.entities, routes: TARGET.routes, tasks: { stray_task: stray } } };
-    const { result, events, calls } = await run([{ input: PLAN }, { input: eager }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }]);
+    const { result, events, calls, filesDir } = await run([{ input: PLAN }, { input: eager }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }]);
     assert.deepEqual(attempts(events).map(([step, , outcome]) => [step, outcome]), [
       ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'accepted'],
     ]);
     assert.deepEqual(calls.slice(2).map((c) => c.prompt.includes('STRAY-TASK-FROM-THE-MODEL-STAGE')), [false, false, false]);
+    assert.equal(result.kind, 'done');
+    const saved = parseYaml(readFileSync(join(filesDir, 'world.yaml'), 'utf8')) as World;
+    assert.deepEqual(Object.keys(saved.tasks).sort(), Object.keys(TARGET.tasks).sort());
+    assert.equal(readFileSync(join(filesDir, 'world.yaml'), 'utf8').includes('stray_task'), false);
+  });
+
+  it('tells a stage retried for other issues which of its sections were left out, so it stops resending them (A-409)', async () => {
+    const stray = { ...TARGET.tasks.resolve_password_ticket!, instruction: 'STRAY-TASK-FROM-THE-MODEL-STAGE' };
+    const badAndEager = { ...BAD_ENTITY, upsert: { ...BAD_ENTITY.upsert, tasks: { stray_task: stray }, seed: {} } };
+    const { result, events, calls } = await run([{ input: PLAN }, { input: badAndEager }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }]);
+    assert.deepEqual(attempts(events).map(([step, , outcome]) => [step, outcome]).slice(0, 3), [['plan', 'accepted'], ['model', 'rejected'], ['model', 'accepted']]);
+    assert.equal(calls[2]?.prompt.includes('Left out of the answer, because another stage writes them:\n\n- ignored: tasks (owned by the tasks stage)'), true);
+    assert.equal(calls[2]?.prompt.includes('ignored: seed'), false);
+    assert.equal(calls[3]?.prompt.includes('ignored:'), false);
     assert.equal(result.kind, 'done');
   });
 

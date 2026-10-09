@@ -43,7 +43,7 @@ import { frozenTests, parsePlanYaml, planSchemaFor, pressurePlanIssues, renderPl
 import { renderPlanMd } from './plan-md.ts';
 import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
 import { renderReport } from './report.ts';
-import { PLAN_BRIEF, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, dateOnlyColumnLines, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
+import { PLAN_BRIEF, SECTION_OWNER, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, dateOnlyColumnLines, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
 
 export type Job =
   | { readonly kind: 'create'; readonly input: Input; readonly outDir: string }
@@ -133,6 +133,8 @@ export type Feedback = {
   readonly history?: readonly TriedAttempt[];
   /** The attempt `previous` is when it is not the latest: the best full one so far. */
   readonly bestOf?: number;
+  /** The sections another stage owns that the rejected answer named, which were left out of it (A-409). */
+  readonly ignored?: readonly string[];
 };
 
 /** One rejected attempt of the step being retried: its own issues, and the owned items it left out that an earlier attempt wrote. */
@@ -299,6 +301,7 @@ function feedbackBlock(feedback: Feedback | null, again = 'Answer again in full'
     'Issues:',
     '',
     renderIssues(feedback.issues),
+    ...(feedback.ignored === undefined ? [] : ['', 'Left out of the answer, because another stage writes them:', '', ...feedback.ignored.map((line) => `- ${line}`)]),
   ];
 }
 
@@ -461,6 +464,22 @@ function ownSectionsOnly(stage: StageId, input: unknown): unknown {
     if (isRecord(part)) out[op] = Object.fromEntries(Object.entries(part).filter(([key]) => !others.has(key)));
   }
   return out;
+}
+
+/** Each section another stage owns that a stage's edit named with content, as `ignored: <section> (owned by the <stage> stage)` (A-409). */
+export function ignoredLines(stage: StageId, input: unknown): string[] {
+  if (!isRecord(input)) return [];
+  const mine: readonly string[] = writesOf(stage);
+  const named = new Set<string>();
+  for (const op of EDIT_OPS) {
+    const part = input[op];
+    if (!isRecord(part)) continue;
+    for (const [key, value] of Object.entries(part)) {
+      const blank = (isRecord(value) && Object.keys(value).length === 0) || (Array.isArray(value) && value.length === 0);
+      if (!mine.includes(key) && !blank) named.add(key);
+    }
+  }
+  return STAGE_WRITES.filter((s) => named.has(s)).map((s) => `ignored: ${s} (owned by the ${SECTION_OWNER[s]} stage)`);
 }
 
 /** `edit.out_of_scope` for each part of a raw edit outside the stage's sections: meta, unowned or unknown sections, unknown keys. */
@@ -987,9 +1006,13 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
             const own = ownIssues(issues, step, world);
             if (proposal !== null) tried.push({ n: made, input: proposal.input, issues: own, left });
             const best = bestAttempt(tried);
+            // A stage that keeps naming another stage's sections is told they were left out, so it stops resending them (A-409).
+            const stage = STAGE_IDS.find((s) => s === step);
+            const ignored = stage === undefined || proposal === null ? [] : ignoredLines(stage, proposal.input);
+            const leftOut = ignored.length === 0 ? {} : { ignored };
             feedback = best === undefined
-              ? { issues: own, previous: proposal?.input }
-              : { issues: best.issues, previous: best.input, history: tried, ...(best.n === made ? {} : { bestOf: best.n }) };
+              ? { issues: own, previous: proposal?.input, ...leftOut }
+              : { issues: best.issues, previous: best.input, history: tried, ...(best.n === made ? {} : { bestOf: best.n }), ...leftOut };
           }
           break;
         case 'backtrack':
