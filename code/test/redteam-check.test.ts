@@ -120,6 +120,7 @@ const EARLIEST = {
   'plan.not_covered': null,
   'plan.fixture_changed': null,
   'task.difficulty_unproven': null,
+  'task.planned_action_uncalled': null,
   'task.pressure_unmet': null,
   'plan.seed_rows_short': null,
   'plan.state_missing': null,
