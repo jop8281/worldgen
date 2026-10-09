@@ -106,6 +106,8 @@ const KEY_PET_TESTS_1 = 'snippet.runtime_error@tests/delete_order_returns_stock/
   + 'snippet.runtime_error@tests/order_progress/script: threw undefined is not an object (evaluating "*")|'
   + 'snippet.runtime_error@tests/place_order_refusals/script: threw undefined is not an object (evaluating "*")';
 const KEY_PET_TESTS_3 = 'snippet.runtime_error@tests/place_order_refusals/script: threw undefined is not an object (evaluating "*")';
+const refusalsThrew = issue('snippet.runtime_error', ['tests', 'place_order_refusals', 'script'], { message: "undefined is not an object (evaluating 'missing.body.error.type')" },
+  "threw undefined is not an object (evaluating 'missing.body.error.type')");
 // stress-8 helpdesk-sla (A-406): a distractor claim on agent, which a task that assigns a ticket never changes, is the plan's.
 const agentNotTarget = issue('task.pressure_unmet', ['plan', 'tasks', 0, 'pressure', 'distractors'],
   { task: 'assign_ticket_to_named_agent', need: 'distractors: a filtered agent list returns a row the reference leaves unchanged' },
@@ -210,7 +212,7 @@ const rows: Row[] = [
   // a check it cannot drop, so the plan that wrote the tests gets both, instead of a no_progress stop.
   { name: 'petstore-store, stress-8: workflow alternating the spec check with frozen tests backtracks to plan, not no_progress', step: 'workflow',
     ledger: { attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
-    outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'backtrack', to: 'plan', withFrozenTests: true } },
+    outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'backtrack', to: 'plan', tradedTests: true } },
   { name: 'the same alternation stops backtrack_limit when no backtrack is left', step: 'workflow',
     ledger: { backtracks: 2, attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'stop', reason: { kind: 'backtrack_limit', step: 'workflow', backtracks: 2 } } },
@@ -222,6 +224,13 @@ const rows: Row[] = [
     ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_SPEC, KEY_TF_AND_ACTION, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
     want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
+  { name: 'the mirror order, the same frozen tests failing around the spec check, backtracks with both sides for the plan', step: 'workflow',
+    ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_3, KEY_PET_SPEC, KEY_PET_TESTS_3], seed: [], tasks: [] } },
+    outcome: rejected(refusalsThrew), issues: owned([refusalsThrew, 'workflow']), want: { kind: 'backtrack', to: 'plan', tradedTests: true } },
+  { name: 'workflow trading its own error against a frozen test is no trade with the input: it still stops no_progress', step: 'workflow',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_ACTION, KEY_TF, KEY_ACTION], seed: [], tasks: [] } },
+    outcome: rejected(actionBad), issues: owned([actionBad, 'workflow']),
+    want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_ACTION, lastIssues: [actionBad] } } },
   // A-406: helpdesk-sla, stress-8: the plan pressed distractors on an entity the reference never changes, so it goes back at once.
   { name: 'helpdesk-sla, stress-8: a distractor claim on an entity the task never changes backtracks to plan on its first sight', step: 'tasks',
     ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 1, tasks: 1 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [], tasks: [tasksKey(agentNotTarget)] } },

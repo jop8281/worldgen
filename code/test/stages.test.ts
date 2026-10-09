@@ -364,6 +364,11 @@ describe('task pressure from reference traces (A-225..A-227)', () => {
     assert.deepEqual(pressureIssues(withTraces(traced(), [v('solve_vip', 'medium', 2, [], [], ['agent', 'ticket'])], { rows: { agent: 8 } }), lookup).map((i) => [i.code, i.path]), [
       ['task.pressure_unmet', ['tasks', 'solve_vip']],
     ]);
+    // A planned action of the task acts on the entity, so a reference that changed no row of it left out a write: the task repairs it.
+    const acting: Plan = { ...pressed('solve_vip', { distractors: 'ticket' }), tasks: pressed('solve_vip', { distractors: 'ticket' }).tasks.map((t) => (t.id === 'solve_vip' ? { ...t, actions: ['solve'] } : t)) };
+    assert.deepEqual(pressureIssues(withTraces(traced(), [v('solve_vip', 'medium', 2, [], [], ['agent'])], { rows: { ticket: 40 } }), acting).map((i) => [i.code, i.path]), [
+      ['task.pressure_unmet', ['tasks', 'solve_vip']],
+    ]);
   });
 
   it('sends a pressed state no state field can hold to the plan at tasks, and checks no seeded rows for it (A-369, YOS-253)', () => {

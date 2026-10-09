@@ -1077,14 +1077,18 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     assert.equal(calls[4]?.prompt.includes('row.not_found'), true);
   });
 
-  // stress-8 petstore-store (A-406): one workflow answer failed a frozen test, the next a check workflow cannot drop, and back.
-  const BROKEN_ESCALATE = { note: 'the actions with the escalate handler cut short', upsert: { actions: { ...TARGET.actions, escalate_ticket: { ...TARGET.actions.escalate_ticket!, handler: '(ctx) => {' } }, jobs: TARGET.jobs } };
+  // stress-8 petstore-store (A-406): one workflow answer failed a frozen test, the next a check the input fixes, and back.
+  const specOff = { ...EDITS.workflow, note: 'the actions with the escalate reason optional', upsert: { ...EDITS.workflow.upsert, actions: { ...TARGET.actions, escalate_ticket: { ...TARGET.actions.escalate_ticket!, description: 'Make an unresolved ticket urgent (reason optional).' } } } };
+  const reasonOptional = issue('openapi.required_field_missing', ['input', 'openapi', 'POST /tickets/{id}/escalate', 'request', 'reason'], { op: 'POST /tickets/{id}/escalate', field: 'reason' }, 'reason is optional');
+  /** As the conformance check refuses petstore's optional petId: a world whose escalate reason is optional fails the source spec. */
+  const specCheck = (world: World): CheckReport =>
+    world.actions.escalate_ticket?.description?.includes('(reason optional)') === true ? { ok: false, reached: 'lints', issues: [reasonOptional], warnings: [] } : checkWorld(world);
 
-  it('backtracks to plan when workflow trades a frozen test against another check, and tells the plan both (A-406)', async () => {
+  it('backtracks to plan when workflow trades a frozen test against a check the input fixes, and tells the plan both (A-406)', async () => {
     const { result, events, calls } = await run([
-      { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: BROKEN_ESCALATE }, { input: EDITS.workflow }, { input: BROKEN_ESCALATE },
+      { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },
       { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
-    ]);
+    ], { check: specCheck });
     assert.equal(result.kind, 'done');
     assert.deepEqual(attempts(events).map(([step, , outcome]) => [step, outcome]), [
       ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'rejected'], ['workflow', 'rejected'], ['workflow', 'rejected'],
@@ -1092,12 +1096,11 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     ]);
     const back = events.find((e) => e.t === 'backtracked');
     assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => [i.code, i.path])] : [], [
-      'workflow', 'plan', [
-        ['snippet.compile_error', ['actions', 'escalate_ticket', 'handler']], ['layer.blocked', ['tests']],
-        ['test.failed', ['tests', 'unknown_ticket_404', 'script']],
-      ],
+      'workflow', 'plan', [['openapi.required_field_missing', ['input', 'openapi', 'POST /tickets/{id}/escalate', 'request', 'reason']], ['test.failed', ['tests', 'unknown_ticket_404', 'script']]],
     ]);
-    assert.deepEqual(['snippet.compile_error', 'unknown_ticket_404'].map((s) => calls[5]?.prompt.includes(s)), [true, true]);
+    assert.deepEqual(['reason is optional', 'ctx.assert failed'].map((s) => calls[5]?.prompt.includes(s)), [true, true]);
+    // The workflow rerun is shown its own last rejection, the spec check, not the old plan's test failure.
+    assert.deepEqual(['reason is optional', 'ctx.assert failed'].map((s) => calls[7]?.prompt.includes(s)), [true, false]);
   });
 });
 

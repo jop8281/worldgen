@@ -43,8 +43,8 @@ export type OwnedIssue = { readonly issue: CheckIssue; readonly owner: StepId };
 export type Decision =
   | { readonly kind: 'advance'; readonly overspent?: Overspend }
   | { readonly kind: 'retry' }
-  /** `withFrozenTests`: the step traded the plan's frozen tests against another check, so the plan also needs the tests it failed (A-406). */
-  | { readonly kind: 'backtrack'; readonly to: StepId; readonly withFrozenTests?: true }
+  /** `tradedTests`: the step traded the plan's frozen tests against a check the input fixes, so the plan needs both sides (A-406). */
+  | { readonly kind: 'backtrack'; readonly to: StepId; readonly tradedTests?: true }
   | { readonly kind: 'stop'; readonly reason: StopReason };
 
 /** Step order is dependency order. An owner "earlier" than the current step is a backtrack target. */
@@ -148,17 +148,25 @@ function fieldOfKey(key: string): string | null {
   return fields.size === 1 && !fields.has(null) ? [...fields][0]! : null;
 }
 
+/** Whether a key's issues, its `layer.blocked` left out, are all frozen-test runs. */
+function testsOnlyKey(key: string): boolean {
+  const real = keyEntries(key).filter((e) => !e.startsWith('layer.blocked@'));
+  return real.length > 0 && real.every(isTestRunEntry);
+}
+
+/** Whether a key holds an issue rooted at `input`: a check the source spec or fixtures fix, which no step may drop. */
+const inputKey = (key: string): boolean => keyEntries(key).some((e) => /^[^@]+@input(?:[/:]|$)/.test(e));
+
 /**
- * Whether the step failed only the plan's frozen tests at some attempt between the first and the latest sighting of `key`:
- * it fixed the tests' failure by breaking a check it cannot drop and came back, so neither holds until the plan rewrites
- * the tests (A-406). `layer.blocked` entries are left out, as they only follow the failure.
+ * Whether, between the first and the latest sighting of `key`, the step went back and forth between the plan's frozen
+ * tests and a check the input fixes: one of the two sides is `key`, the other some set seen in between. Fixing either
+ * breaks the other, so neither holds until the plan rewrites its tests (A-406). A step trading its own error against a
+ * test is not this: it still stops.
  */
-function tradesWithTests(seen: readonly string[], key: string): boolean {
-  const testsOnly = (k: string): boolean => {
-    const real = keyEntries(k).filter((e) => !e.startsWith('layer.blocked@'));
-    return real.length > 0 && real.every(isTestRunEntry);
-  };
-  return seen.slice(seen.indexOf(key) + 1, seen.lastIndexOf(key)).some((k) => k !== key && testsOnly(k));
+function tradedTests(seen: readonly string[], key: string): boolean {
+  const between = seen.slice(seen.indexOf(key) + 1, seen.lastIndexOf(key)).filter((k) => k !== key);
+  if (testsOnlyKey(key)) return between.some(inputKey);
+  return inputKey(key) && between.some(testsOnlyKey);
 }
 
 /**
@@ -297,9 +305,9 @@ export function preflight(config: Config, ledger: Ledger, nowMs: number, estimat
  * Call `record` (with `attemptIssueSet`) for the attempt just made, then `decide`. So `ledger.attempts[step]` counts
  * that attempt, and `seenIssueSets[step]` already holds its set.
  * Order of rules: budget, time, accepted, share_expired, judge_expired, stalled, model_error, backtrack, a seed's second
- * miss on one field's type (back to model, A-368), no_progress (a repeated failing test at workflow or seed, a set repeated
- * there after failing only frozen tests in between (A-406), or a repeated unmet pressure claim at tasks, backtracks to plan
- * instead), attempts, retry.
+ * miss on one field's type (back to model, A-368), no_progress (a repeated failing test at workflow or seed, a back and
+ * forth there between frozen tests and a check the input fixes (A-406), or a repeated unmet pressure claim at tasks,
+ * backtracks to plan instead), attempts, retry.
  * A stalled call is the transport's failure, not the model's: it retries once per step (`stallRetries`), outside
  * `maxAttempts`, and preflight decides whether the retry fits in the time left. A second stall stops.
  * Budget: at or over `maxCostUsd` stops, except an accepted last step, which advances with
@@ -364,14 +372,14 @@ export function decide(config: Config, state: LoopState, outcome: AttemptOutcome
   }
   if (seen >= 2) {
     // Neither workflow nor seed can edit the plan's frozen tests, so a test they keep failing goes back to the plan that wrote it (A-161, A-165),
-    // and so does a set they keep coming back to after failing only frozen tests in between, the tests traded against it (A-406).
+    // and so does a back and forth between those tests and a check the input fixes, with both sides for the plan (A-406).
     if ((step === 'workflow' || step === 'seed') && owned.length > 0) {
-      const traded = !owned.every((o) => isTestRun(o.issue)) && tradesWithTests(ledger.seenIssueSets[step] ?? [], key);
+      const traded = tradedTests(ledger.seenIssueSets[step] ?? [], key);
       if (traded || owned.every((o) => isTestRun(o.issue))) {
         if (ledger.backtracks >= config.maxBacktracks) {
           return { kind: 'stop', reason: { kind: 'backtrack_limit', step, backtracks: ledger.backtracks } };
         }
-        return traded ? { kind: 'backtrack', to: 'plan', withFrozenTests: true } : { kind: 'backtrack', to: 'plan' };
+        return traded ? { kind: 'backtrack', to: 'plan', tradedTests: true } : { kind: 'backtrack', to: 'plan' };
       }
     }
     // A pressure claim the tasks step keeps missing is the plan's to drop: the seed cannot make it true (A-285).

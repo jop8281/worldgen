@@ -152,19 +152,28 @@ function historyLine(t: TriedAttempt): string {
  * The attempt to build on: the one with the fewest own issues among those that left no owned item out, the latest on
  * a tie. The first attempt leaves nothing out, so there is always one.
  */
-/** The frozen-test failures of the latest attempt that had any, its `layer.blocked` left out (A-406). */
-function lastFrozenTestFailures(tried: readonly TriedAttempt[]): readonly CheckIssue[] {
-  for (const t of [...tried].reverse()) {
-    const failed = t.issues.filter((i) => isTestRun(i) && i.code !== 'layer.blocked');
-    if (failed.length > 0) return failed;
-  }
-  return [];
-}
-
 function bestAttempt(tried: readonly TriedAttempt[]): TriedAttempt | undefined {
   let best: TriedAttempt | undefined;
   for (const t of tried) if (t.left.length === 0 && (best === undefined || t.issues.length <= best.issues.length)) best = t;
   return best ?? tried.at(-1);
+}
+
+/**
+ * The other side of a trade between the plan's frozen tests and a check the input fixes (A-406): when `issues` holds the
+ * input check, the latest attempt that failed only frozen tests (its `layer.blocked` left out); when it holds the tests,
+ * the input-rooted issues of the latest attempt that had any. Issues already in `issues` are left out.
+ */
+function tradedSide(tried: readonly TriedAttempt[], issues: readonly CheckIssue[]): readonly CheckIssue[] {
+  const fromInput = (i: CheckIssue): boolean => i.path[0] === 'input';
+  const failedTest = (i: CheckIssue): boolean => isTestRun(i) && i.code !== 'layer.blocked';
+  const same = (a: CheckIssue, b: CheckIssue): boolean => a.code === b.code && a.path.join('/') === b.path.join('/') && a.found === b.found;
+  const side = (t: TriedAttempt): readonly CheckIssue[] => {
+    if (!issues.some(fromInput)) return t.issues.filter(fromInput);
+    const real = t.issues.filter((i) => i.code !== 'layer.blocked');
+    return real.length > 0 && real.every(failedTest) ? real : [];
+  };
+  const found = [...tried].reverse().map(side).find((s) => s.length > 0) ?? [];
+  return found.filter((i) => !issues.some((j) => same(i, j)));
 }
 
 /** The owned items an edit writes, as `section.key`. A plan answer is always whole, so it writes none here. */
@@ -188,7 +197,8 @@ type Judged<T> =
 
 type StepOutcome<T> =
   | { readonly kind: 'advance'; readonly value: T }
-  | { readonly kind: 'backtrack'; readonly to: StepId; readonly because: readonly CheckIssue[]; readonly previous: unknown }
+  /** `alsoForTarget`: issues of earlier attempts the backtrack target needs as well; the step that backtracked is not shown them again (A-406). */
+  | { readonly kind: 'backtrack'; readonly to: StepId; readonly because: readonly CheckIssue[]; readonly alsoForTarget: readonly CheckIssue[]; readonly previous: unknown }
   | { readonly kind: 'stop'; readonly reason: StopReason };
 
 /** A stage's accepted edit: the new world, the edit that made it (null when a skipped stage changed nothing), and the checked world when the engine report is ok. */
@@ -977,11 +987,9 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
               : { issues: best.issues, previous: best.input, history: tried, ...(best.n === made ? {} : { bestOf: best.n }) };
           }
           break;
-        case 'backtrack': {
-          // A step that traded the frozen tests against another check also hands the plan the test failures it last saw (A-406).
-          const failedTests = decision.withFrozenTests === true ? lastFrozenTestFailures(tried) : [];
-          return { kind: 'backtrack', to: decision.to, because: [...issues, ...failedTests], previous: proposal?.input };
-        }
+        case 'backtrack':
+          // A step that traded the frozen tests against an input check hands the plan the other side too (A-406).
+          return { kind: 'backtrack', to: decision.to, because: issues, alsoForTarget: decision.tradedTests === true ? tradedSide(tried, issues) : [], previous: proposal?.input };
         case 'stop':
           return { kind: 'stop', reason: decision.reason };
         default:
@@ -1159,13 +1167,13 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
         carried = null;
         break;
       case 'backtrack':
-        emit({ ...at(), t: 'backtracked', from: step, to: outcome.to, because: outcome.because });
+        emit({ ...at(), t: 'backtracked', from: step, to: outcome.to, because: [...outcome.because, ...outcome.alsoForTarget] });
         rejectedBefore.set(step, { issues: outcome.because, previous: outcome.previous, rerunBy: outcome.to });
         ledger = recordBacktrack(ledger, outcome.to);
         index = STEPS.indexOf(outcome.to);
         reason = 'backtracked';
         // The world is not rolled back, so a stage sees its earlier answer in it; the plan gets its earlier plan.
-        carried = { issues: outcome.because, previous: outcome.to === 'plan' ? (plan ?? undefined) : undefined, from: step };
+        carried = { issues: [...outcome.because, ...outcome.alsoForTarget], previous: outcome.to === 'plan' ? (plan ?? undefined) : undefined, from: step };
         break;
       case 'stop':
           return await stop(outcome.reason);

@@ -234,8 +234,10 @@ export function pressureChecks(report: OkReport, plan: Plan): readonly PressureC
       // With two rows the seed can hold a near-duplicate, so a miss is the reference's filter to change, not the seed's (A-317).
       const seeded = rows >= 2;
       // A distractor counts only on an entity the reference changes rows of (A-230). A claim on one the task only looks up,
-      // as the agent of a ticket assignment, no seed or reference can meet, so it is the plan's to fix (A-406).
-      const lookup = !v.solutionChangedEntities.includes(e);
+      // as the agent of a ticket assignment, no seed or reference can meet, so it is the plan's to fix (A-406). When a
+      // planned action of the task acts on the entity, the reference left out a write it owes, so the task repairs it.
+      const plannedOn = (planned.get(v.taskId)?.actions ?? []).some((a) => plan.workflows.some((w) => w.entity === e && w.actions.includes(a)));
+      const lookup = !v.solutionChangedEntities.includes(e) && !plannedOn;
       out.push({
         task: v.taskId, need: `distractors: a filtered ${e} list returns a row the reference leaves unchanged`, met: v.solutionDistractorEntities.includes(e),
         exempt: fed.has(e) ? `${e} is imported; the input decides which near-duplicate rows exist, and none were fabricated` : null,
