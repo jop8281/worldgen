@@ -51,6 +51,8 @@ The release is **v1.1.1**. Its code is `71f84d45` ([#149](https://github.com/jop
 
 Two known limits remain. OpenAPI fidelity is a normalized comparison of paths, request shapes and error codes within the chosen scope, not exact equivalence with the source API. The snippet heap bound is not enforced in CI, because Bun ignores it (A-87, A-379). Every change lands through a [pull request](https://github.com/jop8281/worldgen/pulls?q=is%3Apr+is%3Amerged) to `stabilize/main`, and `main` moves only by a promotion pull request. [research/readme-reference.md](research/readme-reference.md#status) lists what an earlier repository built. Its PR numbers refer to that repository.
 
+Training benefit has not been shown yet: no model has been trained on these worlds and scored on an outside benchmark. See [research/training-experiment.md](research/training-experiment.md) for the experiment that would test it.
+
 ## Results
 
 ### One run on a new description
