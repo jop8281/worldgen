@@ -3,14 +3,24 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { checkWorld, loadWorld, type CheckedWorld } from '#engine';
+import { templateErrors } from './events.ts';
 import { alias, linkSchema, type LinkEnd } from './links.ts';
 
-const faultSchema = z.strictObject({
-  world: alias,
-  method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
-  path: z.string().startsWith('/'),
-  nth: z.number().int().positive().default(1),
-  kind: z.enum(['drop_response', 'duplicate']),
+const method = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+const pathname = z.string().startsWith('/');
+const request = { method, path: pathname, body: z.json().optional() };
+/** The nth agent request to `world` with this method and exact pathname. */
+const match = { world: alias, method, path: pathname, nth: z.number().int().positive().default(1) };
+const faultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ ...match, kind: z.literal('drop_response') }),
+  z.strictObject({ ...match, kind: z.literal('duplicate') }),
+  z.strictObject({ ...match, kind: z.literal('operator'), request: z.strictObject({ world: alias.optional(), ...request }) }),
+]);
+const eventSchema = z.strictObject({
+  name: z.string().min(1),
+  on: z.strictObject({ world: alias, method, path: pathname, status: z.number().int().min(100).max(599) }),
+  deliver: z.strictObject({ world: alias, ...request }),
+  fault: z.enum(['duplicate', 'out_of_order']).optional(),
 });
 export const scenarioSchema = z.strictObject({
   name: z.string().min(1),
@@ -18,10 +28,13 @@ export const scenarioSchema = z.strictObject({
   worlds: z.record(alias, z.string().min(1)),
   gates: z.array(z.strictObject({ world: alias, task: z.string().min(1) })).min(1),
   faults: z.array(faultSchema).default([]),
+  events: z.array(eventSchema).default([]),
   links: z.array(linkSchema).default([]),
 });
 export type Scenario = z.output<typeof scenarioSchema>;
 export type FaultKind = Scenario['faults'][number]['kind'];
+export type ScenarioEvent = Scenario['events'][number];
+export type EventFault = NonNullable<ScenarioEvent['fault']>;
 export type LoadedScenario = { readonly scenario: Scenario; readonly worlds: Readonly<Record<string, CheckedWorld>> };
 
 const SCENARIO_FILE = 'scenario.yaml';
@@ -79,8 +92,20 @@ export async function loadScenario(dir: string): Promise<{ ok: true; value: Load
     if (seen.has(key)) errors.push(`gates[${i}]: gate ${g.world}/${g.task} appears more than once`);
     seen.add(key);
   });
+  const declared = (at: string, world: string): void => {
+    if (!aliases.includes(world)) errors.push(`${at}: world ${world} is not declared in worlds. ${known}`);
+  };
   scenario.faults.forEach((f, i) => {
-    if (!aliases.includes(f.world)) errors.push(`faults[${i}]: world ${f.world} is not declared in worlds. ${known}`);
+    declared(`faults[${i}]`, f.world);
+    if (f.kind === 'operator' && f.request.world !== undefined) declared(`faults[${i}].request`, f.request.world);
+  });
+  const named = new Set<string>();
+  scenario.events.forEach((e, i) => {
+    if (named.has(e.name)) errors.push(`events[${i}]: event "${e.name}" appears more than once`);
+    named.add(e.name);
+    declared(`events[${i}].on`, e.on.world);
+    declared(`events[${i}].deliver`, e.deliver.world);
+    for (const t of templateErrors(e.deliver)) errors.push(`events[${i}].deliver: ${t} is not \${response.<field>}, a top-level field of the triggering response`);
   });
   const linkEnd = (at: string, e: LinkEnd): void => {
     if (!aliases.includes(e.world)) {

@@ -68,7 +68,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const { scenario } = loaded.value;
   const aliases = Object.keys(scenario.worlds);
   if (args.command === 'check') {
-    process.stdout.write(`ok ${scenario.name}: ${plural(aliases.length, 'world')} (${aliases.join(', ')}), ${plural(scenario.gates.length, 'gate')}, ${plural(scenario.faults.length, 'fault')}, ${plural(scenario.links.length, 'link')}\n`);
+    process.stdout.write(`ok ${scenario.name}: ${plural(aliases.length, 'world')} (${aliases.join(', ')}), ${plural(scenario.gates.length, 'gate')}, ${plural(scenario.faults.length, 'fault')}, ${plural(scenario.events.length, 'event')}, ${plural(scenario.links.length, 'link')}\n`);
     return 0;
   }
   const server = await serveScenario(loaded.value, { port: args.port, ...(args.adminPort === undefined ? {} : { adminPort: args.adminPort }) });
