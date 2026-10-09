@@ -14,7 +14,7 @@ import { checkWorld, createRuntime, loadWorld, serve, type CallRecord, type Chec
 import type { EpisodeInput, NextTurn, TurnResult, WorldPort } from '../src/dataset/episode.ts';
 import { prepareWorld, stateFromAdmin, type PreparedWorld } from '../src/dataset/pipeline.ts';
 import { engineGrader } from '../src/dataset/verifier.ts';
-import { PROMPT_VERSION, SCHEMA_VERSION, redactor, type Episode, type PublicMessage } from '../src/dataset/schema.ts';
+import { PROMPT_VERSION, SCHEMA_VERSION, outcomeOf, redactor, type Episode, type EpisodeV1, type GradeCounts, type PublicMessage } from '../src/dataset/schema.ts';
 import { SANDBOX_BUN, WAIT_FOR_PORT, type ExecOpts, type ExecResult, type SandboxBackend, type SandboxFile } from '../src/sandboxes/backend.ts';
 
 export const HELPDESK_DIR = path.resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
@@ -338,9 +338,15 @@ export function fakeBackend(world: CheckedWorld, o: FakeBackendOptions): FakeBac
 export const SHA_A = 'a'.repeat(64);
 export const SHA_B = 'b'.repeat(64);
 
-/** A valid, complete successful Episode for the helpdesk, with every field overridable. */
-export function episode(over: Partial<Episode> = {}): Episode {
-  const base: Episode = {
+/** The verifier's counts the kit's episodes were graded with: one goal, met, and no guard. */
+export const KIT_COUNTS: GradeCounts = { goals: { met: 1, total: 1 }, guards: { held: 0, total: 0 } };
+
+/**
+ * A valid, complete successful Episode for the helpdesk, with every field overridable. Its outcome follows from the
+ * fields after the overrides, graded with `counts` (KIT_COUNTS, or null for an ungraded row), unless `over` sets it.
+ */
+export function episode(over: Partial<Episode> = {}, counts: GradeCounts | null = KIT_COUNTS): Episode {
+  const base: Omit<Episode, 'outcome'> = {
     schema_version: SCHEMA_VERSION,
     episode_id: `run1__${EASY}__1`,
     run_id: 'run1',
@@ -368,7 +374,15 @@ export function episode(over: Partial<Episode> = {}): Episode {
     error: null,
     usage: { model_calls: 2, unaccounted_calls: 0, input_tokens: 2000, output_tokens: 200, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0.006, duration_ms: 10 },
   };
-  return { ...base, ...over };
+  const { outcome, ...fields } = over;
+  const merged = { ...base, ...fields };
+  return { ...merged, outcome: outcome ?? outcomeOf(merged, merged.score === null ? null : counts) };
+}
+
+/** `ep` as a version 1 row: no outcome, schema_version 1, as an export before A-389 wrote it. */
+export function v1(ep: Episode): EpisodeV1 {
+  const { outcome: _, ...rest } = ep;
+  return { ...rest, schema_version: 1 };
 }
 
 export const noSecrets = redactor([]);

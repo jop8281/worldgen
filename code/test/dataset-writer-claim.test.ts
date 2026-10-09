@@ -68,7 +68,7 @@ describe('dataset episode writer claims', () => {
       assert.deepEqual(await owner.release(), { code: 0, signal: null });
       assert.equal(existsSync(owner.claim), false);
       assert.equal(await appendEpisode(owner.out, next, noSecrets), 'duplicate');
-      await assert.rejects(appendEpisode(owner.out, { ...next, score: 0.5 }, noSecrets), /already saved with different content/);
+      await assert.rejects(appendEpisode(owner.out, episode({ episode_id: next.episode_id, score: 0.5 }), noSecrets), /already saved with different content/);
       assert.equal(existsSync(owner.claim), false);
       assert.deepEqual(await readEpisodeLog(owner.file, noSecrets), [initial, next]);
     } finally { await owner.cleanup(); }
@@ -178,7 +178,7 @@ describe('dataset episode writer claims', () => {
       await assert.rejects(appendEpisode(out, episode({ run_id: 'run2', episode_id: `run2__${EASY}__1` }), noSecrets), /episode run1__\S+ belongs to run run1/);
       assert.equal(readFileSync(foreign, 'utf8'), `${canonicalJson(initial)}\n`);
       const twice = path.join(out, 'logs/run1.episodes.jsonl');
-      const text = `${canonicalJson(initial)}\n${canonicalJson({ ...initial, score: 0.5 })}\n`;
+      const text = `${canonicalJson(initial)}\n${canonicalJson(episode({ episode_id: initial.episode_id, score: 0.5 }))}\n`;
       writeFileSync(twice, text);
       await assert.rejects(appendEpisode(out, next, noSecrets), /saved twice with different content/);
       assert.equal(readFileSync(twice, 'utf8'), text);

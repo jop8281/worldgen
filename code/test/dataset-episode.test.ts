@@ -319,10 +319,11 @@ describe('runEpisode against the golden helpdesk over HTTP', () => {
     assert.deepEqual([creates, result.episode.stop_reason, result.episode.usage.model_calls, result.episode.usage.unaccounted_calls, result.episode.usage.cost_usd], [0, 'model_error', 0, 0, 0]);
   });
 
-  it('stops on a malformed turn and still accounts what it cost', async () => {
+  it('stops on a malformed turn as invalid_turn, an agent failure and not infra (A-389), and still accounts what it cost', async () => {
     for (const decision of [{ action: 'request', method: 'GET' }, { action: 'dance' }, 'finish', { action: 'finish' }, { action: 'finish', final_reply: 'x', extra: 1 }]) {
       const { episode } = await runEpisode(await episodeInput(world.port, async () => turn(decision), fixed));
-      assert.equal(episode.stop_reason, 'model_error');
+      assert.equal(episode.stop_reason, 'invalid_turn');
+      assert.deepEqual([episode.outcome.verdict, episode.outcome.failure_cause], ['failure', 'invalid_turn']);
       assert.equal(episode.usage.model_calls, 1);
       assert.equal(episode.usage.cost_usd, COST);
       assert.equal(episode.final_reply, null);
@@ -368,6 +369,21 @@ describe('runEpisode against the golden helpdesk over HTTP', () => {
     const limited = await runEpisode(await episodeInput(world.port, scripted([get('/agents'), get('/agents')]), { ...fixed, maxTurns: 1, grade: refused }));
     assert.equal(limited.episode.stop_reason, 'turn_limit');
     assert.equal(limited.episode.error, 'no final reply after 1 turns; grading failed at the grade; the details are in the private diagnostics');
+  });
+
+  it('is a grade_error when the verifier answers counts that are not two integer pairs, or a broken guard scored above 0 (A-389)', async () => {
+    const answering = (counts: Record<string, unknown>, score = 0): EpisodeInput['grade'] => async () => ({ ok: true, score, ...counts }) as never;
+    for (const [what, grade] of [
+      ['a name in a pair', answering({ goals: { met: 0, total: 1, missed: ['refund issued'] }, guards: { held: 1, total: 1 } })],
+      ['met above total', answering({ goals: { met: 2, total: 1 }, guards: { held: 1, total: 1 } })],
+      ['no counts', answering({})],
+      ['a broken guard scored 1', answering({ goals: { met: 1, total: 1 }, guards: { held: 0, total: 1 } }, 1)],
+    ] as const) {
+      const { episode, artifacts } = await runEpisode(await episodeInput(world.port, lazySolver, { ...fixed, grade }));
+      assert.deepEqual([episode.stop_reason, episode.score, episode.outcome.verdict, episode.outcome.goals], ['grade_error', null, 'infra', null], what);
+      assert.equal(JSON.stringify(episode).includes('refund issued'), false, what);
+      assert.equal(artifacts.errors?.[0]?.boundary, 'grade', what);
+    }
   });
 
   it('keeps the final reply exactly as returned, and redacts a supplied secret from every public string', async () => {

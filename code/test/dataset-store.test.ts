@@ -5,12 +5,13 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
-  DatasetError, GRADING_NOTE, canonicalJson, episodeSchema, hashState, isCompleteSuccess, redactor, sha256Hex, type Episode,
+  DatasetError, GRADING_NOTE, canonicalJson, episodeSchema, hashState, isCompleteSuccess, outcomeOf, parseEpisode, redactor, sha256Hex, type Episode,
+  type GradeCounts,
 } from '../src/dataset/schema.ts';
 import {
   DATASET_FILE, FAILURES_FILE, MANIFEST_FILE, appendEpisode, exportDataset, newEntryDirs, readEpisodeLog, validateExport, worldArtifactPath, writeArtifacts,
 } from '../src/dataset/store.ts';
-import { EASY, episode, noSecrets, tmp } from './dataset-kit.ts';
+import { EASY, KIT_COUNTS, episode, noSecrets, tmp, v1 } from './dataset-kit.ts';
 
 const WORLD_TEXT = 'format: 1\nmeta: {}\n';
 const WORLD_VERSION = sha256Hex(WORLD_TEXT);
@@ -25,13 +26,13 @@ function outDir(): string {
   return out;
 }
 
-/** A success whose state hashes match private files written under `out`. `over` can break it. */
-async function stage(out: string, over: Partial<Episode> & { task?: string; run?: string } = {}): Promise<Episode> {
-  const { task = EASY, run = 'run1', ...rest } = over;
+/** A success whose state hashes match private files written under `out`. `over` can break it; `counts` are the verifier's. */
+async function stage(out: string, over: Partial<Episode> & { task?: string; run?: string; counts?: GradeCounts | null } = {}): Promise<Episode> {
+  const { task = EASY, run = 'run1', counts = KIT_COUNTS, ...rest } = over;
   const id = `${run}__${task}__1`;
   const initial = dumpFor(`${id}-0`);
   const final = dumpFor(`${id}-1`);
-  const ep = episode({ episode_id: id, run_id: run, task_id: task, world_version: WORLD_VERSION, initial_state_hash: hashState(initial), final_state_hash: hashState(final), ...rest });
+  const ep = episode({ episode_id: id, run_id: run, task_id: task, world_version: WORLD_VERSION, initial_state_hash: hashState(initial), final_state_hash: hashState(final), ...rest }, counts);
   await writeArtifacts(out, id, { initialState: initial, finalState: final }, noSecrets);
   return ep;
 }
@@ -56,7 +57,8 @@ describe('the Episode schema', () => {
   const ok = (e: unknown): boolean => episodeSchema.safeParse(e).success;
   const msgs = episode().messages;
   const [instruction, call, result, final] = msgs as [typeof msgs[0], typeof msgs[0], typeof msgs[0], typeof msgs[0]];
-  const withMessages = (m: unknown[], over: Record<string, unknown> = {}) => ({ ...episode(), messages: m, ...over });
+  // Built through episode(), so the outcome follows the changed fields and only the rule under test can fail.
+  const withMessages = (m: unknown[], over: Partial<Episode> = {}): Episode => episode({ ...over, messages: m as Episode['messages'] });
 
   it('refuses run and task ids that let two runs share an episode id', () => {
     const id = 'nightly__v2__refund__1';
@@ -86,17 +88,18 @@ describe('the Episode schema', () => {
     assert.equal(ok(withMessages([instruction, call, result, final], { final_reply: null })), false);
     assert.equal(ok(withMessages([instruction, call, result], { final_reply: 'Done.' })), false);
   });
-  it('is strict: no extra keys anywhere, only the Anthropic provider and a Claude model id (A-283), only version 1', () => {
+  it('is strict: no extra keys anywhere, only the Anthropic provider and a Claude model id (A-283), only version 2', () => {
     assert.equal(ok({ ...episode(), extra: 1 }), false);
     assert.equal(ok({ ...episode(), model: 'claude-opus-5-5' }), true);
     assert.equal(ok({ ...episode(), model: null }), true, 'null: the agent called no model');
     assert.equal(ok({ ...episode(), model: 'gpt-5' }), false);
     assert.equal(ok({ ...episode(), model: 'claude-opus-5-5 --fallback-model x' }), false);
     assert.equal(ok({ ...episode(), provider: 'openai' }), false);
-    assert.equal(ok({ ...episode(), schema_version: 2 }), false);
+    assert.equal(ok({ ...episode(), schema_version: 1 }), false, 'a version 1 row reads through parseEpisode, not as is');
+    assert.equal(ok({ ...episode(), schema_version: 3 }), false);
     assert.equal(ok({ ...episode(), thinking: 'hidden' }), false);
     assert.equal(ok(withMessages([instruction, { ...call, thinking: 'x' }, result, final])), false);
-    assert.equal(ok({ ...episode(), score: 1.5 }), false);
+    assert.equal(ok(episode({ score: 1.5 })), false);
     assert.equal(ok({ ...episode(), world_version: 'abc' }), false);
     assert.equal(ok({ ...episode(), episode_id: 'other__task__1' }), false);
   });
@@ -122,7 +125,8 @@ describe('what counts as a complete success', () => {
   it('accepts only stop done, engine score 1, a reply, both hashes, and real accounted spend', () => {
     assert.equal(isCompleteSuccess(episode()), true);
     for (const [what, over] of broken) {
-      const e = episodeSchema.safeParse({ ...episode(), ...over });
+      const e = episodeSchema.safeParse(episode(over));
+      assert.equal(e.success, true, `${what}: a valid record`);
       assert.equal(e.success && isCompleteSuccess(e.data), false, what);
     }
   });
@@ -151,7 +155,7 @@ describe('saved logs', () => {
     assert.equal(await appendEpisode(out, ep, noSecrets), 'duplicate');
     const file = path.join(out, 'logs', 'run1.episodes.jsonl');
     assert.equal(readFileSync(file, 'utf8'), `${canonicalJson(ep)}\n`);
-    await assert.rejects(appendEpisode(out, { ...ep, score: 0.5 }, noSecrets), /already saved with different content/);
+    await assert.rejects(appendEpisode(out, await stage(out, { score: 0.5 }), noSecrets), /already saved with different content/);
     assert.deepEqual(await readEpisodeLog(file, noSecrets), [ep]);
   });
 
@@ -199,29 +203,145 @@ describe('saved logs', () => {
   });
 });
 
+/** Counts the verifier answers: goals met of total, guards held of total. */
+const counts = (met: number, goals: number, held: number, guards: number): GradeCounts => ({ goals: { met, total: goals }, guards: { held, total: guards } });
+
+/** One episode of each verdict (A-389), staged under `out`: a success, a turn limit, a broken guard, a partial and an infra stop. */
+async function everyVerdict(out: string): Promise<Record<'success' | 'limit' | 'guard' | 'partial' | 'infra', Episode>> {
+  const reply = (text: string): Partial<Episode> => ({ final_reply: text, messages: [episode().messages[0]!, { seq: 1, role: 'assistant', type: 'final_reply', text, commentary: '' }] });
+  return {
+    success: await stage(out, { counts: counts(2, 2, 1, 1) }),
+    limit: await stage(out, { task: 'second', ...failure(), counts: counts(0, 2, 1, 1) }),
+    guard: await stage(out, { task: 'third', score: 0, ...reply('Confident but wrong.'), counts: counts(2, 2, 0, 1) }),
+    partial: await stage(out, { task: 'fourth', score: 0.5, ...reply('Half of it.'), counts: counts(1, 2, 1, 1) }),
+    infra: await stage(out, { task: 'fifth', ...failure({ stop_reason: 'model_error', error: 'model call failed', score: null }), counts: null }),
+  };
+}
+
+describe('outcome labels (A-389)', () => {
+  it('labels each row with its reward, verdict and a public failure cause, from the record and the verifier counts', () => {
+    const at = (over: Partial<Episode>, c: GradeCounts | null) => episode(over, c).outcome;
+    assert.deepEqual(at({}, counts(2, 2, 1, 1)), { reward: 1, verdict: 'success', failure_cause: null, goals: { met: 2, total: 2 }, guards: { held: 1, total: 1 } });
+    assert.deepEqual(at({ score: 0.5 }, counts(1, 2, 1, 1)), { reward: 0.5, verdict: 'partial', failure_cause: '1 of 2 goals met', goals: { met: 1, total: 2 }, guards: { held: 1, total: 1 } });
+    assert.deepEqual(at({ score: 0 }, counts(2, 2, 0, 1)), { reward: 0, verdict: 'failure', failure_cause: 'guard broken', goals: { met: 2, total: 2 }, guards: { held: 0, total: 1 } });
+    assert.deepEqual(at({ score: 0.25 }, counts(0, 0, 0, 0)), { reward: 0.25, verdict: 'partial', failure_cause: 'scored 0.25', goals: { met: 0, total: 0 }, guards: { held: 0, total: 0 } });
+    assert.deepEqual(at(failure(), counts(0, 2, 1, 1)), { reward: 0, verdict: 'failure', failure_cause: 'turn_limit', goals: { met: 0, total: 2 }, guards: { held: 1, total: 1 } });
+    assert.deepEqual(at(failure({ stop_reason: 'model_error', error: 'x', score: 0.5 }), counts(1, 2, 1, 1)), { reward: 0.5, verdict: 'infra', failure_cause: 'model_error', goals: { met: 1, total: 2 }, guards: { held: 1, total: 1 } });
+    assert.deepEqual(at({ score: null, stop_reason: 'grade_error', error: 'grading failed' }, null), { reward: 0, verdict: 'infra', failure_cause: 'grade_error', goals: null, guards: null });
+    assert.deepEqual(at({ score: null }, null), { reward: 0, verdict: 'infra', failure_cause: 'scored none', goals: null, guards: null });
+    assert.deepEqual(at({ usage: { ...episode().usage, unaccounted_calls: 1 } }, counts(1, 1, 0, 0)), { reward: 1, verdict: 'partial', failure_cause: 'incomplete record', goals: { met: 1, total: 1 }, guards: { held: 0, total: 0 } });
+    assert.deepEqual(at(failure({ stop_reason: 'invalid_turn', error: 'not a valid turn' }), counts(0, 1, 1, 1)), { reward: 0, verdict: 'failure', failure_cause: 'invalid_turn', goals: { met: 0, total: 1 }, guards: { held: 1, total: 1 } });
+  });
+
+  it('refuses an outcome the record does not imply, half-counted grades and a count above its total', () => {
+    const ok = (e: unknown): boolean => episodeSchema.safeParse(e).success;
+    assert.equal(ok(episode()), true);
+    assert.equal(ok({ ...episode(), score: 0.5 }), false, 'the outcome still says success');
+    assert.equal(ok({ ...episode(), outcome: { ...episode().outcome, verdict: 'partial' } }), false);
+    assert.equal(ok({ ...episode(), outcome: { ...episode().outcome, failure_cause: 'the grader wanted a refund' } }), false, 'no free text');
+    assert.equal(ok({ ...episode(), outcome: { ...episode().outcome, guards: null } }), false, 'goals without guards');
+    assert.equal(ok(episode({}, counts(3, 2, 0, 0))), false, 'more goals met than there are');
+    assert.equal(ok({ ...episode(), outcome: { ...episode().outcome, goals: { met: 1, total: 1, names: ['x'] } } }), false, 'counts only, no names');
+    const ungraded = episode({ score: null }, null);
+    assert.equal(ok(ungraded), true);
+    assert.equal(ok({ ...ungraded, outcome: { ...ungraded.outcome, goals: { met: 1, total: 1 }, guards: { held: 1, total: 1 } } }), false, 'an ungraded row has no counts');
+    assert.equal(ok(episode({}, counts(1, 1, 0, 1))), false, 'a broken guard scores 0, never 1');
+    assert.equal(ok(episode({ score: 0 }, counts(1, 1, 0, 1))), true);
+  });
+
+  it('reads a version 1 row as version 2, with the outcome derived and no verifier counts', () => {
+    const old = v1(episode({ score: 0.5 }));
+    assert.equal(old.schema_version, 1);
+    const read = parseEpisode(JSON.parse(canonicalJson(old)), 'old');
+    assert.equal(read.schema_version, 2);
+    assert.deepEqual(read.outcome, { reward: 0.5, verdict: 'partial', failure_cause: 'scored 0.5', goals: null, guards: null });
+    assert.deepEqual(outcomeOf(old, null), read.outcome);
+  });
+});
+
 describe('export', () => {
-  it('splits successes from failures, writes a manifest with checksums, and reopens clean', async () => {
+  it('puts every episode in dataset.jsonl with its outcome, counts them by verdict and cause, and reopens clean', async () => {
     const out = outDir();
-    const a = await stage(out);
-    const b = await stage(out, { task: 'second', ...failure() });
-    const c = await stage(out, { task: 'third', score: 0, final_reply: 'Confident but wrong.', messages: [episode().messages[0]!, { seq: 1, role: 'assistant', type: 'final_reply', text: 'Confident but wrong.', commentary: '' }] });
-    for (const e of [c, a, b]) await appendEpisode(out, e, noSecrets);
+    const e = await everyVerdict(out);
+    for (const x of [e.guard, e.success, e.infra, e.limit, e.partial]) await appendEpisode(out, x, noSecrets);
     const res = await exportDataset({ out, redact: noSecrets });
 
-    assert.deepEqual(res.accepted.map((e) => e.task_id), [EASY]);
-    assert.deepEqual(res.failed.map((e) => e.task_id), ['second', 'third']);
-    assert.equal(read(out, DATASET_FILE), `${canonicalJson(a)}\n`);
-    assert.equal(read(out, FAILURES_FILE), `${canonicalJson(b)}\n${canonicalJson(c)}\n`);
+    assert.deepEqual(res.episodes.map((x) => [x.task_id, x.outcome.verdict, x.outcome.reward, x.outcome.failure_cause]), [
+      [EASY, 'success', 1, null],
+      ['fifth', 'infra', 0, 'model_error'],
+      ['fourth', 'partial', 0.5, '1 of 2 goals met'],
+      ['second', 'failure', 0, 'turn_limit'],
+      ['third', 'failure', 0, 'guard broken'],
+    ]);
+    assert.equal(read(out, DATASET_FILE), [e.success, e.infra, e.partial, e.limit, e.guard].map((x) => `${canonicalJson(x)}\n`).join(''));
+    assert.equal(existsSync(path.join(out, FAILURES_FILE)), false);
     const m = JSON.parse(read(out, MANIFEST_FILE));
-    assert.deepEqual(m.counts, { episodes: 3, accepted: 1, failed: 2, by_stop_reason: { done: 2, turn_limit: 1 } });
-    assert.deepEqual([m.manifest_version, m.schema_version, m.provider, m.model], [1, 1, 'anthropic', 'claude-sonnet-5-5']);
+    assert.deepEqual(m.counts, {
+      episodes: 5,
+      by_verdict: { success: 1, partial: 1, failure: 2, infra: 1 },
+      by_stop_reason: { done: 3, model_error: 1, turn_limit: 1 },
+      by_failure_cause: { '1 of 2 goals met': 1, 'guard broken': 1, model_error: 1, turn_limit: 1 },
+    });
+    assert.deepEqual([m.manifest_version, m.schema_version, m.provider, m.model], [2, 2, 'anthropic', 'claude-sonnet-5-5']);
     assert.deepEqual([m.engine_commits, m.run_ids, m.prompt_versions, m.config_versions], [['a0ca1351234567'], ['run1'], ['solver-prompt-1'], ['cfg-000000000000']]);
     assert.deepEqual(m.worlds, [{ world_id: 'helpdesk', world_version: WORLD_VERSION, artifact: { path: `private/worlds/${WORLD_VERSION}/world.yaml`, sha256: WORLD_VERSION } }]);
+    assert.deepEqual(Object.keys(m.files), ['dataset']);
     assert.equal(m.files.dataset.sha256, sha256Hex(read(out, DATASET_FILE)));
-    assert.equal(m.files.failures.records, 2);
+    assert.equal(m.files.dataset.records, 5);
     assert.equal(m.selection, null);
     assert.equal(m.grading_note, GRADING_NOTE);
-    assert.equal((await validateExport(out, { redact: noSecrets })).counts.accepted, 1);
+    assert.equal((await validateExport(out, { redact: noSecrets })).manifest_version, 2);
+  });
+
+  it('keeps the successes-only view behind a flag, records it, and refuses a failure in such an export', async () => {
+    const out = outDir();
+    for (const x of Object.values(await everyVerdict(out))) await appendEpisode(out, x, noSecrets);
+    const res = await exportDataset({ out, redact: noSecrets, successesOnly: true });
+    assert.deepEqual(res.episodes.map((x) => x.task_id), [EASY]);
+    assert.deepEqual(res.manifest.selection, { run_ids: [], task_ids: [], episode_ids: [], successes_only: true });
+    assert.deepEqual(res.manifest.counts, { episodes: 1, by_verdict: { success: 1, partial: 0, failure: 0, infra: 0 }, by_stop_reason: { done: 1 }, by_failure_cause: {} });
+    assert.equal(read(out, DATASET_FILE).split('\n').filter(Boolean).length, 1);
+
+    // The full export of the same logs, relabelled as successes-only, is refused row by row.
+    const full = await exportDataset({ out, redact: noSecrets });
+    const m = JSON.parse(read(out, MANIFEST_FILE));
+    m.selection = { run_ids: [], task_ids: [], episode_ids: [], successes_only: true };
+    writeFileSync(path.join(out, MANIFEST_FILE), JSON.stringify(m));
+    await assert.rejects(validateExport(out, { redact: noSecrets }), /fifth__1 is not a success, and this export keeps successes only/);
+    assert.equal(full.episodes.length, 5);
+  });
+
+  it('exports an empty dataset with the flag when nothing succeeded, and every row without it', async () => {
+    const out = outDir();
+    for (const t of ['a', 'b']) await appendEpisode(out, await stage(out, { task: t, ...failure() }), noSecrets);
+    const only = await exportDataset({ out, redact: noSecrets, successesOnly: true });
+    assert.deepEqual([only.episodes.length, read(out, DATASET_FILE)], [0, '']);
+    const res = await exportDataset({ out, redact: noSecrets });
+    assert.equal(read(out, DATASET_FILE).split('\n').filter(Boolean).length, 2);
+    assert.deepEqual(res.manifest.counts, { episodes: 2, by_verdict: { success: 0, partial: 0, failure: 2, infra: 0 }, by_stop_reason: { turn_limit: 2 }, by_failure_cause: { turn_limit: 2 } });
+    assert.equal((await validateExport(out, { redact: noSecrets })).manifest_version, 2);
+  });
+
+  it('removes the failures.jsonl a version 1 export left, since dataset.jsonl now holds its rows', async () => {
+    const out = outDir();
+    await appendEpisode(out, await stage(out, { task: 'b', ...failure() }), noSecrets);
+    writeFileSync(path.join(out, FAILURES_FILE), 'stale\n');
+    await exportDataset({ out, redact: noSecrets });
+    assert.equal(existsSync(path.join(out, FAILURES_FILE)), false);
+    assert.equal(read(out, DATASET_FILE).split('\n').filter(Boolean).length, 1);
+  });
+
+  it('re-exports version 1 episode logs as version 2 rows, with outcomes and no verifier counts', async () => {
+    const out = outDir();
+    const ok = await stage(out);
+    const bad = await stage(out, { task: 'b', ...failure() });
+    mkdirSync(path.join(out, 'logs'), { recursive: true });
+    writeFileSync(path.join(out, 'logs', 'run1.episodes.jsonl'), `${canonicalJson(v1(ok))}\n${canonicalJson(v1(bad))}\n`);
+    const res = await exportDataset({ out, redact: noSecrets });
+    assert.deepEqual(res.episodes.map((x) => [x.schema_version, x.outcome]), [
+      [2, { reward: 1, verdict: 'success', failure_cause: null, goals: null, guards: null }],
+      [2, { reward: 0, verdict: 'failure', failure_cause: 'turn_limit', goals: null, guards: null }],
+    ]);
   });
 
   it('is idempotent: exporting again gives the same bytes and no duplicate rows, even with a duplicated saved line', async () => {
@@ -229,13 +349,13 @@ describe('export', () => {
     const a = await stage(out);
     await appendEpisode(out, a, noSecrets);
     await exportDataset({ out, redact: noSecrets });
-    const first = [DATASET_FILE, FAILURES_FILE, MANIFEST_FILE].map((n) => read(out, n));
+    const first = [DATASET_FILE, MANIFEST_FILE].map((n) => read(out, n));
     await exportDataset({ out, redact: noSecrets });
-    assert.deepEqual([DATASET_FILE, FAILURES_FILE, MANIFEST_FILE].map((n) => read(out, n)), first);
+    assert.deepEqual([DATASET_FILE, MANIFEST_FILE].map((n) => read(out, n)), first);
     const log = path.join(out, 'logs', 'run1.episodes.jsonl');
     writeFileSync(log, `${canonicalJson(a)}\n${canonicalJson(a)}\n`);
     await exportDataset({ out, redact: noSecrets });
-    assert.deepEqual([DATASET_FILE, FAILURES_FILE, MANIFEST_FILE].map((n) => read(out, n)), first);
+    assert.deepEqual([DATASET_FILE, MANIFEST_FILE].map((n) => read(out, n)), first);
     assert.equal(read(out, DATASET_FILE).split('\n').filter(Boolean).length, 1);
   });
 
@@ -244,10 +364,10 @@ describe('export', () => {
     const a = await stage(out);
     await appendEpisode(out, a, noSecrets);
     await exportDataset({ out, redact: noSecrets });
-    const before = [DATASET_FILE, FAILURES_FILE, MANIFEST_FILE].map((n) => read(out, n));
-    writeFileSync(path.join(out, 'logs', 'run1.episodes.jsonl'), `${canonicalJson(a)}\n${canonicalJson({ ...a, score: 0.5 })}\n`);
+    const before = [DATASET_FILE, MANIFEST_FILE].map((n) => read(out, n));
+    writeFileSync(path.join(out, 'logs', 'run1.episodes.jsonl'), `${canonicalJson(a)}\n${canonicalJson(await stage(out, { score: 0.5 }))}\n`);
     await assert.rejects(exportDataset({ out, redact: noSecrets }), /saved twice with different content/);
-    assert.deepEqual([DATASET_FILE, FAILURES_FILE, MANIFEST_FILE].map((n) => read(out, n)), before);
+    assert.deepEqual([DATASET_FILE, MANIFEST_FILE].map((n) => read(out, n)), before);
   });
 
   it('lets exports of one --out overlap: each publishes one whole, valid set and leaves nothing behind', async () => {
@@ -256,7 +376,7 @@ describe('export', () => {
     const results = await Promise.all(Array.from({ length: 6 }, () => exportDataset({ out, redact: noSecrets })));
     assert.equal(new Set(results.map((r) => JSON.stringify(r.manifest))).size, 1);
     assert.deepEqual((await validateExport(out, { redact: noSecrets })).run_ids, ['run1', 'run2']);
-    assert.deepEqual(readdirSync(out).sort(), [DATASET_FILE, FAILURES_FILE, 'logs', MANIFEST_FILE, 'private']);
+    assert.deepEqual(readdirSync(out).sort(), [DATASET_FILE, 'logs', MANIFEST_FILE, 'private']);
   });
 
   it('waits for an export that is already running before it reads the logs', async () => {
@@ -278,25 +398,14 @@ describe('export', () => {
     const out = outDir();
     for (const e of [await stage(out, { run: 'run1' }), await stage(out, { run: 'run2' }), await stage(out, { run: 'run2', task: 'other' })]) await appendEpisode(out, e, noSecrets);
     const all = await exportDataset({ out, redact: noSecrets });
-    assert.deepEqual(all.accepted.map((e) => e.episode_id), [`run1__${EASY}__1`, `run2__${EASY}__1`, 'run2__other__1']);
+    assert.deepEqual(all.episodes.map((e) => e.episode_id), [`run1__${EASY}__1`, `run2__${EASY}__1`, 'run2__other__1']);
     assert.deepEqual(all.manifest.run_ids, ['run1', 'run2']);
     const byRun = await exportDataset({ out, redact: noSecrets, runIds: ['run2'] });
-    assert.deepEqual(byRun.accepted.map((e) => e.episode_id), [`run2__${EASY}__1`, 'run2__other__1']);
-    assert.deepEqual(byRun.manifest.selection, { run_ids: ['run2'], task_ids: [], episode_ids: [] });
+    assert.deepEqual(byRun.episodes.map((e) => e.episode_id), [`run2__${EASY}__1`, 'run2__other__1']);
+    assert.deepEqual(byRun.manifest.selection, { run_ids: ['run2'], task_ids: [], episode_ids: [], successes_only: false });
     const one = await exportDataset({ out, redact: noSecrets, taskIds: [EASY], episodeIds: [`run1__${EASY}__1`, `run2__${EASY}__1`], runIds: ['run1'] });
-    assert.deepEqual(one.accepted.map((e) => e.episode_id), [`run1__${EASY}__1`]);
+    assert.deepEqual(one.episodes.map((e) => e.episode_id), [`run1__${EASY}__1`]);
     await assert.rejects(exportDataset({ out, redact: noSecrets, runIds: ['nope'] }), /match no saved episode/);
-  });
-
-  it('writes an empty dataset and lists every episode as a failure when no solver succeeded', async () => {
-    const out = outDir();
-    for (const t of ['a', 'b']) await appendEpisode(out, await stage(out, { task: t, ...failure() }), noSecrets);
-    const res = await exportDataset({ out, redact: noSecrets });
-    assert.equal(res.accepted.length, 0);
-    assert.equal(read(out, DATASET_FILE), '');
-    assert.equal(read(out, FAILURES_FILE).split('\n').filter(Boolean).length, 2);
-    assert.deepEqual(res.manifest.counts, { episodes: 2, accepted: 0, failed: 2, by_stop_reason: { turn_limit: 2 } });
-    assert.equal((await validateExport(out, { redact: noSecrets })).files.dataset.records, 0);
   });
 
   it('refuses to export without saved logs, or when the frozen world is missing or changed', async () => {
@@ -333,7 +442,7 @@ describe('the recorded model (YOS-190)', () => {
     });
     for (const e of [sonnet, noop]) await appendEpisode(out, e, noSecrets);
     const res = await exportDataset({ out, redact: noSecrets });
-    assert.deepEqual([res.accepted.map((e) => e.model), res.failed.map((e) => e.model)], [['claude-sonnet-5-5'], [null]]);
+    assert.deepEqual(res.episodes.map((e) => [e.model, e.outcome.verdict]), [['claude-sonnet-5-5', 'success'], [null, 'failure']]);
     assert.equal(JSON.parse(read(out, MANIFEST_FILE)).model, 'claude-sonnet-5-5');
     assert.equal((await validateExport(out, { redact: noSecrets })).model, 'claude-sonnet-5-5');
   });
@@ -360,15 +469,15 @@ describe('reopening an export', () => {
     await assert.rejects(check(out), /fails its checksum/);
 
     out = await exported();
-    rewriteManifest(out, (m) => (m.counts.accepted = 2));
+    rewriteManifest(out, (m) => (m.counts.by_verdict.success = 2));
     await assert.rejects(check(out), /manifest counts do not match/);
 
     out = await exported();
-    rewriteManifest(out, (m) => (m.files.failures.records = 5));
-    await assert.rejects(check(out), /has 1 records, the manifest says 5/);
+    rewriteManifest(out, (m) => (m.files.dataset.records = 5));
+    await assert.rejects(check(out), /has 2 records, the manifest says 5/);
 
     out = await exported();
-    writeFileSync(path.join(out, FAILURES_FILE), '');
+    writeFileSync(path.join(out, DATASET_FILE), '');
     await assert.rejects(check(out), /bytes, the manifest says/);
 
     out = await exported();
@@ -380,67 +489,32 @@ describe('reopening an export', () => {
     await assert.rejects(check(out), /not a valid manifest/);
 
     out = await exported();
+    rewriteManifest(out, (m) => (m.files.failures = m.files.dataset));
+    await assert.rejects(check(out), /not a valid manifest/);
+
+    out = await exported();
     writeFileSync(path.join(out, MANIFEST_FILE), '');
     await assert.rejects(check(out), DatasetError);
   });
 
-  it('rejects a row in the wrong file: a failure in dataset.jsonl, a success in failures.jsonl', async () => {
-    const out = outDir();
-    const bad = await stage(out, { score: 0 });
-    const line = `${canonicalJson(bad)}\n`;
-    const good = await stage(out, { task: 'g' });
-    const goodLine = `${canonicalJson(good)}\n`;
-    const entry = (text: string, p: string) => ({ path: p, records: 1, bytes: Buffer.byteLength(text), sha256: sha256Hex(text) });
-    const manifest = (datasetText: string, failuresText: string, accepted: number, failed: number) => ({
-      manifest_version: 1, schema_version: 1, provider: 'anthropic', model: 'claude-sonnet-5-5', prompt_versions: ['solver-prompt-1'], config_versions: ['cfg-000000000000'],
-      engine_commits: ['a0ca1351234567'], run_ids: ['run1'], selection: null,
-      worlds: [{ world_id: 'helpdesk', world_version: WORLD_VERSION, artifact: { path: worldArtifactPath(WORLD_VERSION), sha256: WORLD_VERSION } }],
-      counts: { episodes: 1, accepted, failed, by_stop_reason: { done: 1 } },
-      files: { dataset: { ...entry(datasetText, DATASET_FILE), records: accepted }, failures: { ...entry(failuresText, FAILURES_FILE), records: failed } },
-      grading_note: GRADING_NOTE,
-    });
-    writeFileSync(path.join(out, DATASET_FILE), line);
-    writeFileSync(path.join(out, FAILURES_FILE), '');
-    writeFileSync(path.join(out, MANIFEST_FILE), JSON.stringify(manifest(line, '', 1, 0)));
-    await assert.rejects(check(out), /is not a complete success/);
-    writeFileSync(path.join(out, DATASET_FILE), '');
-    writeFileSync(path.join(out, FAILURES_FILE), goodLine);
-    writeFileSync(path.join(out, MANIFEST_FILE), JSON.stringify(manifest('', goodLine, 0, 1)));
-    await assert.rejects(check(out), /is a complete success and belongs in dataset.jsonl/);
+  it('rejects a relabelled row even with a matching checksum: the outcome must follow from the record', async () => {
+    const out = await exported();
+    const text = read(out, DATASET_FILE).replace('"verdict":"failure"', '"verdict":"success"');
+    writeFileSync(path.join(out, DATASET_FILE), text);
+    rewriteManifest(out, (m) => (m.files.dataset.sha256 = sha256Hex(text)));
+    await assert.rejects(check(out), /not a valid episode record: outcome: must be/);
   });
 
-  it('rejects an id that appears twice across the files, and records out of order or not canonical', async () => {
-    const out = outDir();
-    const a = await stage(out);
-    const same = canonicalJson(a);
-    const entry = (text: string, p: string, n: number) => ({ path: p, records: n, bytes: Buffer.byteLength(text), sha256: sha256Hex(text) });
-    const base = (ds: string, fl: string, nd: number, nf: number, accepted: number, failed: number) => ({
-      manifest_version: 1, schema_version: 1, provider: 'anthropic', model: 'claude-sonnet-5-5', prompt_versions: ['solver-prompt-1'], config_versions: ['cfg-000000000000'],
-      engine_commits: ['a0ca1351234567'], run_ids: ['run1'], selection: null,
-      worlds: [{ world_id: 'helpdesk', world_version: WORLD_VERSION, artifact: { path: worldArtifactPath(WORLD_VERSION), sha256: WORLD_VERSION } }],
-      counts: { episodes: accepted + failed, accepted, failed, by_stop_reason: { done: accepted + failed } },
-      files: { dataset: entry(ds, DATASET_FILE, nd), failures: entry(fl, FAILURES_FILE, nf) }, grading_note: GRADING_NOTE,
-    });
-    const write = (ds: string, fl: string, m: unknown): void => {
-      writeFileSync(path.join(out, DATASET_FILE), ds);
-      writeFileSync(path.join(out, FAILURES_FILE), fl);
-      writeFileSync(path.join(out, MANIFEST_FILE), JSON.stringify(m));
-    };
-    // The same row twice in dataset.jsonl.
-    write(`${same}\n${same}\n`, '', base(`${same}\n${same}\n`, '', 2, 0, 2, 0));
-    await assert.rejects(check(out), /records are not in run, task, episode order/);
-    // Not in key order: z before a.
-    const z = canonicalJson(await stage(out, { task: 'z' }));
-    const bb = canonicalJson(await stage(out, { task: 'b' }));
-    write(`${z}\n${bb}\n`, '', base(`${z}\n${bb}\n`, '', 2, 0, 2, 0));
-    await assert.rejects(check(out), /records are not in run, task, episode order/);
-    // Pretty-printed, not canonical.
-    const pretty = `${JSON.stringify(a)}\n`;
-    write(pretty, '', base(pretty, '', 1, 0, 1, 0));
-    await assert.rejects(check(out), /not in canonical form/);
+  it('rejects a version 1 row inside a version 2 export', async () => {
+    const out = await exported();
+    const lines = read(out, DATASET_FILE).split('\n').filter(Boolean);
+    const text = `${canonicalJson(v1(JSON.parse(lines[0]!)))}\n${lines[1]}\n`;
+    writeFileSync(path.join(out, DATASET_FILE), text);
+    rewriteManifest(out, (m) => (m.files.dataset = { ...m.files.dataset, bytes: Buffer.byteLength(text), sha256: sha256Hex(text) }));
+    await assert.rejects(check(out), /dataset.jsonl:1: record is not in canonical form/);
   });
 
-  it('needs the engine state files of every accepted episode, and checks them against the recorded hashes', async () => {
+  it('needs the engine state files of every complete success, and checks them against the recorded hashes', async () => {
     let out = await exported();
     writeFileSync(path.join(out, 'private/episodes', `run1__${EASY}__1`, 'final.json'), JSON.stringify(dumpFor('tampered')));
     await assert.rejects(check(out), /private final.json does not match the recorded state hash/);
@@ -450,5 +524,70 @@ describe('reopening an export', () => {
     out = await exported();
     writeFileSync(path.join(out, 'private/worlds', WORLD_VERSION, 'world.yaml'), 'changed');
     await assert.rejects(check(out), /fails its checksum/);
+  });
+});
+
+describe('reopening a version 1 export (before A-389)', () => {
+  const check = (out: string) => validateExport(out, { redact: noSecrets });
+  const entry = (text: string, p: string) => ({ path: p, records: text.split('\n').filter(Boolean).length, bytes: Buffer.byteLength(text), sha256: sha256Hex(text) });
+  /** Writes `accepted` to dataset.jsonl and `failed` to failures.jsonl as version 1 rows, with a version 1 manifest that `edit` can change. */
+  function writeV1(out: string, accepted: readonly Episode[], failed: readonly Episode[], edit: (m: any) => void = () => {}): void {
+    const ds = accepted.map((e) => `${canonicalJson(v1(e))}\n`).join('');
+    const fl = failed.map((e) => `${canonicalJson(v1(e))}\n`).join('');
+    const stops: Record<string, number> = {};
+    for (const e of [...accepted, ...failed]) stops[e.stop_reason] = (stops[e.stop_reason] ?? 0) + 1;
+    const m = {
+      manifest_version: 1, schema_version: 1, provider: 'anthropic', model: 'claude-sonnet-5-5', prompt_versions: ['solver-prompt-1'], config_versions: ['cfg-000000000000'],
+      engine_commits: ['a0ca1351234567'], run_ids: ['run1'], selection: null,
+      worlds: [{ world_id: 'helpdesk', world_version: WORLD_VERSION, artifact: { path: worldArtifactPath(WORLD_VERSION), sha256: WORLD_VERSION } }],
+      counts: { episodes: accepted.length + failed.length, accepted: accepted.length, failed: failed.length, by_stop_reason: stops },
+      files: { dataset: entry(ds, DATASET_FILE), failures: entry(fl, FAILURES_FILE) },
+      grading_note: GRADING_NOTE,
+    };
+    edit(m);
+    writeFileSync(path.join(out, DATASET_FILE), ds);
+    writeFileSync(path.join(out, FAILURES_FILE), fl);
+    writeFileSync(path.join(out, MANIFEST_FILE), JSON.stringify(m));
+  }
+
+  it('validates a version 1 export with its two files, and its rows read as version 2', async () => {
+    const out = outDir();
+    const good = await stage(out);
+    const bad = await stage(out, { task: 'b', ...failure() });
+    writeV1(out, [good], [bad]);
+    const m = await check(out);
+    assert.deepEqual([m.manifest_version, m.schema_version, m.counts], [1, 1, { episodes: 2, accepted: 1, failed: 1, by_stop_reason: { done: 1, turn_limit: 1 } }]);
+    const row = parseEpisode(JSON.parse(read(out, FAILURES_FILE)), 'failures.jsonl:1');
+    assert.deepEqual(row.outcome, { reward: 0, verdict: 'failure', failure_cause: 'turn_limit', goals: null, guards: null });
+  });
+
+  it('rejects a row in the wrong file: a failure in dataset.jsonl, a success in failures.jsonl', async () => {
+    const out = outDir();
+    const bad = await stage(out, { score: 0 });
+    const good = await stage(out, { task: 'g' });
+    writeV1(out, [bad], []);
+    await assert.rejects(check(out), /is not a complete success/);
+    writeV1(out, [], [good]);
+    await assert.rejects(check(out), /is a complete success and belongs in dataset.jsonl/);
+  });
+
+  it('rejects an id that appears twice across the files, and records out of order or not canonical', async () => {
+    const out = outDir();
+    const a = await stage(out);
+    writeV1(out, [a], [a], (m) => (m.counts = { episodes: 2, accepted: 1, failed: 1, by_stop_reason: { done: 2 } }));
+    await assert.rejects(check(out), /is a complete success and belongs in dataset.jsonl/);
+    writeV1(out, [a, a], []);
+    await assert.rejects(check(out), /records are not in run, task, episode order/);
+    writeV1(out, [await stage(out, { task: 'z' }), await stage(out, { task: 'b' })], []);
+    await assert.rejects(check(out), /records are not in run, task, episode order/);
+    const pretty = `${JSON.stringify(v1(a))}\n`;
+    writeV1(out, [a], [], (m) => (m.files.dataset = { ...m.files.dataset, bytes: Buffer.byteLength(pretty), sha256: sha256Hex(pretty) }));
+    writeFileSync(path.join(out, DATASET_FILE), pretty);
+    await assert.rejects(check(out), /not in canonical form/);
+    // A version 2 row cannot hide in a version 1 file.
+    const v2line = `${canonicalJson(a)}\n`;
+    writeV1(out, [a], [], (m) => (m.files.dataset = { ...m.files.dataset, bytes: Buffer.byteLength(v2line), sha256: sha256Hex(v2line) }));
+    writeFileSync(path.join(out, DATASET_FILE), v2line);
+    await assert.rejects(check(out), /not a valid version 1 episode record/);
   });
 });
