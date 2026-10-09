@@ -47,7 +47,7 @@ export type Decision =
   | { readonly kind: 'stop'; readonly reason: StopReason };
 
 /** Step order is dependency order. An owner "earlier" than the current step is a backtrack target. */
-const STEP_ORDER: readonly StepId[] = ['plan', 'model', 'workflow', 'seed', 'tasks'];
+export const STEP_ORDER: readonly StepId[] = ['plan', 'model', 'workflow', 'seed', 'tasks'];
 const rank = (s: StepId): number => STEP_ORDER.indexOf(s);
 
 /** The world section that builds each kind of planned item `planCoverage` checks (plan.ts). */
