@@ -33,12 +33,28 @@ bun run live ../prod/prompts                                     # every prompt 
 
 The agent under test gets only the world port, which also serves `GET /openapi.json`. The admin port serves `GET /_world/state`, `POST /_world/reset`, `GET /_world/log`, `POST /_world/clock`, `POST /_world/grade/<task>` and `GET /_world/openapi`, and the operator console at `GET /`.
 
-A WorldGen run writes into `prod/worlds/gen-<slug>/` unless `--out` names a directory. It writes `world.yaml`, `plan.yaml`, `plan.md`, `REPORT.md` and `runs/<runId>/events.jsonl`. The events file logs every stage, repair attempt, duration and model cost. The default model is `claude-sonnet-5-5` through `claude -p`, with a budget of $5 and 15 minutes per run. `--model`, `--budget-usd` and `--max-minutes` change them, and no call falls back to another model. `--transport sdk` uses the Anthropic SDK with the key in `LLM_KEY`.
+A WorldGen run writes into `prod/worlds/gen-<slug>/` unless `--out` names a directory. It writes `world.yaml`, `plan.yaml`, `plan.md`, `REPORT.md`, `capsule.json` and `runs/<runId>/events.jsonl`. The events file logs every stage, repair attempt, duration and model cost. The default model is `claude-sonnet-5-5` through `claude -p`, with a budget of $5 and 15 minutes per run. `--model`, `--budget-usd` and `--max-minutes` change them, and no call falls back to another model. `--transport sdk` uses the Anthropic SDK with the key in `LLM_KEY`.
 
 ## How it works
 
+```mermaid
+flowchart LR
+  D["description"] --> RUN
+  O["OpenAPI spec"] --> RUN
+  C["CSV files"] --> RUN
+  subgraph WG["worldgen: the generator, never the judge"]
+    RUN["run loop<br/>plan → model → workflow → seed → tasks"]
+  end
+  RUN -- "each stage's WorldEdit" --> W[("checked world.yaml")]
+  W --> E["worldplay: the engine, the only judge"]
+  E --> WP["world port<br/>the agent gets only this"]
+  E --> AP["admin port<br/>state · reset · log · clock · grade · console"]
+  E --> V["verifier child<br/>grades traces on the private world"]
+```
+
 - **One artifact.** A world is one checked `world.yaml` with its data model, API, workflow logic, seed data and tasks. [prod/world-format.md](prod/world-format.md) documents every section.
 - **The engine is strict.** It checks a world in seven layers, from schema to lints, with errors a model can fix. It refuses any write that breaks the data model, and a failed call changes nothing. Time is engine time, never the wall clock.
+- **The public/private split.** A sandboxed agent gets only `public/world.yaml`, the world's public form with no grader, solution or decoy. Grading happens in a separate verifier child against the private world, which replays the recorded trace from seed and answers one bounded verdict.
 - **Graders are probed, and the coverage is measured.** A task counts only when its reference solution scores 1, doing nothing scores 0, and every decoy, strict prefix and engine mutant scores below 1. That is evidence, not proof. On the prod worlds these probes flip 278 of the 299 grader checks (93.0%), and 364 of the 760 engine mutant slots find something to probe. [research/evidence/probe-coverage.md](research/evidence/probe-coverage.md) lists the 21 checks no probe reaches, and [research/evidence/probe-gaps.md](research/evidence/probe-gaps.md) classifies them.
 - **WorldGen builds in stages.** It plans first, then builds the data model and API, the workflow, the seed and the tasks, and checks after each stage. The engine's issues drive a bounded repair. A run that cannot pass stops and says why. It never hands over a broken world.
 - **Iteration is a diff.** `--world` reruns only the stages a change request reaches. A gate blocks any destructive change the plan did not name.
