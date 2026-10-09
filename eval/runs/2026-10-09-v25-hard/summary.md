@@ -6,8 +6,8 @@ The pilot (#171) measured every task at 3 of 3 for Sonnet 5.5, the hard ones inc
 
 - **Generation:** 8 of 10 runs ended done, and every finished world passes `worldplay verify`. Of the 2 that stopped, one used Haiku as the generator and one used Sonnet.
 - **Generator on Haiku 5.5:** 1 of 2 runs ended done. The pharmacy plan failed the plan schema three times. The library world was built for $0.24.
-- **Gate: not met.** Haiku 5.5 passed every generated hard task 3 of 3 at 30 turns: 8 of 8 so far, with clinic's sweep pending. At difficulty's default 12 turns, two looked hard only because of the turn cap.
-- **Spend:** $13.37 for the 10 generation runs on the isolated ledger, with no open claim. d3's Haiku sweeps ran on their own ledger and cost about $0.47.
+- **Gate: not met.** Haiku 5.5 passed every generated hard task 3 of 3 at 30 turns: 9 hard tasks across 8 worlds. At difficulty's default 12 turns, two looked hard only because of the turn cap.
+- **Spend:** $13.37 for the 10 generation runs on the isolated ledger, with no open claim. d3's Haiku sweeps ran on their own ledger and cost about $0.53.
 
 ## Generation runs
 
@@ -49,26 +49,26 @@ d3 ran `bun run difficulty --models claude-haiku-5-5 --episodes 3 --max-turns 30
 | insurance | find_and_confirm_fraud | investigation | not run | 3/3 | not met |
 | cloud-billing | clean_up_long_overdue_enterprise | time_sensitive | not run | 3/3 | not met |
 | warehouse | reconcile_zone_counts | policy_conflict | not run | 3/3 | not met |
-| clinic | settle_backlog | time_sensitive | not run | pending (d3) | |
+| clinic | settle_backlog | time_sensitive | not run | 3/3 | not met |
 
 **Result: no hard task met the gate.**
 
 | kind | hard tasks that met the gate |
 |---|---|
-| time_sensitive | 0 of 2, clinic pending |
+| time_sensitive | 0 of 3 |
 | policy_conflict | 0 of 3 |
 | investigation | 0 of 2 |
 | irreversible | 0 of 1 |
 | misleading_text | none; no plan gave it to a hard task |
 
-At 30 turns, every one of Haiku's 24 episodes ended done with score 1, for $0.38 in all. Two tasks looked hard at difficulty's default 12 turns, but only because of the cap: Haiku needed 2 to 3 times the turns, and then solved them. This matches J175, where Haiku solved 27 of 31 of the committed hard tasks.
+At 30 turns, every one of Haiku's 27 episodes ended done with score 1, for $0.49 in all. Two tasks looked hard at difficulty's default 12 turns, but only because of the cap: Haiku needed 2 to 3 times the turns, and then solved them. This matches J175, where Haiku solved 27 of 31 of the committed hard tasks.
 
 **What it means.** Naming a kind in the plan and telling the tasks step what it means does not make a task hard for Haiku 5.5. The tasks come out longer, not harder to judge. A-405's kinds stay useful as variety, but they are not a difficulty lever.
 
 **Next levers, by evidence:**
 1. **Measure difficulty in the loop.** A Haiku sweep costs about $0.03 per hard task. Run it at the tasks step and reject a hard task Haiku passes 3 of 3. That is the only lever this run shows is measurable.
 2. **Seed for the kind.** The seed brief keeps seeds small, so an investigation has few pages and few near misses to get wrong. A hard kind could raise rowsPerEntity and the number of near misses.
-3. **Option B for time.** Both time_sensitive tasks were 3 of 3. A-405 parked letting time pass through the world port until this condition held, and it now holds.
+3. **Option B for time.** All three time_sensitive tasks were 3 of 3. A-405 parked letting time pass through the world port until this condition held, and it now holds.
 4. **Report turn budgets.** A task that needs more than 12 turns is hard under a 12-turn budget. A difficulty label should name its turn cap.
 
 ## Descriptions
