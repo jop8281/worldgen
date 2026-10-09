@@ -210,6 +210,24 @@ describe('all expected eval outcomes', () => {
     }
   });
 
+  it('R3 lets only the backtrack target and the steps after it restart at 1; an earlier step keeps its count (A-399)', () => {
+    const step = (name: string, ...ns: number[]) => [
+      { t: 'step_started', runId: 'r', step: name }, ...ns.map((n) => ({ t: 'attempt', runId: 'r', step: name, n })), { t: 'step_finished', runId: 'r', step: name, attempts: ns.length },
+    ];
+    const run = (...tail: Record<string, unknown>[]) => analyzeEvalOutcomes([expected[0]!], [{ ...evidence('alpha'), logs: { create: [
+      { t: 'run_started', runId: 'r', mode: 'create' },
+      ...step('plan', 1), ...step('model', 1),
+      { t: 'step_started', runId: 'r', step: 'workflow' }, { t: 'attempt', runId: 'r', step: 'workflow', n: 1 },
+      { t: 'backtracked', runId: 'r', from: 'workflow', to: 'model' },
+      ...step('model', 1), ...step('workflow', 1),
+      ...tail,
+      { t: 'run_finished', runId: 'r', ms: 1, costUsd: 0, result: { kind: 'done' } },
+    ].map((e) => JSON.stringify(e)).join('\n') } }]).metrics.attempts.total;
+    assert.equal(run(), 5);
+    assert.equal(run(...step('plan', 1)), null);
+    assert.equal(run(...step('plan', 2)), 6);
+  });
+
   it('R3 refuses orphan events, impossible backtracks and completion after refusal as complete attempt coverage', () => {
     const start = { t: 'step_started', step: 'plan' };
     const attempt = { t: 'attempt', step: 'plan', n: 1 };
