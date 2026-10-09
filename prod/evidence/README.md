@@ -2,6 +2,8 @@
 
 Each public claim in [README.md](../../README.md), with the files behind it and the command that re-checks it from a clone. Commands run from `code/` after `bun install --frozen-lockfile` on Bun 1.4.2. None calls a model or needs a key (A-392).
 
+[prod/scorecards.md](../scorecards.md) sorts the measured numbers into four separate scorecards, for the generator, environment fidelity, the graders and agents; `bun run scorecards` regenerates it from committed files (A-402).
+
 ## Re-check from the repository
 
 | Claim | Evidence | Command, from `code/` | You should see |
@@ -29,7 +31,7 @@ Each public claim in [README.md](../../README.md), with the files behind it and 
 | How hard each task is, measured per model (A-391) | `code/src/dataset/difficulty.ts` | `bun run difficulty --help` shows the flags. A run calls a model, so it is a new measurement with its own cost | No difficulty measurement has been run yet; the pilot waits for budget approval |
 | The dataset export writes every episode with a reward, a verdict, a public failure cause and goal and guard counts, and no grader text; a run-wide cut is infra (A-389, A-396) | `code/src/dataset/store.ts`, `code/test/dataset-store.test.ts` | `bun run dataset --help` | `Writes <out>/dataset.jsonl (every episode, with its reward, verdict and failure cause)` and the `--successes-only` line. The committed 2026-10-07 export predates this: schema 1, 38 successes |
 | Generated worlds vary: the few-shot example rotates by input among three worlds, and a new plan needs a hard task naming two or more distinct workflow actions, and a task with a kind | `exampleWorld` in [code/worldgen.config.json](../../code/worldgen.config.json), `pickExample` in `code/src/worldgen/run.ts`, `taskVarietyIssues` in `code/src/worldgen/plan.ts` | `bun test --timeout 120000 test/worldgen.test.ts test/plan.test.ts test/config.test.ts` | every test passes: the rotation table, the variety rule's table and the three listed example worlds |
-| 275 of 299 grader checks (92.0%) are flipped by some probe, and 364 of 760 mutant slots are probed (A-393) | [research/evidence/probe-coverage.md](../../research/evidence/probe-coverage.md) | `bun scripts/probe-coverage.ts ../prod/worlds` | `\| **Total** \| 95 \| 275/299 (92.0%) \| 364/760 (47.9%) \| 0 \|`, and the same table as the committed file, with the 24 unflipped checks listed |
+| 278 of 299 grader checks (93.0%) are flipped by some probe, and 364 of 760 mutant slots are probed (A-393, A-401) | [research/evidence/probe-coverage.md](../../research/evidence/probe-coverage.md) | `bun scripts/probe-coverage.ts ../prod/worlds` | `\| **Total** \| 95 \| 278/299 (93.0%) \| 364/760 (47.9%) \| 0 \|`, and the same table as the committed file, with the 21 unflipped checks listed |
 | A scenario: existing worlds behind one gateway, with a trace, faults and an all-or-nothing grade (A-386) | `prod/scenarios/support-payments/` | `bun run scenario check ../prod/scenarios/support-payments` | `ok support-payments: 2 worlds (support, payments), 2 gates, 1 fault` |
 
 Training benefit is not claimed: [research/training-experiment.md](../../research/training-experiment.md) designs the experiment that would test it, and nothing is run (A-394).

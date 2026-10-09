@@ -247,6 +247,7 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
     const decoys = [{ why: 'escalates only the pending Acme ticket', script: "(ctx) => { ctx.api('PATCH', '/tickets/tkt_0006', { priority: 'urgent' }); }" }];
     assert.deepEqual(brief(verify(only(HARD, { grader, decoys }), HARD)), [
       ['task.prefix_full_marks', ['tasks', 'escalate_acme'], 'the first 1 of 3 writes scored 1'],
+      ['task.omission_full_marks', ['tasks', 'escalate_acme'], 'the solution without write 2 of 3 (PATCH /tickets/tkt_0006) scored 1'],
       ['task.mutant_full_marks', ['tasks', 'escalate_acme', 'grader'], 'the solution plus PATCH /tickets/tkt_0001 {"customer":"cus_0002"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'escalate_acme', 'grader'], 'the solution plus POST /tickets/tkt_0002/resolve scored 1'],
       ['task.mutant_full_marks', ['tasks', 'escalate_acme', 'grader'], 'the solution plus POST /tickets {"customer":"cus_0001","subject":"Cannot log in","priority":"low"} scored 1'],
@@ -294,6 +295,22 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
     ]);
   });
 
+  it('R6 A-401 a grader that checks only the last row passes the prefixes and fails the omission gate', () => {
+    // The medium solution resolves tkt_0008, then tkt_0012; this grader checks tkt_0012 only, so no prefix reaches 1.
+    const grader = "(ctx) => ctx.db.get('ticket', 'tkt_0012').status === 'resolved' ? 1 : 0";
+    const r = verify(only(MEDIUM, { grader }), MEDIUM);
+    const gates = issuesOf(r).filter((i) => i.code === 'task.omission_full_marks' || i.code === 'task.prefix_full_marks');
+    assert.deepEqual(gates.map((i) => [i.code, i.path, i.found]), [
+      ['task.omission_full_marks', ['tasks', 'resolve_initech_pending'], 'the solution without write 1 of 2 (POST /tickets/tkt_0008/resolve) scored 1'],
+    ]);
+    assert.equal(gates[0]?.hint, "The solution's calls without write 1 of 2, POST /tickets/tkt_0008/resolve, still score 1. The grader never checks what that write does; check its effect, such as that row's end state (A-401).");
+  });
+
+  it('R6 A-401 a grader that checks every row passes the omission gate, and the left-out write is a probe it flipped', () => {
+    const v = verdictOf(verify(only(MEDIUM), MEDIUM));
+    assert.deepEqual(v.checks.find((c) => c.check === 'return')?.flippedBy.filter((p) => p.startsWith('omit_write')), ['omit_write 1']);
+  });
+
   it('R6 prefixes are not checked when the solution misses full marks', () => {
     const grader = `(ctx) => ctx.db.get('ticket', 'tkt_0008').status === 'resolved' ? (ctx.db.get('ticket', 'tkt_0012').status === 'resolved' ? 0.5 : 1) : 0`;
     assert.deepEqual(brief(verify(only(MEDIUM, { grader }), MEDIUM)), [
@@ -322,9 +339,36 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
     const decoys = [{ why: DECOY_WHY, script: RESOLVE_ALL_PENDING }];
     const w = only(MEDIUM, { grader: PRO_GRADER, solution: PRO_SOLUTION, decoys });
     assert.deepEqual(plain(verdictOf(verify(w, MEDIUM))), {
-      taskId: MEDIUM, difficulty: 'medium', solution: 1, noop: 0, decoys: [{ why: DECOY_WHY, score: 0.5 }], bestPrefixScore: 0.6666666666666666, solutionCalls: 6, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 3, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'],
+      taskId: MEDIUM, difficulty: 'medium', solution: 1, noop: 0, decoys: [{ why: DECOY_WHY, score: 0.5 }], bestPrefixScore: 0.6666666666666666, solutionCalls: 6, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 3, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'], solutionActions: ['resolve_ticket'],
     });
   });
+});
+
+describe('the verdict names the workflow actions the reference called successfully (A-398)', () => {
+  /** An action that answers 200 and writes nothing, and one that always refuses. */
+  const extra = {
+    note_ticket: { method: 'POST', path: '/tickets/{id}/note', description: 'Acknowledge a ticket.', handler: '(ctx) => ({ status: 200, body: { ok: true } })' },
+    archive_ticket: { method: 'POST', path: '/tickets/{id}/archive', description: 'Never allowed.', handler: "(ctx) => ctx.fail(409, 'ticket.locked', 'Archiving is off.')" },
+  };
+  const viaNote = `(ctx) => {
+    const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
+    ctx.api('POST', '/tickets/' + t.id + '/archive');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/note').status === 200, 'note failed');
+  }`;
+  const patchOnly = `(ctx) => {
+    const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
+    ctx.assert(ctx.api('PATCH', '/tickets/' + t.id, { status: 'resolved' }).status === 200, 'patch failed');
+  }`;
+  const rows: [string, World, TaskId, readonly string[]][] = [
+    ['an action call', only(EASY), EASY, ['resolve_ticket']],
+    ['actions sorted, a refused one left out', only(EASY, { solution: viaNote }, extra), EASY, ['note_ticket', 'resolve_ticket']],
+    ['standard routes only', only(EASY, { solution: patchOnly }), EASY, []],
+    ['an update route and an action', only(HARD), HARD, ['resolve_ticket']],
+  ];
+  for (const [name, w, id, want] of rows) {
+    it(name, () => assert.deepEqual(verdictOf(verify(w, id)).solutionActions, want));
+  }
 });
 
 describe('only a later-page list call counts as paging (A-360)', () => {
@@ -400,7 +444,7 @@ describe('collateral mutants (A-156)', () => {
 
   it('a grader that rejects both passes, and the mutants leave the verdict unchanged', () => {
     assert.deepEqual(plain(verdictOf(verify(only(EASY), EASY))), {
-      taskId: EASY, difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'],
+      taskId: EASY, difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'], solutionActions: ['resolve_ticket'],
     });
   });
 
@@ -572,11 +616,11 @@ describe('minimalWorld under the full rules (R9)', () => {
     assert.equal(r.ok, true);
     if (!r.ok) return;
     assert.deepEqual(Object.values(r.verdicts).map(plain), [
-      { taskId: EASY, difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'] },
-      { taskId: MEDIUM, difficulty: 'medium', solution: 1, noop: 0, decoys: [{ why: DECOY_WHY, score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 4, solutionWrites: 2, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'] },
+      { taskId: EASY, difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'], solutionActions: ['resolve_ticket'] },
+      { taskId: MEDIUM, difficulty: 'medium', solution: 1, noop: 0, decoys: [{ why: DECOY_WHY, score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 4, solutionWrites: 2, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'], solutionActions: ['resolve_ticket'] },
       {
         taskId: HARD, difficulty: 'hard', solution: 1, noop: 0,
-        decoys: [{ why: 'raises priority to urgent but forgets to resolve the pending Acme ticket', score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 5, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: ['ticket'], solutionChangedEntities: ['ticket'],
+        decoys: [{ why: 'raises priority to urgent but forgets to resolve the pending Acme ticket', score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 5, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: ['ticket'], solutionChangedEntities: ['ticket'], solutionActions: ['resolve_ticket'],
       },
     ]);
   });
@@ -589,7 +633,7 @@ describe('grader check coverage: which checks a probe flipped (A-393)', () => {
   const MUTANTS_THAT_COMMIT = ['target_field', 'other_row', 'extra_create', 'extra_delete', 'undone_write', 'retarget'];
 
   it('a grader that records no goal or guard has one check, its return value, flipped by every probe that scored below 1', () => {
-    assert.deepEqual(verdictOf(verify(minimalWorld(), MEDIUM)).checks, [{ check: 'return', flippedBy: ['prefix 1', 'decoy 0', ...MUTANTS_THAT_COMMIT] }]);
+    assert.deepEqual(verdictOf(verify(minimalWorld(), MEDIUM)).checks, [{ check: 'return', flippedBy: ['prefix 1', 'omit_write 1', 'decoy 0', ...MUTANTS_THAT_COMMIT] }]);
   });
 
   it('each goal and guard is a check, a repeated name by occurrence, and one no probe flipped has none', () => {
@@ -602,8 +646,8 @@ describe('grader check coverage: which checks a probe flipped (A-393)', () => {
 }`;
     const v = verdictOf(verify(only(MEDIUM, { grader }), MEDIUM));
     assert.deepEqual(v.checks, [
-      // The solution resolves tkt_0008 first, so its prefix still has it, and retarget swaps only the last write.
-      { check: 'goal pending ticket resolved', flippedBy: [] },
+      // The solution resolves tkt_0008 first, so its prefix still has it and retarget swaps only the last write: only leaving that write out flips it (A-401).
+      { check: 'goal pending ticket resolved', flippedBy: ['omit_write 1'] },
       { check: 'goal pending ticket resolved #2', flippedBy: ['prefix 1', 'retarget'] },
       { check: 'guard only the status of Initech pending tickets changed', flippedBy: ['decoy 0', ...MUTANTS_THAT_COMMIT] },
       { check: 'guard Initech still exists', flippedBy: [] },
@@ -619,7 +663,7 @@ describe('grader check coverage: which checks a probe flipped (A-393)', () => {
 }`;
     assert.deepEqual(verdictOf(verify(only(MEDIUM, { grader }), MEDIUM)).checks, [
       { check: 'guard only the status of Initech pending tickets changed', flippedBy: ['decoy 0', ...MUTANTS_THAT_COMMIT] },
-      { check: 'return', flippedBy: ['prefix 1'] },
+      { check: 'return', flippedBy: ['prefix 1', 'omit_write 1'] },
     ]);
   });
 
@@ -645,7 +689,7 @@ describe('grader check coverage: which checks a probe flipped (A-393)', () => {
   return ctx.score();
 }`;
     const v = verdictOf(verify(only(MEDIUM, { grader }), MEDIUM));
-    assert.deepEqual(v.checks, [{ check: 'goal tkt_0008 resolved', flippedBy: [] }, { check: 'goal tkt_0012 resolved', flippedBy: ['prefix 1'] }]);
+    assert.deepEqual(v.checks, [{ check: 'goal tkt_0008 resolved', flippedBy: ['omit_write 1'] }, { check: 'goal tkt_0012 resolved', flippedBy: ['prefix 1'] }]);
     assert.deepEqual(v.unattributedProbes, ['decoy 0', ...MUTANTS_THAT_COMMIT]);
   });
 });

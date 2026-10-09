@@ -12,7 +12,7 @@
 import { ENGINE_ERROR_CODES, OP_SUCCESS_STATUS, issue, machineOf, routeKey, type CheckIssue, type CheckReport, type Difficulty, type IssueCode, type Section, type World, type WorldStats } from '#engine';
 import { assertNever } from '#lib/never';
 import { fixtureFed } from './input-coverage.ts';
-import { HARD_TASK_ACTIONS, MIX_WITHIN, actionRouteIds, planCoverage, plannedItems, pressurePlanIssues, pressureUnreachable, seedPlanIssues, taskKindLines, type Plan, type PlanList } from './plan.ts';
+import { HARD_TASK_ACTIONS, MIX_WITHIN, actionKey, actionRouteIds, planCoverage, plannedItems, pressurePlanIssues, pressureUnreachable, seedPlanIssues, taskKindLines, type Plan, type PlanList } from './plan.ts';
 
 export const STAGE_IDS = ['model', 'workflow', 'seed', 'tasks'] as const;
 export type StageId = (typeof STAGE_IDS)[number];
@@ -87,7 +87,23 @@ function tasksDone(report: OkReport, plan: Plan): readonly CheckIssue[] {
   if (have.length < DIFFICULTIES.length) {
     out.push(issue('tasks.difficulty_not_spread', ['tasks'], { have }, have.join(', ') || 'none'));
   }
-  return [...out, ...pagingBlocking(report), ...pressureIssues(report, plan), ...coverage(report, plan, COVERS.tasks)];
+  return [...out, ...pagingBlocking(report), ...pressureIssues(report, plan), ...plannedActionIssues(report, plan), ...coverage(report, plan, COVERS.tasks)];
+}
+
+/**
+ * task.planned_action_uncalled for each built task whose reference solution called, successfully, not every workflow
+ * action its plan task lists (A-398). A plan task with no actions, as every plan before A-390 has, owes nothing.
+ */
+export function plannedActionIssues(report: OkReport, plan: Plan): readonly CheckIssue[] {
+  return plan.tasks.flatMap((t): CheckIssue[] => {
+    const verdict = Object.hasOwn(report.verdicts, t.id) ? report.verdicts[t.id] : undefined;
+    if (verdict === undefined || t.actions === undefined) return [];
+    const planned = [...new Set(t.actions.map(actionKey))];
+    const missed = planned.filter((a) => !verdict.solutionActions.includes(a));
+    if (missed.length === 0) return [];
+    const called = verdict.solutionActions.length === 0 ? 'no workflow action' : verdict.solutionActions.join(', ');
+    return [issue('task.planned_action_uncalled', ['tasks', t.id, 'solution'], { task: t.id, planned, missed }, `it called ${called}`)];
+  });
 }
 
 /** One pressure claim on a task, checked against its reference trace and the seed. `exempt` says why imported data cannot meet it. */
@@ -236,7 +252,7 @@ export function pressureChecks(report: OkReport, plan: Plan): readonly PressureC
       // A distractor counts only on an entity the reference changes rows of (A-230). A claim on one the task only looks up,
       // as the agent of a ticket assignment, no seed or reference can meet, so it is the plan's to fix (A-406). When a
       // planned action of the task acts on the entity, the reference left out a write it owes, so the task repairs it.
-      const plannedOn = (planned.get(v.taskId)?.actions ?? []).some((a) => plan.workflows.some((w) => w.entity === e && w.actions.includes(a)));
+      const plannedOn = (planned.get(v.taskId)?.actions ?? []).some((a) => plan.workflows.some((w) => w.entity === e && w.actions.some((wa) => actionKey(wa) === actionKey(a))));
       const lookup = !v.solutionChangedEntities.includes(e) && !plannedOn;
       out.push({
         task: v.taskId, need: `distractors: a filtered ${e} list returns a row the reference leaves unchanged`, met: v.solutionDistractorEntities.includes(e),

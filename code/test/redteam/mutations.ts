@@ -69,6 +69,7 @@ export const NOT_WORLD_TRIGGERABLE: readonly IssueCode[] = [
   'iterate.out_of_scope',
   'iterate.regression',
   'task.difficulty_unproven',
+  'task.planned_action_uncalled',
   'task.pressure_unmet',
   'task.instruction_only',
   'openapi.operation_missing',
