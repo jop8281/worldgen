@@ -32,10 +32,14 @@ const rel = (p: string): string => path.relative(REPO_DIR, p) || '.';
 
 function print(f: FolderCheck, out: (line: string) => void): void {
   out(`${rel(f.folder)}`);
+  if (f.error !== null) {
+    out(`  ERROR  ${f.error}`);
+    return;
+  }
   out(`  files  ${f.changedFiles.length === 0 ? 'ok, sha-256 as in manifest.json' : `CHANGED ${f.changedFiles.join(', ')}`}`);
   out(`  world  ${f.worldVersion === null ? 'MISSING or does not check' : `${f.worldVersion.slice(0, 12)} ${f.worldOk ? 'ok, the version the episodes ran on' : 'DIFFERS from manifest.json'}`}`);
   for (const r of f.replays) {
-    out(`  ${r.agrees ? 'ok  ' : 'DIFF'} ${r.episode}  recorded ${r.recorded ?? 'none'}  replayed ${r.replayed}  seed ${r.seedOk ? 'ok' : 'DIFF'}  calls ${r.calls - r.mismatches}/${r.calls}  final ${r.finalOk ? 'ok' : 'DIFF'}`);
+    out(`  ${r.agrees ? 'ok  ' : 'DIFF'} ${r.episode}  recorded ${r.recorded ?? 'none'}  replayed ${r.replayed}  task ${r.taskOk ? 'ok' : 'DIFF'}  seed ${r.seedOk ? 'ok' : 'DIFF'}  calls ${r.calls - r.mismatches}/${r.calls}  final ${r.finalOk ? 'ok' : 'DIFF'}`);
   }
   if (f.failedRuns > 0) out(`  ${f.failedRuns} failed run(s) in failures.jsonl, with no score to check`);
 }

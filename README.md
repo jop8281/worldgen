@@ -7,7 +7,7 @@ Two tools for building **worlds**. A world is a stateful, deterministic replica 
 
 The task is in [research/spec.md](research/spec.md). [prod/README.md](prod/README.md) maps every spec item to the file that implements it and the command that shows it. The design doc is [prod/design.md](prod/design.md), and [prod/system.md](prod/system.md) shows how the parts fit together, with diagrams.
 
-Every number below can be re-checked from a clone with no model call. [prod/evidence/README.md](prod/evidence/README.md) gives the command for each.
+[prod/evidence/README.md](prod/evidence/README.md) gives the command that re-checks each number below from a clone, with no model call. It also names the few numbers that rest on a Linear receipt or a GitHub CI run instead.
 
 ## Run it
 

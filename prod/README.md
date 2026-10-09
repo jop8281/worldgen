@@ -7,7 +7,7 @@ What gets handed in. Tests in `code/` check and verify every world here, so a br
 - `worlds/helpdesk/` is the hand-built world (`world.yaml`, `NOTES.md`). It is the golden test world and the few-shot example.
 - `worlds/retail-tau2/` is a hand-mapped model of the τ²-bench retail domain, with a `NOTES.md`. `code/scripts/build-retail-tau2.ts` writes it through `saveWorld`.
 - `worlds/gen-<slug>/` is a WorldGen output: `world.yaml`, `plan.yaml`, `REPORT.md`, `runs/<runId>/`.
-- `worlds/<world>/public/world.yaml` is the public form of each world, the one a sandboxed agent gets: no grader, solution or decoy. `code/scripts/render-public-worlds.ts` writes it, and `code/test/public-worlds.test.ts` fails if it drifts from `world.yaml`.
+- `worlds/<world>/public/world.yaml` is the public form of each world, the one a sandboxed agent gets: no grader, solution or decoy. `code/scripts/render-public-worlds.ts` writes it, and `code/test/worlds.test.ts` fails if it drifts from `world.yaml`. Rerun the script after changing a world; `bun run live` writes it for each world it delivers.
 - `evidence/README.md` names each public claim and the command that re-checks it from a clone.
 
 ```sh

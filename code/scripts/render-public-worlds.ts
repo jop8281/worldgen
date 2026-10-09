@@ -1,7 +1,8 @@
 /**
  * Renders the public form of each prod world to <world>/public/world.yaml (YOS-159): every task bare, everything else
- * as the private world has it. The file is what a public bundle serves; test/public-worlds.test.ts fails when one
- * drifts. Each world must check, and so must its public form. saveWorld is the only writer. No model call.
+ * as the private world has it. The file is what a public bundle serves; test/worlds.test.ts fails when one drifts.
+ * Each world must check as a private world, and its public form must check too. saveWorld is the only writer. Rerun it
+ * after changing a world; `bun run live` writes it for each world it delivers. No model call (A-392).
  *
  *   bun scripts/render-public-worlds.ts [<worldDir>...]   # default: every world under prod/worlds
  *
@@ -9,7 +10,7 @@
  */
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { checkWorld, loadWorld, publicWorldOf, renderWorldYaml, saveWorld } from '#engine';
+import { checkWorld, loadWorld, publicWorldOf, renderWorldYaml, saveWorld, taskPrivacy } from '#engine';
 
 const USAGE = 'usage: bun scripts/render-public-worlds.ts [<worldDir>...]\n';
 const REPO = path.resolve(import.meta.dirname, '../..');
@@ -28,6 +29,8 @@ async function render(dir: string): Promise<'wrote' | 'unchanged'> {
   if (!loaded.ok) throw new Error(`did not load: ${JSON.stringify(loaded.error)}`);
   const report = checkWorld(loaded.value);
   if (!report.ok) throw new Error(`failed check at ${report.reached}: ${JSON.stringify(report.issues)}`);
+  // An all-bare world is already a public form; rendering it would nest public/public/.
+  if (taskPrivacy(report.world) !== 'private') throw new Error('is already a public form: its tasks carry no grader or solution');
   const pub = checkWorld(publicWorldOf(report.world));
   if (!pub.ok) throw new Error(`public form failed check at ${pub.reached}: ${JSON.stringify(pub.issues)}`);
   const file = path.join(dir, 'public', 'world.yaml');
