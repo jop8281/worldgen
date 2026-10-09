@@ -12,7 +12,6 @@ type Row = Readonly<Record<string, unknown>>;
 
 /** The header the gateway stamps on every delivery with its trace seq, so a world's call log places each call in the trace. */
 export const SEQ_HEADER = 'x-scenario-seq';
-/** Who a delivery came from: the agent through the gateway, an operator fault, or an event rule. */
 export type Source = 'agent' | 'operator' | 'event';
 /** What linkResult reads of a gateway trace entry and of a world's call log record (GET /_world/log). */
 type TraceEntry = { readonly seq: number; readonly world: string; readonly method: string; readonly path: string; readonly status: number; readonly source: Source };
@@ -42,11 +41,7 @@ const RULES: Readonly<Record<Link['rule'], (text: unknown, value: string, kind: 
   equals: (text, value) => (text === value ? null : `does not equal ${value}`),
 };
 
-/**
- * The trace entry of the last call in `world`'s log with a write that `wrote` accepts, or null when there is none or its
- * stamp names no trace entry of that world with the same method, path and status.
- */
-function placed(evidence: LinkEvidence, world: string, wrote: (w: CallWrite) => boolean): TraceEntry | null {
+function traceEntryOfLastWrite(evidence: LinkEvidence, world: string, wrote: (w: CallWrite) => boolean): TraceEntry | null {
   const call = evidence.logs(world).findLast((c) => c.writes.some(wrote));
   if (call === undefined) return null;
   const seq = Number(call.req.headers?.[SEQ_HEADER]);
@@ -76,7 +71,7 @@ export function linkResult(link: Link, tables: (world: string, entity: string) =
   }
   const linked = String(raw);
   const source = `${from.entity} ${String(origin['id'])}`;
-  const created = placed(evidence, from.world, (w) => w.entity === from.entity && w.id === origin['id'] && w.op === 'created');
+  const created = traceEntryOfLastWrite(evidence, from.world, (w) => w.entity === from.entity && w.id === origin['id'] && w.op === 'created');
   const targets = select(to);
   if (targets.length === 0) return result(false, `1 ${from.entity} row matched; 0 ${to.entity} rows matched where ${JSON.stringify(to.where)}`);
   const misses: string[] = [];
@@ -87,7 +82,7 @@ export function linkResult(link: Link, tables: (world: string, entity: string) =
       misses.push(`${target} ${to.field} ${why}`);
       continue;
     }
-    const wrote = placed(evidence, to.world, (w) => w.entity === to.entity && w.id === row['id'] && (w.op === 'created' || w.fields.includes(to.field)));
+    const wrote = traceEntryOfLastWrite(evidence, to.world, (w) => w.entity === to.entity && w.id === row['id'] && (w.op === 'created' || w.fields.includes(to.field)));
     if (created === null) misses.push(`${source} was created by no call in the gateway trace`);
     else if (wrote === null) misses.push(`${target} ${to.field} was written by no call in the gateway trace`);
     else if (wrote.source !== 'agent') misses.push(`${target} ${to.field} was written at gateway seq ${wrote.seq} by an ${wrote.source} delivery, not by the agent`);

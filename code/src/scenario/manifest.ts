@@ -9,7 +9,6 @@ import { alias, linkSchema, type LinkEnd } from './links.ts';
 const method = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const pathname = z.string().startsWith('/');
 const request = { method, path: pathname, body: z.json().optional() };
-/** The nth agent request to `world` with this method and exact pathname. */
 const match = { world: alias, method, path: pathname, nth: z.number().int().positive().default(1) };
 const faultSchema = z.discriminatedUnion('kind', [
   z.strictObject({ ...match, kind: z.literal('drop_response') }),

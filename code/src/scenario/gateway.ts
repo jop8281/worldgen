@@ -14,7 +14,6 @@ export type BoundaryCall = {
   readonly fault: FaultKind | EventFault | null;
   readonly source: Source;
 };
-/** An event the gateway did not deliver: the seq of the delivery that triggered it, its name, and why. */
 export type Undelivered = { readonly after: number; readonly event: string; readonly reason: string };
 export type GateResult = { readonly world: string; readonly task: string; readonly score: number };
 export type ScenarioVerdict = { readonly verdict: 0 | 1; readonly gates: readonly GateResult[]; readonly links: readonly LinkResult[] };
@@ -49,7 +48,6 @@ const DELIVERY: Record<FaultKind | 'normal', { readonly deliveries: number; read
   operator: { deliveries: 1, reply: (first) => first },
 };
 
-/** An operator's or an event's request, its body sent as JSON. */
 const jsonDelivery = (r: JsonRequest): Delivery => ({
   world: r.world,
   method: r.method,
@@ -121,7 +119,6 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
     const calls: BoundaryCall[] = [];
     const undelivered: Undelivered[] = [];
     const faults = scenario.faults.map((f) => ({ ...f, seen: 0 }));
-    // Event requests an out_of_order rule holds, by rule index; a Map iterates in the order they arrived.
     const held = new Map<number, Delivery>();
     let delivered = 0;
     let turn: Promise<unknown> = Promise.resolve();
@@ -132,7 +129,6 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
       return run;
     };
 
-    // An agent's or operator's delivery fires each event rule it matches, right after it; an event's delivery fires none.
     const deliver = async (d: Delivery, source: Source, fault: BoundaryCall['fault']): Promise<Upstream> => {
       delivered += 1;
       const seq = delivered;
@@ -238,7 +234,6 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
         const url = new URL(req.url ?? '/', 'http://admin');
         if (req.method === 'GET' && url.pathname === '/_scenario/trace') return send(res, json(200, { calls, undelivered }));
         if (req.method === 'POST' && url.pathname === '/_scenario/grade') {
-          // A held event is delivered before the grade reads any world, so none is lost.
           return send(res, await serially(async () => {
             await flush();
             return grade();

@@ -1,8 +1,6 @@
 import type { EventFault, ScenarioEvent } from './manifest.ts';
 
-/** A request the gateway makes for an operator fault or an event rule, with a JSON body. */
 export type JsonRequest = { readonly world: string; readonly method: string; readonly path: string; readonly body?: unknown };
-/** What one firing of a rule sends now, in order, and the request it leaves held for the rule's next firing. */
 type Release<R> = { readonly send: readonly R[]; readonly hold: R | undefined };
 
 /**
