@@ -1,0 +1,51 @@
+{
+  "manifest_version": 2,
+  "schema_version": 2,
+  "provider": "anthropic",
+  "model": "claude-haiku-5-5",
+  "prompt_versions": [
+    "solver-prompt-1"
+  ],
+  "config_versions": [
+    "cfg-07e2771c91cb"
+  ],
+  "engine_commits": [
+    "23520120c53ee78b5bdf00530dd982d18aba070c"
+  ],
+  "run_ids": [
+    "p3-gen-stripe-customers"
+  ],
+  "selection": null,
+  "worlds": [
+    {
+      "world_id": "gen_stripe_customers",
+      "world_version": "1928300b0fc216eca6c46b84c7ea321154db905ebad9de525e6b0fa1c54372a5",
+      "artifact": {
+        "path": "private/worlds/1928300b0fc216eca6c46b84c7ea321154db905ebad9de525e6b0fa1c54372a5/world.yaml",
+        "sha256": "1928300b0fc216eca6c46b84c7ea321154db905ebad9de525e6b0fa1c54372a5"
+      }
+    }
+  ],
+  "counts": {
+    "episodes": 3,
+    "by_verdict": {
+      "success": 3,
+      "partial": 0,
+      "failure": 0,
+      "infra": 0
+    },
+    "by_stop_reason": {
+      "done": 3
+    },
+    "by_failure_cause": {}
+  },
+  "files": {
+    "dataset": {
+      "path": "dataset.jsonl",
+      "records": 3,
+      "bytes": 95069,
+      "sha256": "f7316967eed723806bed0a823bf9103661877e6917b20f5719c105a0e755838a"
+    }
+  },
+  "grading_note": "The engine score certifies the final world state only. It does not independently certify that the final reply is factually correct."
+}
