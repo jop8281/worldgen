@@ -199,10 +199,15 @@ export type EpisodeInput = {
   readonly grade: EpisodeGrader;
   readonly nextTurn: NextTurn;
   readonly maxTurns: number;
-  /** Model spend left for the run, in USD, when this episode starts. */
+  /** Model spend this episode may use, in USD: its own budget, or what is left of a run's (limitScope). */
   readonly budgetLeftUsd: number;
-  /** Epoch ms after which the episode is cancelled. */
+  /** Epoch ms after which the episode is cancelled: its own deadline, or a run's (limitScope). */
   readonly deadline: number;
+  /**
+   * Whose budget and deadline these are: the episode's own (the default), or what is left of a run's shared ones. A cut
+   * by a run's is `run_budget_limit` or `run_time_limit`, which is infra, not the agent's failure (A-396).
+   */
+  readonly limitScope?: 'episode' | 'run';
   readonly now: () => number;
   readonly redact: Redactor;
   /** The operator's Ctrl-C. Aborting it cancels the pending call like the deadline does, and the episode stops as `interrupted`. */
@@ -269,8 +274,10 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
     usage.cache_write_tokens += u.cacheWriteTokens ?? 0;
     usage.cost_usd = Math.round((usage.cost_usd + costUsd) * 1e9) / 1e9;
   };
+  const runLimits = a.limitScope === 'run';
   const exhausted = (): { reason: StopReason; why: string } | null =>
-    usage.cost_usd >= a.budgetLeftUsd ? { reason: 'budget_limit', why: `the model budget is spent (${usage.cost_usd} USD of ${a.budgetLeftUsd} USD left at the start)` }
+    usage.cost_usd >= a.budgetLeftUsd
+      ? { reason: runLimits ? 'run_budget_limit' : 'budget_limit', why: `the ${runLimits ? "run's " : ''}model budget is spent (${usage.cost_usd} USD of ${a.budgetLeftUsd} USD left at the start)` }
       : a.interrupt?.aborted === true ? cancelled()
       : a.now() >= a.deadline ? cancelled()
       : null;
@@ -282,7 +289,8 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
   if (a.interrupt?.aborted === true) onInterrupt();
   a.interrupt?.addEventListener('abort', onInterrupt, { once: true });
   const cancelled = (): { reason: StopReason; why: string } =>
-    a.interrupt?.aborted === true ? { reason: 'interrupted', why: 'the operator interrupted the run' } : { reason: 'time_limit', why: 'the time limit passed' };
+    a.interrupt?.aborted === true ? { reason: 'interrupted', why: 'the operator interrupted the run' }
+      : runLimits ? { reason: 'run_time_limit', why: "the run's time limit passed" } : { reason: 'time_limit', why: 'the time limit passed' };
   try {
     const early = exhausted();
     if (early !== null) {

@@ -231,6 +231,12 @@ describe('outcome labels (A-389)', () => {
     assert.deepEqual(at({ score: null }, null), { reward: 0, verdict: 'infra', failure_cause: 'scored none', goals: null, guards: null });
     assert.deepEqual(at({ usage: { ...episode().usage, unaccounted_calls: 1 } }, counts(1, 1, 0, 0)), { reward: 1, verdict: 'partial', failure_cause: 'incomplete record', goals: { met: 1, total: 1 }, guards: { held: 0, total: 0 } });
     assert.deepEqual(at(failure({ stop_reason: 'invalid_turn', error: 'not a valid turn' }), counts(0, 1, 1, 1)), { reward: 0, verdict: 'failure', failure_cause: 'invalid_turn', goals: { met: 0, total: 1 }, guards: { held: 1, total: 1 } });
+    // An episode's own budget or deadline is the agent's; a run's shared one is not (A-396).
+    for (const [stop, verdict, cause] of [
+      ['budget_limit', 'failure', 'budget_limit'], ['time_limit', 'failure', 'time_limit'], ['run_budget_limit', 'infra', 'run budget'], ['run_time_limit', 'infra', 'run time'],
+    ] as const) {
+      assert.deepEqual(at(failure({ stop_reason: stop, error: 'cut' }), counts(0, 1, 1, 1)), { reward: 0, verdict, failure_cause: cause, goals: { met: 0, total: 1 }, guards: { held: 1, total: 1 } }, stop);
+    }
   });
 
   it('refuses an outcome the record does not imply, half-counted grades and a count above its total', () => {
