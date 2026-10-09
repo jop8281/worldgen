@@ -110,6 +110,19 @@ const KEY_PET_TESTS_3 = 'snippet.runtime_error@tests/place_order_refusals/script
 const PET_TEST_OPS: ReadonlyMap<string, readonly string[]> = new Map([
   ['place_order_refusals', ['POST /store/orders']], ['order_progress', ['GET /store/orders/{}', 'POST /store/orders']], ['delete_order_returns_stock', ['DELETE /store/orders/{}', 'POST /store/orders']],
 ]);
+/** The exact operation petstore's spec check names, as the loop records it for KEY_PET_SPEC (A-406, J193). */
+const PET_INPUT_OPS: ReadonlyMap<string, readonly string[]> = new Map([[KEY_PET_SPEC, ['POST /store/orders']]]);
+// J193: a frozen test of GET /tickets/{} alternating with a check on the nested GET /tickets/{ticket_id}/events. The joined key
+// 'input/openapi/GET /tickets/{}/events/…' starts with 'input/openapi/GET /tickets/{}/', yet the two are different operations.
+const ticketTestFailed = issue('test.failed', ['tests', 'unknown_ticket_404', 'script'], { message: 'expected not_found' }, 'expected not_found, got row.not_found');
+const eventsReasonOptional = issue('openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}/events', 'request', 'reason'], { op: 'GET /tickets/{ticket_id}/events', field: 'reason' }, 'reason is optional');
+const ticketReasonOptional = issue('openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason'], { op: 'GET /tickets/{ticket_id}', field: 'reason' }, 'reason is optional');
+const workflowKey = (i: CheckIssue): string => attemptIssueSet(rejected(i), owned([i, 'workflow'])) ?? '';
+const KEY_TICKET_TEST = workflowKey(ticketTestFailed);
+const KEY_EVENTS_SPEC = workflowKey(eventsReasonOptional);
+const KEY_TICKET_SPEC = workflowKey(ticketReasonOptional);
+const TICKET_TEST_OPS: ReadonlyMap<string, readonly string[]> = new Map([['unknown_ticket_404', ['GET /tickets/{}']]]);
+const TICKET_INPUT_OPS: ReadonlyMap<string, readonly string[]> = new Map([[KEY_EVENTS_SPEC, ['GET /tickets/{}/events']], [KEY_TICKET_SPEC, ['GET /tickets/{}']]]);
 // e3's review of #179: a frozen test of another operation, broken by the step's own code, alternating with the spec check.
 const KEY_CATEGORIES = 'test.failed@tests/list_categories_lists_seeded/script: expected 200, got 500';
 const refusalsThrew = issue('snippet.runtime_error', ['tests', 'place_order_refusals', 'script'], { message: "undefined is not an object (evaluating 'missing.body.error.type')" },
@@ -149,6 +162,7 @@ type Row = {
   step: StepId;
   last?: boolean;
   testOperations?: ReadonlyMap<string, readonly string[]>;
+  inputOperations?: ReadonlyMap<string, readonly string[]>;
   ledger?: Partial<Ledger>;
   nowMs?: number;
   config?: Partial<Config>;
@@ -217,10 +231,10 @@ const rows: Row[] = [
     outcome: rejected(threw), issues: owned([threw, 'workflow']), want: { kind: 'backtrack', to: 'plan' } },
   // A-406: a step that fails only frozen tests between two sightings of another issue set is trading the plan's tests against
   // a check it cannot drop, so the plan that wrote the tests gets both, instead of a no_progress stop.
-  { name: 'petstore-store, stress-8: workflow alternating the spec check with frozen tests backtracks to plan, not no_progress', step: 'workflow', testOperations: PET_TEST_OPS,
+  { name: 'petstore-store, stress-8: workflow alternating the spec check with frozen tests backtracks to plan, not no_progress', step: 'workflow', testOperations: PET_TEST_OPS, inputOperations: PET_INPUT_OPS,
     ledger: { attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'backtrack', to: 'plan', tradedTests: true } },
-  { name: 'the same alternation stops backtrack_limit when no backtrack is left', step: 'workflow', testOperations: PET_TEST_OPS,
+  { name: 'the same alternation stops backtrack_limit when no backtrack is left', step: 'workflow', testOperations: PET_TEST_OPS, inputOperations: PET_INPUT_OPS,
     ledger: { backtracks: 2, attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'stop', reason: { kind: 'backtrack_limit', step: 'workflow', backtracks: 2 } } },
   { name: 'a frozen test failing only before the repeated set is no trade: it still stops no_progress', step: 'workflow',
@@ -231,11 +245,11 @@ const rows: Row[] = [
     ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_SPEC, KEY_TF_AND_ACTION, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
     want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
-  { name: 'the mirror order, the same frozen tests failing around the spec check, backtracks with both sides for the plan', step: 'workflow', testOperations: PET_TEST_OPS,
+  { name: 'the mirror order, the same frozen tests failing around the spec check, backtracks with both sides for the plan', step: 'workflow', testOperations: PET_TEST_OPS, inputOperations: PET_INPUT_OPS,
     ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_3, KEY_PET_SPEC, KEY_PET_TESTS_3], seed: [], tasks: [] } },
     outcome: rejected(refusalsThrew), issues: owned([refusalsThrew, 'workflow']), want: { kind: 'backtrack', to: 'plan', tradedTests: true } },
   { name: 'a frozen test of another operation alternating with the spec check is no trade: it still stops no_progress (e3, #179)', step: 'workflow',
-    testOperations: new Map([...PET_TEST_OPS, ['list_categories_lists_seeded', ['GET /categories']]]),
+    testOperations: new Map([...PET_TEST_OPS, ['list_categories_lists_seeded', ['GET /categories']]]), inputOperations: PET_INPUT_OPS,
     ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_SPEC, KEY_CATEGORIES, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
     want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
@@ -243,6 +257,20 @@ const rows: Row[] = [
     ledger: { attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
     want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
+  // J193: a trade compares whole operations, so a check on a nested sub-operation of what the tests exercise is no trade (A-406).
+  { name: 'a frozen test of GET /tickets/{} failing around a check on its nested GET /tickets/{}/events goes back to the plan untraded (J193)', step: 'workflow',
+    testOperations: TICKET_TEST_OPS, inputOperations: TICKET_INPUT_OPS,
+    ledger: { attempts: { plan: 1, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_TICKET_TEST, KEY_EVENTS_SPEC, KEY_TICKET_TEST], seed: [], tasks: [] } },
+    outcome: rejected(ticketTestFailed), issues: owned([ticketTestFailed, 'workflow']), want: { kind: 'backtrack', to: 'plan' } },
+  { name: 'the mirror, the nested GET /tickets/{}/events check around a GET /tickets/{} test, is no trade: it stops no_progress (J193)', step: 'workflow',
+    testOperations: TICKET_TEST_OPS, inputOperations: TICKET_INPUT_OPS,
+    ledger: { attempts: { plan: 1, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_EVENTS_SPEC, KEY_TICKET_TEST, KEY_EVENTS_SPEC], seed: [], tasks: [] } },
+    outcome: rejected(eventsReasonOptional), issues: owned([eventsReasonOptional, 'workflow']),
+    want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_EVENTS_SPEC, lastIssues: [eventsReasonOptional] } } },
+  { name: 'a check on GET /tickets/{} itself around that test is the trade, with both sides for the plan (J193)', step: 'workflow',
+    testOperations: TICKET_TEST_OPS, inputOperations: TICKET_INPUT_OPS,
+    ledger: { attempts: { plan: 1, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_TICKET_SPEC, KEY_TICKET_TEST, KEY_TICKET_SPEC], seed: [], tasks: [] } },
+    outcome: rejected(ticketReasonOptional), issues: owned([ticketReasonOptional, 'workflow']), want: { kind: 'backtrack', to: 'plan', tradedTests: true } },
   { name: 'workflow trading its own error against a frozen test is no trade with the input: it still stops no_progress', step: 'workflow',
     ledger: { attempts: { plan: 1, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_ACTION, KEY_TF, KEY_ACTION], seed: [], tasks: [] } },
     outcome: rejected(actionBad), issues: owned([actionBad, 'workflow']),
@@ -397,7 +425,10 @@ describe('decide', () => {
   for (const row of rows) {
     it(row.name, () => {
       const cfg: Config = { ...config, ...row.config };
-      const state = { step: row.step, ledger: ledger(row.ledger), nowMs: row.nowMs ?? START + MIN, ...(row.testOperations === undefined ? {} : { testOperations: row.testOperations }) };
+      const state = {
+        step: row.step, ledger: ledger(row.ledger), nowMs: row.nowMs ?? START + MIN,
+        ...(row.testOperations === undefined ? {} : { testOperations: row.testOperations }), ...(row.inputOperations === undefined ? {} : { inputOperations: row.inputOperations }),
+      };
       const got = decide(cfg, row.last === undefined ? state : { ...state, last: row.last }, row.outcome, row.issues);
       assert.deepEqual(got, row.want);
     });
