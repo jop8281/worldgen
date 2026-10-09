@@ -129,18 +129,22 @@ From `bun run difficulty` runs in `eval/difficulty/` (A-391). A pass is an engin
 
 ### Dataset exports
 
-From the `manifest.json` of each export folder in `eval/dataset/` (YOS-91). The denominator is the episodes an export holds. A success is a complete success: stopped done, an engine score of exactly 1, a non-blank final reply, both state hashes and fully accounted spend. A schema-2 export counts every episode by verdict: success, partial, failure or infra (A-389, A-396). A schema-1 export counts only the successes and the rest.
+From the `manifest.json` of each export folder in `eval/dataset/`, one per world, grouped by the folder that holds the world folders: an export, or one pass of an export made in passes (YOS-91). The denominator is the episodes the manifests count. A success is a complete success: stopped done, an engine score of exactly 1, a non-blank final reply, both state hashes and fully accounted spend. A schema-2 manifest counts every episode by verdict: success, partial, failure or infra (A-389, A-396). A schema-1 manifest counts only the successes and the rest.
 
-| Export manifest | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success |
-|---|--:|---|--:|--:|--:|--:|--:|--:|
-| `eval/dataset/2026-10-07/gen-insurance-claims/manifest.json` | 1 | claude-sonnet-5-5 | 8 | 8 | - | - | - | 0 |
-| `eval/dataset/2026-10-07/gen-library-loans/manifest.json` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 |
-| `eval/dataset/2026-10-07/gen-orders/manifest.json` | 1 | claude-sonnet-5-5 | 4 | 4 | - | - | - | 0 |
-| `eval/dataset/2026-10-07/gen-repair-desk/manifest.json` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 |
-| `eval/dataset/2026-10-07/gen-stripe-charges/manifest.json` | 1 | claude-sonnet-5-5 | 8 | 8 | - | - | - | 0 |
-| `eval/dataset/2026-10-07/helpdesk/manifest.json` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 |
-| **Total** |  |  | 38 | 38 |  |  |  | 0 |
+| Manifests | World folders | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success |
+|---|--:|---|---|--:|--:|--:|--:|--:|--:|
+| `eval/dataset/2026-10-07/*/manifest.json` | 6 | 1 | claude-sonnet-5-5 | 38 | 38 | - | - | - | 0 |
+| `eval/dataset/2026-10-09-sweep/p1/*/manifest.json` | 25 | 2 | claude-haiku-5-5 | 95 | 89 | 4 | 2 | 0 | 6 |
+| `eval/dataset/2026-10-09-sweep/p2/*/manifest.json` | 25 | 2 | claude-haiku-5-5 | 95 | 89 | 4 | 2 | 0 | 6 |
+| `eval/dataset/2026-10-09-sweep/p3/*/manifest.json` | 25 | 2 | claude-haiku-5-5 | 95 | 89 | 3 | 2 | 1 | 6 |
+| `eval/dataset/2026-10-09-sweep/s1/*/manifest.json` | 4 | 2 | claude-sonnet-5-5 | 16 | 11 | 0 | 1 | 4 | 5 |
+| `eval/dataset/2026-10-09-sweep/s2/*/manifest.json` | 4 | 2 | claude-sonnet-5-5 | 16 | 11 | 0 | 1 | 4 | 5 |
+| `eval/dataset/2026-10-09-sweep/s3/*/manifest.json` | 4 | 2 | claude-sonnet-5-5 | 16 | 10 | 0 | 1 | 5 | 6 |
+| `eval/dataset/2026-10-09-sweep/t1/*/manifest.json` | 2 | 2 | claude-sonnet-5-5 | 8 | 5 | 0 | 0 | 3 | 3 |
+| `eval/dataset/2026-10-09-sweep/t2/*/manifest.json` | 2 | 2 | claude-sonnet-5-5 | 8 | 2 | 1 | 0 | 5 | 6 |
+| `eval/dataset/2026-10-09-sweep/t3/*/manifest.json` | 2 | 2 | claude-sonnet-5-5 | 8 | 2 | 1 | 1 | 4 | 6 |
+| **Total** | 99 |  |  | 395 | 346 |  |  |  | 49 |
 
-No schema-2 export is committed yet, so no partial, failure or infra count is shown: the committed exports predate A-389.
+Schema-2 manifests, in 9 folders, count 357 episodes: 308 success, 13 partial, 10 failure, 26 infra.
 
 Limits: few tasks, few episodes and few models; a 3-of-3 cell cannot tell easy from medium. The engine score certifies the final world state, not the agent's final reply. An export holds the runs someone chose to export, so its success share is not a sample of all tasks.

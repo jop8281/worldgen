@@ -331,6 +331,45 @@ export function exportCounts(m: Manifest | ManifestV1): { readonly episodes: num
   return { episodes: m.counts.episodes, success: v.success, partial: v.partial, failure: v.failure, infra: v.infra, notSuccess: v.partial + v.failure + v.infra };
 }
 
+export type ExportGroup = {
+  /** The folder that holds the world folders, such as eval/dataset/2026-10-07 or eval/dataset/2026-10-09-sweep/p1. */
+  readonly folder: string;
+  readonly manifests: number;
+  readonly schemas: readonly number[];
+  readonly models: readonly string[];
+  readonly episodes: number;
+  readonly success: number;
+  /** Summed over the schema-2 manifests; null when the folder has none. */
+  readonly partial: number | null;
+  readonly failure: number | null;
+  readonly infra: number | null;
+  readonly notSuccess: number;
+  /** Schema-2 manifests exported with successes only. */
+  readonly successesOnly: number;
+};
+
+/** Readable export manifests, grouped by the folder above their world folder, in the order given. */
+export function exportGroups(exports: readonly ExportInput[]): ExportGroup[] {
+  const groups = new Map<string, ExportGroup>();
+  const add = (n: number | null, m: number | null): number | null => (n === null ? m : m === null ? n : n + m);
+  for (const e of exports) {
+    if (!('manifest' in e)) continue;
+    const folder = e.source.split('/').slice(0, -2).join('/');
+    const c = exportCounts(e.manifest);
+    const g = groups.get(folder);
+    const only = e.manifest.manifest_version !== 1 && e.manifest.selection?.successes_only === true ? 1 : 0;
+    groups.set(folder, {
+      folder, manifests: (g?.manifests ?? 0) + 1,
+      schemas: [...new Set([...(g?.schemas ?? []), e.manifest.schema_version])].sort((a, b) => a - b),
+      models: [...new Set([...(g?.models ?? []), e.manifest.model])].sort(),
+      episodes: (g?.episodes ?? 0) + c.episodes, success: (g?.success ?? 0) + c.success,
+      partial: add(g?.partial ?? null, c.partial), failure: add(g?.failure ?? null, c.failure), infra: add(g?.infra ?? null, c.infra),
+      notSuccess: (g?.notSuccess ?? 0) + c.notSuccess, successesOnly: (g?.successesOnly ?? 0) + only,
+    });
+  }
+  return [...groups.values()];
+}
+
 function agentCard(inputs: ScorecardInputs): string[] {
   const out = [
     '## 4. Agent: how often does an agent solve a task?',
@@ -364,29 +403,27 @@ function agentCard(inputs: ScorecardInputs): string[] {
       '',
     );
   }
-  const read = inputs.exports.flatMap((e) => ('manifest' in e ? [e] : []));
-  const v2 = read.filter((e) => e.manifest.manifest_version !== 1);
-  const successesOnly = v2.filter((e) => e.manifest.manifest_version !== 1 && e.manifest.selection?.successes_only === true);
-  const total = (es: typeof read, f: (c: ReturnType<typeof exportCounts>) => number): number => es.reduce((n, e) => n + f(exportCounts(e.manifest)), 0);
+  const groups = exportGroups(inputs.exports);
+  const unreadable = inputs.exports.flatMap((e) => ('error' in e ? [e] : []));
+  const v2 = groups.filter((g) => g.partial !== null);
+  const sum = (gs: readonly ExportGroup[], f: (g: ExportGroup) => number): number => gs.reduce((n, g) => n + f(g), 0);
   const dash = (n: number | null): string | number => n ?? '-';
+  const successesOnly = groups.filter((g) => g.successesOnly > 0);
   out.push(
     '### Dataset exports',
     '',
-    'From the `manifest.json` of each export folder in `eval/dataset/` (YOS-91). The denominator is the episodes an export holds. A success is a complete success: stopped done, an engine score of exactly 1, a non-blank final reply, both state hashes and fully accounted spend. A schema-2 export counts every episode by verdict: success, partial, failure or infra (A-389, A-396). A schema-1 export counts only the successes and the rest.',
+    'From the `manifest.json` of each export folder in `eval/dataset/`, one per world, grouped by the folder that holds the world folders: an export, or one pass of an export made in passes (YOS-91). The denominator is the episodes the manifests count. A success is a complete success: stopped done, an engine score of exactly 1, a non-blank final reply, both state hashes and fully accounted spend. A schema-2 manifest counts every episode by verdict: success, partial, failure or infra (A-389, A-396). A schema-1 manifest counts only the successes and the rest.',
     '',
-    '| Export manifest | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success |',
-    '|---|--:|---|--:|--:|--:|--:|--:|--:|',
-    ...inputs.exports.map((e) => {
-      if (!('manifest' in e)) return row([code(e.source), '-', '-', '-', '-', '-', '-', '-', `unreadable: ${e.error}`]);
-      const c = exportCounts(e.manifest);
-      return row([code(e.source), e.manifest.schema_version, e.manifest.model, c.episodes, c.success, dash(c.partial), dash(c.failure), dash(c.infra), c.notSuccess]);
-    }),
-    row(['**Total**', '', '', total(read, (c) => c.episodes), total(read, (c) => c.success), '', '', '', total(read, (c) => c.notSuccess)]),
+    '| Manifests | World folders | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success |',
+    '|---|--:|---|---|--:|--:|--:|--:|--:|--:|',
+    ...groups.map((g) => row([code(`${g.folder}/*/manifest.json`), g.manifests, g.schemas.join(', '), g.models.join(', '), g.episodes, g.success, dash(g.partial), dash(g.failure), dash(g.infra), g.notSuccess])),
+    row(['**Total**', sum(groups, (g) => g.manifests), '', '', sum(groups, (g) => g.episodes), sum(groups, (g) => g.success), '', '', '', sum(groups, (g) => g.notSuccess)]),
     '',
+    ...(unreadable.length === 0 ? [] : [...unreadable.map((e) => `- ${code(e.source)} is unreadable, so it is not counted: ${e.error}`), '']),
     v2.length === 0
       ? 'No schema-2 export is committed yet, so no partial, failure or infra count is shown: the committed exports predate A-389.'
-      : `${v2.length} schema-2 export ${plural(v2.length, 'folder holds', 'folders hold')} ${total(v2, (c) => c.episodes)} episodes: ${total(v2, (c) => c.success)} success, ${total(v2, (c) => c.partial ?? 0)} partial, ${total(v2, (c) => c.failure ?? 0)} failure, ${total(v2, (c) => c.infra ?? 0)} infra.`,
-    ...(successesOnly.length === 0 ? [] : ['', `${successesOnly.map((e) => code(e.source)).join(', ')} ${plural(successesOnly.length, 'was', 'were')} exported with successes only, so ${plural(successesOnly.length, 'its', 'their')} zero partial, failure and infra counts say nothing was kept, not that nothing failed.`]),
+      : `Schema-2 manifests, in ${v2.length} ${plural(v2.length, 'folder', 'folders')}, count ${sum(v2, (g) => g.episodes)} episodes: ${sum(v2, (g) => g.success)} success, ${sum(v2, (g) => g.partial ?? 0)} partial, ${sum(v2, (g) => g.failure ?? 0)} failure, ${sum(v2, (g) => g.infra ?? 0)} infra.`,
+    ...(successesOnly.length === 0 ? [] : ['', `${successesOnly.map((g) => code(`${g.folder}/`)).join(', ')} ${plural(successesOnly.length, 'holds', 'hold')} exports made with successes only, so ${plural(successesOnly.length, 'its', 'their')} zero partial, failure and infra counts say nothing was kept, not that nothing failed.`]),
     '',
     'Limits: few tasks, few episodes and few models; a 3-of-3 cell cannot tell easy from medium. The engine score certifies the final world state, not the agent\'s final reply. An export holds the runs someone chose to export, so its success share is not a sample of all tasks.',
   );
