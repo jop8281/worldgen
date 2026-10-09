@@ -48,6 +48,7 @@ Training benefit is not claimed: [research/training-experiment.md](../../researc
 
 - The live `--only /store` acceptance run: 248 s and $0.82 on `e034036c`, done, with `check` and `verify` passing. Its output stays outside the repository. The receipt is a comment on [YOS-244](https://linear.app/yossi-zozo123/issue/YOS-244).
 - The live-run dress rehearsal: 3 of 3 delivered in 13.2 minutes for $3.55. The receipt is on [YOS-100](https://linear.app/yossi-zozo123/issue/YOS-100).
+- The full check on a Boat VM: BOATCI_LINE. [scripts/boat-ci.sh](../../scripts/boat-ci.sh) runs the typecheck and every test on a ref in a large Boat VM, and prints the test counts and a PASS or FAIL line. It needs a Boat key, so a clone without one cannot rerun it.
 - The difficulty pilot. Its numbers rest on the committed `difficulty.json` and `difficulty.md` in `eval/difficulty/2026-10-09-pilot/`, which keep the matrix and a row for each episode that ran to the end. The episode traces stay outside the repository. Measuring again calls a model, at a new cost.
 
 ## Answers in the committed worlds
