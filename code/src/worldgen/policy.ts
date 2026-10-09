@@ -35,11 +35,25 @@ export type Ledger = {
 /**
  * `testOperations`: for each frozen acceptance test, the operations it exercises as `operationKey`s, so a trade between a
  * failing test and an input check counts only when they concern the same operation (A-406). Absent, no trade is confirmed.
+ * `inputOperations`: for each issue-set key the loop recorded, the operations its input issues name
+ * (`attemptInputOperations`), compared whole with the tests', so a check on a nested sub-operation is no trade (J193). A key
+ * it does not hold names none.
  */
-export type LoopState = { readonly step: StepId; readonly ledger: Ledger; readonly nowMs: number; readonly last?: boolean; readonly testOperations?: ReadonlyMap<string, readonly string[]> };
+export type LoopState = {
+  readonly step: StepId;
+  readonly ledger: Ledger;
+  readonly nowMs: number;
+  readonly last?: boolean;
+  readonly testOperations?: ReadonlyMap<string, readonly string[]>;
+  readonly inputOperations?: ReadonlyMap<string, readonly string[]>;
+};
 
 /** An operation as a trade compares it: `METHOD path`, every `{param}` written `{}`, since a spec and a world may name a parameter differently. */
 export const operationKey = (method: string, path: string): string => `${method.toUpperCase()} ${path.replace(/\{[^}]*\}/g, '{}')}`;
+
+/** The operation an input issue names at `input/openapi/<METHOD path>`, as `operationKey` writes it, or null. Read from the path array, so a nested operation never reads as its parent. */
+export const namedOperation = (i: CheckIssue): string | null =>
+  (i.path[0] === 'input' && i.path[1] === 'openapi' && typeof i.path[2] === 'string' ? i.path[2].replace(/\{[^}]*\}/g, '{}') : null);
 
 /** Spend over the limit that an accepted last step was allowed to keep. The loop reports it as a warning. */
 export type Overspend = { readonly spentUsd: number; readonly limitUsd: number };
@@ -172,13 +186,14 @@ const entryPath = (entry: string): string => {
 };
 
 /**
- * Whether a tests-only set and an input set concern one operation: some test the first fails exercises an operation an
- * input-rooted issue of the second names at `input/openapi/<METHOD path>`, parameters compared as `{}`.
+ * Whether a tests-only set and an input set concern one operation: some test the first fails exercises an operation that
+ * an input-rooted issue of the second names, compared whole (`inputOperations`, parameters as `{}`). The joined key cannot
+ * tell `GET /tickets/{}/events` from `GET /tickets/{}` followed by more path, so the operations come from the issues (J193).
  */
-function sameOperation(testsKey: string, inputSet: string, testOperations: ReadonlyMap<string, readonly string[]>): boolean {
+function sameOperation(testsKey: string, inputSet: string, testOperations: ReadonlyMap<string, readonly string[]>, inputOperations: ReadonlyMap<string, readonly string[]>): boolean {
   const tests = keyEntries(testsKey).filter((e) => !e.startsWith('layer.blocked@')).map((e) => entryPath(e).split('/')[1] ?? '');
-  const named = keyEntries(inputSet).map(entryPath).filter((p) => p.startsWith('input/')).map((p) => p.replace(/\{[^}]*\}/g, '{}'));
-  return tests.some((id) => (testOperations.get(id) ?? []).some((op) => named.some((p) => p === `input/openapi/${op}` || p.startsWith(`input/openapi/${op}/`))));
+  const named = inputOperations.get(inputSet) ?? [];
+  return tests.some((id) => (testOperations.get(id) ?? []).some((op) => named.includes(op)));
 }
 
 /**
@@ -188,10 +203,10 @@ function sameOperation(testsKey: string, inputSet: string, testOperations: Reado
  * holds until the plan rewrites its tests (A-406). A step trading its own error against a test, or an input check
  * against a test of another operation, is not this: it still stops.
  */
-function tradedTests(seen: readonly string[], key: string, testOperations: ReadonlyMap<string, readonly string[]>): boolean {
+function tradedTests(seen: readonly string[], key: string, testOperations: ReadonlyMap<string, readonly string[]>, inputOperations: ReadonlyMap<string, readonly string[]>): boolean {
   const between = seen.slice(seen.indexOf(key) + 1, seen.lastIndexOf(key)).filter((k) => k !== key);
-  if (testsOnlyKey(key)) return between.some((k) => inputKey(k) && sameOperation(key, k, testOperations));
-  return inputKey(key) && between.some((k) => testsOnlyKey(k) && sameOperation(k, key, testOperations));
+  if (testsOnlyKey(key)) return between.some((k) => inputKey(k) && sameOperation(key, k, testOperations, inputOperations));
+  return inputKey(key) && between.some((k) => testsOnlyKey(k) && sameOperation(k, key, testOperations, inputOperations));
 }
 
 /**
@@ -213,6 +228,11 @@ function countedIssues(outcome: AttemptOutcome, issues: readonly OwnedIssue[]): 
 export function attemptIssueSet(outcome: AttemptOutcome, issues: readonly OwnedIssue[]): string | null {
   if (outcome.kind !== 'rejected' && outcome.kind !== 'invalid_output') return null;
   return issueSetKey(countedIssues(outcome, issues));
+}
+
+/** The operations the counted issues of an attempt name at `input/openapi/<op>`, sorted: what `LoopState.inputOperations` holds for its `attemptIssueSet` key (J193). */
+export function attemptInputOperations(outcome: AttemptOutcome, issues: readonly OwnedIssue[]): readonly string[] {
+  return [...new Set(countedIssues(outcome, issues).map(namedOperation).filter((op): op is string => op !== null))].sort();
 }
 
 /** How long a call may take when its step has made none yet, by effort. Absent effort is the model default. */
@@ -399,7 +419,7 @@ export function decide(config: Config, state: LoopState, outcome: AttemptOutcome
     // Neither workflow nor seed can edit the plan's frozen tests, so a test they keep failing goes back to the plan that wrote it (A-161, A-165),
     // and so does a back and forth between those tests and a check the input fixes, with both sides for the plan (A-406).
     if ((step === 'workflow' || step === 'seed') && owned.length > 0) {
-      const traded = tradedTests(ledger.seenIssueSets[step] ?? [], key, state.testOperations ?? new Map());
+      const traded = tradedTests(ledger.seenIssueSets[step] ?? [], key, state.testOperations ?? new Map(), state.inputOperations ?? new Map());
       if (traded || owned.every((o) => isTestRun(o.issue))) {
         if (ledger.backtracks >= config.maxBacktracks) {
           return { kind: 'stop', reason: { kind: 'backtrack_limit', step, backtracks: ledger.backtracks } };

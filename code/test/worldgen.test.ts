@@ -1184,9 +1184,9 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     assert.equal(result.kind, 'done');
   });
 
-  it('tells the plan the deciding attempt\'s issues whole when no other side of the trade is found, never none (J192 review)', async () => {
-    // 66's block on #198: the policy's prefix match trades GET /tickets/{} against a check on the nested GET /tickets/{ticket_id}/events,
-    // whose exact operation tradedSide never matches, so an unguarded narrowing left the plan with no issues at all.
+  it('tells the plan the deciding attempt\'s failing tests whole when the check names only a nested sub-operation, never none (J192 review, J193)', async () => {
+    // 66's block on #198: a prefix match once traded GET /tickets/{} against a check on the nested GET /tickets/{ticket_id}/events, and an
+    // unguarded narrowing then left the plan no issues. Since J193 the two are no trade, so the frozen tests go back to the plan whole (A-161).
     const nested = issue('openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}/events', 'request', 'reason'], { op: 'GET /tickets/{ticket_id}/events', field: 'reason' }, 'reason is optional');
     const nestedCheck = (world: World): CheckReport =>
       world.actions.escalate_ticket?.description?.includes('(reason optional)') === true ? { ok: false, reached: 'lints', issues: [nested], warnings: [] } : checkWorld(world);
@@ -1197,6 +1197,33 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     ], { check: nestedCheck });
     const back = events.find((e) => e.t === 'backtracked');
     assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => String(i.path[1]))] : [], ['workflow', 'plan', ['unknown_ticket_404', 'customers_teapot']]);
+    assert.equal(result.kind, 'done');
+  });
+
+  // J193: a trade compares whole operations (A-406), and the plan sees only the input issues of the traded operation (A-416).
+  const eventsReasonOptional = issue('openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}/events', 'request', 'reason'], { op: 'GET /tickets/{ticket_id}/events', field: 'reason' }, 'reason is optional');
+  const customersEmailOptional = issue('openapi.required_field_missing', ['input', 'openapi', 'POST /customers', 'request', 'email'], { op: 'POST /customers', field: 'email' }, 'email is optional');
+  /** specCheck with other input issues: the world with an optional escalate reason fails each of `issues`. */
+  const checkWith = (...issues: [CheckIssue, ...CheckIssue[]]) => (world: World): CheckReport =>
+    world.actions.escalate_ticket?.description?.includes('(reason optional)') === true ? { ok: false, reached: 'lints', issues, warnings: [] } : checkWorld(world);
+
+  it('stops, not trades, when the input check names a nested sub-operation of what the failing test exercises (J193)', async () => {
+    const { result, events } = await run([
+      { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },
+    ], { check: checkWith(eventsReasonOptional) });
+    assert.equal(events.some((e) => e.t === 'backtracked'), false);
+    assert.deepEqual(result.kind === 'stopped' ? [result.reason.kind, result.reason.kind === 'no_progress' ? result.reason.step : null] : result.kind, ['no_progress', 'workflow']);
+  });
+
+  it('when the input side decides the trade, hands the plan only the input issues of the traded operation, never another\'s (J193, A-416)', async () => {
+    const { result, events } = await run([
+      { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { check: checkWith(reasonOptional, customersEmailOptional) });
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => [i.code, i.path])] : [], [
+      'workflow', 'plan', [['openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason']], ['test.failed', ['tests', 'unknown_ticket_404', 'script']]],
+    ]);
     assert.equal(result.kind, 'done');
   });
 
