@@ -4,15 +4,16 @@
  * the work is in dataset/difficulty.ts.
  *
  * Exit codes: 0 the run completed or spent its budget, 1 it failed, was interrupted or met a cost
- * refusal (the matrix of what ran is still written), 2 bad usage or a model with no price, before
- * any model call.
+ * refusal (once episodes start, the matrix of what ran is still written), 2 bad usage, an --out that
+ * holds a run, or a model with no price, before any model call.
  */
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { difficultyMatrix, localRunner, renderDifficultyMd, runDifficulty, type DifficultyTask } from '../dataset/difficulty.ts';
+import { capsFromEnv, ledgerPath, openLedger } from '../costs/ledger.ts';
+import { difficultyMatrix, localRunner, modelCapLeft, renderDifficultyMd, runDifficulty, type DifficultyTask } from '../dataset/difficulty.ts';
 import { checkInChild } from '../dataset/pipeline.ts';
 import { GRADING_NOTE, RUN_ID, redactor } from '../dataset/schema.ts';
 import type { SolverProposer } from '../dataset/solver.ts';
@@ -30,9 +31,11 @@ export const USAGE = `usage: difficulty <world-dir>... --budget-usd <n> --out <d
 Runs N local agent episodes of each task per model on this machine (loopback, no Boat), grades each
 in the verifier child, and writes <out>/difficulty.json and <out>/difficulty.md: the pass rate with a
 Wilson 95% interval per task per model, the labeled tier beside the measured one, and the cost.
-Every model call is metered through the spend ledger. The first refused call stops the run, and no
-other model stands in.
-  --budget-usd <n>          hard cap on the whole run's model spend; required
+Every model call is metered through the spend ledger. An episode starts only while its whole budget
+fits in what is left of --budget-usd and under the spend caps; the first refused call stops the run,
+and no other model stands in.
+  --budget-usd <n>          the whole run's model spend; required. The claude CLI checks a call's
+                            allowance after the call, so the last episode can pass it by part of a call
   --out <dir>               where the matrix and every episode go; must not hold a difficulty run
   --run-id <id>             this run's name, at most ${MAX_RUN_ID} characters; episode k runs as <id>.k
   --engine-commit <sha>     the engine commit the episodes run, 7 to 64 hex digits
@@ -148,17 +151,17 @@ export async function main(argv: readonly string[], env: Env = process.env): Pro
     process.stderr.write(`${matrixFile} already holds a difficulty run; give a new --out\n`);
     return 2;
   }
-  const base = await loadConfig(CONFIG_FILE, {});
-  const unpriced = args.models.filter((m) => !isPriced(m, base.prices));
-  if (unpriced.length > 0) {
-    process.stderr.write(`no known price for ${unpriced.join(', ')}: add prices.<model> with inputPerMTok and outputPerMTok to worldgen.config.json; no other model stands in\n`);
-    return 2;
-  }
   const controller = new AbortController();
   const onSignal = (): void => controller.abort();
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   try {
+    const base = await loadConfig(CONFIG_FILE, {});
+    const unpriced = args.models.filter((m) => !isPriced(m, base.prices));
+    if (unpriced.length > 0) {
+      process.stderr.write(`no known price for ${unpriced.join(', ')}: add prices.<model> with inputPerMTok and outputPerMTok to worldgen.config.json; no other model stands in\n`);
+      return 2;
+    }
     const tasks = await plan(args, env);
     const proposers = new Map<string, SolverProposer>();
     for (const model of args.models) {
@@ -169,9 +172,13 @@ export async function main(argv: readonly string[], env: Env = process.env): Pro
     const options = { runId: args.runId, tasks, models: args.models, episodes: args.episodes, budgetUsd: args.budgetUsd, episodeBudgetUsd: args.episodeBudgetUsd };
     const run = await runDifficulty({
       ...options,
-      run: localRunner({ out: args.out, engineCommit: args.engineCommit, maxTurns: args.maxTurns, maxMinutes: args.maxMinutes, redact, proposers, interrupt: controller.signal }),
+      run: localRunner({
+        out: args.out, engineCommit: args.engineCommit, maxTurns: args.maxTurns, maxMinutes: args.maxMinutes, maxOutputTokens: SOLVER_MAX_OUTPUT_TOKENS,
+        redact, proposers, interrupt: controller.signal,
+      }),
+      capLeftUsd: modelCapLeft(openLedger(ledgerPath(env)), capsFromEnv(env)),
       interrupt: controller.signal,
-      onEpisode: (r) => process.stderr.write(`${redact.text(`${r.runId} ${r.world} ${r.task} ${r.model} #${r.index}: ${r.stopReason}, score ${r.score ?? 'none'}, $${r.costUsd}`)}\n`),
+      onEpisode: (r) => process.stderr.write(`${redact.text(`${r.runId} ${r.world} ${r.task} ${r.model} #${r.index}: ${r.stopReason}, score ${r.score ?? 'none'}, charged $${r.chargedUsd}`)}\n`),
     });
     const matrix = difficultyMatrix(options, run);
     await writeFile(matrixFile, `${redact.text(JSON.stringify(matrix, null, 2))}\n`);

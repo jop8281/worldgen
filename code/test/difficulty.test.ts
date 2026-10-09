@@ -10,10 +10,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
 import { parse } from '../src/cli/difficulty.ts';
-import { openLedger } from '../src/costs/ledger.ts';
+import { CostUnenforceableError, openLedger, SpendCapError } from '../src/costs/ledger.ts';
 import { meteredModel } from '../src/costs/meter.ts';
 import {
-  difficultyMatrix, localRunner, measuredTier, renderDifficultyMd, runDifficulty, wilson,
+  difficultyMatrix, isBudgetStop, isCostRefusal, localRunner, measuredTier, modelCapLeft, renderDifficultyMd, runDifficulty, wilson,
   type DifficultyRunOptions, type DifficultyTask, type EpisodeJob, type EpisodeOutcome,
 } from '../src/dataset/difficulty.ts';
 import { redactor, type StopReason } from '../src/dataset/schema.ts';
@@ -36,7 +36,9 @@ after(() => {
   for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
 });
 
-const outcome = (score: number | null, costUsd: number, stopReason: StopReason = 'done', refusal: string | null = null): Omit<EpisodeOutcome, 'episodeId'> => ({ score, stopReason, costUsd, refusal });
+const outcome = (score: number | null, costUsd: number, stopReason: StopReason = 'done', refusal: string | null = null, unaccountedCalls = 0): Omit<EpisodeOutcome, 'episodeId'> => ({
+  score, stopReason, costUsd, unaccountedCalls, refusal,
+});
 
 /** A runner that answers each job from `script`, keyed `task model index`, and records the jobs it was given. */
 function scriptedRunner(script: Readonly<Record<string, Omit<EpisodeOutcome, 'episodeId'> | Error>>): { run: DifficultyRunOptions['run']; jobs: string[] } {
@@ -73,6 +75,42 @@ describe('wilson and measuredTier', () => {
   });
 });
 
+describe('isCostRefusal, isBudgetStop and modelCapLeft', () => {
+  it('reads every refusal the ledger throws before a call, and nothing else', () => {
+    assert.deepEqual(
+      [
+        new SpendCapError({ cap: 'maxTotalUsd', capUsd: 1, spentUsd: 1, remainingUsd: 0 }, '2026-10-08'),
+        new CostUnenforceableError('maxDailyUsd', 'c1', 'cost admission refused: WORLDGEN_MAX_DAILY_USD cannot be enforced'),
+        new Error('cost admission refused: the ledger contains corrupt or incomplete records'),
+        new Error('model call failed: Anthropic API error 529: overloaded'),
+        'cost admission refused',
+      ].map(isCostRefusal),
+      [true, true, true, false, false],
+    );
+  });
+
+  it('reads a call its allowance stopped, in each way llm.ts words it', () => {
+    assert.deepEqual(
+      [
+        'claude -p failed (exit 1): error_max_budget_usd: Reached maximum budget ($0.02)',
+        'SDK admission refused: counted input and one output token do not fit the model estimate budget',
+        'model output hit max_tokens (250) before the tool call finished',
+        'model output hit max_tokens (4096) before the tool call finished',
+        'claude -p failed (exit 1): error_max_structured_output_retries: Failed to provide valid structured output after 5 attempts',
+      ].map((m) => isBudgetStop(new Error(m), 4096)),
+      [true, true, true, false, false],
+    );
+  });
+
+  it('leaves the least that a model-call cap leaves, ignores the sandbox cap, and is null with no cap', () => {
+    const ledger = openLedger(path.join(tmp('caps'), 'costs.jsonl'));
+    ledger.record({ provider: 'anthropic', account: 'sha256:e0dbaa0c6455', kind: 'model_call', usd: 1.25, estimated: false });
+    assert.equal(modelCapLeft(ledger, { maxTotalUsd: 10, maxDailyLlmUsd: 2, maxDailySandboxUsd: 0.1 })(), 0.75);
+    assert.equal(modelCapLeft(ledger, { maxDailySandboxUsd: 0.1 })(), null);
+    assert.equal(modelCapLeft(ledger, {})(), null);
+  });
+});
+
 describe('runDifficulty and difficultyMatrix', () => {
   it('runs every task with every model once per round and builds the literal matrix', async () => {
     const { run, jobs } = scriptedRunner({
@@ -98,10 +136,10 @@ describe('runDifficulty and difficultyMatrix', () => {
       { world: 'helpdesk', task: HARD.task, labeled: 'hard', trials: 4, passes: 1, passRate: 0.25, interval: [0.046, 0.699], measured: 'hard', agrees: true },
     ]);
     assert.deepEqual(m.cells, [
-      { world: 'helpdesk', task: EASY.task, labeled: 'easy', model: SONNET, episodes: 3, trials: 3, passes: 2, passRate: 0.667, interval: [0.208, 0.939], measured: 'easy', costUsd: 0.03, usdPerPass: 0.015, stops: { done: 2, turn_limit: 1 }, refused: 0 },
-      { world: 'helpdesk', task: EASY.task, labeled: 'easy', model: OPUS, episodes: 3, trials: 3, passes: 3, passRate: 1, interval: [0.439, 1], measured: 'easy', costUsd: 0.06, usdPerPass: 0.02, stops: { done: 3 }, refused: 0 },
-      { world: 'helpdesk', task: HARD.task, labeled: 'hard', model: SONNET, episodes: 3, trials: 2, passes: 0, passRate: 0, interval: [0, 0.658], measured: 'hard', costUsd: 0.03, usdPerPass: null, stops: { done: 2, model_error: 1 }, refused: 0 },
-      { world: 'helpdesk', task: HARD.task, labeled: 'hard', model: OPUS, episodes: 3, trials: 2, passes: 1, passRate: 0.5, interval: [0.095, 0.905], measured: 'medium', costUsd: 0.06, usdPerPass: 0.06, stops: { done: 2, world_error: 1 }, refused: 0 },
+      { world: 'helpdesk', task: EASY.task, labeled: 'easy', model: SONNET, episodes: 3, trials: 3, passes: 2, passRate: 0.667, interval: [0.208, 0.939], measured: 'easy', costUsd: 0.03, usdPerPass: 0.015, unaccountedCalls: 0, stops: { done: 2, turn_limit: 1 }, refused: 0 },
+      { world: 'helpdesk', task: EASY.task, labeled: 'easy', model: OPUS, episodes: 3, trials: 3, passes: 3, passRate: 1, interval: [0.439, 1], measured: 'easy', costUsd: 0.06, usdPerPass: 0.02, unaccountedCalls: 0, stops: { done: 3 }, refused: 0 },
+      { world: 'helpdesk', task: HARD.task, labeled: 'hard', model: SONNET, episodes: 3, trials: 2, passes: 0, passRate: 0, interval: [0, 0.658], measured: 'hard', costUsd: 0.03, usdPerPass: null, unaccountedCalls: 0, stops: { done: 2, model_error: 1 }, refused: 0 },
+      { world: 'helpdesk', task: HARD.task, labeled: 'hard', model: OPUS, episodes: 3, trials: 2, passes: 1, passRate: 0.5, interval: [0.095, 0.905], measured: 'medium', costUsd: 0.06, usdPerPass: 0.06, unaccountedCalls: 0, stops: { done: 2, world_error: 1 }, refused: 0 },
     ]);
   });
 
@@ -125,12 +163,30 @@ describe('runDifficulty and difficultyMatrix', () => {
 
   it('stops as failed when an episode cannot run, and as interrupted when the operator stops it', async () => {
     const failed = await runDifficulty({ ...base, tasks: [EASY], episodes: 1, run: scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: new Error('the world did not start serving') }).run });
-    assert.deepEqual(failed.stop, { kind: 'failed', message: `episode d1.1 (helpdesk ${EASY.task}, ${SONNET}) could not run: the world did not start serving` });
+    assert.deepEqual(failed.stop, { kind: 'failed', message: `episode d1.1 (helpdesk ${EASY.task}, ${SONNET}) could not run to the end: the world did not start serving` });
+    assert.equal(failed.spentUsd, 0.5);
     const stopped = new AbortController();
     stopped.abort();
     const { run, jobs } = scriptedRunner({});
     const interrupted = await runDifficulty({ ...base, tasks: [EASY], episodes: 1, run, interrupt: stopped.signal });
     assert.deepEqual([interrupted.stop, jobs.length], [{ kind: 'interrupted' }, 0]);
+  });
+
+  it('refuses the next episode when the spend caps no longer fit its budget', async () => {
+    const left = [2, 0.3];
+    const { run, jobs } = scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: outcome(1, 0.2) });
+    const r = await runDifficulty({ ...base, tasks: [EASY], episodes: 1, run, capLeftUsd: () => left.shift() ?? null });
+    assert.deepEqual(r.stop, { kind: 'cost_refused', message: "the spend caps leave $0.3 for model calls, less than one episode's $0.5 budget" });
+    assert.deepEqual([jobs.length, r.spentUsd], [1, 0.2]);
+  });
+
+  it('charges an episode with a call of unknown billing its whole budget', async () => {
+    const { run } = scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: outcome(0, 0.1, 'time_limit', null, 1), [`${EASY.task} ${OPUS} 1`]: outcome(1, 0.2) });
+    const options = { ...base, tasks: [EASY], episodes: 1 };
+    const r = await runDifficulty({ ...options, run });
+    assert.deepEqual([r.spentUsd, r.rows.map((e) => e.chargedUsd)], [0.7, [0.5, 0.2]]);
+    const cells = difficultyMatrix(options, r).cells;
+    assert.deepEqual(cells.map((c) => [c.costUsd, c.unaccountedCalls]), [[0.1, 1], [0.2, 0]]);
   });
 
   it('renders the literal Markdown matrix', async () => {
@@ -140,7 +196,9 @@ describe('runDifficulty and difficultyMatrix', () => {
     assert.equal(md, [
       '# Difficulty: d1',
       '',
-      'Models: claude-sonnet-5-5, claude-opus-5-5. Episodes per task per model: 1. Spent $0.03 of the $10 budget over 2 episodes, at most $0.5 each.',
+      'Models: claude-sonnet-5-5, claude-opus-5-5. Episodes per task per model: 1, each with a $0.5 budget.',
+      '',
+      'Charged $0.03 of the $10 budget over 2 episodes. An episode with a call of unknown billing is charged its whole budget; there were 0 such calls.',
       '',
       'Stop: complete.',
       '',
@@ -196,7 +254,7 @@ describe('localRunner over helpdesk with a fake Model', () => {
     const solver = fakeModel(SOLVE_EASY, 0.001);
     const lazy = fakeModel([FINISH], 0.001);
     const options = { runId: 'loc', tasks: [EASY], models: [SONNET, OPUS], episodes: 1, budgetUsd: 1, episodeBudgetUsd: 0.1 };
-    const run = localRunner({ out, engineCommit: 'abcdef1', maxTurns: 8, maxMinutes: 2, redact: redactor([]), proposers: new Map([[SONNET, solver], [OPUS, lazy]]) });
+    const run = localRunner({ out, engineCommit: 'abcdef1', maxTurns: 8, maxMinutes: 2, maxOutputTokens: 4096, redact: redactor([]), proposers: new Map([[SONNET, solver], [OPUS, lazy]]) });
     const r = await runDifficulty({ ...options, run });
     assert.deepEqual(r.stop, { kind: 'complete' });
     assert.deepEqual(r.rows.map((e) => [e.runId, e.model, e.stopReason, e.score, e.costUsd, e.refusal]), [
@@ -209,6 +267,18 @@ describe('localRunner over helpdesk with a fake Model', () => {
     assert.deepEqual([existsSync(path.join(out, 'episodes/loc.1/dataset.jsonl')), existsSync(path.join(out, 'episodes/loc.2/failures.jsonl'))], [true, true]);
   });
 
+  it('reads a call its allowance stopped as budget_limit, a trial, with its billed cost', async () => {
+    const out = tmp('budget');
+    const budgetStop = Object.assign(new Error('claude -p failed (exit 1): error_max_budget_usd: Reached maximum budget'), {
+      usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0 }, costUsd: 0.02, ms: 1,
+    });
+    const spender: SolverProposer = { propose: async () => { throw budgetStop; } };
+    const run = localRunner({ out, engineCommit: 'abcdef1', maxTurns: 8, maxMinutes: 2, maxOutputTokens: 4096, redact: redactor([]), proposers: new Map([[SONNET, spender]]) });
+    const r = await runDifficulty({ runId: 'bud', tasks: [EASY], models: [SONNET], episodes: 1, budgetUsd: 1, episodeBudgetUsd: 0.1, run });
+    assert.deepEqual(r.rows.map((e) => [e.stopReason, e.score, e.costUsd, e.unaccountedCalls, e.refusal]), [['budget_limit', 0, 0.02, 0, null]]);
+    assert.deepEqual(r.stop, { kind: 'complete' });
+  });
+
   it('stops the run when the spend ledger refuses the first call, before the fake Model is called', async () => {
     const out = tmp('refused');
     const ledger = openLedger(path.join(out, 'costs.jsonl'));
@@ -216,7 +286,7 @@ describe('localRunner over helpdesk with a fake Model', () => {
     const inner = fakeModel(SOLVE_EASY, 0.001);
     const metered = meteredModel(inner, ledger, { provider: 'anthropic', account: 'sha256:e0dbaa0c6455', caps: { maxTotalUsd: 1 } });
     const other = fakeModel([FINISH], 0.001);
-    const run = localRunner({ out, engineCommit: 'abcdef1', maxTurns: 8, maxMinutes: 2, redact: redactor([]), proposers: new Map([[SONNET, metered], [OPUS, other]]) });
+    const run = localRunner({ out, engineCommit: 'abcdef1', maxTurns: 8, maxMinutes: 2, maxOutputTokens: 4096, redact: redactor([]), proposers: new Map([[SONNET, metered], [OPUS, other]]) });
     const r = await runDifficulty({ runId: 'ref', tasks: [EASY], models: [SONNET, OPUS], episodes: 2, budgetUsd: 1, episodeBudgetUsd: 0.1, run });
     assert.equal(r.stop.kind, 'cost_refused');
     assert.match(r.stop.kind === 'cost_refused' ? r.stop.message : '', /^total spend cap WORLDGEN_MAX_TOTAL_USD=\$1\.00 reached/);

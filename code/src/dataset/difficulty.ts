@@ -4,13 +4,13 @@
  * by the verifier child, and builds the matrix: the pass rate with a Wilson 95% interval per task per
  * model, the task's labeled tier beside the tier its pass rate measures, and the cost.
  *
- * Spend goes through the metered proposer the caller injects, under one hard budget for the whole
- * run: an episode starts only while its full per-episode budget still fits. The first call the spend
- * ledger refuses stops the run, and no other model stands in for the refused one.
+ * Spend goes through the metered proposer the caller injects. An episode starts only while its whole
+ * budget fits in what is left of the run's budget and under the ledger's spend caps. The first call
+ * the ledger refuses stops the run, and no other model stands in for the refused one.
  */
 import path from 'node:path';
 import type { Difficulty } from '#engine';
-import { CostUnenforceableError, SpendCapError } from '../costs/ledger.ts';
+import { CAPS, CostUnenforceableError, SpendCapError, capStatus, type Ledger, type SpendCaps } from '../costs/ledger.ts';
 import type { Runner, Spawner } from '../sandboxes/backend.ts';
 import { runLocalEpisode } from './local.ts';
 import { GRADING_NOTE, STOP_REASONS, type Redactor, type StopReason } from './schema.ts';
@@ -27,21 +27,26 @@ export type EpisodeOutcome = {
   readonly episodeId: string;
   readonly score: number | null;
   readonly stopReason: StopReason;
+  /** The billed cost of the episode's calls. */
   readonly costUsd: number;
+  /** Calls whose billing is unknown, such as one cut off by the time limit. */
+  readonly unaccountedCalls: number;
   readonly refusal: string | null;
 };
 
 export type EpisodeRunner = (job: EpisodeJob) => Promise<EpisodeOutcome>;
 
-export type EpisodeRow = Omit<EpisodeJob, 'worldDir' | 'budgetUsd'> & EpisodeOutcome;
+/** `chargedUsd` is what the episode counts against the run's budget: its cost, or its whole budget when a call's billing is unknown. */
+export type EpisodeRow = Omit<EpisodeJob, 'worldDir' | 'budgetUsd'> & EpisodeOutcome & { readonly chargedUsd: number };
 
 export type DifficultyStop =
   | { readonly kind: 'complete' }
   /** The next episode's budget no longer fits in what is left of the run's. */
   | { readonly kind: 'budget_spent'; readonly leftUsd: number }
+  /** The ledger refused a call, or its spend caps no longer fit the next episode's budget. */
   | { readonly kind: 'cost_refused'; readonly message: string }
   | { readonly kind: 'interrupted' }
-  /** An episode could not run at all, for example because its world did not serve. */
+  /** An episode could not run to the end, for example because its world did not serve. */
   | { readonly kind: 'failed'; readonly message: string };
 
 export type DifficultyRunOptions = {
@@ -50,15 +55,18 @@ export type DifficultyRunOptions = {
   readonly models: readonly string[];
   /** Episodes per task per model. */
   readonly episodes: number;
-  /** The hard cap on the whole run's model spend. */
+  /** The cap on the whole run's model spend. */
   readonly budgetUsd: number;
   /** Each episode's budget. Every episode gets all of it, so every trial is measured under the same budget. */
   readonly episodeBudgetUsd: number;
   readonly run: EpisodeRunner;
+  /** What the ledger's spend caps leave for model calls, or null when none is set. Asked before each episode. */
+  readonly capLeftUsd?: () => number | null;
   readonly interrupt?: AbortSignal | undefined;
   readonly onEpisode?: (row: EpisodeRow) => void;
 };
 
+/** `spentUsd` is the sum of every episode's `chargedUsd`, and of the whole budget of an episode that could not run to the end. */
 export type DifficultyRun = { readonly rows: readonly EpisodeRow[]; readonly spentUsd: number; readonly stop: DifficultyStop };
 
 const usd = (n: number): number => Math.round(n * 1e6) / 1e6;
@@ -81,15 +89,22 @@ export async function runDifficulty(o: DifficultyRunOptions): Promise<Difficulty
         if (o.interrupt?.aborted === true) return done({ kind: 'interrupted' });
         const left = usd(o.budgetUsd - spent);
         if (left < o.episodeBudgetUsd) return done({ kind: 'budget_spent', leftUsd: left });
+        const capLeft = o.capLeftUsd?.() ?? null;
+        if (capLeft !== null && capLeft < o.episodeBudgetUsd) {
+          return done({ kind: 'cost_refused', message: `the spend caps leave $${capLeft} for model calls, less than one episode's $${o.episodeBudgetUsd} budget` });
+        }
         const runId = episodeRunId(o.runId, rows.length + 1);
         let outcome: EpisodeOutcome;
         try {
           outcome = await o.run({ ...t, model, index, runId, budgetUsd: o.episodeBudgetUsd });
         } catch (e) {
-          return done({ kind: 'failed', message: `episode ${runId} (${t.world} ${t.task}, ${model}) could not run: ${messageOf(e)}` });
+          // What it spent before it failed is unknown, so it counts at its whole budget.
+          spent += o.episodeBudgetUsd;
+          return done({ kind: 'failed', message: `episode ${runId} (${t.world} ${t.task}, ${model}) could not run to the end: ${messageOf(e)}` });
         }
-        spent += outcome.costUsd;
-        const row: EpisodeRow = { world: t.world, task: t.task, labeled: t.labeled, model, index, runId, ...outcome };
+        const chargedUsd = usd(outcome.unaccountedCalls > 0 ? Math.max(outcome.costUsd, o.episodeBudgetUsd) : outcome.costUsd);
+        spent += chargedUsd;
+        const row: EpisodeRow = { world: t.world, task: t.task, labeled: t.labeled, model, index, runId, ...outcome, chargedUsd };
         rows.push(row);
         o.onEpisode?.(row);
         if (outcome.refusal !== null) return done({ kind: 'cost_refused', message: outcome.refusal });
@@ -105,12 +120,37 @@ export function isCostRefusal(e: unknown): boolean {
   return e instanceof SpendCapError || e instanceof CostUnenforceableError || (e instanceof Error && e.message.startsWith('cost admission refused'));
 }
 
+/**
+ * Whether `e` is a call its cost allowance stopped, as llm.ts words it: the claude CLI's
+ * `error_max_budget_usd`, SDK admission that cannot fit the input and one output token, and SDK
+ * output cut below `maxOutputTokens` to fit the allowance. The episode files these as model_error,
+ * but the agent ran out of budget.
+ */
+export function isBudgetStop(e: unknown, maxOutputTokens: number): boolean {
+  if (!(e instanceof Error)) return false;
+  if (e.message.includes('error_max_budget_usd') || e.message.includes('do not fit the model estimate budget')) return true;
+  const cut = /hit max_tokens \((\d+)\)/.exec(e.message);
+  return cut !== null && Number(cut[1]) < maxOutputTokens;
+}
+
+/** What the spend caps that bind model calls leave, the least of them, or null when none is set. */
+export function modelCapLeft(ledger: Ledger, caps: SpendCaps, now: () => number = Date.now): () => number | null {
+  return () => {
+    const left = Object.values(capStatus(ledger, caps, now()).lines)
+      .filter((l) => l !== undefined && CAPS[l.cap].kind !== 'sandbox')
+      .map((l) => l?.remainingUsd ?? 0);
+    return left.length === 0 ? null : Math.min(...left);
+  };
+}
+
 export type LocalRunnerOptions = {
   /** Each episode writes under `<out>/episodes/<run id>`. */
   readonly out: string;
   readonly engineCommit: string;
   readonly maxTurns: number;
   readonly maxMinutes: number;
+  /** The output cap each solver call is configured with, so a lower cap reads as cut to fit the budget. */
+  readonly maxOutputTokens: number;
   readonly redact: Redactor;
   /** The metered proposer of each model, built before the run starts. */
   readonly proposers: ReadonlyMap<string, SolverProposer>;
@@ -122,19 +162,22 @@ export type LocalRunnerOptions = {
 
 /**
  * An EpisodeRunner over runLocalEpisode. The episode files any failed model call as model_error,
- * so the proposer is watched here: a cost refusal is noted before it is rethrown.
+ * and the failed call is always the last, so the proposer is watched here: a cost refusal is noted,
+ * and a call its allowance stopped makes the episode read as budget_limit.
  */
 export function localRunner(o: LocalRunnerOptions): EpisodeRunner {
   return async (job) => {
     const proposer = o.proposers.get(job.model);
     if (proposer === undefined) throw new Error(`no proposer was built for ${job.model}`);
     let refusal: string | null = null;
+    let budgetStop = false;
     const watched: SolverProposer = {
       async propose(req) {
         try {
           return await proposer.propose(req);
         } catch (e) {
           if (isCostRefusal(e)) refusal ??= messageOf(e);
+          else if (isBudgetStop(e, o.maxOutputTokens)) budgetStop = true;
           throw e;
         }
       },
@@ -147,7 +190,8 @@ export function localRunner(o: LocalRunnerOptions): EpisodeRunner {
       ...(o.spawner === undefined ? {} : { spawner: o.spawner }),
       ...(o.env === undefined ? {} : { env: o.env }),
     });
-    return { episodeId: episode.episode_id, score: episode.score, stopReason: episode.stop_reason, costUsd: episode.usage.cost_usd, refusal };
+    const stopReason = episode.stop_reason === 'model_error' && budgetStop && refusal === null ? 'budget_limit' : episode.stop_reason;
+    return { episodeId: episode.episode_id, score: episode.score, stopReason, costUsd: episode.usage.cost_usd, unaccountedCalls: episode.usage.unaccounted_calls, refusal };
   };
 }
 
@@ -157,8 +201,8 @@ export function localRunner(o: LocalRunnerOptions): EpisodeRunner {
 /**
  * Which stops measure the agent on the task: it finished, or ran out of turns, budget or time.
  * A failed model call, a refused, ungraded or interrupted episode, and one the world or the grader
- * broke measure the model's transport, the infrastructure or the operator, so they are not trials;
- * a broken transport shows as unmeasured, never as hard.
+ * broke measure the transport, the infrastructure or the operator, so they are not trials: a call
+ * that fails reads as unmeasured, not as hard. A slow call still counts against the time limit.
  */
 const MEASURES: Record<StopReason, boolean> = {
   done: true, turn_limit: true, budget_limit: true, time_limit: true,
@@ -200,8 +244,10 @@ type Rate = {
   readonly measured: Measured;
 };
 export type DifficultyCell = { readonly world: string; readonly task: string; readonly labeled: Difficulty; readonly model: string; readonly episodes: number } & Rate & {
+  /** The billed cost of the cell's calls; `usdPerPass` divides it by the passes. */
   readonly costUsd: number;
   readonly usdPerPass: number | null;
+  readonly unaccountedCalls: number;
   readonly stops: Readonly<Partial<Record<StopReason, number>>>;
   readonly refused: number;
 };
@@ -249,7 +295,8 @@ export function difficultyMatrix(
       }
       return {
         world: t.world, task: t.task, labeled: t.labeled, model, episodes: rows.length, ...r, costUsd,
-        usdPerPass: r.passes === 0 ? null : usd(costUsd / r.passes), stops, refused: rows.filter((e) => e.refusal !== null).length,
+        usdPerPass: r.passes === 0 ? null : usd(costUsd / r.passes), unaccountedCalls: rows.reduce((sum, e) => sum + e.unaccountedCalls, 0),
+        stops, refused: rows.filter((e) => e.refusal !== null).length,
       };
     }),
   );
@@ -285,7 +332,9 @@ export function renderDifficultyMd(m: DifficultyMatrix): string {
   return [
     `# Difficulty: ${m.runId}`,
     '',
-    `Models: ${m.models.join(', ')}. Episodes per task per model: ${m.episodesPerCell}. Spent $${m.spentUsd} of the $${m.budgetUsd} budget over ${m.episodes.length} episodes, at most $${m.episodeBudgetUsd} each.`,
+    `Models: ${m.models.join(', ')}. Episodes per task per model: ${m.episodesPerCell}, each with a $${m.episodeBudgetUsd} budget.`,
+    '',
+    `Charged $${m.spentUsd} of the $${m.budgetUsd} budget over ${m.episodes.length} episodes. An episode with a call of unknown billing is charged its whole budget; there were ${m.cells.reduce((sum, c) => sum + c.unaccountedCalls, 0)} such calls.`,
     '',
     `Stop: ${stopText(m.stop)}.`,
     '',
