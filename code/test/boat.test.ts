@@ -421,6 +421,51 @@ describe('boatBackend.up', () => {
     assert.deepEqual(calls.slice(-2).map((c) => c[0]), ['stop', 'waitStopped']);
   });
 
+  it('retries a write and a stop that boat.dev answers 502, up to 3 tries with backoff (J190)', async () => {
+    const { client, calls } = fakeBoat();
+    const slept: number[] = [];
+    const sleep = async (ms: number): Promise<void> => void slept.push(ms);
+    let writes = 0;
+    const write = client.writeFile.bind(client);
+    client.writeFile = async (id, f) => {
+      if (++writes <= 2) throw new BoatError('boat.dev writeFile failed: HTTP 502', 502);
+      return write(id, f);
+    };
+    let stops = 0;
+    const stop = client.stop.bind(client);
+    client.stop = async (id) => {
+      if (++stops === 1) throw new BoatError('boat.dev stop failed: HTTP 502', 502);
+      return stop(id);
+    };
+    const b = boatBackend({ client, sleep });
+    await b.up([{ path: 'a', data: bytes('x') }], { name: 'demo-1' });
+    await b.down('sb_1');
+    assert.equal(writes, 3);
+    assert.equal(stops, 2);
+    assert.deepEqual(slept, [5000, 10000, 5000]);
+    assert.deepEqual(calls.filter((c) => c[0] === 'stop' || c[0] === 'waitStopped').map((c) => c[0]), ['stop', 'waitStopped']);
+  });
+
+  it('gives up after 3 tries of a 502 write and stops the VM, and never retries other failures (J190)', async () => {
+    const { client, calls } = fakeBoat();
+    let writes = 0;
+    client.writeFile = async () => {
+      writes++;
+      throw new BoatError('boat.dev writeFile failed: HTTP 502', 502);
+    };
+    await assert.rejects(boatBackend({ client, sleep: async () => {} }).up([{ path: 'a', data: bytes('x') }], { name: 'demo-1' }), /HTTP 502/);
+    assert.equal(writes, 3);
+    assert.deepEqual(calls.slice(-2).map((c) => c[0]), ['stop', 'waitStopped']);
+    let other = 0;
+    const { client: c2 } = fakeBoat();
+    c2.writeFile = async () => {
+      other++;
+      throw new BoatError('boat.dev writeFile failed: HTTP 400', 400);
+    };
+    await assert.rejects(boatBackend({ client: c2, sleep: async () => {} }).up([{ path: 'a', data: bytes('x') }], { name: 'demo-1' }), /HTTP 400/);
+    assert.equal(other, 1);
+  });
+
   it('maps sizes to boat types and refuses a size boat does not sell', async () => {
     assert.equal(boatTypeOf({ cpus: 2, memoryGi: 4 }), 'small');
     assert.equal(boatTypeOf({ cpus: 8, memoryGi: 16 }), 'large');

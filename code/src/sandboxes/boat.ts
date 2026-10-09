@@ -30,6 +30,8 @@ export const TIMED_OUT_EXIT = 124;
 export type BoatDeps = {
   readonly client: BoatClient;
   readonly ttlSeconds?: number;
+  /** Waits between retries of a write or a stop; tests pass one that returns at once. */
+  readonly sleep?: (ms: number) => Promise<void>;
 };
 
 const BOAT_TYPES: readonly BoatType[] = ['small', 'default', 'large'];
@@ -50,6 +52,21 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
  * Any other failure leaves the outcome unknown: a timeout, a 5xx, a 429, or a 409 that may name an earlier create.
  */
 const REFUSED_CREATE: ReadonlySet<number> = new Set([400, 401, 402, 403, 404, 422]);
+
+/** boat.dev answers 502, 503 or 504 for minutes at a time; a write or a stop is tried this many times before it fails. */
+export const BOAT_TRANSIENT_TRIES = 3;
+const TRANSIENT: ReadonlySet<number> = new Set([502, 503, 504]);
+
+async function withRetry<T>(f: () => Promise<T>, sleep: (ms: number) => Promise<void>): Promise<T> {
+  for (let n = 1; ; n++) {
+    try {
+      return await f();
+    } catch (err) {
+      if (n >= BOAT_TRANSIENT_TRIES || !(err instanceof BoatError && TRANSIENT.has(err.status ?? 0))) throw err;
+      await sleep(5_000 * n);
+    }
+  }
+}
 
 async function call<T>(f: () => Promise<T>): Promise<T> {
   try {
@@ -77,6 +94,7 @@ async function inBatches<T>(items: readonly T[], size: number, f: (item: T) => P
 export function boatBackend(deps: BoatDeps): SandboxBackend {
   const { client } = deps;
   const ttlSeconds = deps.ttlSeconds ?? BOAT_DEFAULT_TTL_SEC;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0) throw new SandboxError('boat TTL must be a positive finite integer in seconds');
 
   const exec = async (id: string, cmd: readonly string[], opts?: ExecOpts): Promise<ExecResult> => {
@@ -91,14 +109,14 @@ export function boatBackend(deps: BoatDeps): SandboxBackend {
 
   /** Stops the VM and waits until boat.dev says it is archived, so a leaked sandbox is never silent. */
   const down = async (id: string): Promise<void> => {
-    await call(async () => {
+    await call(() => withRetry(async () => {
       await client.stop(id);
       await client.waitStopped(id);
-    });
+    }, sleep));
   };
 
   const write = (id: string, path: string, data: Uint8Array): Promise<void> =>
-    call(() => client.writeFile(id, { path, content: Buffer.from(data).toString('base64'), encoding: 'base64' }));
+    call(() => withRetry(() => client.writeFile(id, { path, content: Buffer.from(data).toString('base64'), encoding: 'base64' }), sleep));
 
   /** Writes one file, in parts joined on the VM when it is too large for one write, and checks the joined bytes by sha256. */
   const upload = async (id: string, f: SandboxFile): Promise<void> => {
