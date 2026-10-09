@@ -35,7 +35,7 @@ import { stepModel, transportOf, type Config } from './config.ts';
 import { createEmitter, type AttemptOutcome, type CutProgress, type Emit, type FidelityCheck, type RunEvent, type StopReason } from './events.ts';
 import { INPUT_KINDS, digestInput, redact, type Input, type InputDigest } from './input.ts';
 import { fixturePlanIssues, operationPlanIssues } from './input-coverage.ts';
-import { ITERATE_PLAN_BRIEF, applyPlanPatch, changedSections, iteratePlanBlocks, iteratePlanSchema, iterateStageBlock, planPatchSchema, planWithWorldTests, revisesPlanOnly } from './iterate.ts';
+import { ITERATE_PLAN_BRIEF, admissibleIssues, applyPlanPatch, changedSections, iteratePlanBlocks, iteratePlanSchema, iterateStageBlock, planPatchSchema, planWithWorldTests, revisesPlanOnly } from './iterate.ts';
 import { FIDELITY_FLOOR, fidelityGate, fidelityScore, parseFidelityReference } from './fidelity.ts';
 import { blockingIssues, checkJudgeable, infraIssues, preservationIssues, requestScopeIssues, unplannedChanges } from './judge.ts';
 import { CallStalled, ModelError, StepShareExpired, estimateCallUsd, type CallProgress, type Model, type Proposal, type ProposeRequest, type Usage } from './llm.ts';
@@ -1025,8 +1025,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
     if (!firstCheck.ok) {
       // An old world held back only at the tasks layer by issues a stage owns is admitted, those issues tolerated, as
       // work that stage must clear; the plan below must rerun it (A-395). Any other failure is refused as before.
-      const owed = firstCheck.issues.filter((i) => i.code !== 'layer.blocked');
-      if (firstCheck.reached === 'tasks' && owed.every((i) => ownerOf(i) !== 'plan')) {
+      const owed = admissibleIssues(firstCheck);
+      if (owed !== null) {
         const retried = beforeDeadline(deadline, () => checkWorld(loaded.value, loaded.lines, { tolerate: new Set(owed.map((i) => i.code)) }));
           if (retried === EXPIRED) return await stop({ kind: 'time_exhausted', minutes: config.maxMinutes });
         if (retried.ok) {

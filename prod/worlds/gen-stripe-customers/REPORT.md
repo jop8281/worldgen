@@ -111,7 +111,7 @@ World id (WID): `wid_edf565274ff4f3c136cbeeb6fd76361206cc292d7d11fba57d2f5c2f819
 | delete_older_duplicate_acme | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 2/8 | `tid_44ef0f7fd939b54d30328ca05546ed2f91c3d31d053235f5936f64211f57029e` |
 | mark_registered_nonprofits_exempt | hard | 1.000 | 0.000 | 0.400, 0.000, 0.000 | 0.800 | legacy; mutants 3/8 | `tid_a6da0cab72a631250baa78ffe248ca294bd5b9be6fade670321505355e66036c` |
 
-Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/8* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 

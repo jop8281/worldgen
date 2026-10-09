@@ -9,8 +9,9 @@
  * - Which stages run is `stagesToRun` (stages.ts, A-33). This file only supplies its input.
  */
 import { z } from 'zod';
-import { SECTIONS, renderWorldYaml, type Section, type World } from '#engine';
+import { SECTIONS, renderWorldYaml, type CheckIssue, type CheckReport, type Section, type World } from '#engine';
 import { changeItem, jobActionIssues, planSchema, plannedItems, renderPlanYaml, taskVarietyIssues, untestedActions, type Plan } from './plan.ts';
+import { ownerOf } from './policy.ts';
 import { stagesToRun } from './stages.ts';
 
 /**
@@ -262,4 +263,14 @@ export function iteratePlanSchema(world: World, oldPlan: Plan | null): typeof pl
       });
     });
   });
+}
+
+/**
+ * The failing issues an iterate may admit its old world with (A-395): every issue but layer.blocked, when the check
+ * reached the tasks layer and a stage owns each one, so a rerun of that stage can clear it. Null for any other failure.
+ */
+export function admissibleIssues(report: CheckReport): readonly CheckIssue[] | null {
+  if (report.ok || report.reached !== 'tasks') return null;
+  const owed = report.issues.filter((i) => i.code !== 'layer.blocked');
+  return owed.every((i) => ownerOf(i) !== 'plan') ? owed : null;
 }
