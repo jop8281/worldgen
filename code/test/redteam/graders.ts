@@ -114,14 +114,14 @@ export const BAD_TASKS: readonly BadTask[] = [
   },
   {
     id: 'GR-prefix-any', note: 'hard grader gives 1 once any target is escalated', code: 'task.prefix_full_marks', expect: 'present',
-    taskId: 'escalate_unassigned', accept: ['task.decoy_full_marks', 'task.mutant_full_marks'],
+    taskId: 'escalate_unassigned', accept: ['task.decoy_full_marks', 'task.mutant_full_marks', 'task.omission_full_marks'],
     mutate: (w) => {
       task(w, 'escalate_unassigned').grader = `(ctx) => ctx.db.list('ticket', { where: { escalated: true } }).length > 0 ? 1 : 0`;
     },
   },
   {
     id: 'GR-prefix-medium', note: 'medium grader gives 1 once one target is pending', code: 'task.prefix_full_marks', expect: 'present',
-    taskId: 'pend_open_urgent', accept: ['task.decoy_full_marks'],
+    taskId: 'pend_open_urgent', accept: ['task.decoy_full_marks', 'task.omission_full_marks'],
     mutate: (w) => {
       task(w, 'pend_open_urgent').grader = `(ctx) => { const g = ${SNIPPETS.mediumGrader}; return g(ctx) > 0 ? 1 : 0; }`;
     },
