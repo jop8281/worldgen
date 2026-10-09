@@ -333,6 +333,7 @@ const ISSUE_EXAMPLES: { readonly [C in IssueCode]: CheckIssue } = {
   'plan.rule_unanswered': issue('plan.rule_unanswered', ['format'], { workflow: '<workflow>', rule: '<rule>', by: ['<action or job>'] }, '<found>'),
   'plan.job_as_action': issue('plan.job_as_action', ['format'], { job: '<job>' }, '<found>'),
   'task.difficulty_unproven': issue('task.difficulty_unproven', ['format'], { task: '<task>', rows: 1 }, '<found>'),
+  'task.planned_action_uncalled': issue('task.planned_action_uncalled', ['format'], { task: '<task>', planned: ['<action>'], missed: ['<action>'] }, '<found>'),
   'task.pressure_unmet': issue('task.pressure_unmet', ['format'], { task: '<task>', need: '<need>' }, '<found>'),
   'plan.fixture_changed': issue('plan.fixture_changed', ['format'], { entity: '<entity>', table: '<table>', problem: '<problem>' }, '<found>'),
   'plan.seed_mix_off': issue('plan.seed_mix_off', ['format'], { entity: '<entity>', state: '<state>', planned: 0, built: 0, within: 10 }, '<found>'),

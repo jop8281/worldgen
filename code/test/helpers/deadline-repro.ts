@@ -20,7 +20,7 @@ import { configSchema } from '../../src/worldgen/config.ts';
 import type { RunEvent } from '../../src/worldgen/events.ts';
 import type { Model, ProposeRequest } from '../../src/worldgen/llm.ts';
 import { runWorldGen } from '../../src/worldgen/run.ts';
-import { ESCALATE_HANDLER, ESCALATE_TEST } from './scripted-world.ts';
+import { ESCALATE_HANDLER, ESCALATE_SOLUTION, ESCALATE_TEST } from './scripted-world.ts';
 import { minimalWorld } from './world.ts';
 
 const CUSTOMERS = `(ctx) => [
@@ -54,6 +54,7 @@ const TARGET: World = minimalWorld({
   routes: { list_customers: { pageSize: 5 }, list_tickets: { pageSize: 4 } },
   actions: { escalate_ticket: { method: 'POST', path: '/tickets/{id}/escalate', description: 'Make an unresolved ticket urgent.', handler: ESCALATE_HANDLER } },
   seed: { customer: CUSTOMERS },
+  tasks: { escalate_acme: { solution: ESCALATE_SOLUTION } },
 });
 const PLAN = {
   open_questions: [{ question: 'Which ticket priorities exist?', default_answer: 'low, normal and high' }],

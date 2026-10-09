@@ -169,7 +169,7 @@ describe('verifyTask (R3, R4, R7)', () => {
     assert.match(endStateHash, /^[0-9a-f]{32}$/);
     assert.equal(collateral.length, 8);
     assert.deepEqual(rest, {
-      taskId: 'resolve_password_ticket', difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [],
+      taskId: 'resolve_password_ticket', difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionActions: ['resolve_ticket'],
       checks: [{ check: 'return', flippedBy: ['target_field', 'other_row', 'extra_create', 'extra_delete', 'undone_write', 'retarget'] }], unattributedProbes: [],
     });
     assert.deepEqual(r.log.map((c) => c.routeId), ['list_tickets', 'resolve_ticket']);
