@@ -446,6 +446,23 @@ function judgePlan(schema: PlanSchema, input: unknown, approved: Plan | null, di
   return { ok: false, outcome: { kind: 'invalid_output', issues }, issues };
 }
 
+/**
+ * The edit without the sections another stage owns. Every stage answers with one edit tool (A-409), whose schema lets it
+ * name any stage's section; only the owner's write may land, as each stage's own schema once made the only answer it
+ * could give. The owner writes that section in its turn, and an engine issue the leftover causes still names its owner.
+ */
+function ownSectionsOnly(stage: StageId, input: unknown): unknown {
+  if (!isRecord(input)) return input;
+  const mine: readonly string[] = writesOf(stage);
+  const others = new Set<string>(STAGE_WRITES.filter((s) => !mine.includes(s)));
+  const out: Record<string, unknown> = { ...input };
+  for (const op of EDIT_OPS) {
+    const part = input[op];
+    if (isRecord(part)) out[op] = Object.fromEntries(Object.entries(part).filter(([key]) => !others.has(key)));
+  }
+  return out;
+}
+
 /** `edit.out_of_scope` for each part of a raw edit outside the stage's sections: meta, unowned or unknown sections, unknown keys. */
 export function scopeIssues(stage: StageId, input: unknown): readonly CheckIssue[] {
   if (!isRecord(input)) return [];
@@ -601,10 +618,11 @@ function ownIssues(issues: readonly CheckIssue[], step: StepId, world: World | n
  * `invalid_output`, so policy can send it back to the plan step that owns them.
  */
 function judgeEdit(stage: StageId, world: World, plan: Plan, input: unknown, gate: Gate | null, fidelity: Fidelity, check: (world: World) => CheckReport, digest?: InputDigest): Judged<StageValue> {
-  const scope = scopeIssues(stage, input);
+  const own = ownSectionsOnly(stage, input);
+  const scope = scopeIssues(stage, own);
   if (scope.some((i) => i.path[0] === 'tests')) return { ok: false, outcome: { kind: 'rejected', issues: scope }, issues: scope };
   if (scope.length > 0) return { ok: false, outcome: { kind: 'invalid_output', issues: scope }, issues: scope };
-  const applied = applyEdit(world, input);
+  const applied = applyEdit(world, own);
   if (!applied.ok) return { ok: false, outcome: { kind: 'invalid_output', issues: applied.error }, issues: applied.error };
   return judgeCandidate(stage, withLoweredRules(applied.value.world), applied.value.edit, plan, gate, fidelity, check, digest);
 }

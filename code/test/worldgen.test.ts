@@ -637,18 +637,40 @@ describe('runWorldGen create: stage tools and scope', () => {
     assert.notDeepEqual(calls[0]?.tool, calls[1]?.tool);
   });
 
-  it('rejects edits to meta, to sections another stage owns, and to fixtures as edit.out_of_scope', async () => {
+  it('opens the workflow call with the path rule read from the example world the run picked (A-409)', async () => {
+    const loaded = await loadWorld(join(import.meta.dirname, '../../prod/worlds/helpdesk'));
+    const report = checkWorld(loaded.ok ? loaded.value : null);
+    assert.equal(report.ok, true);
+    if (!report.ok) return;
+    const { calls } = await run(HAPPY, { exampleWorld: report.world });
+    assert.equal(calls[2]?.prompt.includes('Example from the example world: routes.create_ticket declares POST /tickets, so no action may use POST /tickets.'), true);
+    assert.equal(calls[2]?.system.includes('Example from the example world:'), false);
+  });
+
+  it('rejects edits to meta and to fixtures as edit.out_of_scope', async () => {
     const intrusive = { note: 'too much', meta: { description: 'mine' }, upsert: { entities: TARGET.entities, routes: TARGET.routes, tasks: TARGET.tasks } };
     const fixtures = { note: 'tables', upsert: { fixtures: { legacy_ticket: [{ subject: 'Old' }] } } };
     const { result, events, calls, filesDir } = await run([{ input: PLAN }, { input: intrusive }, { input: fixtures }, new ModelError('stop here')]);
     const outcomes = events.flatMap((e) => (e.t === 'attempt' && e.outcome.kind === 'invalid_output' ? [brief(e.outcome.issues)] : []));
     assert.deepEqual(outcomes, [
-      [['edit.out_of_scope', ['meta']], ['edit.out_of_scope', ['tasks']]],
+      [['edit.out_of_scope', ['meta']]],
       [['edit.out_of_scope', ['fixtures']]],
     ]);
-    assert.equal(calls[2]?.prompt.includes('  hint: This stage does not own tasks.'), true);
+    assert.equal(calls[2]?.prompt.includes('  hint: This stage does not own meta.'), true);
     assert.deepEqual(result.kind === 'stopped' ? result.reason : null, { kind: 'model_error', message: 'stop here' });
     assert.equal(existsSync(join(filesDir, 'world.yaml')), false);
+  });
+
+  // A-409: the one edit tool lets a stage name another stage's section; only the owner's write lands, as each stage's own schema once allowed.
+  it('drops the sections another stage owns from a stage edit, and the owner writes them in its turn (A-409)', async () => {
+    const stray = { ...TARGET.tasks.resolve_password_ticket!, instruction: 'STRAY-TASK-FROM-THE-MODEL-STAGE' };
+    const eager = { note: 'entities, routes and a task', upsert: { entities: TARGET.entities, routes: TARGET.routes, tasks: { stray_task: stray } } };
+    const { result, events, calls } = await run([{ input: PLAN }, { input: eager }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }]);
+    assert.deepEqual(attempts(events).map(([step, , outcome]) => [step, outcome]), [
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'accepted'],
+    ]);
+    assert.deepEqual(calls.slice(2).map((c) => c.prompt.includes('STRAY-TASK-FROM-THE-MODEL-STAGE')), [false, false, false]);
+    assert.equal(result.kind, 'done');
   });
 
   /** A first workflow answer whose handler refuses every resolve, so the frozen test fails and the next answer is a repair. */
