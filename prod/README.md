@@ -8,6 +8,8 @@ What gets handed in. Tests in `code/` check and verify every world here, so a br
 - `worlds/retail-tau2/` is a hand-mapped model of the τ²-bench retail domain, with a `NOTES.md`. `code/scripts/build-retail-tau2.ts` writes it through `saveWorld`.
 - `worlds/gen-<slug>/` is a WorldGen output: `world.yaml`, `plan.yaml`, `REPORT.md`, `runs/<runId>/`.
 
+Training benefit has not been shown yet. See [research/training-experiment.md](../research/training-experiment.md).
+
 ```sh
 bun run worldplay check ../prod/worlds/helpdesk   # from code/
 bun run worldgen "A helpdesk with SLA tiers" --out ../prod/worlds/gen-helpdesk-sla
