@@ -58,13 +58,13 @@ const out = [
   ...rows.map((r) => line(r.world, count(r.verdicts))),
   line('**Total**', count(all)),
   '',
-  `Probe runs graded: ${runs.decoys + runs.prefixes + runs.mutants} (${runs.decoys} decoys, ${runs.prefixes} prefixes, ${runs.mutants} mutants). Full marks among them: ${fullMarks}; verify allows one only for a mutant inside its task's declared \`allows\`.`,
+  `Probe runs graded, free-text swaps aside: ${runs.decoys + runs.prefixes + runs.mutants} (${runs.decoys} decoys, ${runs.prefixes} prefixes, ${runs.mutants} mutants). Full marks among them: ${fullMarks}; verify allows one only for a mutant inside its task's declared \`allows\`.`,
   '',
   '| Probe | Checks it flipped |',
   '|---|--:|',
 ];
 const byProbe = new Map<string, number>();
-for (const v of all) for (const c of v.checks) for (const probe of new Set(c.flippedBy.map((p) => p.replace(/ \d+$/, '')))) byProbe.set(probe, (byProbe.get(probe) ?? 0) + 1);
+for (const v of all) for (const c of v.checks) for (const probe of new Set(c.flippedBy.map((p) => p.split(' ')[0]!))) byProbe.set(probe, (byProbe.get(probe) ?? 0) + 1);
 out.push(...[...byProbe].sort((a, b) => b[1] - a[1]).map(([probe, n]) => `| ${probe} | ${n} |`));
 out.push('', 'Checks no probe flipped:', '');
 for (const r of rows) for (const v of r.verdicts) for (const c of v.checks) if (c.flippedBy.length === 0) out.push(`- ${r.world} ${v.taskId}: ${c.check}`);

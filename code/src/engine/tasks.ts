@@ -64,7 +64,7 @@ export type TaskVerdict = {
   readonly solutionDistractorEntities: readonly string[];
   /** Every engine mutant kind, in order: the call it graded and its score, or nulls when no candidate committed a visible change, so the kind was not probed. */
   readonly collateral: readonly MutantProbe[];
-  /** Each grader check and the probes that flipped it: decoys, prefixes and engine mutants. Doing nothing is not a probe. */
+  /** Each grader check and the probes that flipped it: prefixes, decoys, engine mutants and free-text swaps. Doing nothing is not a probe. */
   readonly checks: readonly CheckProbe[];
   /** Probes that scored below 1 without flipping a goal or guard of a grader whose goals make its score, such as one an early `return 0` caught. */
   readonly unattributedProbes: readonly string[];
@@ -859,7 +859,7 @@ function withinAllows(g: Graded, taskId: string): boolean {
 /** A mutant pass's issues, one probe per kind it ran, and the graded run of each kind that found something to probe. */
 type Probed = { readonly issues: CheckIssue[]; readonly probes: MutantProbe[]; readonly runs: ProbeRun[] };
 
-/** One probe's graded run, named as `worldplay verify` prints it: `prefix 2`, `decoy 0` or a mutant kind. */
+/** One probe's graded run, named as `worldplay verify` prints it: `prefix 2`, `decoy 0`, a mutant kind or `free_text <entity.field>`. */
 type ProbeRun = { readonly probe: string; readonly graded: Extract<Graded, { ok: true }> };
 
 /** The goals and guards one grading recorded, keyed by kind and name, a repeated name by occurrence (`#2`), with whether each held. */
@@ -968,6 +968,7 @@ function* undoneEdits({ world, seed, end, log }: MutantInput): Generator<readonl
  */
 function undoneIssues(world: CheckedWorld, seed: State, taskId: string, host: SnippetHost, log: readonly CallRecord[], end: State): Probed {
   const out: CheckIssue[] = [];
+  const runs: ProbeRun[] = [];
   let probe: MutantProbe = { kind: 'undone_write', call: null, score: null };
   const solutionContent = contentHash(end);
   let rt = replaySolution(world, seed, host, log);
@@ -985,11 +986,12 @@ function undoneIssues(world: CheckedWorld, seed: State, taskId: string, host: Sn
     const g = grade(world, seed, state, taskId, host, rt.journal(), rt.log());
     const call = `${edit.method} ${edit.path} ${show(edit.body)} then ${show(undo.body)}`;
     probe = { kind: 'undone_write', call, score: g.ok ? g.score : null };
+    if (g.ok) runs.push({ probe: 'undone_write', graded: g });
     if (!g.ok) out.push(g.issue);
     else if (g.score === 1 && !withinAllows(g, taskId)) out.push(issue('task.mutant_full_marks', ['tasks', taskId, 'grader'], { kind: 'undone_write', call }, `the solution plus ${call} scored 1`));
     break;
   }
-  return { issues: out, probes: [probe] };
+  return { issues: out, probes: [probe], runs };
 }
 
 /** The fields two states' rows differ in, without engine timestamps, or null when they hold different rows. */
@@ -1016,10 +1018,12 @@ function fieldDiff(a: State, b: State): { entity: string; id: string; field: str
  * (one the call wrote by that name, or whose stored value is that string), swapped for nonsense of the same length,
  * then the solution's calls replayed from `seed`, at most MUTANT_TRIES replays. A replay whose swapped call is
  * refused, or whose end differs from the solution's anywhere but in free text, is skipped. One that still scores 1
- * is task.freetext_unchecked, once per field: the grader never reads that text.
+ * is task.freetext_unchecked, once per field: the grader never reads that text. Each graded replay is a probe run,
+ * `free_text <entity.field>` (A-393).
  */
-function freeTextIssues(world: CheckedWorld, seed: State, taskId: string, host: SnippetHost, log: readonly CallRecord[], end: State): CheckIssue[] {
+function freeTextIssues(world: CheckedWorld, seed: State, taskId: string, host: SnippetHost, log: readonly CallRecord[], end: State): { issues: CheckIssue[]; runs: ProbeRun[] } {
   const out: CheckIssue[] = [];
+  const runs: ProbeRun[] = [];
   const flagged = new Set<string>();
   let tries = 0;
   for (const [index, c] of log.entries()) {
@@ -1036,7 +1040,7 @@ function freeTextIssues(world: CheckedWorld, seed: State, taskId: string, host: 
       })[0];
       const nonsense = holder === undefined ? undefined : nonsenseOf(holder.def, value);
       if (holder === undefined || nonsense === undefined || flagged.has(`${holder.entity}.${holder.field}`)) continue;
-      if (tries++ === MUTANT_TRIES) return out;
+      if (tries++ === MUTANT_TRIES) return { issues: out, runs };
       const rt = runtime(world, host, seed);
       let refused = false;
       for (const [i, cc] of log.entries()) {
@@ -1056,14 +1060,15 @@ function freeTextIssues(world: CheckedWorld, seed: State, taskId: string, host: 
         out.push(g.issue);
         continue;
       }
-      if (g.score !== 1) continue;
       const field = `${holder.entity}.${holder.field}`;
+      runs.push({ probe: `free_text ${field}`, graded: g });
+      if (g.score !== 1) continue;
       const call = `${c.req.method} ${c.req.path} with ${key} ${show(nonsense)}`;
       flagged.add(field);
       out.push(issue('task.freetext_unchecked', ['tasks', taskId, 'grader'], { field, call }, `the solution with ${call} scored 1`));
     }
   }
-  return out;
+  return { issues: out, runs };
 }
 
 /**
@@ -1293,7 +1298,9 @@ export function verifyTask(
       probes.push(...pass.probes);
       runs.push(...pass.runs);
     }
-    for (const i of freeTextIssues(world, seed, taskId, host, first.log, first.end)) push(i);
+    const freeText = freeTextIssues(world, seed, taskId, host, first.log, first.end);
+    for (const i of freeText.issues) push(i);
+    runs.push(...freeText.runs);
   }
 
   const [head, ...rest] = issues;

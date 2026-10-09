@@ -580,7 +580,7 @@ describe('grader check coverage: which checks a probe flipped (A-393)', () => {
   const targets = `const c = ctx.seed.list('customer', { where: { name: 'Initech' } })[0];
   const targets = ctx.seed.list('ticket', { where: { customer: c.id, status: 'pending' } });
   const onlyTargets = ctx.changes().every((x) => targets.some((t) => t.id === x.id) && x.fields.every((f) => f === 'status'));`;
-  const MUTANTS_THAT_COMMIT = ['target_field', 'other_row', 'extra_create', 'extra_delete', 'retarget'];
+  const MUTANTS_THAT_COMMIT = ['target_field', 'other_row', 'extra_create', 'extra_delete', 'undone_write', 'retarget'];
 
   it('a grader that records no goal or guard has one check, its return value, flipped by every probe that scored below 1', () => {
     assert.deepEqual(verdictOf(verify(minimalWorld(), MEDIUM)).checks, [{ check: 'return', flippedBy: ['prefix 1', 'decoy 0', ...MUTANTS_THAT_COMMIT] }]);
@@ -614,6 +614,20 @@ describe('grader check coverage: which checks a probe flipped (A-393)', () => {
     assert.deepEqual(verdictOf(verify(only(MEDIUM, { grader }), MEDIUM)).checks, [
       { check: 'guard only the status of Initech pending tickets changed', flippedBy: ['decoy 0', ...MUTANTS_THAT_COMMIT] },
       { check: 'return', flippedBy: ['prefix 1'] },
+    ]);
+  });
+
+  it('a free-text swap of a string the solution writes is a probe too, named by its field', () => {
+    const grader = `(ctx) => {
+  ctx.guardChanges('only the subject of tkt_0002', [{ entity: 'ticket', id: 'tkt_0002', kind: 'updated', fields: ['subject'] }]);
+  ctx.goal(1, 'subject reads Printer jam on floor 3', ctx.db.get('ticket', 'tkt_0002').subject === 'Printer jam on floor 3');
+  return ctx.score();
+}`;
+    const solution = `(ctx) => { ctx.assert(ctx.api('PATCH', '/tickets/tkt_0002', { subject: 'Printer jam on floor 3' }).status === 200, 'patch failed'); }`;
+    const v = verdictOf(verify(only(EASY, { instruction: 'Change the subject of ticket tkt_0002 to "Printer jam on floor 3".', grader, solution }), EASY));
+    assert.deepEqual(v.checks, [
+      { check: 'goal subject reads Printer jam on floor 3', flippedBy: ['retarget', 'free_text ticket.subject'] },
+      { check: 'guard only the subject of tkt_0002', flippedBy: ['target_field', 'other_row', 'extra_action', 'extra_create', 'extra_delete', 'undone_write', 'retarget'] },
     ]);
   });
 
