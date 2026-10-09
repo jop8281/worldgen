@@ -344,9 +344,11 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
   });
 });
 
-describe('the verdict names the workflow actions a successful reference call wrote through (A-398, A-411)', () => {
-  /** An action that writes, one that answers 200 and writes nothing, and one that always refuses. */
+describe('the verdict names the workflow actions a successful reference call changed a row through (A-398, A-411)', () => {
+  /** An action that writes, one that answers 200 and writes nothing, two that update without changing a field, and one that always refuses. */
   const extra = {
+    touch_ticket: { method: 'POST', path: '/tickets/{id}/touch', description: 'Update nothing.', handler: "(ctx) => ({ status: 200, body: ctx.db.update('ticket', ctx.params.id, {}) })" },
+    restate_ticket: { method: 'POST', path: '/tickets/{id}/restate', description: 'Set the priority it already has.', handler: "(ctx) => ({ status: 200, body: ctx.db.update('ticket', ctx.params.id, { priority: ctx.db.get('ticket', ctx.params.id).priority }) })" },
     alert_ticket: { method: 'POST', path: '/tickets/{id}/alert', description: 'Make a ticket urgent.', handler: "(ctx) => ({ status: 200, body: ctx.db.update('ticket', ctx.params.id, { priority: 'urgent' }) })" },
     note_ticket: { method: 'POST', path: '/tickets/{id}/note', description: 'Acknowledge a ticket.', handler: '(ctx) => ({ status: 200, body: { ok: true } })' },
     archive_ticket: { method: 'POST', path: '/tickets/{id}/archive', description: 'Never allowed.', handler: "(ctx) => ctx.fail(409, 'ticket.locked', 'Archiving is off.')" },
@@ -368,6 +370,12 @@ describe('the verdict names the workflow actions a successful reference call wro
     if (!t || !ctx.changes().every((c) => c.id === t.id && c.fields.every((f) => f === 'status' || f === 'priority'))) return 0;
     return (t.status === 'resolved' ? 0.5 : 0) + (t.priority === 'urgent' ? 0.5 : 0);
   }`;
+  /** Resolves the ticket after a no-op call to `action`. */
+  const afterNoop = (action: string) => `(ctx) => {
+    const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/${action}').status === 200, '${action} failed');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
+  }`;
   const patchOnly = `(ctx) => {
     const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
     ctx.assert(ctx.api('PATCH', '/tickets/' + t.id, { status: 'resolved' }).status === 200, 'patch failed');
@@ -376,6 +384,8 @@ describe('the verdict names the workflow actions a successful reference call wro
     ['an action call', only(EASY), EASY, ['resolve_ticket']],
     ['two writing actions, sorted', only(EASY, { solution: viaAlert, grader: alertGrader }, extra), EASY, ['alert_ticket', 'resolve_ticket']],
     ['a refused action and one that writes nothing left out', only(EASY, { solution: viaNote }, extra), EASY, ['resolve_ticket']],
+    ['an update that changes no field left out', only(EASY, { solution: afterNoop('touch') }, extra), EASY, ['resolve_ticket']],
+    ['an update that sets the value a field already has left out', only(EASY, { solution: afterNoop('restate') }, extra), EASY, ['resolve_ticket']],
     ['standard routes only', only(EASY, { solution: patchOnly }), EASY, []],
     ['an update route and an action', only(HARD), HARD, ['resolve_ticket']],
   ];
