@@ -1227,6 +1227,39 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     assert.equal(result.kind, 'done');
   });
 
+  // J194: the trade's other side can sit only in issues the step does not own, which `tried` leaves out, and a deciding set
+  // can hold the step's own errors, which are its rerun's to fix, not the plan's (A-416).
+  const ticketStatusMissing = issue('openapi.status_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'responses', '410'], { op: 'GET /tickets/{ticket_id}', status: '410' }, '200, 404');
+  const ruleUnanswered = issue('plan.rule_unanswered', ['actions', 'escalate_ticket'], { workflow: 'ticket', rule: 'escalation needs a reason', by: ['escalate_ticket'] }, 'no action enforces it');
+  const testsBlocked = issue('layer.blocked', ['tests'], { layer: 'actions' }, 'not checked');
+
+  it('tells the plan the deciding attempt\'s issues whole when the trade\'s other side is an issue the step does not own (J194)', async () => {
+    // B's input check is model's (routes), so tried keeps only B's own rule_unanswered, while decide counts both and sees the trade.
+    const { result, events } = await run([
+      { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: specOff }, { input: EDITS.workflow },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { check: checkWith(ticketStatusMissing, ruleUnanswered) });
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => [i.code, i.path])] : [], [
+      'workflow', 'plan', [['test.failed', ['tests', 'unknown_ticket_404', 'script']]],
+    ]);
+    assert.equal(result.kind, 'done');
+  });
+
+  it('keeps the step\'s own errors and layer.blocked out of the plan\'s feedback on a traded backtrack, and in the step\'s rerun (J194, A-416)', async () => {
+    const { result, events, calls } = await run([
+      { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { check: checkWith(reasonOptional, ruleUnanswered, testsBlocked) });
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => [i.code, i.path])] : [], [
+      'workflow', 'plan', [['openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason']], ['test.failed', ['tests', 'unknown_ticket_404', 'script']]],
+    ]);
+    assert.deepEqual(['plan.rule_unanswered', 'no action enforces it'].map((s) => calls[5]?.prompt.includes(s)), [false, false]);
+    assert.equal(calls[7]?.prompt.includes('no action enforces it'), true);
+    assert.equal(result.kind, 'done');
+  });
+
   it('backtracks to plan when workflow trades a frozen test against a check the input fixes, and tells the plan both (A-406)', async () => {
     const { result, events, calls } = await run([
       { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },
