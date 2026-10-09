@@ -106,6 +106,12 @@ const KEY_PET_TESTS_1 = 'snippet.runtime_error@tests/delete_order_returns_stock/
   + 'snippet.runtime_error@tests/order_progress/script: threw undefined is not an object (evaluating "*")|'
   + 'snippet.runtime_error@tests/place_order_refusals/script: threw undefined is not an object (evaluating "*")';
 const KEY_PET_TESTS_3 = 'snippet.runtime_error@tests/place_order_refusals/script: threw undefined is not an object (evaluating "*")';
+/** What petstore-store's frozen tests exercise: each places orders, as the spec's POST /store/orders takes them (A-406). */
+const PET_TEST_OPS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['place_order_refusals', ['POST /store/orders']], ['order_progress', ['GET /store/orders/{}', 'POST /store/orders']], ['delete_order_returns_stock', ['DELETE /store/orders/{}', 'POST /store/orders']],
+]);
+// e3's review of #179: a frozen test of another operation, broken by the step's own code, alternating with the spec check.
+const KEY_CATEGORIES = 'test.failed@tests/list_categories_lists_seeded/script: expected 200, got 500';
 const refusalsThrew = issue('snippet.runtime_error', ['tests', 'place_order_refusals', 'script'], { message: "undefined is not an object (evaluating 'missing.body.error.type')" },
   "threw undefined is not an object (evaluating 'missing.body.error.type')");
 // stress-8 helpdesk-sla (A-406): a distractor claim on agent, which a task that assigns a ticket never changes, is the plan's.
@@ -142,6 +148,7 @@ type Row = {
   name: string;
   step: StepId;
   last?: boolean;
+  testOperations?: ReadonlyMap<string, readonly string[]>;
   ledger?: Partial<Ledger>;
   nowMs?: number;
   config?: Partial<Config>;
@@ -210,10 +217,10 @@ const rows: Row[] = [
     outcome: rejected(threw), issues: owned([threw, 'workflow']), want: { kind: 'backtrack', to: 'plan' } },
   // A-406: a step that fails only frozen tests between two sightings of another issue set is trading the plan's tests against
   // a check it cannot drop, so the plan that wrote the tests gets both, instead of a no_progress stop.
-  { name: 'petstore-store, stress-8: workflow alternating the spec check with frozen tests backtracks to plan, not no_progress', step: 'workflow',
+  { name: 'petstore-store, stress-8: workflow alternating the spec check with frozen tests backtracks to plan, not no_progress', step: 'workflow', testOperations: PET_TEST_OPS,
     ledger: { attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'backtrack', to: 'plan', tradedTests: true } },
-  { name: 'the same alternation stops backtrack_limit when no backtrack is left', step: 'workflow',
+  { name: 'the same alternation stops backtrack_limit when no backtrack is left', step: 'workflow', testOperations: PET_TEST_OPS,
     ledger: { backtracks: 2, attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'stop', reason: { kind: 'backtrack_limit', step: 'workflow', backtracks: 2 } } },
   { name: 'a frozen test failing only before the repeated set is no trade: it still stops no_progress', step: 'workflow',
@@ -224,9 +231,18 @@ const rows: Row[] = [
     ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_SPEC, KEY_TF_AND_ACTION, KEY_PET_SPEC], seed: [], tasks: [] } },
     outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
     want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
-  { name: 'the mirror order, the same frozen tests failing around the spec check, backtracks with both sides for the plan', step: 'workflow',
+  { name: 'the mirror order, the same frozen tests failing around the spec check, backtracks with both sides for the plan', step: 'workflow', testOperations: PET_TEST_OPS,
     ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_3, KEY_PET_SPEC, KEY_PET_TESTS_3], seed: [], tasks: [] } },
     outcome: rejected(refusalsThrew), issues: owned([refusalsThrew, 'workflow']), want: { kind: 'backtrack', to: 'plan', tradedTests: true } },
+  { name: 'a frozen test of another operation alternating with the spec check is no trade: it still stops no_progress (e3, #179)', step: 'workflow',
+    testOperations: new Map([...PET_TEST_OPS, ['list_categories_lists_seeded', ['GET /categories']]]),
+    ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_SPEC, KEY_CATEGORIES, KEY_PET_SPEC], seed: [], tasks: [] } },
+    outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
+    want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
+  { name: 'the petstore alternation with no known test operations is no confirmed trade: it stops no_progress', step: 'workflow',
+    ledger: { attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
+    outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
+    want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
   { name: 'workflow trading its own error against a frozen test is no trade with the input: it still stops no_progress', step: 'workflow',
     ledger: { attempts: { plan: 1, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_ACTION, KEY_TF, KEY_ACTION], seed: [], tasks: [] } },
     outcome: rejected(actionBad), issues: owned([actionBad, 'workflow']),
@@ -381,7 +397,7 @@ describe('decide', () => {
   for (const row of rows) {
     it(row.name, () => {
       const cfg: Config = { ...config, ...row.config };
-      const state = { step: row.step, ledger: ledger(row.ledger), nowMs: row.nowMs ?? START + MIN };
+      const state = { step: row.step, ledger: ledger(row.ledger), nowMs: row.nowMs ?? START + MIN, ...(row.testOperations === undefined ? {} : { testOperations: row.testOperations }) };
       const got = decide(cfg, row.last === undefined ? state : { ...state, last: row.last }, row.outcome, row.issues);
       assert.deepEqual(got, row.want);
     });

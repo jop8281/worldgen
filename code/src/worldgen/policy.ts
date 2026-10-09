@@ -32,7 +32,14 @@ export type Ledger = {
 };
 
 /** `last`: no step follows this one in the run (iterate runs can end before `tasks`). Defaults to `step === 'tasks'`. */
-export type LoopState = { readonly step: StepId; readonly ledger: Ledger; readonly nowMs: number; readonly last?: boolean };
+/**
+ * `testOperations`: for each frozen acceptance test, the operations it exercises as `operationKey`s, so a trade between a
+ * failing test and an input check counts only when they concern the same operation (A-406). Absent, no trade is confirmed.
+ */
+export type LoopState = { readonly step: StepId; readonly ledger: Ledger; readonly nowMs: number; readonly last?: boolean; readonly testOperations?: ReadonlyMap<string, readonly string[]> };
+
+/** An operation as a trade compares it: `METHOD path`, every `{param}` written `{}`, since a spec and a world may name a parameter differently. */
+export const operationKey = (method: string, path: string): string => `${method.toUpperCase()} ${path.replace(/\{[^}]*\}/g, '{}')}`;
 
 /** Spend over the limit that an accepted last step was allowed to keep. The loop reports it as a warning. */
 export type Overspend = { readonly spentUsd: number; readonly limitUsd: number };
@@ -157,16 +164,34 @@ function testsOnlyKey(key: string): boolean {
 /** Whether a key holds an issue rooted at `input`: a check the source spec or fixtures fix, which no step may drop. */
 const inputKey = (key: string): boolean => keyEntries(key).some((e) => /^[^@]+@input(?:[/:]|$)/.test(e));
 
+/** The path of a `code@path: found` key entry. */
+const entryPath = (entry: string): string => {
+  const at = entry.indexOf('@');
+  const colon = entry.indexOf(': ', at);
+  return at < 0 ? '' : entry.slice(at + 1, colon < 0 ? undefined : colon);
+};
+
+/**
+ * Whether a tests-only set and an input set concern one operation: some test the first fails exercises an operation an
+ * input-rooted issue of the second names at `input/openapi/<METHOD path>`, parameters compared as `{}`.
+ */
+function sameOperation(testsKey: string, inputSet: string, testOperations: ReadonlyMap<string, readonly string[]>): boolean {
+  const tests = keyEntries(testsKey).filter((e) => !e.startsWith('layer.blocked@')).map((e) => entryPath(e).split('/')[1] ?? '');
+  const named = keyEntries(inputSet).map(entryPath).filter((p) => p.startsWith('input/')).map((p) => p.replace(/\{[^}]*\}/g, '{}'));
+  return tests.some((id) => (testOperations.get(id) ?? []).some((op) => named.some((p) => p === `input/openapi/${op}` || p.startsWith(`input/openapi/${op}/`))));
+}
+
 /**
  * Whether, between the first and the latest sighting of `key`, the step went back and forth between the plan's frozen
- * tests and a check the input fixes: one of the two sides is `key`, the other some set seen in between. Fixing either
- * breaks the other, so neither holds until the plan rewrites its tests (A-406). A step trading its own error against a
- * test is not this: it still stops.
+ * tests and a check the input fixes, about one operation: one of the two sides is `key`, the other some set seen in
+ * between, and a failing test exercises the operation the input check names. Fixing either breaks the other, so neither
+ * holds until the plan rewrites its tests (A-406). A step trading its own error against a test, or an input check
+ * against a test of another operation, is not this: it still stops.
  */
-function tradedTests(seen: readonly string[], key: string): boolean {
+function tradedTests(seen: readonly string[], key: string, testOperations: ReadonlyMap<string, readonly string[]>): boolean {
   const between = seen.slice(seen.indexOf(key) + 1, seen.lastIndexOf(key)).filter((k) => k !== key);
-  if (testsOnlyKey(key)) return between.some(inputKey);
-  return inputKey(key) && between.some(testsOnlyKey);
+  if (testsOnlyKey(key)) return between.some((k) => inputKey(k) && sameOperation(key, k, testOperations));
+  return inputKey(key) && between.some((k) => testsOnlyKey(k) && sameOperation(k, key, testOperations));
 }
 
 /**
@@ -374,7 +399,7 @@ export function decide(config: Config, state: LoopState, outcome: AttemptOutcome
     // Neither workflow nor seed can edit the plan's frozen tests, so a test they keep failing goes back to the plan that wrote it (A-161, A-165),
     // and so does a back and forth between those tests and a check the input fixes, with both sides for the plan (A-406).
     if ((step === 'workflow' || step === 'seed') && owned.length > 0) {
-      const traded = tradedTests(ledger.seenIssueSets[step] ?? [], key);
+      const traded = tradedTests(ledger.seenIssueSets[step] ?? [], key, state.testOperations ?? new Map());
       if (traded || owned.every((o) => isTestRun(o.issue))) {
         if (ledger.backtracks >= config.maxBacktracks) {
           return { kind: 'stop', reason: { kind: 'backtrack_limit', step, backtracks: ledger.backtracks } };

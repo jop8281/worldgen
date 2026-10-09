@@ -22,7 +22,7 @@ import type { Input, InputDigest } from '../src/worldgen/input.ts';
 import { claudeCliModel, CallStalled, ModelError, StepShareExpired, type Model, type ProposeRequest } from '../src/worldgen/llm.ts';
 import { planCoverage, planSchemaFor } from '../src/worldgen/plan.ts';
 import { renderReport } from '../src/worldgen/report.ts';
-import { partialDir, pickExample, runWorldGen, scopeIssues, stagePrompt, systemPrompt, type RunResult } from '../src/worldgen/run.ts';
+import { partialDir, pickExample, runWorldGen, scopeIssues, stagePrompt, systemPrompt, testOperations, type RunResult } from '../src/worldgen/run.ts';
 import { PLAN_BRIEF, STAGES } from '../src/worldgen/stages.ts';
 import { CUSTOMERS, EDITS, ESCALATE_TEST, PLAN, RESOLVE_TEST, TARGET } from './helpers/scripted-world.ts';
 import { minimalWorld } from './helpers/world.ts';
@@ -1077,9 +1077,28 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     assert.equal(calls[4]?.prompt.includes('row.not_found'), true);
   });
 
+  it('maps each frozen test to the planned operations it exercises: declared action routes and literal ctx.api paths (A-406)', () => {
+    const plan = {
+      ...PLAN, revision: 1, changes: [],
+      routes: [...PLAN.routes, { id: 'resolve_ticket', method: 'post', path: '/tickets/{id}/resolve', purpose: 'resolve' }],
+      acceptanceTests: [
+        ...PLAN.acceptanceTests,
+        { id: 'declared', intent: 'i', actions: ['resolve_ticket'], description: 'd', script: '(ctx) => {}' },
+        { id: 'annotated', intent: 'i', actions: ['resolve_ticket (POST /tickets/{id}/resolve)'], description: 'd', script: '(ctx) => {}' },
+        { id: 'literal', intent: 'i', actions: ['escalate_ticket'], description: 'd', script: "(ctx) => { ctx.api('GET', '/tickets/tkt_0001'); ctx.api('GET', '/customers?q=Acme'); }" },
+        { id: 'built', intent: 'i', actions: ['escalate_ticket'], description: 'd', script: "(ctx) => { const id = 'tkt_0001'; ctx.api('GET', '/tickets/' + id); }" },
+      ],
+    };
+    const mine = new Set(['declared', 'annotated', 'literal', 'built']);
+    assert.deepEqual([...testOperations(planSchemaFor('description').parse(plan))].filter(([id]) => mine.has(id)), [
+      ['declared', ['POST /tickets/{}/resolve']], ['annotated', ['POST /tickets/{}/resolve']], ['literal', ['GET /customers', 'GET /tickets/{}']], ['built', []],
+    ]);
+  });
+
   // stress-8 petstore-store (A-406): one workflow answer failed a frozen test, the next a check the input fixes, and back.
   const specOff = { ...EDITS.workflow, note: 'the actions with the escalate reason optional', upsert: { ...EDITS.workflow.upsert, actions: { ...TARGET.actions, escalate_ticket: { ...TARGET.actions.escalate_ticket!, description: 'Make an unresolved ticket urgent (reason optional).' } } } };
-  const reasonOptional = issue('openapi.required_field_missing', ['input', 'openapi', 'POST /tickets/{id}/escalate', 'request', 'reason'], { op: 'POST /tickets/{id}/escalate', field: 'reason' }, 'reason is optional');
+  // A stand-in for petstore's spec check, on the operation the frozen test unknown_ticket_404 exercises (GET /tickets/tkt_9999).
+  const reasonOptional = issue('openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason'], { op: 'GET /tickets/{ticket_id}', field: 'reason' }, 'reason is optional');
   /** As the conformance check refuses petstore's optional petId: a world whose escalate reason is optional fails the source spec. */
   const specCheck = (world: World): CheckReport =>
     world.actions.escalate_ticket?.description?.includes('(reason optional)') === true ? { ok: false, reached: 'lints', issues: [reasonOptional], warnings: [] } : checkWorld(world);
@@ -1096,7 +1115,7 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     ]);
     const back = events.find((e) => e.t === 'backtracked');
     assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => [i.code, i.path])] : [], [
-      'workflow', 'plan', [['openapi.required_field_missing', ['input', 'openapi', 'POST /tickets/{id}/escalate', 'request', 'reason']], ['test.failed', ['tests', 'unknown_ticket_404', 'script']]],
+      'workflow', 'plan', [['openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason']], ['test.failed', ['tests', 'unknown_ticket_404', 'script']]],
     ]);
     assert.deepEqual(['reason is optional', 'ctx.assert failed'].map((s) => calls[5]?.prompt.includes(s)), [true, true]);
     // The workflow rerun is shown its own last rejection, the spec check, not the old plan's test failure.
