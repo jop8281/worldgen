@@ -1,0 +1,1053 @@
+format: 1
+meta:
+  name: world
+  description: An issue tracker where teams own issues that move through a status lifecycle (backlog to done or canceled), get assigned to team members, and are scheduled into capacity-limited cycles (sprints).
+  resembles: Linear-style issue tracker (teams, issues, cycles, comments)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  team:
+    description: A group that owns issues and cycles. Identified by a short unique key such as ENG.
+    idPrefix: team
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      key:
+        type: string
+        description: Short unique uppercase team key, such as ENG.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 10
+        pattern: ^[A-Z][A-Z0-9]{1,9}$
+  member:
+    description: A user who belongs to exactly one team, as an admin or a regular member.
+    idPrefix: mem
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: restrict
+      role:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - admin
+          - member
+  cycle:
+    description: A time-boxed sprint of one team with a limited issue capacity. Any issue with the cycle_id counts toward capacity.
+    idPrefix: cyc
+    fields:
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: restrict
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      capacity:
+        type: int
+        description: Maximum number of issues the cycle can hold.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      starts_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      ends_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  issue:
+    description: A unit of work with a priority and a status lifecycle, an optional assignee and an optional cycle. Status, assignee, cycle and lifecycle timestamps change only through workflow actions.
+    idPrefix: iss
+    fields:
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: restrict
+      creator_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+      assignee_id:
+        type: ref
+        description: Set by the assign action. Must be a member of the issue's team.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: member
+        onDelete: nullify
+      priority:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - low
+          - normal
+          - high
+          - urgent
+      estimate:
+        type: int
+        description: Optional effort estimate in points.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        min: 0
+        max: 100
+      status:
+        type: state
+        description: Lifecycle. Moved by the start, complete and cancel actions. done and canceled are final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - backlog
+          - todo
+          - in_progress
+          - in_review
+          - done
+          - canceled
+        initial: backlog
+        transitions:
+          backlog:
+            - todo
+            - in_progress
+            - canceled
+          todo:
+            - backlog
+            - in_progress
+            - canceled
+          in_progress:
+            - in_review
+            - done
+            - canceled
+          in_review:
+            - in_progress
+            - done
+            - canceled
+          done: []
+          canceled: []
+      cycle_id:
+        type: ref
+        description: Set by the add_to_cycle action.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: cycle
+        onDelete: nullify
+      started_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      completed_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      canceled_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      project_id:
+        type: ref
+        description: Optional project the issue belongs to.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: project
+        onDelete: nullify
+      due_date:
+        type: datetime
+        description: Optional due date of the issue.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  comment:
+    description: A message written by a member on an issue.
+    idPrefix: cmt
+    fields:
+      issue_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: issue
+        onDelete: cascade
+      author_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+      body:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  project:
+    description: A body of work that groups issues, owned by one team and optionally led by a member.
+    idPrefix: prj
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: restrict
+      lead_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: nullify
+      status:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - planned
+          - started
+          - paused
+          - completed
+          - canceled
+        default: planned
+      start_date:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      target_date:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  issue_label:
+    description: A label that can be used to categorize issues, optionally scoped to one team.
+    idPrefix: lbl
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+      color:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 20
+      team_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: nullify
+  workflow_state:
+    description: A named column in a team's workflow (such as Todo or In Review) with a category type. Linear lets a state move between any categories.
+    idPrefix: wfs
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: cascade
+      color:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 20
+      position:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+      type:
+        type: state
+        description: Category of the workflow state. Any category can be changed to any other.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - backlog
+          - unstarted
+          - started
+          - completed
+          - canceled
+        initial: backlog
+        transitions:
+          backlog:
+            - unstarted
+            - started
+            - completed
+            - canceled
+          unstarted:
+            - backlog
+            - started
+            - completed
+            - canceled
+          started:
+            - backlog
+            - unstarted
+            - completed
+            - canceled
+          completed:
+            - backlog
+            - unstarted
+            - started
+            - canceled
+          canceled:
+            - backlog
+            - unstarted
+            - started
+            - completed
+routes:
+  list_teams:
+    op: list
+    entity: team
+    filters:
+      - key
+    search:
+      - name
+      - key
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /teams
+    description: List teams
+  get_team:
+    op: get
+    entity: team
+    method: GET
+    path: /teams/{id}
+    description: Get a team
+  create_team:
+    op: create
+    entity: team
+    method: POST
+    path: /teams
+    description: Create a team
+  list_members:
+    op: list
+    entity: member
+    filters:
+      - team_id
+      - role
+    search:
+      - name
+      - email
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /members
+    description: List members, filter by team_id and role
+  create_member:
+    op: create
+    entity: member
+    method: POST
+    path: /members
+    description: Create a member
+  list_cycles:
+    op: list
+    entity: cycle
+    filters:
+      - team_id
+    search:
+      - name
+    sort:
+      - starts_at
+    pageSize: 25
+    method: GET
+    path: /cycles
+    description: List cycles, filter by team_id
+  get_cycle:
+    op: get
+    entity: cycle
+    method: GET
+    path: /cycles/{id}
+    description: Get a cycle
+  create_cycle:
+    op: create
+    entity: cycle
+    method: POST
+    path: /cycles
+    description: Create a cycle
+  list_issues:
+    op: list
+    entity: issue
+    filters:
+      - status
+      - priority
+      - team_id
+      - assignee_id
+      - cycle_id
+      - project_id
+    search:
+      - title
+    sort:
+      - created_at
+      - title
+    pageSize: 25
+    method: GET
+    path: /issues
+    description: List issues; filter by status, priority, team_id, assignee_id, cycle_id; search title
+  get_issue:
+    op: get
+    entity: issue
+    method: GET
+    path: /issues/{id}
+    description: Get an issue
+  create_issue:
+    op: create
+    entity: issue
+    method: POST
+    path: /issues
+    description: Create an issue in backlog
+  update_issue:
+    op: update
+    entity: issue
+    method: PATCH
+    path: /issues/{id}
+    description: Edit title, description, priority, estimate
+  list_comments:
+    op: list
+    entity: comment
+    filters: []
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /issues/{issue_id}/comments
+    description: List comments of an issue
+  create_comment:
+    op: create
+    entity: comment
+    method: POST
+    path: /comments
+    description: Add a comment to an issue
+  list_projects:
+    op: list
+    entity: project
+    filters:
+      - team_id
+      - status
+      - lead_id
+    search:
+      - name
+    sort:
+      - name
+      - target_date
+    pageSize: 25
+    method: GET
+    path: /projects
+    description: List projects
+  get_project:
+    op: get
+    entity: project
+    method: GET
+    path: /projects/{id}
+    description: Get a project
+  create_project:
+    op: create
+    entity: project
+    method: POST
+    path: /projects
+    description: Create a project
+  update_project:
+    op: update
+    entity: project
+    method: PATCH
+    path: /projects/{id}
+    description: Update a project
+  list_users:
+    op: list
+    entity: member
+    filters:
+      - team_id
+      - role
+    search:
+      - name
+      - email
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /users
+    description: List users (members of teams)
+  get_user:
+    op: get
+    entity: member
+    method: GET
+    path: /users/{id}
+    description: Get a user
+  list_labels:
+    op: list
+    entity: issue_label
+    filters:
+      - team_id
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /labels
+    description: List issue labels
+  get_label:
+    op: get
+    entity: issue_label
+    method: GET
+    path: /labels/{id}
+    description: Get a label
+  create_label:
+    op: create
+    entity: issue_label
+    method: POST
+    path: /labels
+    description: Create a label
+  list_workflow_states:
+    op: list
+    entity: workflow_state
+    filters:
+      - team_id
+      - type
+    search:
+      - name
+    sort:
+      - position
+      - name
+    pageSize: 25
+    method: GET
+    path: /workflow_states
+    description: List workflow states
+  get_workflow_state:
+    op: get
+    entity: workflow_state
+    method: GET
+    path: /workflow_states/{id}
+    description: Get a workflow state
+  create_workflow_state:
+    op: create
+    entity: workflow_state
+    method: POST
+    path: /workflow_states
+    description: Create a workflow state
+actions:
+  assign_issue:
+    method: POST
+    path: /issues/{id}/assign
+    description: Assign an issue to a member of its own team.
+    input:
+      assignee_id:
+        type: ref
+        description: Member of the issue's team.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        if (issue.status === 'done' || issue.status === 'canceled') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is ' + issue.status + ' and cannot be assigned.');
+        const m = ctx.db.get('member', ctx.body.assignee_id);
+        if (m === null) ctx.fail(404, 'not_found', 'member ' + ctx.body.assignee_id + ' not found');
+        if (m.team_id !== issue.team_id) ctx.fail(409, 'not_team_member', 'member ' + m.id + ' does not belong to team ' + issue.team_id + '.');
+        const updated = ctx.db.update('issue', issue.id, { assignee_id: m.id });
+        return { status: 200, body: updated };
+      }
+  start_issue:
+    method: POST
+    path: /issues/{id}/start
+    description: Start work on an assigned backlog or todo issue.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        if (issue.status !== 'backlog' && issue.status !== 'todo') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is ' + issue.status + '. Only backlog and todo issues can be started.');
+        if (issue.assignee_id === null || issue.assignee_id === undefined) ctx.fail(409, 'no_assignee', 'issue ' + issue.id + ' has no assignee. Assign it first.');
+        const updated = ctx.db.update('issue', issue.id, { status: 'in_progress', started_at: ctx.now() });
+        return { status: 200, body: updated };
+      }
+  complete_issue:
+    method: POST
+    path: /issues/{id}/complete
+    description: Mark an in_progress or in_review issue done.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        if (issue.status !== 'in_progress' && issue.status !== 'in_review') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is ' + issue.status + '. Only in_progress and in_review issues can be completed.');
+        const updated = ctx.db.update('issue', issue.id, { status: 'done', completed_at: ctx.now() });
+        return { status: 200, body: updated };
+      }
+  cancel_issue:
+    method: POST
+    path: /issues/{id}/cancel
+    description: Cancel an issue permanently. Done and canceled issues cannot be canceled.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        if (issue.status === 'done' || issue.status === 'canceled') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is already ' + issue.status + ' and cannot be canceled.');
+        const updated = ctx.db.update('issue', issue.id, { status: 'canceled', canceled_at: ctx.now() });
+        return { status: 200, body: updated };
+      }
+  add_to_cycle:
+    method: POST
+    path: /issues/{id}/cycle
+    description: Schedule an issue into a cycle of its own team that has free capacity.
+    input:
+      cycle_id:
+        type: ref
+        description: Target cycle of the issue's team.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: cycle
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        const cycle = ctx.db.get('cycle', ctx.body.cycle_id);
+        if (cycle === null) ctx.fail(404, 'not_found', 'cycle ' + ctx.body.cycle_id + ' not found');
+        if (issue.status === 'done' || issue.status === 'canceled') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is ' + issue.status + ' and cannot be scheduled.');
+        if (cycle.team_id !== issue.team_id) ctx.fail(409, 'cycle_team_mismatch', 'cycle ' + cycle.id + ' belongs to team ' + cycle.team_id + ', not ' + issue.team_id + '.');
+        if (issue.cycle_id === cycle.id) ctx.fail(409, 'no_change', 'issue ' + issue.id + ' is already in cycle ' + cycle.id + '.');
+        const inCycle = ctx.db.list('issue', { where: { cycle_id: cycle.id } });
+        if (inCycle.length >= cycle.capacity) ctx.fail(409, 'cycle_full', 'cycle ' + cycle.id + ' is full (' + inCycle.length + '/' + cycle.capacity + ').');
+        const updated = ctx.db.update('issue', issue.id, { cycle_id: cycle.id });
+        return { status: 200, body: updated };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  team: (ctx) => [['Platform','PLT'],['Billing','BIL'],['Mobile','MOB']].map(([name,key],i)=>{const t=ctx.time.minus(ctx.now(),(2500+i*24)+'h');return {name,key,created_at:t,updated_at:t};})
+  member: |-
+    (ctx) => {
+      const people = [
+        ['Marta Lindqvist','admin'],['Dana Okafor','admin'],['Tobias Wren','member'],['Ines Carvalho','member'],
+        ['Rahul Menon','admin'],['Hannah Sato','admin'],['Felix Brandt','member'],['Yara Haddad','member'],
+        ['Owen Prescott','admin'],['Mei Tanaka','member'],['Luca Ferrari','member'],['Nadia Volkov','member']];
+      return people.map(([name,role],i)=>{
+        const t = ctx.time.minus(ctx.now(), (2000 - i*30) + 'h');
+        return { name, email: name.toLowerCase().replace(' ','.') + '@tracker.example', team_id: 'team_000' + (Math.floor(i/4)+1), role, created_at: t, updated_at: t };
+      });
+    }
+  cycle: |-
+    (ctx) => {
+      const t = ctx.time.minus(ctx.now(), '900h');
+      const c = [
+        [1,'Platform Sprint 41',6,'2026-09-14T00:00:00.000Z','2026-09-28T00:00:00.000Z'],
+        [1,'Platform Sprint 42',5,'2026-10-12T00:00:00.000Z','2026-10-26T00:00:00.000Z'],
+        [1,'Platform Sprint 43',5,'2026-10-26T00:00:00.000Z','2026-11-09T00:00:00.000Z'],
+        [2,'Billing Sprint 21',6,'2026-09-14T00:00:00.000Z','2026-09-28T00:00:00.000Z'],
+        [2,'Billing Sprint 22',6,'2026-10-12T00:00:00.000Z','2026-10-26T00:00:00.000Z'],
+        [3,'Mobile Sprint 9',6,'2026-09-14T00:00:00.000Z','2026-09-28T00:00:00.000Z'],
+        [3,'Mobile Sprint 10',6,'2026-10-12T00:00:00.000Z','2026-10-26T00:00:00.000Z']];
+      return c.map(([tm,name,capacity,starts_at,ends_at])=>({team_id:'team_000'+tm,name,capacity,starts_at,ends_at,created_at:t,updated_at:t}));
+    }
+  issue: |-
+    (ctx) => {
+      const now = ctx.now();
+      const members = ctx.rows('member');
+      const byTeam = {};
+      for (const m of members) (byTeam[m.team_id] = byTeam[m.team_id] || []).push(m.id);
+      const P = 'team_0001', B = 'team_0002', M = 'team_0003';
+      const mk = (title, team, status, priority, assignee, cycle) => ({ title, team, status, priority, assignee: assignee || null, cycle: cycle || null });
+      const A = [
+        mk('Login redirect loops on Safari', P, 'backlog', 'high'),
+        mk('[dup] Login redirect loops on Safari', M, 'backlog', 'normal'),
+        mk('Invoice PDF fails to render for EUR customers', B, 'backlog', 'urgent'),
+        mk('Stripe webhook retries exhausted', B, 'backlog', 'urgent', 'mem_0007'),
+        mk('Proration wrong on mid-cycle upgrade', B, 'backlog', 'high'),
+        mk('Rotate leaked CI token', P, 'todo', 'urgent'),
+        mk('Postgres failover runbook outdated', P, 'todo', 'high'),
+        mk('Rate limiter drops valid burst traffic', P, 'todo', 'high'),
+        mk('Add p99 latency panel to dashboards', P, 'todo', 'normal', 'mem_0003', 'cyc_0002'),
+        mk('Clean up unused feature flags', P, 'todo', 'low', 'mem_0004', 'cyc_0002'),
+        mk('Upgrade Node runtime to 22', P, 'todo', 'normal', 'mem_0001', 'cyc_0002'),
+      ];
+      const Bk = [
+        mk('Patch OpenSSL in base images', P, 'todo', 'urgent'),
+        mk('[dup] Crash on launch Android 14', M, 'backlog', 'normal'),
+        mk('[dup] Push notification badge count wrong', M, 'backlog', 'low'),
+        mk('[dup] Dark mode toggle resets', M, 'backlog', 'normal'),
+        mk('[dup] Crash on launch Android 14', M, 'done', 'normal', 'mem_0010'),
+        mk('[dup] Rate limiter drops valid burst traffic', P, 'backlog', 'normal'),
+        mk('[dup] Offline sync conflict', M, 'in_progress', 'high', 'mem_0011'),
+      ];
+      const target = { backlog: 16, todo: 13, in_progress: 16, in_review: 6, done: 10, canceled: 3 };
+      const have = {};
+      for (const a of A.concat(Bk)) have[a.status] = (have[a.status] || 0) + 1;
+      const sts = [];
+      for (const s of Object.keys(target)) for (let k = have[s] || 0; k < target[s]; k++) sts.push(s);
+      for (let i = sts.length - 1; i > 0; i--) { const j = ctx.int(0, i); const x = sts[i]; sts[i] = sts[j]; sts[j] = x; }
+      const titles = ['Search results miss recent records','Webhook deliveries failing with 500','Export to CSV times out','Settings page flickers on load','Add SSO group mapping','Email digest sent twice','Timezone wrong on audit log','Pagination skips last item','Avatar upload rejects PNG','Slow cold start on report page','Retry logic ignores 429','Tooltip overlaps modal','Currency rounding off by one cent','Deep links open wrong screen','Keyboard shortcuts conflict','Cache not invalidated after edit','Add bulk edit for labels','Autocomplete lags on long lists','Broken link in welcome email','Session expires too early','Sidebar collapses unexpectedly','Add audit trail for role changes','Upload progress bar stuck','Notification settings not saved'];
+      const gen = sts.map((status, i) => {
+        const team = ['team_0001','team_0002','team_0003'][i % 3];
+        let prios = ['low','normal','high','urgent'];
+        if ((team === P && status === 'todo') || (team === B && status === 'backlog')) prios = ['low','normal','high'];
+        const title = titles[i % titles.length] + (i >= titles.length ? ' (follow-up)' : '');
+        const pool = byTeam[team];
+        const assignee = (status === 'backlog' || (status === 'todo' && i % 2 === 0)) ? null : ctx.pick(pool);
+        return mk(title, team, status, ctx.pick(prios), assignee);
+      });
+      const all = A.concat(gen, Bk);
+      return all.map((o, i) => {
+        const created = ctx.time.minus(now, (2000 - i * 20) + 'h');
+        const pool = byTeam[o.team];
+        let started = null, completed = null, canceled = null, upd = created;
+        if (['in_progress','in_review','done'].includes(o.status)) { started = ctx.time.plus(created, '5h'); upd = started; }
+        if (o.status === 'done') { completed = ctx.time.plus(created, '30h'); upd = completed; }
+        if (o.status === 'canceled') { canceled = ctx.time.plus(created, '10h'); upd = canceled; }
+        return { title: o.title, description: i % 3 === 0 ? null : 'Reported by a customer; see linked thread for details.', team_id: o.team, creator_id: pool[i % pool.length], assignee_id: o.assignee, priority: o.priority, estimate: i % 4 === 0 ? null : (i % 5) + 1, status: o.status, cycle_id: o.cycle, started_at: started, completed_at: completed, canceled_at: canceled, created_at: created, updated_at: upd };
+      });
+    }
+  comment: |-
+    (ctx) => {
+      const issues = ctx.rows('issue');
+      const members = ctx.rows('member');
+      const bodies = ['Reproduced on staging, looks related to the last deploy.','Can you share the request ID from the failed call?','Picking this up after the current sprint work.','Workaround shared with the customer by chat.','Waiting on a design review before continuing.','Fix is in review, should ship tomorrow.','Confirmed with support, affects several accounts.','Added logs to narrow down the cause.'];
+      const out = [];
+      for (let k = 0; k < 40; k++) {
+        const iss = issues[(k * 7) % issues.length];
+        const pool = members.filter((m) => m.team_id === iss.team_id);
+        const t = ctx.time.plus(iss.created_at, (2 + k) + 'h');
+        out.push({ issue_id: iss.id, author_id: pool[k % pool.length].id, body: bodies[k % bodies.length], created_at: t, updated_at: t });
+      }
+      return out;
+    }
+tests:
+  assign_requires_team_member:
+    description: Create two teams, a member in each and an issue in team A. Assigning the team B member returns 409 not_team_member; assigning the team A member succeeds.
+    script: |-
+      (ctx) => {
+        const ta = ctx.api('POST', '/teams', { name: 'Alpha Assign', key: 'ASA' });
+        ctx.assert(ta.status === 201, 'team a ' + JSON.stringify(ta.body));
+        const tb = ctx.api('POST', '/teams', { name: 'Beta Assign', key: 'ASB' });
+        ctx.assert(tb.status === 201, 'team b');
+        const ma = ctx.api('POST', '/members', { name: 'Ann Assign', email: 'ann.assign@acceptance.example', team_id: ta.body.id, role: 'member' });
+        ctx.assert(ma.status === 201, 'member a ' + JSON.stringify(ma.body));
+        const mb = ctx.api('POST', '/members', { name: 'Ben Assign', email: 'ben.assign@acceptance.example', team_id: tb.body.id, role: 'member' });
+        ctx.assert(mb.status === 201, 'member b');
+        const i = ctx.api('POST', '/issues', { title: 'Acceptance assign issue', team_id: ta.body.id, creator_id: ma.body.id, priority: 'high' });
+        ctx.assert(i.status === 201 && i.body.status === 'backlog', 'issue ' + JSON.stringify(i.body));
+        const bad = ctx.api('POST', '/issues/' + i.body.id + '/assign', { assignee_id: mb.body.id });
+        ctx.assert(bad.status === 409 && bad.body.error.code === 'not_team_member', 'bad ' + JSON.stringify(bad.body));
+        const ok = ctx.api('POST', '/issues/' + i.body.id + '/assign', { assignee_id: ma.body.id });
+        ctx.assert(ok.status === 200 && ok.body.assignee_id === ma.body.id, 'ok ' + JSON.stringify(ok.body));
+      }
+  start_requires_assignee:
+    description: Starting an unassigned issue gives 409 no_assignee; after assignment start sets in_progress and started_at.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Start Team', key: 'STT' });
+        const m = ctx.api('POST', '/members', { name: 'Sam Start', email: 'sam.start@acceptance.example', team_id: t.body.id, role: 'member' });
+        const i = ctx.api('POST', '/issues', { title: 'Acceptance start issue', team_id: t.body.id, creator_id: m.body.id, priority: 'normal' });
+        ctx.assert(i.status === 201, 'issue ' + JSON.stringify(i.body));
+        const no = ctx.api('POST', '/issues/' + i.body.id + '/start', {});
+        ctx.assert(no.status === 409 && no.body.error.code === 'no_assignee', 'no assignee ' + JSON.stringify(no.body));
+        ctx.assert(ctx.api('POST', '/issues/' + i.body.id + '/assign', { assignee_id: m.body.id }).status === 200, 'assign');
+        const s = ctx.api('POST', '/issues/' + i.body.id + '/start', {});
+        ctx.assert(s.status === 200 && s.body.status === 'in_progress' && s.body.started_at !== null, 'start ' + JSON.stringify(s.body));
+        const again = ctx.api('POST', '/issues/' + i.body.id + '/start', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'again ' + JSON.stringify(again.body));
+      }
+  complete_requires_started:
+    description: Completing a backlog issue is refused; after start, complete sets done and completed_at.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Complete Team', key: 'CMT' });
+        const m = ctx.api('POST', '/members', { name: 'Cleo Complete', email: 'cleo.complete@acceptance.example', team_id: t.body.id, role: 'admin' });
+        const i = ctx.api('POST', '/issues', { title: 'Acceptance complete issue', team_id: t.body.id, creator_id: m.body.id, priority: 'low' });
+        const early = ctx.api('POST', '/issues/' + i.body.id + '/complete', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'early ' + JSON.stringify(early.body));
+        ctx.api('POST', '/issues/' + i.body.id + '/assign', { assignee_id: m.body.id });
+        ctx.assert(ctx.api('POST', '/issues/' + i.body.id + '/start', {}).status === 200, 'start');
+        const d = ctx.api('POST', '/issues/' + i.body.id + '/complete', {});
+        ctx.assert(d.status === 200 && d.body.status === 'done' && d.body.completed_at !== null, 'done ' + JSON.stringify(d.body));
+      }
+  cycle_capacity_enforced:
+    description: A cycle with capacity 1 accepts one issue; a second gets 409 cycle_full; an issue of another team gets 409 cycle_team_mismatch.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Cycle Team', key: 'CYT' });
+        const o = ctx.api('POST', '/teams', { name: 'Other Cycle Team', key: 'CYO' });
+        const m = ctx.api('POST', '/members', { name: 'Cy Cycle', email: 'cy.cycle@acceptance.example', team_id: t.body.id, role: 'member' });
+        const c = ctx.api('POST', '/cycles', { team_id: t.body.id, name: 'Acceptance Sprint', capacity: 1, starts_at: '2026-10-12T00:00:00.000Z', ends_at: '2026-10-26T00:00:00.000Z' });
+        ctx.assert(c.status === 201, 'cycle ' + JSON.stringify(c.body));
+        const mk = (title, team) => ctx.api('POST', '/issues', { title, team_id: team, creator_id: m.body.id, priority: 'normal' }).body.id;
+        const i1 = mk('Cycle issue one', t.body.id);
+        const i2 = mk('Cycle issue two', t.body.id);
+        const i3 = mk('Cycle issue foreign', o.body.id);
+        const r1 = ctx.api('POST', '/issues/' + i1 + '/cycle', { cycle_id: c.body.id });
+        ctx.assert(r1.status === 200 && r1.body.cycle_id === c.body.id, 'first ' + JSON.stringify(r1.body));
+        const r2 = ctx.api('POST', '/issues/' + i2 + '/cycle', { cycle_id: c.body.id });
+        ctx.assert(r2.status === 409 && r2.body.error.code === 'cycle_full', 'full ' + JSON.stringify(r2.body));
+        const r3 = ctx.api('POST', '/issues/' + i3 + '/cycle', { cycle_id: c.body.id });
+        ctx.assert(r3.status === 409 && r3.body.error.code === 'cycle_team_mismatch', 'mismatch ' + JSON.stringify(r3.body));
+      }
+  cancel_is_final:
+    description: Cancel sets canceled and canceled_at; a canceled issue cannot be canceled, started again; a done issue cannot be canceled.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Cancel Team', key: 'CNT' });
+        const m = ctx.api('POST', '/members', { name: 'Cam Cancel', email: 'cam.cancel@acceptance.example', team_id: t.body.id, role: 'member' });
+        const mk = (title) => ctx.api('POST', '/issues', { title, team_id: t.body.id, creator_id: m.body.id, priority: 'urgent' }).body.id;
+        const a = mk('Cancel me');
+        const c = ctx.api('POST', '/issues/' + a + '/cancel', {});
+        ctx.assert(c.status === 200 && c.body.status === 'canceled' && c.body.canceled_at !== null, 'cancel ' + JSON.stringify(c.body));
+        const c2 = ctx.api('POST', '/issues/' + a + '/cancel', {});
+        ctx.assert(c2.status === 409 && c2.body.error.code === 'invalid_state', 'twice ' + JSON.stringify(c2.body));
+        ctx.api('POST', '/issues/' + a + '/assign', { assignee_id: m.body.id });
+        const s = ctx.api('POST', '/issues/' + a + '/start', {});
+        ctx.assert(s.status === 409, 'start canceled ' + s.status);
+        const b = mk('Finish me');
+        ctx.api('POST', '/issues/' + b + '/assign', { assignee_id: m.body.id });
+        ctx.api('POST', '/issues/' + b + '/start', {});
+        ctx.assert(ctx.api('POST', '/issues/' + b + '/complete', {}).status === 200, 'complete');
+        const c3 = ctx.api('POST', '/issues/' + b + '/cancel', {});
+        ctx.assert(c3.status === 409 && c3.body.error.code === 'invalid_state', 'cancel done ' + JSON.stringify(c3.body));
+      }
+tasks:
+  assign_login_bug:
+    difficulty: easy
+    instruction: Assign the issue titled 'Login redirect loops on Safari' to the member Dana Okafor of its team.
+    grader: "(ctx) => { const target = ctx.seed.list('issue', { where: { title: 'Login redirect loops on Safari' } })[0]; const dana = ctx.seed.list('member', { where: { name: 'Dana Okafor' } })[0]; if (!target || !dana) return 0; ctx.guardChanges('only the assignee of the target issue changed', [{ entity: 'issue', id: target.id, kind: 'updated', fields: ['assignee_id'] }]); const end = ctx.db.get('issue', target.id); ctx.goal(1, 'assigned to Dana Okafor', end.assignee_id === dana.id); return ctx.score(); }"
+    solution: "(ctx) => { const hits = ctx.api('GET', '/issues?q=Login+redirect').body.data.filter((i) => i.title === 'Login redirect loops on Safari'); ctx.assert(hits.length === 1, 'expected exactly one issue with that title, found ' + hits.length); const dana = ctx.api('GET', '/members?q=Dana').body.data.find((m) => m.name === 'Dana Okafor' && m.team_id === hits[0].team_id); ctx.assert(dana, 'Dana Okafor not found in the issue team'); const r = ctx.api('POST', '/issues/' + hits[0].id + '/assign', { assignee_id: dana.id }); ctx.assert(r.status === 200, 'assign failed: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: assigns the correct issue to Marta Lindqvist, another Platform member, instead of Dana Okafor
+        script: "(ctx) => { const hit = ctx.api('GET', '/issues?q=Login+redirect').body.data.find((i) => i.title === 'Login redirect loops on Safari'); const marta = ctx.api('GET', '/members?q=Marta').body.data.find((m) => m.name === 'Marta Lindqvist'); const r = ctx.api('POST', '/issues/' + hit.id + '/assign', { assignee_id: marta.id }); ctx.assert(r.status === 200, 'assign failed'); }"
+    alternatives: []
+    allows:
+      - entity: issue
+        kind: updated
+        fields:
+          - assignee_id
+        where:
+          title: Login redirect loops on Safari
+  start_urgent_billing:
+    difficulty: medium
+    instruction: Take the unassigned urgent backlog issue of the Billing team, assign it to the Billing team admin Rahul Menon and start it.
+    grader: "(ctx) => { const B = ctx.seed.list('team', { where: { key: 'BIL' } })[0]; if (!B) return 0; const rahul = ctx.seed.list('member', { where: { team_id: B.id, name: 'Rahul Menon' } })[0]; if (!rahul) return 0; const target = ctx.seed.list('issue', { where: { team_id: B.id, priority: 'urgent', status: 'backlog' } }).find((i) => i.assignee_id === null); if (!target) return 0; ctx.guardChanges('only the target issue changed', [{ entity: 'issue', id: target.id, kind: 'updated', fields: ['assignee_id', 'status', 'started_at'] }]); const end = ctx.db.get('issue', target.id); ctx.goal(0.5, 'assigned to Rahul Menon', end.assignee_id === rahul.id); ctx.goal(0.5, 'started', end.status === 'in_progress' && end.started_at !== null); return ctx.score(); }"
+    solution: "(ctx) => { const team = ctx.api('GET', '/teams?key=BIL').body.data[0]; ctx.assert(team, 'Billing team not found'); const open = ctx.api('GET', '/issues?team_id=' + team.id + '&priority=urgent&status=backlog').body.data.filter((i) => i.assignee_id === null); ctx.assert(open.length === 1, 'expected one unassigned urgent backlog issue, found ' + open.length); const rahul = ctx.api('GET', '/members?team_id=' + team.id + '&role=admin').body.data.find((m) => m.name === 'Rahul Menon'); ctx.assert(rahul, 'Rahul Menon not found among Billing admins'); const a = ctx.api('POST', '/issues/' + open[0].id + '/assign', { assignee_id: rahul.id }); ctx.assert(a.status === 200, 'assign failed: ' + JSON.stringify(a.body)); const s = ctx.api('POST', '/issues/' + open[0].id + '/start', {}); ctx.assert(s.status === 200, 'start failed: ' + JSON.stringify(s.body)); }"
+    decoys:
+      - why: assigns a non-admin Billing member and starts the issue, so the assignee is not the named admin
+        script: "(ctx) => { const team = ctx.api('GET', '/teams?key=BIL').body.data[0]; const open = ctx.api('GET', '/issues?team_id=' + team.id + '&priority=urgent&status=backlog').body.data.filter((i) => i.assignee_id === null); const plain = ctx.api('GET', '/members?team_id=' + team.id + '&role=member').body.data[0]; ctx.assert(ctx.api('POST', '/issues/' + open[0].id + '/assign', { assignee_id: plain.id }).status === 200, 'assign failed'); ctx.assert(ctx.api('POST', '/issues/' + open[0].id + '/start', {}).status === 200, 'start failed'); }"
+      - why: assigns the other Billing admin, Hannah Sato, instead of Rahul Menon, then starts the issue
+        script: "(ctx) => { const team = ctx.api('GET', '/teams?key=BIL').body.data[0]; const open = ctx.api('GET', '/issues?team_id=' + team.id + '&priority=urgent&status=backlog').body.data.filter((i) => i.assignee_id === null); const hannah = ctx.api('GET', '/members?team_id=' + team.id + '&role=admin').body.data.find((m) => m.name === 'Hannah Sato'); ctx.assert(ctx.api('POST', '/issues/' + open[0].id + '/assign', { assignee_id: hannah.id }).status === 200, 'assign failed'); ctx.assert(ctx.api('POST', '/issues/' + open[0].id + '/start', {}).status === 200, 'start failed'); }"
+      - why: starts the urgent Billing backlog issue that already has an assignee instead of the unassigned one
+        script: (ctx) => { const team = ctx.api('GET', '/teams?key=BIL').body.data[0]; const taken = ctx.api('GET', '/issues?team_id=' + team.id + '&priority=urgent&status=backlog').body.data.filter((i) => i.assignee_id !== null); ctx.assert(taken.length > 0, 'no assigned urgent issue'); ctx.assert(ctx.api('POST', '/issues/' + taken[0].id + '/start', {}).status === 200, 'start failed'); }
+    alternatives: []
+    allows:
+      - entity: issue
+        kind: updated
+        fields:
+          - assignee_id
+          - status
+          - started_at
+        where:
+          team_id: team_0002
+          priority: urgent
+          status: backlog
+          assignee_id: null
+  fill_platform_cycle:
+    difficulty: hard
+    instruction: "Platform Sprint 42, the Platform team's next cycle, has only a few free slots. Schedule the highest-priority todo Platform issues that are not in any cycle yet into it until it is full, and assign each issue you schedule to Marta Lindqvist. Do not start, cancel or otherwise change any issue that did not fit. Finally create the Platform cycle that follows the existing ones: name 'Platform Sprint 44', capacity 5, starting 2026-11-09T00:00:00.000Z and ending 2026-11-23T00:00:00.000Z."
+    grader: "(ctx) => { const P = ctx.seed.list('team', { where: { key: 'PLT' } })[0]; const marta = ctx.seed.list('member', { where: { name: 'Marta Lindqvist' } })[0]; if (!P || !marta) return 0; const sprint = ctx.seed.list('cycle', { where: { team_id: P.id, name: 'Platform Sprint 42' } })[0]; if (!sprint) return 0; const used = ctx.seed.list('issue', { where: { cycle_id: sprint.id } }).length; const free = sprint.capacity - used; const rank = { urgent: 3, high: 2, normal: 1, low: 0 }; const expected = ctx.seed.list('issue', { where: { team_id: P.id, status: 'todo' } }).filter((i) => i.cycle_id === null).sort((a, b) => rank[b.priority] - rank[a.priority] || (a.id < b.id ? -1 : 1)).slice(0, free); if (expected.length === 0) return 0; const fresh = ctx.db.list('cycle').filter((c) => ctx.seed.get('cycle', c.id) === null); ctx.guard('at most one new cycle', fresh.length <= 1); ctx.guardChanges('only the chosen issues and the new cycle changed', [...expected.map((i) => ({ entity: 'issue', id: i.id, kind: 'updated', fields: ['cycle_id', 'assignee_id'] })), ...fresh.map((c) => ({ entity: 'cycle', id: c.id, kind: 'created', fields: ['team_id', 'name', 'capacity', 'starts_at', 'ends_at'] }))]); const w = 0.7 / expected.length; for (const i of expected) { const end = ctx.db.get('issue', i.id); ctx.goal(w, 'scheduled and assigned ' + i.id, end.cycle_id === sprint.id && end.assignee_id === marta.id); } const c = fresh[0]; const ok = fresh.length === 1 && c.team_id === P.id && c.name === 'Platform Sprint 44' && c.capacity === 5 && ctx.time.minutesBetween(c.starts_at, '2026-11-09T00:00:00.000Z') === 0 && ctx.time.minutesBetween(c.ends_at, '2026-11-23T00:00:00.000Z') === 0; ctx.goal(0.3, 'next cycle created', ok); return ctx.score(); }"
+    solution: "(ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body)); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); return rows; }; const team = ctx.api('GET', '/teams?key=PLT').body.data[0]; ctx.assert(team, 'Platform team not found'); const cycles = pages('/cycles?team_id=' + team.id + '&limit=25'); const sprint = cycles.find((c) => c.name === 'Platform Sprint 42'); ctx.assert(sprint, 'Platform Sprint 42 not found'); const marta = ctx.api('GET', '/members?team_id=' + team.id + '&q=Marta').body.data.find((m) => m.name === 'Marta Lindqvist'); ctx.assert(marta, 'Marta Lindqvist not found'); const issues = pages('/issues?limit=25'); const used = issues.filter((i) => i.cycle_id === sprint.id).length; const free = sprint.capacity - used; const rank = { urgent: 3, high: 2, normal: 1, low: 0 }; const chosen = issues.filter((i) => i.team_id === team.id && i.status === 'todo' && i.cycle_id === null).sort((a, b) => rank[b.priority] - rank[a.priority] || (a.id < b.id ? -1 : 1)).slice(0, free); ctx.assert(chosen.length > 0, 'nothing to schedule'); for (const i of chosen) { const a = ctx.api('POST', '/issues/' + i.id + '/assign', { assignee_id: marta.id }); ctx.assert(a.status === 200, 'assign ' + i.id + ' failed: ' + JSON.stringify(a.body)); const c = ctx.api('POST', '/issues/' + i.id + '/cycle', { cycle_id: sprint.id }); ctx.assert(c.status === 200, 'schedule ' + i.id + ' failed: ' + JSON.stringify(c.body)); } const n = ctx.api('POST', '/cycles', { team_id: team.id, name: 'Platform Sprint 44', capacity: 5, starts_at: '2026-11-09T00:00:00.000Z', ends_at: '2026-11-23T00:00:00.000Z' }); ctx.assert(n.status === 201, 'create cycle failed: ' + JSON.stringify(n.body)); }"
+    decoys:
+      - why: reads only the first page of issues, so it finds one urgent issue and leaves a free slot unfilled; the other urgent issue sits on a later page
+        script: "(ctx) => { const team = ctx.api('GET', '/teams?key=PLT').body.data[0]; const marta = ctx.api('GET', '/members?team_id=' + team.id + '&q=Marta').body.data.find((m) => m.name === 'Marta Lindqvist'); const sprint = ctx.api('GET', '/cycles?team_id=' + team.id).body.data.find((c) => c.name === 'Platform Sprint 42'); const page = ctx.api('GET', '/issues?limit=25').body.data; const urgent = page.filter((i) => i.team_id === team.id && i.status === 'todo' && i.cycle_id === null && i.priority === 'urgent'); ctx.assert(urgent.length > 0, 'no urgent issue on page one'); for (const i of urgent) { ctx.assert(ctx.api('POST', '/issues/' + i.id + '/assign', { assignee_id: marta.id }).status === 200, 'assign failed'); ctx.assert(ctx.api('POST', '/issues/' + i.id + '/cycle', { cycle_id: sprint.id }).status === 200, 'schedule failed'); } ctx.assert(ctx.api('POST', '/cycles', { team_id: team.id, name: 'Platform Sprint 44', capacity: 5, starts_at: '2026-11-09T00:00:00.000Z', ends_at: '2026-11-23T00:00:00.000Z' }).status === 201, 'create cycle failed'); }"
+      - why: fills the free slots with the first todo Platform issues in id order instead of the highest priority ones
+        script: "(ctx) => { const team = ctx.api('GET', '/teams?key=PLT').body.data[0]; const marta = ctx.api('GET', '/members?team_id=' + team.id + '&q=Marta').body.data.find((m) => m.name === 'Marta Lindqvist'); const sprint = ctx.api('GET', '/cycles?team_id=' + team.id).body.data.find((c) => c.name === 'Platform Sprint 42'); const todo = ctx.api('GET', '/issues?team_id=' + team.id + '&status=todo&limit=25').body.data.filter((i) => i.cycle_id === null); for (const i of todo.slice(0, 2)) { ctx.assert(ctx.api('POST', '/issues/' + i.id + '/assign', { assignee_id: marta.id }).status === 200, 'assign failed'); ctx.assert(ctx.api('POST', '/issues/' + i.id + '/cycle', { cycle_id: sprint.id }).status === 200, 'schedule failed'); } ctx.assert(ctx.api('POST', '/cycles', { team_id: team.id, name: 'Platform Sprint 44', capacity: 5, starts_at: '2026-11-09T00:00:00.000Z', ends_at: '2026-11-23T00:00:00.000Z' }).status === 201, 'create cycle failed'); }"
+      - why: schedules the right urgent issues into Platform Sprint 43, the later empty cycle, instead of the next cycle Platform Sprint 42
+        script: "(ctx) => { const team = ctx.api('GET', '/teams?key=PLT').body.data[0]; const marta = ctx.api('GET', '/members?team_id=' + team.id + '&q=Marta').body.data.find((m) => m.name === 'Marta Lindqvist'); const later = ctx.api('GET', '/cycles?team_id=' + team.id).body.data.find((c) => c.name === 'Platform Sprint 43'); const urgent = ctx.api('GET', '/issues?team_id=' + team.id + '&status=todo&priority=urgent').body.data.filter((i) => i.cycle_id === null); ctx.assert(urgent.length > 0, 'no urgent issues'); for (const i of urgent) { ctx.assert(ctx.api('POST', '/issues/' + i.id + '/assign', { assignee_id: marta.id }).status === 200, 'assign failed'); ctx.assert(ctx.api('POST', '/issues/' + i.id + '/cycle', { cycle_id: later.id }).status === 200, 'schedule failed'); } ctx.assert(ctx.api('POST', '/cycles', { team_id: team.id, name: 'Platform Sprint 44', capacity: 5, starts_at: '2026-11-09T00:00:00.000Z', ends_at: '2026-11-23T00:00:00.000Z' }).status === 201, 'create cycle failed'); }"
+    alternatives: []
+    allows:
+      - entity: issue
+        kind: updated
+        fields:
+          - cycle_id
+          - assignee_id
+        where:
+          team_id: team_0001
+          status: todo
+      - entity: cycle
+        kind: created
+        fields: []
+        where:
+          team_id: team_0001
+          name: Platform Sprint 44
+  cancel_duplicate_mobile:
+    difficulty: medium
+    instruction: Cancel every backlog issue of the Mobile team whose title starts with '[dup]'. Leave all other issues untouched, including '[dup]' issues that are in other statuses or belong to other teams.
+    grader: "(ctx) => { const mob = ctx.seed.list('team', { where: { key: 'MOB' } })[0]; if (!mob) return 0; const targets = ctx.seed.list('issue', { where: { team_id: mob.id, status: 'backlog' } }).filter((i) => i.title.startsWith('[dup]')); if (targets.length === 0) return 0; ctx.guardChanges('only the Mobile backlog dup issues were canceled', targets.map((t) => ({ entity: 'issue', id: t.id, kind: 'updated', fields: ['status', 'canceled_at'] }))); const w = 1 / targets.length; for (const t of targets) { const end = ctx.db.get('issue', t.id); ctx.goal(w, 'canceled ' + t.id, end.status === 'canceled' && end.canceled_at !== null); } return ctx.score(); }"
+    solution: "(ctx) => { const team = ctx.api('GET', '/teams?key=MOB').body.data[0]; ctx.assert(team, 'Mobile team not found'); const rows = []; let cursor = null; do { const r = ctx.api('GET', '/issues?team_id=' + team.id + '&limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'list failed: ' + JSON.stringify(r.body)); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); const targets = rows.filter((i) => i.status === 'backlog' && i.title.startsWith('[dup]')); ctx.assert(targets.length > 0, 'no dup backlog issues found'); for (const t of targets) { const c = ctx.api('POST', '/issues/' + t.id + '/cancel', {}); ctx.assert(c.status === 200, 'cancel ' + t.id + ' failed: ' + JSON.stringify(c.body)); } }"
+    decoys:
+      - why: reads only a page of two Mobile backlog issues, so it cancels only the first dup issue and misses the others
+        script: (ctx) => { const team = ctx.api('GET', '/teams?key=MOB').body.data[0]; const page = ctx.api('GET', '/issues?team_id=' + team.id + '&status=backlog&limit=2').body.data.filter((i) => i.title.startsWith('[dup]')); ctx.assert(page.length > 0, 'no dup issue on the first page'); for (const t of page) { ctx.assert(ctx.api('POST', '/issues/' + t.id + '/cancel', {}).status === 200, 'cancel failed'); } }
+      - why: ignores the team and cancels every backlog issue whose title starts with [dup], including the Platform one
+        script: (ctx) => { const rows = ctx.api('GET', '/issues?status=backlog&limit=25').body.data.filter((i) => i.title.startsWith('[dup]')); ctx.assert(rows.length > 0, 'no dup issues'); for (const t of rows) { ctx.assert(ctx.api('POST', '/issues/' + t.id + '/cancel', {}).status === 200, 'cancel failed'); } }
+      - why: ignores the status and cancels every Mobile [dup] issue it can, including the one that is in progress
+        script: (ctx) => { const team = ctx.api('GET', '/teams?key=MOB').body.data[0]; const rows = ctx.api('GET', '/issues?team_id=' + team.id + '&limit=25').body.data.filter((i) => i.title.startsWith('[dup]')); ctx.assert(rows.length > 0, 'no dup issues'); for (const t of rows) { ctx.api('POST', '/issues/' + t.id + '/cancel', {}); } }
+    alternatives: []
+    allows:
+      - entity: issue
+        kind: updated
+        fields:
+          - status
+          - canceled_at
+        where:
+          team_id: team_0003
+          status: backlog

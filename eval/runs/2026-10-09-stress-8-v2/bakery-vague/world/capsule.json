@@ -1,0 +1,54 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T121908Z_2d1cd65c",
+  "mode": "create",
+  "input": {
+    "kind": "description",
+    "digest": "757ae6afba2f8bebe5e4ad971a1aa352fe5640f0d736478363721e64e54b6e6d",
+    "source": {
+      "kind": "description"
+    }
+  },
+  "worldId": "wid_3990f089a91aaea3aa011ae63367a28a12a583e4e284f4b8d1a4005c0e492a65",
+  "model": "claude-sonnet-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 47062,
+      "costUsd": 0.09529860000000001
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 12716,
+      "costUsd": 0.073131
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 14361,
+      "costUsd": 0.08280699999999999
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 20947,
+      "costUsd": 0.0980108
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 132887,
+      "costUsd": 0.2856308
+    }
+  ],
+  "ms": 228226,
+  "costUsd": 0.6348782000000001
+}
