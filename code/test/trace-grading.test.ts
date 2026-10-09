@@ -281,6 +281,7 @@ describe('verifyTask grades every run with its own trace', () => {
       ['task.decoy_trivial', ['tasks', TASK, 'decoys', 0], 'ends in the same state as the solution'],
       ['task.mutant_full_marks', ['tasks', TASK, 'grader'], 'the solution plus PATCH /invoices/inv_0001 {"customer":"Globex"} scored 1'],
       ['task.mutant_full_marks', ['tasks', TASK, 'grader'], 'the solution plus PATCH /invoices/inv_0002 {"disputed":true} scored 1'],
+      ['task.mutant_full_marks', ['tasks', TASK, 'grader'], 'the solution plus PATCH /invoices/inv_0002 {"customer":"Acme"} then {"customer":"Globex"} scored 1'],
     ]);
   });
 });

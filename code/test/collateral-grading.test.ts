@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { chainOf, checkWorld, traceOf, verifySubmission, worldIdOf } from '#engine';
-import { runtime, type Runtime } from '../src/engine/api.ts';
+import { changesSince, runtime, type JournalRow, type OriginJournal, type Runtime, type TablesView } from '../src/engine/api.ts';
 import type { World } from '../src/engine/format.ts';
 import { createVmHost } from '../src/engine/sandbox.ts';
 import { gradeDump, verifyTask } from '../src/engine/tasks.ts';
@@ -171,6 +171,32 @@ describe('an edit undone before the end still counts as collateral (A-387)', () 
     return same('customer', ['name', 'tier']) && same('ticket', ['customer', 'subject', 'priority', 'status']) ? 1 : 0;
   }`;
 
+  it('changesSince counts what calls wrote, but not a write that changed nothing or a row a job created and a call deleted', () => {
+    const at = '2026-01-05T09:00:00.000Z' as OriginJournal[number]['at'];
+    const seed = { tables: { ticket: [{ id: 'tkt_0001', subject: 'Printer', priority: 'low' }], alert: [] } } as unknown as TablesView;
+    const journal: OriginJournal = [
+      { origin: 'job', source: 'raise_alert', at, rows: [{ entity: 'alert', id: 'alr_0001', kind: 'created', fields: ['message'] }] },
+      { origin: 'call', source: 'delete_alert', at, rows: [{ entity: 'alert', id: 'alr_0001', kind: 'deleted', fields: ['message'] }] },
+      { origin: 'call', source: 'update_ticket', at, rows: [{ entity: 'ticket', id: 'tkt_0001', kind: 'updated', fields: [] }] },
+    ];
+    const calls = (j: OriginJournal): JournalRow[] => j.filter((e) => e.origin === 'call').flatMap((e) => e.rows);
+    assert.deepEqual(changesSince(seed, seed, journal, calls(journal)), []);
+    const undone: OriginJournal = [...journal,
+      { origin: 'call', source: 'update_ticket', at, rows: [{ entity: 'ticket', id: 'tkt_0001', kind: 'updated', fields: ['priority'] }] },
+      { origin: 'call', source: 'update_ticket', at, rows: [{ entity: 'ticket', id: 'tkt_0001', kind: 'updated', fields: ['priority'] }] },
+    ];
+    assert.deepEqual(changesSince(seed, seed, undone, calls(undone)), [{ entity: 'ticket', id: 'tkt_0001', kind: 'updated', fields: ['priority'], origin: 'call' }]);
+    assert.deepEqual(changesSince(seed, seed, undone), []);
+  });
+
+  it('a write that resends the value a row already holds is no collateral', () => {
+    const world = worldWith();
+    const rt = solved(world);
+    const subject = (rt.call({ method: 'GET', path: '/tickets/tkt_0001', query: {}, body: undefined }).body as { subject: string }).subject;
+    assert.equal(call(rt, 'PATCH', '/tickets/tkt_0001', { subject }), 200);
+    assert.equal(rt.grade(TASK), 1);
+  });
+
   it('ctx.guardChanges scores 0 for the solution plus an edit it undoes', () => {
     const world = worldWith();
     const rt = solved(world);
@@ -201,13 +227,13 @@ describe('an edit undone before the end still counts as collateral (A-387)', () 
     assert.deepEqual(verifySubmission(world, held, JSON.stringify(request), new Set()).verdict, { task: TASK, wid: held.wid, score: 0, stop: 'graded' });
   });
 
-  it('without a journal the guards see only the end state, and the score says so', () => {
+  it('without a journal or a call log the guards see only the end state, and the score says so', () => {
     const world = worldWith();
     const rt = solved(world);
     undo(rt);
     assert.deepEqual(gradeDump(world, TASK, rt.dump(), host), {
       ok: true, score: 1, goals: [], guards: [{ name: 'only declared changes', held: true }],
-      caveat: 'no journal given, so the collateral guards saw only the end state; an edit undone before it was not judged',
+      caveat: 'no journal or call log given, so ctx.changes() and the collateral guards saw only the end state; an edit undone before it was not judged',
     });
   });
 
