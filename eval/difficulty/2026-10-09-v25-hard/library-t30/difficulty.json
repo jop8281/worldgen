@@ -1,0 +1,103 @@
+{
+  "runId": "v25-hard-library-t30",
+  "models": [
+    "claude-haiku-5-5"
+  ],
+  "episodesPerCell": 3,
+  "budgetUsd": 2,
+  "episodeBudgetUsd": 0.5,
+  "spentUsd": 0.018629,
+  "stop": {
+    "kind": "complete"
+  },
+  "tasks": [
+    {
+      "world": "gen-library",
+      "task": "waive_lost_charge_of_returned_title",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    }
+  ],
+  "cells": [
+    {
+      "world": "gen-library",
+      "task": "waive_lost_charge_of_returned_title",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.018629,
+      "usdPerPass": 0.00621,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    }
+  ],
+  "episodes": [
+    {
+      "world": "gen-library",
+      "task": "waive_lost_charge_of_returned_title",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 1,
+      "runId": "v25-hard-library-t30.1",
+      "episodeId": "v25-hard-library-t30.1__waive_lost_charge_of_returned_title__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.00631689,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.006317
+    },
+    {
+      "world": "gen-library",
+      "task": "waive_lost_charge_of_returned_title",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 2,
+      "runId": "v25-hard-library-t30.2",
+      "episodeId": "v25-hard-library-t30.2__waive_lost_charge_of_returned_title__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.00652267,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.006523
+    },
+    {
+      "world": "gen-library",
+      "task": "waive_lost_charge_of_returned_title",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 3,
+      "runId": "v25-hard-library-t30.3",
+      "episodeId": "v25-hard-library-t30.3__waive_lost_charge_of_returned_title__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.00578894,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.005789
+    }
+  ]
+}

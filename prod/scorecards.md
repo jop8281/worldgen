@@ -27,7 +27,7 @@ The denominator is every case of the suite (A-341), so a targeted rerun's rate c
 
 - `eval/runs/2026-10-07-live-segment` also holds `giftcards-openapi-rerun2`, which `eval/live-segment.yaml` does not list, so it is not scored.
 - `eval/runs/2026-10-07-stress-2` has a measured cost for 28 of its 29 cases run.
-- 8 other folders under `eval/runs/` keep no case files, directly or one folder down, so analyze-eval cannot score them: `eval/runs/2026-10-06-boat-sonnet-baseline`, `eval/runs/2026-10-07-rehearsal-stabilize`, `eval/runs/2026-10-07-yos156-allows`, `eval/runs/2026-10-07-yos226-reserve`, `eval/runs/2026-10-08-handin-smoke`, `eval/runs/2026-10-08-rollback-drill`, `eval/runs/2026-10-08-rollback-drill-2`, `eval/runs/stress-1b`.
+- 9 other folders under `eval/runs/` keep no case files, directly or one folder down, so analyze-eval cannot score them: `eval/runs/2026-10-06-boat-sonnet-baseline`, `eval/runs/2026-10-07-rehearsal-stabilize`, `eval/runs/2026-10-07-yos156-allows`, `eval/runs/2026-10-07-yos226-reserve`, `eval/runs/2026-10-08-handin-smoke`, `eval/runs/2026-10-08-rollback-drill`, `eval/runs/2026-10-08-rollback-drill-2`, `eval/runs/2026-10-09-v25-hard`, `eval/runs/stress-1b`.
 
 Limits: a success says the engine accepted the world and verify passed, and an expected refusal that WorldGen turned down an impossible prompt. Neither says anything about fidelity, grader strength or whether an agent can solve the tasks. Every run is scored against the suite file as it is now, so a case whose expectation has changed since the run reads as invalid, an infra failure.
 

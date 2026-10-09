@@ -1,0 +1,7 @@
+world.yaml:448: warning seed.too_few_rows_for_paging seed.adjuster: expected more than 25 adjuster rows, found 6 rows. 6 rows fit on one page. Paging never matters.
+world.yaml:457: warning seed.too_few_rows_for_paging seed.policy: expected more than 25 policy rows, found 12 rows. 12 rows fit on one page. Paging never matters.
+assign_submitted_claim easy solution 1.000 noop 0.000 decoys [0.500] prefix - mutants 4/8 probed (not probed: target_field, extra_action, extra_delete, undone_write) checks 4/4 flipped
+approve_within_limit medium solution 1.000 noop 0.000 decoys [0.300, 0.600] prefix 0.600 mutants 4/8 probed (not probed: target_field, extra_delete, undone_write, perturb) checks 5/5 flipped unattributed [omit_write 1]
+review_holder_claims hard solution 1.000 noop 0.000 decoys [0.400, 0.700] prefix 0.700 mutants 4/8 probed (not probed: target_field, extra_delete, undone_write, perturb) checks 7/7 flipped
+find_and_confirm_fraud hard solution 1.000 noop 0.000 decoys [0.500, 0.000] prefix 0.500 mutants 3/8 probed (not probed: target_field, extra_action, extra_delete, undone_write, perturb) checks 5/5 flipped
+total: checks 21/21 flipped, mutants 15/32 probed, 4 tasks

@@ -1,0 +1,40 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T153721Z_35ef608d",
+  "mode": "create",
+  "input": {
+    "kind": "description",
+    "digest": "ff5b87ee2bdba835c95e44d8bdf4a3bac32211200f82435d7beda4963078cea6",
+    "source": {
+      "kind": "description"
+    }
+  },
+  "worldId": null,
+  "model": "claude-haiku-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 233314,
+      "costUsd": 0.10025541
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "invalid_output",
+      "ms": 52809,
+      "costUsd": 0.01287423
+    },
+    {
+      "step": "plan",
+      "n": 3,
+      "outcome": "invalid_output",
+      "ms": 53220,
+      "costUsd": 0.01278393
+    }
+  ],
+  "ms": 339378,
+  "costUsd": 0.12591357
+}

@@ -1,0 +1,1059 @@
+format: 1
+meta:
+  name: gen_clinic
+  description: A clinic scheduler. Doctors have working hours and a no-show fee, patients book appointments with them, and the engine refuses double-booking of a doctor or a patient. Appointments move through scheduled, checked_in, completed, cancelled and no_show. A no-show posts a fee charge, either from a staff action or from an hourly job that sweeps stale unattended appointments.
+  resembles: Jane App / Athenahealth-style clinic scheduling system (doctors, appointments, no-show fees)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  doctor:
+    description: A clinician with a specialty, daily working hours in whole UTC hours, and the fee charged for a no-show.
+    idPrefix: doc
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      specialty:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+      start_hour:
+        type: int
+        description: First working hour of the day, UTC.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        max: 23
+      end_hour:
+        type: int
+        description: Hour at which the working day ends, UTC. Appointments must finish by then.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+        max: 24
+      no_show_fee:
+        type: money
+        description: Fee in USD cents charged when a patient does not show up.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      active:
+        type: bool
+        description: Inactive doctors cannot be booked.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  patient:
+    description: A person who books appointments. Email is unique.
+    idPrefix: pat
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 160
+        format: email
+      phone:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 30
+  appointment:
+    description: A booking of one doctor by one patient for a time window. Window, doctor, patient and status change only through actions and the auto_no_show job.
+    idPrefix: apt
+    fields:
+      doctor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: doctor
+        onDelete: restrict
+      patient_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: patient
+        onDelete: restrict
+      starts_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      ends_at:
+        type: datetime
+        description: Computed as starts_at plus duration_minutes.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      duration_minutes:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 15
+        max: 120
+      status:
+        type: state
+        description: Moved only by actions and the auto_no_show job.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - scheduled
+          - checked_in
+          - completed
+          - cancelled
+          - no_show
+        initial: scheduled
+        transitions:
+          scheduled:
+            - checked_in
+            - cancelled
+            - no_show
+          checked_in:
+            - completed
+          completed: []
+          cancelled: []
+          no_show: []
+      reason:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 200
+      cancel_requested:
+        type: bool
+        description: The patient has asked to cancel; staff still need to cancel the appointment.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+      notes:
+        type: text
+        description: Free-text staff notes. They may be out of date and do not decide the status.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  fee:
+    description: A no-show fee charged to a patient for an appointment. Written by mark_no_show and the auto_no_show job only.
+    idPrefix: fee
+    fields:
+      appointment_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: appointment
+        onDelete: restrict
+      patient_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: patient
+        onDelete: restrict
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      kind:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        values:
+          - no_show
+        default: no_show
+routes:
+  list_doctors:
+    op: list
+    entity: doctor
+    filters:
+      - specialty
+      - active
+    search:
+      - name
+    sort:
+      - name
+      - specialty
+    pageSize: 25
+    method: GET
+    path: /doctors
+    description: List doctors, filter by specialty and active, search by name.
+  get_doctor:
+    op: get
+    entity: doctor
+    method: GET
+    path: /doctors/{id}
+    description: Fetch one doctor.
+  create_doctor:
+    op: create
+    entity: doctor
+    method: POST
+    path: /doctors
+    description: Add a doctor.
+  update_doctor:
+    op: update
+    entity: doctor
+    method: PATCH
+    path: /doctors/{id}
+    description: Edit hours, fee or active flag.
+  list_patients:
+    op: list
+    entity: patient
+    filters: []
+    search:
+      - name
+      - email
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /patients
+    description: List patients, search by name or email.
+  get_patient:
+    op: get
+    entity: patient
+    method: GET
+    path: /patients/{id}
+    description: Fetch one patient.
+  create_patient:
+    op: create
+    entity: patient
+    method: POST
+    path: /patients
+    description: Register a patient.
+  update_patient:
+    op: update
+    entity: patient
+    method: PATCH
+    path: /patients/{id}
+    description: Edit patient contact details.
+  list_appointments:
+    op: list
+    entity: appointment
+    filters:
+      - doctor_id
+      - patient_id
+      - status
+      - cancel_requested
+    search: []
+    sort:
+      - starts_at
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /appointments
+    description: List appointments, filter by doctor_id, patient_id, status and cancel_requested; sort by starts_at.
+  get_appointment:
+    op: get
+    entity: appointment
+    method: GET
+    path: /appointments/{id}
+    description: Fetch one appointment.
+  list_fees:
+    op: list
+    entity: fee
+    filters:
+      - patient_id
+      - appointment_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /fees
+    description: List fees, filter by patient_id and appointment_id.
+  get_fee:
+    op: get
+    entity: fee
+    method: GET
+    path: /fees/{id}
+    description: Fetch one fee.
+actions:
+  book_appointment:
+    method: POST
+    path: /appointments
+    description: Book a doctor for a patient. ends_at is computed. Refuses past starts, inactive doctors, out-of-hours windows and overlaps.
+    input:
+      doctor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: doctor
+        onDelete: restrict
+      patient_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: patient
+        onDelete: restrict
+      starts_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      duration_minutes:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 15
+        max: 120
+      reason:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 200
+      notes:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        const doc = ctx.db.get('doctor', b.doctor_id);
+        if (doc === null) ctx.fail(404, 'not_found', 'doctor ' + b.doctor_id + ' not found');
+        const pat = ctx.db.get('patient', b.patient_id);
+        if (pat === null) ctx.fail(404, 'not_found', 'patient ' + b.patient_id + ' not found');
+        if (ctx.time.minutesBetween(ctx.now(), b.starts_at) <= 0) ctx.fail(422, 'in_past', 'starts_at ' + b.starts_at + ' is not in the future');
+        if (!doc.active) ctx.fail(409, 'doctor_inactive', 'doctor ' + doc.name + ' is not active');
+        const dayStart = b.starts_at.slice(0, 10) + 'T00:00:00.000Z';
+        const sm = ctx.time.minutesBetween(dayStart, b.starts_at);
+        const em = sm + b.duration_minutes;
+        if (sm < doc.start_hour * 60 || em > doc.end_hour * 60) ctx.fail(422, 'outside_hours', 'window is outside the working hours ' + doc.start_hour + ':00-' + doc.end_hour + ':00 UTC');
+        const ends = ctx.time.plus(b.starts_at, b.duration_minutes + 'm');
+        const clash = (o) => ctx.time.minutesBetween(o.starts_at, ends) > 0 && ctx.time.minutesBetween(b.starts_at, o.ends_at) > 0;
+        for (const st of ['scheduled', 'checked_in']) {
+          for (const o of ctx.db.list('appointment', { where: { doctor_id: doc.id, status: st } })) {
+            if (clash(o)) ctx.fail(409, 'doctor_unavailable', 'doctor is already booked by ' + o.id);
+          }
+          for (const o of ctx.db.list('appointment', { where: { patient_id: pat.id, status: st } })) {
+            if (clash(o)) ctx.fail(409, 'patient_unavailable', 'patient is already booked by ' + o.id);
+          }
+        }
+        const created = ctx.db.create('appointment', {
+          doctor_id: doc.id, patient_id: pat.id, starts_at: b.starts_at, ends_at: ends, duration_minutes: b.duration_minutes,
+          reason: b.reason === undefined ? null : b.reason, notes: b.notes === undefined ? null : b.notes
+        });
+        return { status: 201, body: created };
+      }
+  reschedule_appointment:
+    method: POST
+    path: /appointments/{id}/reschedule
+    description: Move a scheduled appointment to a new start, optionally with another doctor. Duration is kept.
+    input:
+      starts_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      doctor_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: doctor
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const a = ctx.db.get('appointment', id);
+        if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+        if (a.status !== 'scheduled') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only scheduled appointments can be rescheduled.');
+        const did = ctx.body.doctor_id ? ctx.body.doctor_id : a.doctor_id;
+        const doc = ctx.db.get('doctor', did);
+        if (doc === null) ctx.fail(404, 'not_found', 'doctor ' + did + ' not found');
+        const start = ctx.body.starts_at;
+        if (ctx.time.minutesBetween(ctx.now(), start) <= 0) ctx.fail(422, 'in_past', 'starts_at ' + start + ' is not in the future');
+        if (!doc.active) ctx.fail(409, 'doctor_inactive', 'doctor ' + doc.name + ' is not active');
+        const dayStart = start.slice(0, 10) + 'T00:00:00.000Z';
+        const sm = ctx.time.minutesBetween(dayStart, start);
+        const em = sm + a.duration_minutes;
+        if (sm < doc.start_hour * 60 || em > doc.end_hour * 60) ctx.fail(422, 'outside_hours', 'window is outside the working hours ' + doc.start_hour + ':00-' + doc.end_hour + ':00 UTC');
+        const ends = ctx.time.plus(start, a.duration_minutes + 'm');
+        const clash = (o) => ctx.time.minutesBetween(o.starts_at, ends) > 0 && ctx.time.minutesBetween(start, o.ends_at) > 0;
+        for (const st of ['scheduled', 'checked_in']) {
+          for (const o of ctx.db.list('appointment', { where: { doctor_id: doc.id, status: st } })) {
+            if (o.id !== id && clash(o)) ctx.fail(409, 'doctor_unavailable', 'doctor is already booked by ' + o.id);
+          }
+          for (const o of ctx.db.list('appointment', { where: { patient_id: a.patient_id, status: st } })) {
+            if (o.id !== id && clash(o)) ctx.fail(409, 'patient_unavailable', 'patient is already booked by ' + o.id);
+          }
+        }
+        const updated = ctx.db.update('appointment', id, { doctor_id: doc.id, starts_at: start, ends_at: ends });
+        return { status: 200, body: updated };
+      }
+  cancel_appointment:
+    method: POST
+    path: /appointments/{id}/cancel
+    description: Cancel a scheduled appointment before its start time.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const a = ctx.db.get('appointment', id);
+        if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+        if (a.status !== 'scheduled') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only scheduled appointments can be cancelled.');
+        if (ctx.time.minutesBetween(ctx.now(), a.starts_at) <= 0) ctx.fail(409, 'too_late', 'appointment ' + id + ' has already started');
+        const updated = ctx.db.update('appointment', id, { status: 'cancelled' });
+        return { status: 200, body: updated };
+      }
+  check_in_appointment:
+    method: POST
+    path: /appointments/{id}/check_in
+    description: Check in a scheduled appointment on its start day.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const a = ctx.db.get('appointment', id);
+        if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+        if (a.status !== 'scheduled') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only scheduled appointments can be checked in.');
+        const today = ctx.now().slice(0, 10);
+        const day = a.starts_at.slice(0, 10);
+        if (today < day) ctx.fail(409, 'too_early', 'check-in opens on ' + day);
+        if (today > day) ctx.fail(409, 'too_late', 'the start day ' + day + ' has passed');
+        const updated = ctx.db.update('appointment', id, { status: 'checked_in' });
+        return { status: 200, body: updated };
+      }
+  complete_appointment:
+    method: POST
+    path: /appointments/{id}/complete
+    description: Complete a checked-in appointment.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const a = ctx.db.get('appointment', id);
+        if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+        if (a.status !== 'checked_in') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only checked_in appointments can be completed.');
+        const updated = ctx.db.update('appointment', id, { status: 'completed' });
+        return { status: 200, body: updated };
+      }
+  mark_no_show:
+    method: POST
+    path: /appointments/{id}/mark_no_show
+    description: Mark a scheduled appointment whose start has passed as no_show and post the doctor's no-show fee.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const a = ctx.db.get('appointment', id);
+        if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+        if (a.status !== 'scheduled') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only scheduled appointments can be marked no-show.');
+        if (ctx.time.minutesBetween(ctx.now(), a.starts_at) > 0) ctx.fail(409, 'too_early', 'appointment ' + id + ' starts at ' + a.starts_at + ' and has not started yet');
+        const doc = ctx.db.get('doctor', a.doctor_id);
+        const updated = ctx.db.update('appointment', id, { status: 'no_show' });
+        ctx.db.create('fee', { appointment_id: id, patient_id: a.patient_id, amount: doc.no_show_fee, kind: 'no_show' });
+        return { status: 200, body: updated };
+      }
+jobs:
+  auto_no_show:
+    description: "Hourly: scheduled appointments that ended at least 24 hours ago become no_show with exactly one fee."
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const a of ctx.db.list('appointment', { where: { status: 'scheduled' } })) {
+          if (ctx.time.minutesBetween(a.ends_at, now) < 1440) continue;
+          ctx.db.update('appointment', a.id, { status: 'no_show' });
+          if (ctx.db.list('fee', { where: { appointment_id: a.id } }).length === 0) {
+            const doc = ctx.db.get('doctor', a.doctor_id);
+            ctx.db.create('fee', { appointment_id: a.id, patient_id: a.patient_id, amount: doc.no_show_fee, kind: 'no_show' });
+          }
+        }
+      }
+fixtures: {}
+seed:
+  doctor: |-
+    (ctx) => {
+      const t = '2025-06-01T09:00:00.000Z';
+      return [
+        { name: 'Dr. Amara Okoye', specialty: 'general', start_hour: 8, end_hour: 17, no_show_fee: 5000, active: true },
+        { name: 'Dr. Lena Fischer', specialty: 'general', start_hour: 8, end_hour: 17, no_show_fee: 4500, active: true },
+        { name: 'Dr. Raj Patel', specialty: 'general', start_hour: 8, end_hour: 17, no_show_fee: 5000, active: false },
+        { name: 'Dr. Mei Tanaka', specialty: 'dermatology', start_hour: 8, end_hour: 17, no_show_fee: 6500, active: true },
+        { name: 'Dr. Carlos Ruiz', specialty: 'cardiology', start_hour: 8, end_hour: 17, no_show_fee: 8000, active: true },
+        { name: 'Dr. Sara Lindqvist', specialty: 'general', start_hour: 8, end_hour: 17, no_show_fee: 4000, active: true },
+      ].map((r) => ({ ...r, created_at: t, updated_at: t }));
+    }
+  patient: |-
+    (ctx) => {
+      const fixed = ['Maria Gonzalez', 'Maria Gonzales', 'John Smith', 'Jon Smith'];
+      const firsts = ['Aiko', 'Noah', 'Chloe', 'Mateo', 'Fatima', 'Oliver', 'Grace', 'Ethan', 'Lucia', 'Samuel', 'Nora', 'Victor', 'Ingrid', 'Hugo', 'Amara', 'Felix', 'Mei', 'Rafael', 'Tessa', 'Jonas', 'Leila', 'Owen', 'Camila', 'Arjun', 'Beth', 'Tomas'];
+      const lasts = ['Carter', 'Lindqvist', 'Moreau', 'Tanaka', 'Alvarez', 'Reilly', 'Haddad', 'Novak', 'Fischer', 'Mensah', 'Kowalski', 'Dubois', 'Sato', 'Bennett'];
+      const rows = [];
+      for (let i = 0; i < 30; i++) {
+        let name; let email;
+        if (i < 4) { name = fixed[i]; email = name.toLowerCase().replace(' ', '.') + (i < 2 ? '.' + i : '') + '@example.org'; }
+        else { const f = firsts[i - 4]; const l = lasts[(i * 3) % 14]; name = f + ' ' + l; email = (f + '.' + l).toLowerCase() + i + '@example.org'; }
+        const c = ctx.time.minus(ctx.now(), (40 + i * 5) + 'd');
+        rows.push({ name, email, phone: '555-02' + String(10 + i), created_at: c, updated_at: c });
+      }
+      return rows;
+    }
+  appointment: |-
+    (ctx) => {
+      const NOW = ctx.now();
+      const base = NOW.slice(0, 10) + 'T00:00:00.000Z';
+      const at = (d, m) => ctx.time.plus(d >= 0 ? ctx.time.plus(base, d + 'd') : ctx.time.minus(base, (-d) + 'd'), m + 'm');
+      const docs = ctx.rows('doctor');
+      const pats = ctx.rows('patient');
+      const spec = [];
+      const B = [[1,540],[1,600],[2,540],[2,600],[3,540],[3,600],[4,540],[4,600]];
+      B.forEach((x, k) => spec.push({ d: x[0], m: x[1], s: 'scheduled', cr: k === 1 || k === 4 || k === 6, note: k === 2 ? 'Prefers morning slots' : null }));
+      [[2,840],[3,840],[4,840]].forEach((x) => spec.push({ d: x[0], m: x[1], s: 'scheduled', cr: true, note: 'Patient phoned to cancel' }));
+      const A = [[0,480],[0,510],[-1,600],[-1,630],[-1,660],[-1,690],[-1,720],[-1,750],[-1,780]];
+      A.forEach((x, k) => spec.push({ d: x[0], m: x[1], s: 'scheduled', cr: k === 0 || k === 2 || k === 4, note: k % 3 === 0 ? 'patient called, arrived' : k === 1 ? 'Reminder sent' : null }));
+      spec.push({ d: 0, m: 540, s: 'checked_in', cr: false, note: 'In waiting room' });
+      spec.push({ d: -1, m: 840, s: 'checked_in', cr: false, note: null });
+      for (let k = 0; k < 7; k++) spec.push({ d: -2 - k, m: 600, s: 'completed', cr: false, note: k % 2 === 0 ? 'Follow-up in 6 weeks' : null });
+      [[5,540],[6,540],[7,540],[-3,720],[-4,720],[-2,720]].forEach((x) => spec.push({ d: x[0], m: x[1], s: 'cancelled', cr: false, note: null }));
+      for (let k = 0; k < 5; k++) spec.push({ d: -2 - k, m: 660, s: 'no_show', cr: false, note: k === 0 ? 'Left voicemail' : null });
+      const reasons = ['Annual checkup', 'Follow-up visit', 'Skin rash', 'Blood pressure review', 'Flu symptoms', 'Vaccination', 'Back pain'];
+      const active = [0, 1, 3, 4];
+      return spec.map((x, i) => {
+        let di = active[i % 4];
+        if (x.s !== 'scheduled' && x.s !== 'checked_in' && i % 3 === 0) di = 2;
+        if (i % 9 === 8) di = 5;
+        if (x.s === 'scheduled' && i % 9 === 8) di = 1;
+        const start = at(x.d, x.m);
+        const ends = ctx.time.plus(start, '30m');
+        const future = x.d > 0 || (x.d === 0 && x.m > 540);
+        const created = future ? ctx.time.minus(NOW, (2 + (i % 6)) + 'd') : ctx.time.minus(start, '2d');
+        let updated = created;
+        if (x.s === 'completed' || x.s === 'no_show') updated = ends;
+        else if (x.s === 'checked_in') updated = start;
+        else if (x.s === 'cancelled') updated = ctx.time.plus(created, '1d');
+        return {
+          doctor_id: docs[di].id, patient_id: pats[i % 30].id, starts_at: start, ends_at: ends, duration_minutes: 30,
+          status: x.s, reason: reasons[i % 7], cancel_requested: x.cr, notes: x.note,
+          created_at: created, updated_at: updated,
+        };
+      });
+    }
+  fee: |-
+    (ctx) => {
+      const docs = ctx.rows('doctor');
+      const rows = [];
+      for (const a of ctx.rows('appointment')) {
+        if (a.status !== 'no_show') continue;
+        const d = docs.find((x) => x.id === a.doctor_id);
+        rows.push({ appointment_id: a.id, patient_id: a.patient_id, amount: d.no_show_fee, kind: 'no_show', created_at: a.updated_at, updated_at: a.updated_at });
+      }
+      return rows;
+    }
+tests:
+  double_booking_rules:
+    description: Create two doctors and two patients, book, then check doctor and patient overlap refusals, adjacency and slot freeing after cancel.
+    script: |-
+      (ctx) => {
+        const mkDoc = (n) => ctx.api('POST', '/doctors', { name: n, specialty: 'general', start_hour: 8, end_hour: 17, no_show_fee: 5000, active: true });
+        const d1 = mkDoc('Dr Test One'); const d2 = mkDoc('Dr Test Two');
+        ctx.assert(d1.status === 201 && d2.status === 201, 'create doctors: ' + JSON.stringify(d1.body));
+        const p1 = ctx.api('POST', '/patients', { name: 'Pat One', email: 'pat.one.dbl@example.com', phone: '555-0101' });
+        const p2 = ctx.api('POST', '/patients', { name: 'Pat Two', email: 'pat.two.dbl@example.com', phone: '555-0102' });
+        ctx.assert(p1.status === 201 && p2.status === 201, 'create patients: ' + JSON.stringify(p1.body));
+        const book = (d, p, t, m) => ctx.api('POST', '/appointments', { doctor_id: d.body.id, patient_id: p.body.id, starts_at: t, duration_minutes: m, reason: 'checkup' });
+        const a = book(d1, p1, '2027-03-01T10:00:00.000Z', 30);
+        ctx.assert(a.status === 201 && a.body.status === 'scheduled', 'book: ' + JSON.stringify(a.body));
+        ctx.assert(a.body.ends_at === '2027-03-01T10:30:00.000Z', 'ends_at computed, got ' + a.body.ends_at);
+        const clash = book(d1, p2, '2027-03-01T10:15:00.000Z', 30);
+        ctx.assert(clash.status === 409 && clash.body.error.code === 'doctor_unavailable', 'doctor overlap: ' + JSON.stringify(clash.body));
+        const pclash = book(d2, p1, '2027-03-01T10:00:00.000Z', 30);
+        ctx.assert(pclash.status === 409 && pclash.body.error.code === 'patient_unavailable', 'patient overlap: ' + JSON.stringify(pclash.body));
+        const adj = book(d1, p2, '2027-03-01T10:30:00.000Z', 30);
+        ctx.assert(adj.status === 201, 'adjacent allowed: ' + JSON.stringify(adj.body));
+        const c = ctx.api('POST', '/appointments/' + a.body.id + '/cancel', {});
+        ctx.assert(c.status === 200 && c.body.status === 'cancelled', 'cancel: ' + JSON.stringify(c.body));
+        const again = book(d1, p2, '2027-03-01T10:00:00.000Z', 30);
+        ctx.assert(again.status === 201, 'cancelled frees slot: ' + JSON.stringify(again.body));
+      }
+  booking_validation:
+    description: Validation refusals of book_appointment.
+    script: |-
+      (ctx) => {
+        const d = ctx.api('POST', '/doctors', { name: 'Dr Valid', specialty: 'dermatology', start_hour: 9, end_hour: 12, no_show_fee: 4000, active: true });
+        const off = ctx.api('POST', '/doctors', { name: 'Dr Inactive', specialty: 'dermatology', start_hour: 9, end_hour: 12, no_show_fee: 4000, active: false });
+        const p = ctx.api('POST', '/patients', { name: 'Val Patient', email: 'val.patient@example.com', phone: '555-0103' });
+        ctx.assert(d.status === 201 && off.status === 201 && p.status === 201, 'setup');
+        const book = (did, t, m) => ctx.api('POST', '/appointments', { doctor_id: did, patient_id: p.body.id, starts_at: t, duration_minutes: m, reason: 'visit' });
+        const past = book(d.body.id, '2020-01-06T10:00:00.000Z', 30);
+        ctx.assert(past.status === 422 && past.body.error.code === 'in_past', 'past: ' + JSON.stringify(past.body));
+        const early = book(d.body.id, '2027-03-02T07:00:00.000Z', 30);
+        ctx.assert(early.status === 422 && early.body.error.code === 'outside_hours', 'before hours: ' + JSON.stringify(early.body));
+        const late = book(d.body.id, '2027-03-02T11:45:00.000Z', 30);
+        ctx.assert(late.status === 422 && late.body.error.code === 'outside_hours', 'runs past end: ' + JSON.stringify(late.body));
+        const inact = book(off.body.id, '2027-03-02T10:00:00.000Z', 30);
+        ctx.assert(inact.status === 409 && inact.body.error.code === 'doctor_inactive', 'inactive: ' + JSON.stringify(inact.body));
+        const dur = book(d.body.id, '2027-03-02T10:00:00.000Z', 5);
+        ctx.assert(dur.status === 400 && dur.body.error.code === 'input.invalid', 'duration: ' + JSON.stringify(dur.body));
+        const unk = book('doc_9999', '2027-03-02T10:00:00.000Z', 30);
+        ctx.assert(unk.status >= 400 && unk.status < 500, 'unknown doctor: ' + JSON.stringify(unk.body));
+        const ok = book(d.body.id, '2027-03-02T10:00:00.000Z', 60);
+        ctx.assert(ok.status === 201, 'valid booking: ' + JSON.stringify(ok.body));
+      }
+  lifecycle_transitions:
+    description: Check refusals of out-of-order transitions and double cancel.
+    script: |-
+      (ctx) => {
+        const d = ctx.api('POST', '/doctors', { name: 'Dr Life', specialty: 'cardiology', start_hour: 8, end_hour: 17, no_show_fee: 6000, active: true });
+        const p = ctx.api('POST', '/patients', { name: 'Life Patient', email: 'life.patient@example.com', phone: '555-0104' });
+        const a = ctx.api('POST', '/appointments', { doctor_id: d.body.id, patient_id: p.body.id, starts_at: '2027-04-05T09:00:00.000Z', duration_minutes: 30, reason: 'review' });
+        ctx.assert(a.status === 201, 'book: ' + JSON.stringify(a.body));
+        const id = a.body.id;
+        const ci = ctx.api('POST', '/appointments/' + id + '/check_in', {});
+        ctx.assert(ci.status === 409 && ci.body.error.code === 'too_early', 'early check-in: ' + JSON.stringify(ci.body));
+        const co = ctx.api('POST', '/appointments/' + id + '/complete', {});
+        ctx.assert(co.status === 409 && co.body.error.code === 'invalid_state', 'complete scheduled: ' + JSON.stringify(co.body));
+        const c = ctx.api('POST', '/appointments/' + id + '/cancel', {});
+        ctx.assert(c.status === 200 && c.body.status === 'cancelled', 'cancel: ' + JSON.stringify(c.body));
+        const c2 = ctx.api('POST', '/appointments/' + id + '/cancel', {});
+        ctx.assert(c2.status === 409 && c2.body.error.code === 'invalid_state', 'double cancel: ' + JSON.stringify(c2.body));
+        const ci2 = ctx.api('POST', '/appointments/' + id + '/check_in', {});
+        ctx.assert(ci2.status === 409 && ci2.body.error.code === 'invalid_state', 'check in cancelled: ' + JSON.stringify(ci2.body));
+        const nf = ctx.api('POST', '/appointments/apt_9999/cancel', {});
+        ctx.assert(nf.status === 404, 'unknown appointment: ' + JSON.stringify(nf.body));
+      }
+  reschedule_rules:
+    description: Move to a free time, refuse conflict, switch doctor, refuse for cancelled.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/doctors', { name: n, specialty: 'pediatrics', start_hour: 8, end_hour: 17, no_show_fee: 3000, active: true });
+        const d1 = mk('Dr Move One'); const d2 = mk('Dr Move Two');
+        const p1 = ctx.api('POST', '/patients', { name: 'Move One', email: 'move.one@example.com', phone: '555-0105' });
+        const p2 = ctx.api('POST', '/patients', { name: 'Move Two', email: 'move.two@example.com', phone: '555-0106' });
+        const book = (d, p, t) => ctx.api('POST', '/appointments', { doctor_id: d.body.id, patient_id: p.body.id, starts_at: t, duration_minutes: 30, reason: 'visit' });
+        const a = book(d1, p1, '2027-05-03T09:00:00.000Z');
+        const b = book(d1, p2, '2027-05-03T11:00:00.000Z');
+        ctx.assert(a.status === 201 && b.status === 201, 'setup');
+        const mv = ctx.api('POST', '/appointments/' + a.body.id + '/reschedule', { starts_at: '2027-05-03T14:00:00.000Z' });
+        ctx.assert(mv.status === 200 && mv.body.starts_at === '2027-05-03T14:00:00.000Z' && mv.body.ends_at === '2027-05-03T14:30:00.000Z' && mv.body.status === 'scheduled', 'move: ' + JSON.stringify(mv.body));
+        const cl = ctx.api('POST', '/appointments/' + a.body.id + '/reschedule', { starts_at: '2027-05-03T11:15:00.000Z' });
+        ctx.assert(cl.status === 409 && cl.body.error.code === 'doctor_unavailable', 'conflict: ' + JSON.stringify(cl.body));
+        const sw = ctx.api('POST', '/appointments/' + a.body.id + '/reschedule', { starts_at: '2027-05-03T11:00:00.000Z', doctor_id: d2.body.id });
+        ctx.assert(sw.status === 200 && sw.body.doctor_id === d2.body.id, 'switch doctor: ' + JSON.stringify(sw.body));
+        ctx.assert(ctx.api('POST', '/appointments/' + b.body.id + '/cancel', {}).status === 200, 'cancel');
+        const dead = ctx.api('POST', '/appointments/' + b.body.id + '/reschedule', { starts_at: '2027-05-03T15:00:00.000Z' });
+        ctx.assert(dead.status === 409 && dead.body.error.code === 'invalid_state', 'cancelled: ' + JSON.stringify(dead.body));
+      }
+  no_show_refusals:
+    description: Marking a future appointment or a cancelled one as no-show is refused and no fee is created.
+    script: |-
+      (ctx) => {
+        const d = ctx.api('POST', '/doctors', { name: 'Dr NoShow', specialty: 'general', start_hour: 8, end_hour: 17, no_show_fee: 7500, active: true });
+        const p = ctx.api('POST', '/patients', { name: 'NoShow Patient', email: 'noshow.patient@example.com', phone: '555-0107' });
+        const a = ctx.api('POST', '/appointments', { doctor_id: d.body.id, patient_id: p.body.id, starts_at: '2027-06-07T09:00:00.000Z', duration_minutes: 30, reason: 'visit' });
+        ctx.assert(a.status === 201, 'book: ' + JSON.stringify(a.body));
+        const early = ctx.api('POST', '/appointments/' + a.body.id + '/mark_no_show', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'too_early', 'future: ' + JSON.stringify(early.body));
+        ctx.assert(ctx.api('POST', '/appointments/' + a.body.id + '/cancel', {}).status === 200, 'cancel');
+        const dead = ctx.api('POST', '/appointments/' + a.body.id + '/mark_no_show', {});
+        ctx.assert(dead.status === 409 && dead.body.error.code === 'invalid_state', 'cancelled: ' + JSON.stringify(dead.body));
+        const fees = ctx.api('GET', '/fees?patient_id=' + p.body.id);
+        ctx.assert(fees.status === 200 && fees.body.data.length === 0, 'no fee written');
+        const nf = ctx.api('POST', '/appointments/apt_9999/mark_no_show', {});
+        ctx.assert(nf.status === 404, 'unknown: ' + JSON.stringify(nf.body));
+      }
+tasks:
+  cancel_patient_upcoming:
+    difficulty: easy
+    instruction: "The patient Maria Gonzalez (careful with the spelling: a different patient called Maria Gonzales also exists) phoned the clinic. She wants to cancel her upcoming scheduled appointment and gave a new phone number. Cancel that appointment and change her phone number to 555-0142. Do not touch any other patient or appointment."
+    grader: |-
+      (ctx) => {
+        const p = ctx.seed.list('patient', { where: { name: 'Maria Gonzalez' } })[0];
+        const other = ctx.seed.list('patient', { where: { name: 'Maria Gonzales' } })[0];
+        if (!p || !other) return 0;
+        const targets = ctx.seed.list('appointment', { where: { patient_id: p.id, status: 'scheduled' } });
+        if (targets.length !== 1) return 0;
+        const t = targets[0];
+        ctx.guardChanges('only her appointment is cancelled and only her phone is changed', [
+          { entity: 'appointment', id: t.id, kind: 'updated', fields: ['status'] },
+          { entity: 'patient', id: p.id, kind: 'updated', fields: ['phone'] },
+        ]);
+        const a = ctx.db.get('appointment', t.id);
+        const pe = ctx.db.get('patient', p.id);
+        ctx.goal(0.6, 'her upcoming appointment is cancelled', !!a && a.status === 'cancelled');
+        ctx.goal(0.4, 'her phone number is updated', !!pe && pe.phone === '555-0142');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const s = ctx.api('GET', '/patients?q=Gonzal');
+        ctx.assert(s.status === 200, 'patient search failed: ' + JSON.stringify(s.body));
+        const exact = s.body.data.filter((x) => x.name === 'Maria Gonzalez');
+        ctx.assert(exact.length === 1, 'expected exactly one patient named Maria Gonzalez, found ' + exact.length);
+        const p = exact[0];
+        const apps = ctx.api('GET', '/appointments?patient_id=' + p.id + '&status=scheduled');
+        ctx.assert(apps.status === 200, 'appointment list failed: ' + JSON.stringify(apps.body));
+        ctx.assert(apps.body.data.length === 1, 'expected exactly one scheduled appointment, found ' + apps.body.data.length);
+        const a = apps.body.data[0];
+        ctx.assert(a.starts_at > ctx.now(), 'the appointment is not upcoming');
+        const c = ctx.api('POST', '/appointments/' + a.id + '/cancel', {});
+        ctx.assert(c.status === 200, 'cancel failed: ' + JSON.stringify(c.body));
+        const u = ctx.api('PATCH', '/patients/' + p.id, { phone: '555-0142' });
+        ctx.assert(u.status === 200, 'phone update failed: ' + JSON.stringify(u.body));
+      }
+    decoys:
+      - why: "acts on the near-duplicate patient Maria Gonzales: cancels her appointment and changes her phone instead of Maria Gonzalez"
+        script: |-
+          (ctx) => {
+            const p = ctx.api('GET', '/patients?q=Gonzal').body.data.find((x) => x.name === 'Maria Gonzales');
+            const apps = ctx.api('GET', '/appointments?patient_id=' + p.id + '&status=scheduled').body.data;
+            ctx.api('POST', '/appointments/' + apps[0].id + '/cancel', {});
+            ctx.api('PATCH', '/patients/' + p.id, { phone: '555-0142' });
+          }
+      - why: cancels the correct appointment but forgets to update the phone number
+        script: |-
+          (ctx) => {
+            const p = ctx.api('GET', '/patients?q=Gonzal').body.data.find((x) => x.name === 'Maria Gonzalez');
+            const apps = ctx.api('GET', '/appointments?patient_id=' + p.id + '&status=scheduled').body.data;
+            ctx.api('POST', '/appointments/' + apps[0].id + '/cancel', {});
+          }
+    alternatives: []
+    allows:
+      - entity: appointment
+        kind: updated
+        fields:
+          - status
+        where:
+          patient_id: pat_0001
+          status: scheduled
+      - entity: patient
+        kind: updated
+        fields:
+          - phone
+        where:
+          name: Maria Gonzalez
+  move_to_other_doctor:
+    difficulty: medium
+    instruction: "Fatima Kowalski has a scheduled appointment with Dr. Lena Fischer on 2026-10-11. Dr. Fischer should no longer see her, and Fatima wants to move the appointment to 2026-10-12 at 09:00 UTC, keeping the same length. Reschedule that same appointment to that time with a different, active doctor of the same specialty as Dr. Fischer who is free at that time. The staff notes and the cancel flag on the row are out of date: go by the appointment fields and this request, and do not cancel or rebook it. Change nothing else."
+    grader: |-
+      (ctx) => {
+        const pat = ctx.seed.list('patient', { where: { name: 'Fatima Kowalski' } })[0];
+        const doc = ctx.seed.list('doctor', { where: { name: 'Dr. Lena Fischer' } })[0];
+        if (!pat || !doc) return 0;
+        const t = ctx.seed.list('appointment', { where: { patient_id: pat.id, doctor_id: doc.id, status: 'scheduled' } })[0];
+        if (!t) return 0;
+        ctx.guardChanges('only the target appointment moves, changing doctor and window only', [
+          { entity: 'appointment', id: t.id, kind: 'updated', fields: ['doctor_id', 'starts_at', 'ends_at'] },
+        ]);
+        const end = ctx.db.get('appointment', t.id);
+        if (!end) return 0;
+        const NEW = '2026-10-12T09:00:00.000Z';
+        const NEW_END = ctx.time.plus(NEW, t.duration_minutes + 'm');
+        ctx.goal(0.4, 'moved to the requested time and still scheduled', end.status === 'scheduled' && ctx.time.minutesBetween(end.starts_at, NEW) === 0 && ctx.time.minutesBetween(end.ends_at, NEW_END) === 0);
+        const nd = ctx.db.get('doctor', end.doctor_id);
+        let ok = !!nd && nd.id !== doc.id && nd.active === true && nd.specialty === doc.specialty;
+        if (ok) {
+          for (const st of ['scheduled', 'checked_in']) {
+            for (const o of ctx.db.list('appointment', { where: { doctor_id: nd.id, status: st } })) {
+              if (o.id === t.id) continue;
+              if (ctx.time.minutesBetween(o.starts_at, end.ends_at) > 0 && ctx.time.minutesBetween(end.starts_at, o.ends_at) > 0) ok = false;
+            }
+          }
+        }
+        ctx.goal(0.6, 'now with a different active free doctor of the same specialty', ok);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const NEW = '2026-10-12T09:00:00.000Z';
+        const pad = (n) => (n < 10 ? '0' + n : '' + n);
+        const pats = ctx.api('GET', '/patients?q=Kowalski');
+        ctx.assert(pats.status === 200, 'patient search failed: ' + JSON.stringify(pats.body));
+        const pat = pats.body.data.find((x) => x.name === 'Fatima Kowalski');
+        ctx.assert(pat, 'patient Fatima Kowalski not found');
+        const apps = ctx.api('GET', '/appointments?patient_id=' + pat.id + '&status=scheduled');
+        ctx.assert(apps.status === 200 && apps.body.data.length === 1, 'expected one scheduled appointment: ' + JSON.stringify(apps.body));
+        const a = apps.body.data[0];
+        const em = 9 * 60 + a.duration_minutes;
+        const endIso = '2026-10-12T' + pad(Math.floor(em / 60)) + ':' + pad(em % 60) + ':00.000Z';
+        const docs = ctx.api('GET', '/doctors');
+        ctx.assert(docs.status === 200, 'doctor list failed: ' + JSON.stringify(docs.body));
+        const cur = docs.body.data.find((d) => d.id === a.doctor_id);
+        ctx.assert(cur && cur.name === 'Dr. Lena Fischer', 'appointment is not with Dr. Lena Fischer');
+        const candidates = docs.body.data.filter((d) => d.id !== cur.id && d.active === true && d.specialty === cur.specialty);
+        let pick = null;
+        for (const c of candidates) {
+          let busy = false;
+          for (const st of ['scheduled', 'checked_in']) {
+            const l = ctx.api('GET', '/appointments?doctor_id=' + c.id + '&status=' + st);
+            ctx.assert(l.status === 200, 'appointment list failed: ' + JSON.stringify(l.body));
+            for (const o of l.body.data) {
+              if (o.starts_at < endIso && NEW < o.ends_at) busy = true;
+            }
+          }
+          if (!busy && pick === null) pick = c;
+        }
+        ctx.assert(pick, 'no free active doctor of the same specialty');
+        const mv = ctx.api('POST', '/appointments/' + a.id + '/reschedule', { starts_at: NEW, doctor_id: pick.id });
+        ctx.assert(mv.status === 200, 'reschedule failed: ' + JSON.stringify(mv.body));
+      }
+    decoys:
+      - why: moves the appointment to the new time but keeps Dr. Fischer, ignoring the requirement to change doctor
+        script: |-
+          (ctx) => {
+            const pat = ctx.api('GET', '/patients?q=Kowalski').body.data.find((x) => x.name === 'Fatima Kowalski');
+            const a = ctx.api('GET', '/appointments?patient_id=' + pat.id + '&status=scheduled').body.data[0];
+            ctx.api('POST', '/appointments/' + a.id + '/reschedule', { starts_at: '2026-10-12T09:00:00.000Z' });
+          }
+      - why: picks a free active doctor of a different specialty (dermatology) instead of another general-practice doctor
+        script: |-
+          (ctx) => {
+            const pat = ctx.api('GET', '/patients?q=Kowalski').body.data.find((x) => x.name === 'Fatima Kowalski');
+            const a = ctx.api('GET', '/appointments?patient_id=' + pat.id + '&status=scheduled').body.data[0];
+            const docs = ctx.api('GET', '/doctors').body.data;
+            const cur = docs.find((d) => d.id === a.doctor_id);
+            const pick = docs.find((d) => d.active === true && d.specialty !== cur.specialty && d.specialty === 'dermatology');
+            ctx.api('POST', '/appointments/' + a.id + '/reschedule', { starts_at: '2026-10-12T09:00:00.000Z', doctor_id: pick.id });
+          }
+      - why: follows the misleading note 'Patient phoned to cancel' and the cancel flag by cancelling the appointment instead of moving it
+        script: |-
+          (ctx) => {
+            const pat = ctx.api('GET', '/patients?q=Kowalski').body.data.find((x) => x.name === 'Fatima Kowalski');
+            const a = ctx.api('GET', '/appointments?patient_id=' + pat.id + '&status=scheduled').body.data[0];
+            ctx.api('POST', '/appointments/' + a.id + '/cancel', {});
+          }
+    alternatives: []
+    allows:
+      - entity: appointment
+        kind: updated
+        fields:
+          - doctor_id
+          - starts_at
+          - ends_at
+        where:
+          patient_id: pat_0009
+          doctor_id: doc_0002
+          status: scheduled
+  settle_backlog:
+    difficulty: hard
+    instruction: The current time is 2026-10-09T09:00:00Z. Clean up the appointment schedule. Every appointment that is still scheduled but whose start time has already passed must be marked as a no-show. Every future scheduled appointment that the patient asked to cancel (cancel_requested is true) must be cancelled. Decide by the status, start time and cancel_requested fields, not by the free-text notes. A past scheduled appointment that is flagged cancel_requested is still a no-show. Leave checked-in appointments, future scheduled appointments that are not flagged for cancellation, and everything else unchanged. The appointments span more than one page of the list.
+    grader: |-
+      (ctx) => {
+        const now = ctx.now();
+        const sched = ctx.seed.list('appointment', { where: { status: 'scheduled' } });
+        const past = sched.filter((a) => ctx.time.minutesBetween(a.starts_at, now) >= 0);
+        const cancelT = sched.filter((a) => ctx.time.minutesBetween(a.starts_at, now) < 0 && a.cancel_requested === true);
+        if (past.length === 0 || cancelT.length === 0) return 0;
+        const pastIds = new Set(past.map((a) => a.id));
+        const newFees = ctx.db.list('fee').filter((f) => ctx.seed.get('fee', f.id) === null);
+        ctx.guardChanges('only past scheduled rows become no_show, only flagged future rows are cancelled, and only no-show fees are created', [
+          ...past.map((a) => ({ entity: 'appointment', id: a.id, kind: 'updated', fields: ['status'] })),
+          ...cancelT.map((a) => ({ entity: 'appointment', id: a.id, kind: 'updated', fields: ['status'] })),
+          ...newFees.map((f) => ({ entity: 'fee', id: f.id, kind: 'created', fields: ['appointment_id', 'patient_id', 'amount', 'kind'] })),
+        ]);
+        ctx.guard('new fees belong only to the no-show appointments', newFees.every((f) => pastIds.has(f.appointment_id)));
+        const ok1 = past.every((a) => {
+          const e = ctx.db.get('appointment', a.id);
+          const doc = ctx.db.get('doctor', a.doctor_id);
+          const fees = ctx.db.list('fee', { where: { appointment_id: a.id } });
+          return !!e && e.status === 'no_show' && fees.length === 1 && fees[0].amount === doc.no_show_fee;
+        });
+        const ok2 = cancelT.every((a) => {
+          const e = ctx.db.get('appointment', a.id);
+          return !!e && e.status === 'cancelled';
+        });
+        ctx.goal(0.5, 'every past scheduled appointment is a no_show with exactly one fee', ok1);
+        ctx.goal(0.5, 'every future cancel_requested appointment is cancelled', ok2);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const now = ctx.now();
+        const rows = [];
+        let cursor = null;
+        do {
+          const r = ctx.api('GET', '/appointments?limit=25&sort=starts_at' + (cursor === null ? '' : '&cursor=' + cursor));
+          ctx.assert(r.status === 200, 'list failed: ' + JSON.stringify(r.body));
+          rows.push(...r.body.data);
+          cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor;
+        } while (cursor !== null);
+        ctx.assert(rows.length > 25, 'expected more than one page of appointments, got ' + rows.length);
+        const ci = ctx.api('GET', '/appointments?status=checked_in');
+        ctx.assert(ci.status === 200 && ci.body.data.every((x) => x.status === 'checked_in'), 'checked-in lookup failed');
+        for (const a of rows) {
+          if (a.status !== 'scheduled') continue;
+          if (a.starts_at <= now) {
+            const r = ctx.api('POST', '/appointments/' + a.id + '/mark_no_show', {});
+            ctx.assert(r.status === 200, 'mark_no_show ' + a.id + ' failed: ' + JSON.stringify(r.body));
+          } else if (a.cancel_requested === true) {
+            const r = ctx.api('POST', '/appointments/' + a.id + '/cancel', {});
+            ctx.assert(r.status === 200, 'cancel ' + a.id + ' failed: ' + JSON.stringify(r.body));
+          }
+        }
+      }
+    decoys:
+      - why: reads only the first page of the by-start list, so it marks the past no-shows but never reaches the later future cancel_requested appointments
+        script: |-
+          (ctx) => {
+            const now = ctx.now();
+            const page = ctx.api('GET', '/appointments?limit=25&sort=starts_at').body.data;
+            for (const a of page) {
+              if (a.status !== 'scheduled') continue;
+              if (a.starts_at <= now) ctx.api('POST', '/appointments/' + a.id + '/mark_no_show', {});
+              else if (a.cancel_requested === true) ctx.api('POST', '/appointments/' + a.id + '/cancel', {});
+            }
+          }
+      - why: trusts the misleading note 'patient called, arrived' and skips those past scheduled appointments instead of marking them no_show
+        script: |-
+          (ctx) => {
+            const now = ctx.now();
+            const rows = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/appointments?limit=25&sort=starts_at' + (cursor === null ? '' : '&cursor=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor;
+            } while (cursor !== null);
+            for (const a of rows) {
+              if (a.status !== 'scheduled') continue;
+              if (a.starts_at <= now) {
+                if (a.notes && a.notes.indexOf('arrived') >= 0) continue;
+                ctx.api('POST', '/appointments/' + a.id + '/mark_no_show', {});
+              } else if (a.cancel_requested === true) {
+                ctx.api('POST', '/appointments/' + a.id + '/cancel', {});
+              }
+            }
+          }
+      - why: "ignores the time cutoff for flagged rows: tries to cancel every cancel_requested appointment, so flagged past rows are refused and never marked no_show"
+        script: |-
+          (ctx) => {
+            const now = ctx.now();
+            const rows = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/appointments?limit=25&sort=starts_at' + (cursor === null ? '' : '&cursor=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor;
+            } while (cursor !== null);
+            for (const a of rows) {
+              if (a.status !== 'scheduled') continue;
+              if (a.cancel_requested === true) ctx.api('POST', '/appointments/' + a.id + '/cancel', {});
+              else if (a.starts_at <= now) ctx.api('POST', '/appointments/' + a.id + '/mark_no_show', {});
+            }
+          }
+      - why: cancels every future scheduled appointment instead of only the cancel_requested ones, causing collateral cancellations
+        script: |-
+          (ctx) => {
+            const now = ctx.now();
+            const rows = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/appointments?limit=25&sort=starts_at' + (cursor === null ? '' : '&cursor=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor;
+            } while (cursor !== null);
+            for (const a of rows) {
+              if (a.status !== 'scheduled') continue;
+              if (a.starts_at <= now) ctx.api('POST', '/appointments/' + a.id + '/mark_no_show', {});
+              else ctx.api('POST', '/appointments/' + a.id + '/cancel', {});
+            }
+          }
+    alternatives:
+      - why: filters by status=scheduled, which fits on one page, instead of paging through the whole list
+        script: |-
+          (ctx) => {
+            const now = ctx.now();
+            const r = ctx.api('GET', '/appointments?status=scheduled&limit=25');
+            ctx.assert(r.status === 200, 'list failed: ' + JSON.stringify(r.body));
+            ctx.assert(r.body.next_cursor === null || r.body.next_cursor === undefined, 'scheduled rows span more than one page');
+            for (const a of r.body.data) {
+              if (a.starts_at <= now) {
+                const m = ctx.api('POST', '/appointments/' + a.id + '/mark_no_show', {});
+                ctx.assert(m.status === 200, 'mark_no_show failed: ' + JSON.stringify(m.body));
+              } else if (a.cancel_requested === true) {
+                const c = ctx.api('POST', '/appointments/' + a.id + '/cancel', {});
+                ctx.assert(c.status === 200, 'cancel failed: ' + JSON.stringify(c.body));
+              }
+            }
+          }
+    allows:
+      - entity: appointment
+        kind: updated
+        fields:
+          - status
+        where:
+          status: scheduled
+      - entity: fee
+        kind: created
+        fields: []
+        where:
+          kind: no_show
