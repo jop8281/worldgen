@@ -6,7 +6,7 @@
 import { accessSync, constants, statSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { checkWorld, loadWorld, type World } from '#engine';
+import { loadWorld, worldSchema, type World } from '#engine';
 import { assertNever } from '#lib/never';
 import { capsFromEnv, ledgerPath, openLedger } from '../costs/ledger.ts';
 import { meteredModel } from '../costs/meter.ts';
@@ -73,14 +73,18 @@ export function makeModel(config: Config, env: Env = process.env, transport: Tra
   }
 }
 
-/** Loads and checks every config.exampleWorld; a run renders the one its input digest picks into every system prompt (A-390). */
+/**
+ * Loads every config.exampleWorld and parses it against the world schema; a run renders the one its input digest picks
+ * into every system prompt (A-390). It runs no full check, which verifies every task and cost seconds per world at each
+ * CLI start, even for a run that stops on its input; config.test checks every shipped example in full.
+ */
 export async function loadExampleWorlds(config: Config): Promise<readonly World[]> {
   return Promise.all(config.exampleWorld.map(async (dir) => {
     const loaded = await loadWorld(dir);
     if (!loaded.ok) throw new Error(`example world ${dir} does not load: ${loaded.error[0].code}`);
-    const report = checkWorld(loaded.value);
-    if (!report.ok) throw new Error(`example world ${dir} does not check: ${report.issues[0].code}`);
-    return report.world;
+    const parsed = worldSchema.safeParse(loaded.value);
+    if (!parsed.success) throw new Error(`example world ${dir} does not parse: ${parsed.error.issues[0]?.message ?? 'not a world'}`);
+    return parsed.data;
   }));
 }
 

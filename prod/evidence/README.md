@@ -2,6 +2,8 @@
 
 Each public claim in [README.md](../../README.md), with the files behind it and the command that re-checks it from a clone. Commands run from `code/` after `bun install --frozen-lockfile` on Bun 1.4.2. None calls a model or needs a key (A-392).
 
+[prod/scorecards.md](../scorecards.md) sorts the measured numbers into four separate scorecards, for the generator, environment fidelity, the graders and agents; `bun run scorecards` regenerates it from committed files (A-402).
+
 ## Re-check from the repository
 
 | Claim | Evidence | Command, from `code/` | You should see |
