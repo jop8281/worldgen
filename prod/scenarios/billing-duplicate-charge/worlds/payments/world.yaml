@@ -1,0 +1,1416 @@
+format: 1
+meta:
+  name: acme_payments
+  description: "Derived from gen_stripe_charges for the flagship scenario billing-duplicate-charge (A-397). A deterministic replica of the Stripe REST charges and refunds surface. Customers hold a card state that decides how a new charge resolves (succeeded, failed or pending). Charges can be created uncaptured, then captured in full or in part. Refunds are issued against captured charges and move through pending to succeeded, failed or canceled. Jobs settle pending bank-debit charges, expire stale uncaptured authorizations after 7 days, and settle pending refunds. Agents list, retrieve, create, capture and refund with Stripe-style paths, a list envelope and an error body. The input keeps only three charge operations. The world adds refunds, capture and customer lookup so that writes and realistic tasks are possible. Acme Logistics has three $149.00 charges: order O-7301 twice, minutes apart, and order O-7302."
+  resembles: Stripe API (2024-06-20), charges and refunds subset
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-06T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: stripe
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        type: invalid_request_error
+        code: $code
+        message: $message
+entities:
+  customer:
+    description: A Stripe customer that charges are billed to. card_state is a simulation switch for the card on file and decides how a new charge for this customer resolves.
+    idPrefix: cus
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        format: email
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      card_state:
+        type: enum
+        description: valid charges succeed, declined and expired charges fail, bank_debit charges stay pending until settled.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - valid
+          - declined
+          - expired
+          - bank_debit
+        default: valid
+      livemode:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+  charge:
+    description: A payment attempt, mirroring the Stripe Charge object. Amounts are integer minor units. Status, paid, captured and the amount fields are maintained by actions and jobs.
+    idPrefix: ch
+    fields:
+      amount:
+        type: int
+        description: Charge amount in minor units of currency.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 50
+      currency:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - usd
+          - eur
+          - gbp
+      customer:
+        type: ref
+        description: The customer billed. null for a charge with no customer.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      description:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 500
+      receipt_email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        format: email
+      status:
+        type: state
+        description: pending until a bank debit settles, then succeeded or failed. Both are final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - pending
+          - succeeded
+          - failed
+        initial: pending
+        transitions:
+          pending:
+            - succeeded
+            - failed
+          succeeded: []
+          failed: []
+      paid:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      captured:
+        type: bool
+        description: false for an authorization made with capture=false.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      amount_captured:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      amount_refunded:
+        type: int
+        description: Sum of pending and succeeded refunds. Never exceeds amount_captured, or amount for a released authorization.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      refunded:
+        type: bool
+        description: true once amount_refunded covers the whole captured amount.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      failure_code:
+        type: string
+        description: card_declined or expired_card on a failed charge.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      failure_message:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      payment_intent:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      livemode:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+  refund:
+    description: A refund of all or part of a charge, mirroring the Stripe Refund object. Written by create_refund, cancel_refund and the settlement jobs.
+    idPrefix: re
+    fields:
+      charge:
+        type: ref
+        description: The charge being refunded.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: charge
+        onDelete: restrict
+      amount:
+        type: int
+        description: Refund amount in minor units, in the charge currency.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      currency:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - usd
+          - eur
+          - gbp
+      reason:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - duplicate
+          - expired_uncaptured_charge
+          - fraudulent
+          - requested_by_customer
+      status:
+        type: state
+        description: pending until settled. succeeded, failed and canceled are final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - pending
+          - succeeded
+          - failed
+          - canceled
+        initial: pending
+        transitions:
+          pending:
+            - succeeded
+            - failed
+            - canceled
+          succeeded: []
+          failed: []
+          canceled: []
+      failure_reason:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        values:
+          - expired_or_canceled_card
+          - lost_or_stolen_card
+          - unknown
+      receipt_number:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      payment_intent:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_charges:
+    op: list
+    entity: charge
+    filters:
+      - customer
+      - status
+      - captured
+      - paid
+      - refunded
+    search:
+      - description
+      - receipt_email
+    sort: []
+    pageSize: 10
+    method: GET
+    path: /v1/charges
+    description: List charges, newest first. Page with starting_after and limit.
+  get_charge:
+    op: get
+    entity: charge
+    method: GET
+    path: /v1/charges/{id}
+    description: Retrieve one charge.
+  list_refunds:
+    op: list
+    entity: refund
+    filters:
+      - charge
+      - status
+      - reason
+    search: []
+    sort: []
+    pageSize: 10
+    method: GET
+    path: /v1/refunds
+    description: List refunds. Filter by charge to see the refunds of one charge.
+  get_refund:
+    op: get
+    entity: refund
+    method: GET
+    path: /v1/refunds/{id}
+    description: Retrieve one refund.
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - card_state
+    search:
+      - name
+      - email
+    sort: []
+    pageSize: 10
+    method: GET
+    path: /v1/customers
+    description: List customers. Search by name or email to find a customer id.
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /v1/customers/{id}
+    description: Retrieve one customer.
+actions:
+  create_charge:
+    method: POST
+    path: /v1/charges
+    description: "Create a charge. The customer's card_state decides the outcome: valid succeeds (captured unless capture is false), declined and expired produce a failed charge with a failure_code, bank_debit stays pending until settled. A failed charge is returned with 200 and status failed. A charge with no customer succeeds."
+    input:
+      amount:
+        type: int
+        description: Amount in minor units. At least 50.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      currency:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - usd
+          - eur
+          - gbp
+      customer:
+        type: string
+        description: Customer id, such as cus_0001.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      description:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 500
+      receipt_email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        format: email
+      capture:
+        type: bool
+        description: false makes an authorization to capture later. Default true.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        if (!Number.isInteger(b.amount) || b.amount < 50) ctx.fail(422, 'invalid_amount', 'amount must be an integer of at least 50 minor units, found ' + b.amount);
+        let cust = null;
+        if (b.customer !== undefined && b.customer !== null) {
+          cust = ctx.db.get('customer', b.customer);
+          if (cust === null) ctx.fail(422, 'resource_missing', 'No such customer: ' + b.customer + '. Find customers with GET /v1/customers.');
+        }
+        const capture = b.capture === undefined || b.capture === null ? true : b.capture;
+        const state = cust === null ? 'valid' : cust.card_state;
+        if (state === 'bank_debit' && capture === false) ctx.fail(422, 'capture_unsupported', 'Customer ' + cust.id + ' pays by bank debit, which cannot be authorized and captured later. Use capture true.');
+        const row = ctx.db.create('charge', {
+          amount: b.amount,
+          currency: b.currency,
+          customer: cust === null ? null : cust.id,
+          description: b.description === undefined ? null : b.description,
+          receipt_email: b.receipt_email === undefined ? null : b.receipt_email,
+        });
+        const patch = { payment_intent: 'pi_' + row.id.slice(3) };
+        if (state === 'declined') {
+          patch.status = 'failed';
+          patch.failure_code = 'card_declined';
+          patch.failure_message = 'Your card was declined.';
+        } else if (state === 'expired') {
+          patch.status = 'failed';
+          patch.failure_code = 'expired_card';
+          patch.failure_message = 'Your card has expired.';
+        } else if (state === 'valid') {
+          patch.status = 'succeeded';
+          patch.paid = true;
+          patch.captured = capture;
+          patch.amount_captured = capture ? b.amount : 0;
+        }
+        const updated = ctx.db.update('charge', row.id, patch);
+        return { status: 200, body: updated };
+      }
+  capture_charge:
+    method: POST
+    path: /v1/charges/{id}/capture
+    description: Capture a succeeded, uncaptured, not refunded charge, in full or in part with amount_to_capture. The rest of the authorization is released. A charge can be captured only once.
+    input:
+      amount_to_capture:
+        type: int
+        description: Amount to capture, between 1 and the charge amount. Default is the full amount.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('charge', id);
+        if (t === null) ctx.fail(404, 'resource_missing', 'No such charge: ' + id);
+        if (t.status !== 'succeeded') ctx.fail(409, 'charge_not_capturable', 'Charge ' + id + ' is ' + t.status + '. Only succeeded authorizations can be captured.');
+        if (t.refunded) ctx.fail(409, 'charge_already_refunded', 'Charge ' + id + ' was refunded or released and cannot be captured.');
+        if (t.captured) ctx.fail(409, 'charge_already_captured', 'Charge ' + id + ' has already been captured.');
+        const a = ctx.body.amount_to_capture;
+        const given = a !== undefined && a !== null;
+        if (given && (!Number.isInteger(a) || a < 1 || a > t.amount)) ctx.fail(422, 'invalid_amount', 'amount_to_capture must be between 1 and ' + t.amount + ', found ' + a);
+        const updated = ctx.db.update('charge', id, { captured: true, paid: true, amount_captured: given ? a : t.amount });
+        return { status: 200, body: updated };
+      }
+  create_refund:
+    method: POST
+    path: /v1/refunds
+    description: "Refund a succeeded charge. Amount defaults to the refundable balance (amount_captured minus amount_refunded). A refund of a captured charge starts pending and counts against amount_refunded at once. Refunding an uncaptured authorization releases all of it: amount must be omitted or equal the charge amount, and the refund is succeeded at once."
+    input:
+      charge:
+        type: string
+        description: Id of the charge to refund.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      amount:
+        type: int
+        description: Amount in minor units. Default is the full refundable balance.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      reason:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - duplicate
+          - fraudulent
+          - requested_by_customer
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        const charge = ctx.db.get('charge', b.charge);
+        if (charge === null) ctx.fail(422, 'resource_missing', 'No such charge: ' + b.charge + '. List charges with GET /v1/charges.');
+        if (charge.status !== 'succeeded') ctx.fail(409, 'charge_not_refundable', 'Charge ' + charge.id + ' is ' + charge.status + '. Only succeeded charges can be refunded.');
+        if (charge.refunded) ctx.fail(409, 'charge_already_refunded', 'Charge ' + charge.id + ' has already been fully refunded.');
+        const given = b.amount !== undefined && b.amount !== null;
+        if (given && (!Number.isInteger(b.amount) || b.amount < 1)) ctx.fail(422, 'invalid_amount', 'amount must be an integer of at least 1, found ' + b.amount);
+        const reason = b.reason === undefined ? null : b.reason;
+        if (!charge.captured) {
+          if (given && b.amount !== charge.amount) ctx.fail(422, 'invalid_amount', 'Charge ' + charge.id + ' is not captured. Releasing it refunds the full ' + charge.amount + ', found ' + b.amount);
+          const r = ctx.db.create('refund', { charge: charge.id, amount: charge.amount, currency: charge.currency, reason, payment_intent: charge.payment_intent });
+          const done = ctx.db.update('refund', r.id, { status: 'succeeded', receipt_number: 'RN-' + r.id.slice(3) });
+          ctx.db.update('charge', charge.id, { amount_refunded: charge.amount, refunded: true });
+          return { status: 200, body: done };
+        }
+        const balance = charge.amount_captured - charge.amount_refunded;
+        if (balance <= 0) ctx.fail(409, 'charge_already_refunded', 'Charge ' + charge.id + ' has no refundable balance left.');
+        const amount = given ? b.amount : balance;
+        if (amount > balance) ctx.fail(422, 'amount_too_large', 'Refund amount ' + amount + ' is greater than the refundable balance ' + balance + ' of charge ' + charge.id + '.');
+        const r = ctx.db.create('refund', { charge: charge.id, amount, currency: charge.currency, reason, payment_intent: charge.payment_intent });
+        const total = charge.amount_refunded + amount;
+        ctx.db.update('charge', charge.id, { amount_refunded: total, refunded: total === charge.amount_captured });
+        return { status: 200, body: r };
+      }
+  cancel_refund:
+    method: POST
+    path: /v1/refunds/{id}/cancel
+    description: "Cancel a pending refund. The amount goes back to the charge: amount_refunded drops by the refund amount and refunded becomes false."
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const r = ctx.db.get('refund', id);
+        if (r === null) ctx.fail(404, 'resource_missing', 'No such refund: ' + id);
+        if (r.status !== 'pending') ctx.fail(409, 'refund_not_cancelable', 'Refund ' + id + ' is ' + r.status + '. Only pending refunds can be canceled.');
+        const charge = ctx.db.get('charge', r.charge);
+        const updated = ctx.db.update('refund', id, { status: 'canceled' });
+        ctx.db.update('charge', charge.id, { amount_refunded: Math.max(0, charge.amount_refunded - r.amount), refunded: false });
+        return { status: 200, body: updated };
+      }
+jobs:
+  settle_pending_charges:
+    description: "Every hour. A pending charge created at least 48 hours ago succeeds: paid, captured and amount_captured equal to amount."
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const c of ctx.db.list('charge', { where: { status: 'pending' } })) {
+          if (ctx.time.minutesBetween(c.created_at, now) < 48 * 60) continue;
+          ctx.db.update('charge', c.id, { status: 'succeeded', paid: true, captured: true, amount_captured: c.amount });
+        }
+      }
+  expire_uncaptured_charges:
+    description: "Every hour. A succeeded, uncaptured, not refunded charge created at least 7 days ago is released: a succeeded refund for the full amount with reason expired_uncaptured_charge is created and the charge becomes refunded."
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const c of ctx.db.list('charge', { where: { status: 'succeeded', captured: false, refunded: false } })) {
+          if (ctx.time.minutesBetween(c.created_at, now) < 7 * 24 * 60) continue;
+          const r = ctx.db.create('refund', { charge: c.id, amount: c.amount, currency: c.currency, reason: 'expired_uncaptured_charge', payment_intent: c.payment_intent });
+          ctx.db.update('refund', r.id, { status: 'succeeded', receipt_number: 'RN-' + r.id.slice(3) });
+          ctx.db.update('charge', c.id, { amount_refunded: c.amount, refunded: true });
+        }
+      }
+  settle_refunds:
+    description: Every 15 minutes. A pending refund at least 1 hour old succeeds with a receipt number, or fails with expired_or_canceled_card when the charge's customer has an expired card. A failed refund is subtracted from the charge's amount_refunded and clears refunded.
+    every: 15m
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const r of ctx.db.list('refund', { where: { status: 'pending' } })) {
+          if (ctx.time.minutesBetween(r.created_at, now) < 60) continue;
+          const charge = ctx.db.get('charge', r.charge);
+          const cust = charge.customer === null ? null : ctx.db.get('customer', charge.customer);
+          if (cust !== null && cust.card_state === 'expired') {
+            ctx.db.update('refund', r.id, { status: 'failed', failure_reason: 'expired_or_canceled_card' });
+            ctx.db.update('charge', charge.id, { amount_refunded: Math.max(0, charge.amount_refunded - r.amount), refunded: false });
+          } else {
+            ctx.db.update('refund', r.id, { status: 'succeeded', receipt_number: 'RN-' + r.id.slice(3) });
+          }
+        }
+      }
+fixtures: {}
+seed:
+  customer: |-
+    (ctx) => {
+      const base = ((ctx) => {
+      const anchors = [
+        ['Harbor Freight Co', 'billing@harborfreight.example'],
+        ['Cedar Analytics', 'accounts@cedaranalytics.example'],
+        ['Northwind Health', 'finance@northwindhealth.example'],
+        ['Redwood Labs', 'billing@redwoodlabs.example'],
+        ['Redwood Logistics', 'ap@redwoodlogistics.example'],
+      ];
+      const names = ['Harbor Freight Supply','Summit Outfitters','Brightline Media','Ironwood Foods','Silverleaf Dental','Lakeside Robotics','Granite Systems','Copperfield Travel','Maple Street Bakery','Pioneer Energy','Evergreen Pharma','Riverside Credit Union','Oakridge Motors','Starling Studios','Kestrel Telecom','Meridian Insurance','Juniper Retail','Sterling Freight','Falcon Analytics','Atlas Robotics','Orchid Health','Beacon Labs','Coastal Logistics','Highland Foods','Willow Media','Tidewater Energy','Bluefin Travel','Crestview Dental','Delta Print Works','Eastgate Pharma','Fairway Golf Club','Gable Software','Hollis Furniture','Indigo Apparel','Keystone Hardware'];
+      const declined = [3, 11, 19, 27];
+      const expired = [6, 14, 30];
+      const bank = [1, 9, 17, 25, 33];
+      const rows = [];
+      const stamp = () => ctx.time.plus('2024-10-01T09:00:00.000Z', ctx.int(1, 500) + 'd');
+      for (const [name, email] of anchors) {
+        const t = stamp();
+        rows.push({ name, email, description: null, card_state: 'valid', livemode: false, created_at: t, updated_at: t });
+      }
+      names.forEach((name, i) => {
+        const state = declined.includes(i) ? 'declined' : expired.includes(i) ? 'expired' : bank.includes(i) ? 'bank_debit' : 'valid';
+        const domain = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+        const t = stamp();
+        rows.push({ name, email: 'billing@' + domain + '.example', description: ctx.int(1, 3) === 1 ? 'Customer since ' + t.slice(0, 4) : null, card_state: state, livemode: false, created_at: t, updated_at: t });
+      });
+      return rows;
+    })(ctx);
+      const since = '2025-02-11T09:00:00.000Z';
+      return [...base, { name: 'Acme Logistics', email: 'billing@acmelogistics.example', description: null, card_state: 'valid', livemode: false, created_at: since, updated_at: since }];
+    }
+  charge: |-
+    (ctx) => {
+      const acme = ctx.rows('customer').find((c) => c.name === 'Acme Logistics');
+      const before = { ...ctx, rows: (entity) => ctx.rows(entity).filter((r) => r.id !== acme.id && r.customer !== acme.id) };
+      const base = ((ctx) => {
+      const BASE = '2026-03-01T00:00:00.000Z';
+      const START = '2026-10-06T09:00:00.000Z';
+      const X = ctx.time.minutesBetween(BASE, START);
+      const iso = (ago) => (ago === X ? BASE : ctx.time.plus(BASE, (X - ago) + 'm'));
+      const custs = ctx.rows('customer');
+      const cb = {};
+      const byName = {};
+      for (const c of custs) { cb[c.id] = c; byName[c.name] = c.id; }
+      const anchorNames = new Set(['Harbor Freight Co', 'Cedar Analytics', 'Northwind Health', 'Redwood Labs', 'Redwood Logistics']);
+      const fillers = custs.filter((c) => !anchorNames.has(c.name));
+      const ids = (s) => fillers.filter((c) => c.card_state === s).map((c) => c.id);
+      const validF = ids('valid');
+      const bankF = ids('bank_debit');
+      const decExp = ids('declined').concat(ids('expired'));
+      const D = (d) => d * 1440 + ctx.int(0, 1200);
+      const descs = ['Pro plan subscription', 'Invoice', 'Order', 'Annual license', 'Consulting hours', 'Equipment rental', 'Setup fee', 'Usage overage'];
+      const desc = () => ctx.pick(descs) + ' #' + ctx.int(1000, 9999);
+      const curr = () => { const r = ctx.int(1, 10); return r <= 7 ? 'usd' : r <= 9 ? 'eur' : 'gbp'; };
+      const rows = [];
+      const mk = (cid, kind, amount, currency, description, age, x) => {
+        const o = x || {};
+        const c = cb[cid];
+        const cap = o.cap !== undefined ? o.cap : amount;
+        const ref = o.ref || 0;
+        const t = iso(age);
+        const row = {
+          amount, currency, customer: cid, description,
+          receipt_email: ctx.int(1, 3) === 1 ? c.email : null,
+          status: 'succeeded', paid: true, captured: true, amount_captured: cap, amount_refunded: ref, refunded: ref > 0 && ref === cap,
+          failure_code: null, failure_message: null, payment_intent: null, livemode: false,
+          created_at: t, updated_at: t,
+        };
+        if (kind === 'auth') { row.captured = false; row.amount_captured = 0; row.amount_refunded = 0; row.refunded = false; }
+        else if (kind === 'released') { row.captured = false; row.amount_captured = 0; row.amount_refunded = amount; row.refunded = true; }
+        else if (kind === 'failed') {
+          const exp = c.card_state === 'expired';
+          row.status = 'failed'; row.paid = false; row.captured = false; row.amount_captured = 0; row.amount_refunded = 0; row.refunded = false;
+          row.failure_code = exp ? 'expired_card' : 'card_declined';
+          row.failure_message = exp ? 'Your card has expired.' : 'Your card was declined.';
+        } else if (kind === 'pending') {
+          row.status = 'pending'; row.paid = false; row.captured = false; row.amount_captured = 0; row.amount_refunded = 0; row.refunded = false;
+        }
+        rows.push(row);
+      };
+      const harbor = byName['Harbor Freight Co'];
+      const harborSupply = byName['Harbor Freight Supply'];
+      const cedar = byName['Cedar Analytics'];
+      const nw = byName['Northwind Health'];
+      const rw = byName['Redwood Labs'];
+      const rl = byName['Redwood Logistics'];
+      // Harbor Freight Co: exactly one authorization.
+      mk(harbor, 'auth', 64000, 'usd', 'Freight invoice #7731', 3 * 1440 + 200);
+      [8, 20, 35, 50, 70, 95, 130].forEach((d, i) => {
+        const amt = [2400000, 18500, 92000, 41000, 15600, 73000, 28800][i] / (i === 0 ? 100 : 1);
+        mk(harbor, 'ok', amt, 'usd', 'Freight invoice #' + (7000 + i * 17), D(d), i === 2 ? { ref: 30000 } : {});
+      });
+      mk(harborSupply, 'auth', 22000, 'usd', 'Supply order #5520', 2 * 1440 + 300);
+      // Cedar Analytics: planted duplicate pair, a same-amount decoy, and clean history.
+      mk(cedar, 'ok', 18900, 'usd', 'Order #4821', 20 * 1440 + 7);
+      mk(cedar, 'ok', 18900, 'usd', 'Order #4821', 20 * 1440);
+      mk(cedar, 'ok', 18900, 'usd', 'Order #4790', D(30));
+      [2, 5, 9, 14, 33, 45, 60, 88, 120].forEach((d) => mk(cedar, 'ok', ctx.int(15, 150) * 100, 'usd', 'Order #' + ctx.int(4000, 4700), D(d)));
+      // Northwind Health.
+      mk(nw, 'ok', 240000, 'usd', 'Annual plan renewal', 12 * 1440, { ref: 240000 });
+      mk(nw, 'ok', 45000, 'usd', 'Support plan', 20 * 1440, { ref: 15000 });
+      mk(nw, 'ok', 30000, 'usd', 'Onboarding fee', 40 * 1440, { ref: 30000 });
+      [3, 33, 63].forEach((d) => mk(nw, 'ok', 12000, 'usd', 'Monthly usage', D(d)));
+      // Redwood Labs: 24 charges.
+      [12500, 8800, 45000, 23000, 6400, 31000, 15750, 9900, 27500].forEach((a, i) => mk(rw, 'ok', a, 'usd', 'Project invoice #' + (300 + i), D(7 + i * 14)));
+      mk(rw, 'ok', 20000, 'usd', 'Project invoice #310', D(25), { cap: 12000 });
+      [[30000, 10000], [18000, 6000], [52000, 20000], [7500, 2500], [40000, 15000]].forEach(([a, r], i) => mk(rw, 'ok', a, 'usd', 'Project invoice #' + (320 + i), D(10 + i * 19), { ref: r }));
+      [14000, 9000, 22000].forEach((a, i) => mk(rw, 'ok', a, 'usd', 'Project invoice #' + (330 + i), D(15 + i * 30), { ref: a }));
+      [[5000, 1], [11000, 3], [7000, 5]].forEach(([a, d], i) => mk(rw, 'auth', a, 'usd', 'Hold #' + (340 + i), d * 1440 + 400));
+      mk(rw, 'released', 16000, 'usd', 'Hold #335', 20 * 1440 + 90);
+      mk(rw, 'failed', 9000, 'usd', 'Project invoice #350', D(40));
+      mk(rw, 'failed', 4000, 'usd', 'Project invoice #351', D(75));
+      // Redwood Logistics.
+      [12000, 8000, 21000].forEach((a, i) => mk(rl, 'ok', a, 'usd', 'Freight #' + (900 + i), D(10 + i * 20)));
+      mk(rl, 'ok', 30000, 'usd', 'Freight #903', D(35), { ref: 10000 });
+      mk(rl, 'auth', 9000, 'usd', 'Freight hold #904', 2 * 1440 + 100);
+      const amt = () => ctx.int(5, 900) * 100 + ctx.pick([0, 50, 99]);
+      for (let i = 0; i < 28; i++) mk(decExp[i % decExp.length], 'failed', amt(), curr(), desc(), ctx.int(30, 170 * 1440));
+      for (let i = 0; i < 25; i++) mk(bankF[i % bankF.length], 'pending', amt(), curr(), desc(), ctx.int(60, 2800));
+      const pool = validF.concat(bankF);
+      const ages = [D(1), D(3), 5 * 1440 + ctx.int(0, 1000), 6 * 1440 + ctx.int(0, 600)];
+      ages.forEach((a) => mk(ctx.pick(validF), 'auth', amt(), curr(), desc(), a));
+      for (let i = 0; i < 3; i++) mk(ctx.pick(validF), 'released', amt(), curr(), desc(), D(ctx.int(9, 40)));
+      for (let i = 0; i < 7; i++) { const a = amt(); mk(ctx.pick(pool), 'ok', a, curr(), desc(), D(ctx.int(6, 170)), { ref: Math.max(1, Math.floor(a * ctx.pick([0.25, 0.4, 0.5, 0.6]))) }); }
+      for (let i = 0; i < 5; i++) { const a = amt(); mk(ctx.pick(pool), 'ok', a, curr(), desc(), D(ctx.int(6, 170)), { ref: a }); }
+      { const a = amt(); mk(ctx.pick(validF), 'ok', a, curr(), desc(), D(ctx.int(6, 100)), { cap: Math.floor(a * 0.6) }); }
+      for (let i = 0; i < 11; i++) mk(ctx.pick(pool), 'ok', amt(), curr(), desc(), ctx.int(3000, 170 * 1440));
+      rows.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
+      return rows.map((r, i) => ({ ...r, payment_intent: 'pi_' + String(i + 1).padStart(4, '0') }));
+    })(before);
+      const template = base.find((c) => c.status === 'succeeded' && c.captured && c.amount_refunded === 0 && c.customer !== null);
+      const charge = (n, description, ago) => {
+        const at = ctx.time.minus(ctx.now(), ago);
+        return { ...template, amount: 14900, currency: 'usd', customer: acme.id, description, receipt_email: acme.email, amount_captured: 14900,
+          payment_intent: 'pi_' + String(base.length + n).padStart(4, '0'), created_at: at, updated_at: at };
+      };
+      return [...base, charge(1, 'Order O-7301', '2d4h12m'), charge(2, 'Order O-7301', '2d4h5m'), charge(3, 'Order O-7302', '1d2h')];
+    }
+  refund: |-
+    (ctx) => {
+      const acme = ctx.rows('customer').find((c) => c.name === 'Acme Logistics');
+      const before = { ...ctx, rows: (entity) => ctx.rows(entity).filter((r) => r.id !== acme.id && r.customer !== acme.id) };
+      return ((ctx) => {
+      const BASE = '2026-03-01T00:00:00.000Z';
+      const START = '2026-10-06T09:00:00.000Z';
+      const X = ctx.time.minutesBetween(BASE, START);
+      const iso = (ago) => (ago === X ? BASE : ctx.time.plus(BASE, (X - ago) + 'm'));
+      const custs = ctx.rows('customer');
+      const name = {};
+      for (const c of custs) name[c.id] = c.name;
+      const anchorNames = new Set(['Harbor Freight Co', 'Cedar Analytics', 'Northwind Health', 'Redwood Labs', 'Redwood Logistics']);
+      const reasons = ['duplicate', 'fraudulent', 'requested_by_customer', 'requested_by_customer', null];
+      const nwPending = { 'Annual plan renewal': true, 'Support plan': true, 'Onboarding fee': false };
+      const out = [];
+      const push = (c, amount, reason, status, at, j) => {
+        out.push({ at, row: {
+          charge: c.id, amount, currency: c.currency, reason, status,
+          failure_reason: status === 'failed' ? 'expired_or_canceled_card' : null,
+          receipt_number: status === 'succeeded' ? 'RN-' + c.id.slice(3) + '-' + j : null,
+          payment_intent: c.payment_intent,
+        } });
+      };
+      const charges = ctx.rows('charge');
+      let k = 0;
+      for (const c of charges) {
+        const idx = parseInt(c.id.slice(3), 10);
+        const created = X - ctx.time.minutesBetween(BASE, c.created_at);
+        const R = c.amount_refunded;
+        const isNw = name[c.customer] === 'Northwind Health';
+        if (R > 0) {
+          if (!c.captured) {
+            const when = ctx.time.plus(c.created_at, (7 * 1440 + ctx.int(5, 55)) + 'm');
+            out.push({ at: X - ctx.time.minutesBetween(BASE, when), row: { charge: c.id, amount: c.amount, currency: c.currency, reason: 'expired_uncaptured_charge', status: 'succeeded', failure_reason: null, receipt_number: 'RN-' + c.id.slice(3) + '-0', payment_intent: c.payment_intent } });
+          } else {
+            const split = !isNw && idx % 4 === 0 && R >= 1000;
+            const pieces = split ? [Math.floor(R * 0.4), R - Math.floor(R * 0.4)] : [R];
+            const lastPending = isNw ? nwPending[c.description] === true : idx % 4 === 1;
+            pieces.forEach((p, j) => {
+              const last = j === pieces.length - 1;
+              const reason = ctx.pick(reasons);
+              if (last && lastPending) push(c, p, reason, 'pending', ctx.int(5, 50), j);
+              else push(c, p, reason, 'succeeded', created - (120 + j * 180 + ctx.int(0, 60)), j);
+            });
+          }
+        }
+        if (c.status === 'succeeded' && c.captured && c.customer !== null && !anchorNames.has(name[c.customer])) {
+          const slot = k++ % 3;
+          const amount = Math.max(1, Math.floor(c.amount_captured / 3));
+          if (slot === 0) push(c, amount, ctx.pick(reasons), 'failed', created - (60 + ctx.int(60, 120)), 9);
+          else if (slot === 1) push(c, amount, ctx.pick(reasons), 'canceled', created - ctx.int(30, 90), 9);
+        }
+      }
+      out.sort((a, b) => b.at - a.at);
+      return out.map((e) => {
+        const t = iso(e.at);
+        return { ...e.row, created_at: t, updated_at: t };
+      });
+    })(before);
+    }
+tests:
+  create_charge_without_customer:
+    description: create_charge with no customer succeeds and is captured by default, capture=false makes an uncaptured authorization, and bad input is refused.
+    script: |-
+      (ctx) => {
+        const r = ctx.api('POST', '/v1/charges', { amount: 5000, currency: 'usd', description: 'Order 1001', receipt_email: 'buyer@example.com' });
+        ctx.assert(r.status === 200, 'create returned ' + r.status + ' ' + JSON.stringify(r.body));
+        const c = r.body;
+        ctx.assert(c.status === 'succeeded' && c.paid === true && c.captured === true && c.amount_captured === 5000, 'captured charge: ' + JSON.stringify(c));
+        ctx.assert(c.amount_refunded === 0 && c.refunded === false && c.customer === null, 'no refunds, no customer: ' + JSON.stringify(c));
+        ctx.assert(typeof c.payment_intent === 'string' && c.payment_intent.startsWith('pi_'), 'payment_intent set, got ' + c.payment_intent);
+        const got = ctx.api('GET', '/v1/charges/' + c.id);
+        ctx.assert(got.status === 200 && got.body.id === c.id, 'charge is retrievable');
+        const a = ctx.api('POST', '/v1/charges', { amount: 7500, currency: 'eur', capture: false });
+        ctx.assert(a.status === 200, 'authorization returned ' + a.status);
+        ctx.assert(a.body.status === 'succeeded' && a.body.paid === true && a.body.captured === false && a.body.amount_captured === 0, 'authorization: ' + JSON.stringify(a.body));
+        const low = ctx.api('POST', '/v1/charges', { amount: 10, currency: 'usd' });
+        ctx.assert(low.status === 422 && low.body.error.code === 'invalid_amount', 'amount below 50: ' + JSON.stringify(low));
+        const unknown = ctx.api('POST', '/v1/charges', { amount: 5000, currency: 'usd', customer: 'cus_9999' });
+        ctx.assert(unknown.status === 422 && unknown.body.error.code === 'resource_missing', 'unknown customer: ' + JSON.stringify(unknown));
+        const cur = ctx.api('POST', '/v1/charges', { amount: 5000, currency: 'xyz' });
+        ctx.assert(cur.status === 400, 'bad currency: ' + cur.status);
+        const missing = ctx.api('POST', '/v1/charges', { currency: 'usd' });
+        ctx.assert(missing.status === 400, 'missing amount: ' + missing.status);
+      }
+  create_charge_follows_card_state:
+    description: A declined or expired customer gets a failed charge with a failure code, a bank_debit customer gets a pending charge and cannot authorize, and a failed charge cannot be captured or refunded. Skipped for a card state no seeded customer has.
+    script: |-
+      (ctx) => {
+        const find = (s) => {
+          const r = ctx.api('GET', '/v1/customers?card_state=' + s + '&limit=1');
+          return r.status === 200 && r.body.data.length > 0 ? r.body.data[0] : null;
+        };
+        const declined = find('declined');
+        if (declined !== null) {
+          const r = ctx.api('POST', '/v1/charges', { amount: 2500, currency: 'usd', customer: declined.id });
+          ctx.assert(r.status === 200, 'declined create returned ' + r.status + ' ' + JSON.stringify(r.body));
+          ctx.assert(r.body.status === 'failed' && r.body.paid === false && r.body.captured === false && r.body.amount_captured === 0, 'failed charge: ' + JSON.stringify(r.body));
+          ctx.assert(r.body.failure_code === 'card_declined' && typeof r.body.failure_message === 'string', 'failure code: ' + JSON.stringify(r.body));
+          const cap = ctx.api('POST', '/v1/charges/' + r.body.id + '/capture', {});
+          ctx.assert(cap.status === 409, 'capture of a failed charge: ' + cap.status);
+          const ref = ctx.api('POST', '/v1/refunds', { charge: r.body.id });
+          ctx.assert(ref.status === 409 && ref.body.error.code === 'charge_not_refundable', 'refund of a failed charge: ' + JSON.stringify(ref));
+        }
+        const expired = find('expired');
+        if (expired !== null) {
+          const r = ctx.api('POST', '/v1/charges', { amount: 2500, currency: 'gbp', customer: expired.id });
+          ctx.assert(r.status === 200 && r.body.status === 'failed' && r.body.failure_code === 'expired_card', 'expired card: ' + JSON.stringify(r.body));
+        }
+        const bank = find('bank_debit');
+        if (bank !== null) {
+          const r = ctx.api('POST', '/v1/charges', { amount: 9900, currency: 'usd', customer: bank.id });
+          ctx.assert(r.status === 200 && r.body.status === 'pending' && r.body.paid === false && r.body.captured === false, 'bank debit stays pending: ' + JSON.stringify(r.body));
+          const auth = ctx.api('POST', '/v1/charges', { amount: 9900, currency: 'usd', customer: bank.id, capture: false });
+          ctx.assert(auth.status === 422 && auth.body.error.code === 'capture_unsupported', 'bank debit authorization: ' + JSON.stringify(auth));
+        }
+        const valid = find('valid');
+        if (valid !== null) {
+          const r = ctx.api('POST', '/v1/charges', { amount: 1200, currency: 'usd', customer: valid.id });
+          ctx.assert(r.status === 200 && r.body.status === 'succeeded' && r.body.customer === valid.id, 'valid card: ' + JSON.stringify(r.body));
+        }
+      }
+  capture_charge_full_and_partial:
+    description: capture_charge captures an authorization in full or in part, refuses a second capture, an out-of-range amount, a captured charge and a missing charge.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/v1/charges', { amount: 8000, currency: 'usd', capture: false }).body;
+        const bad0 = ctx.api('POST', '/v1/charges/' + a.id + '/capture', { amount_to_capture: 0 });
+        ctx.assert(bad0.status === 422 && bad0.body.error.code === 'invalid_amount', 'capture 0: ' + JSON.stringify(bad0));
+        const big = ctx.api('POST', '/v1/charges/' + a.id + '/capture', { amount_to_capture: 8001 });
+        ctx.assert(big.status === 422, 'capture above amount: ' + big.status);
+        const part = ctx.api('POST', '/v1/charges/' + a.id + '/capture', { amount_to_capture: 3000 });
+        ctx.assert(part.status === 200, 'partial capture returned ' + part.status + ' ' + JSON.stringify(part.body));
+        ctx.assert(part.body.captured === true && part.body.paid === true && part.body.amount_captured === 3000 && part.body.amount === 8000, 'partial capture: ' + JSON.stringify(part.body));
+        const again = ctx.api('POST', '/v1/charges/' + a.id + '/capture', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'charge_already_captured', 'second capture: ' + JSON.stringify(again));
+        const b = ctx.api('POST', '/v1/charges', { amount: 4200, currency: 'eur', capture: false }).body;
+        const full = ctx.api('POST', '/v1/charges/' + b.id + '/capture', {});
+        ctx.assert(full.status === 200 && full.body.captured === true && full.body.amount_captured === 4200, 'full capture: ' + JSON.stringify(full.body));
+        const done = ctx.api('POST', '/v1/charges', { amount: 1000, currency: 'usd' }).body;
+        const late = ctx.api('POST', '/v1/charges/' + done.id + '/capture', {});
+        ctx.assert(late.status === 409, 'capture of a captured charge: ' + late.status);
+        const missing = ctx.api('POST', '/v1/charges/ch_9999/capture', {});
+        ctx.assert(missing.status === 404, 'capture of a missing charge: ' + missing.status);
+        const rel = ctx.api('POST', '/v1/charges', { amount: 3000, currency: 'usd', capture: false }).body;
+        ctx.assert(ctx.api('POST', '/v1/refunds', { charge: rel.id }).status === 200, 'release the authorization');
+        const afterRelease = ctx.api('POST', '/v1/charges/' + rel.id + '/capture', {});
+        ctx.assert(afterRelease.status === 409, 'capture of a released authorization: ' + afterRelease.status);
+      }
+  create_refund_partial_then_rest:
+    description: create_refund starts pending, counts against amount_refunded at once, defaults to the refundable balance, flips refunded on the last refund, and refuses too large amounts, a fully refunded charge and an unknown charge.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/v1/charges', { amount: 5000, currency: 'usd', description: 'Annual plan' }).body;
+        const r1 = ctx.api('POST', '/v1/refunds', { charge: c.id, amount: 1000, reason: 'requested_by_customer' });
+        ctx.assert(r1.status === 200, 'refund returned ' + r1.status + ' ' + JSON.stringify(r1.body));
+        ctx.assert(r1.body.status === 'pending' && r1.body.amount === 1000 && r1.body.currency === 'usd' && r1.body.charge === c.id && r1.body.reason === 'requested_by_customer', 'refund: ' + JSON.stringify(r1.body));
+        let ch = ctx.api('GET', '/v1/charges/' + c.id).body;
+        ctx.assert(ch.amount_refunded === 1000 && ch.refunded === false, 'charge after partial refund: ' + JSON.stringify(ch));
+        const big = ctx.api('POST', '/v1/refunds', { charge: c.id, amount: 4001 });
+        ctx.assert(big.status === 422 && big.body.error.code === 'amount_too_large', 'too large: ' + JSON.stringify(big));
+        const zero = ctx.api('POST', '/v1/refunds', { charge: c.id, amount: 0 });
+        ctx.assert(zero.status === 422, 'zero amount: ' + zero.status);
+        const r2 = ctx.api('POST', '/v1/refunds', { charge: c.id, reason: 'duplicate' });
+        ctx.assert(r2.status === 200 && r2.body.amount === 4000, 'default amount is the remainder: ' + JSON.stringify(r2.body));
+        ch = ctx.api('GET', '/v1/charges/' + c.id).body;
+        ctx.assert(ch.amount_refunded === 5000 && ch.refunded === true, 'charge fully refunded: ' + JSON.stringify(ch));
+        const more = ctx.api('POST', '/v1/refunds', { charge: c.id });
+        ctx.assert(more.status === 409 && more.body.error.code === 'charge_already_refunded', 'refund of a refunded charge: ' + JSON.stringify(more));
+        const list = ctx.api('GET', '/v1/refunds?charge=' + c.id).body.data;
+        ctx.assert(list.length === 2, 'two refunds on the charge, got ' + list.length);
+        const unknown = ctx.api('POST', '/v1/refunds', { charge: 'ch_9999' });
+        ctx.assert(unknown.status === 422 && unknown.body.error.code === 'resource_missing', 'unknown charge: ' + JSON.stringify(unknown));
+        const reason = ctx.api('POST', '/v1/refunds', { charge: c.id, reason: 'expired_uncaptured_charge' });
+        ctx.assert(reason.status === 400, 'reserved reason: ' + reason.status);
+        const p = ctx.api('POST', '/v1/charges', { amount: 6000, currency: 'gbp' }).body;
+        ctx.api('POST', '/v1/charges/' + p.id + '/capture', {});
+        const cap = ctx.api('POST', '/v1/charges', { amount: 6000, currency: 'gbp', capture: false }).body;
+        ctx.api('POST', '/v1/charges/' + cap.id + '/capture', { amount_to_capture: 2000 });
+        const over = ctx.api('POST', '/v1/refunds', { charge: cap.id, amount: 2500 });
+        ctx.assert(over.status === 422, 'refund above the captured amount: ' + over.status);
+        const ok = ctx.api('POST', '/v1/refunds', { charge: cap.id });
+        ctx.assert(ok.status === 200 && ok.body.amount === 2000, 'default amount is the captured amount: ' + JSON.stringify(ok.body));
+        ctx.assert(ctx.api('GET', '/v1/charges/' + cap.id).body.refunded === true, 'partially captured charge is refunded once its captured amount is');
+      }
+  refund_uncaptured_releases_authorization:
+    description: "Refunding an uncaptured charge releases it: the refund is succeeded at once with a receipt number, the charge is refunded with captured false, and a partial amount is refused."
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/v1/charges', { amount: 3500, currency: 'usd', capture: false }).body;
+        const part = ctx.api('POST', '/v1/refunds', { charge: a.id, amount: 1000 });
+        ctx.assert(part.status === 422 && part.body.error.code === 'invalid_amount', 'partial release: ' + JSON.stringify(part));
+        const r = ctx.api('POST', '/v1/refunds', { charge: a.id, reason: 'requested_by_customer' });
+        ctx.assert(r.status === 200, 'release returned ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(r.body.status === 'succeeded' && r.body.amount === 3500 && typeof r.body.receipt_number === 'string', 'release refund: ' + JSON.stringify(r.body));
+        const ch = ctx.api('GET', '/v1/charges/' + a.id).body;
+        ctx.assert(ch.refunded === true && ch.amount_refunded === 3500 && ch.captured === false && ch.amount_captured === 0, 'released charge: ' + JSON.stringify(ch));
+        const cancel = ctx.api('POST', '/v1/refunds/' + r.body.id + '/cancel', {});
+        ctx.assert(cancel.status === 409 && cancel.body.error.code === 'refund_not_cancelable', 'cancel of a succeeded refund: ' + JSON.stringify(cancel));
+      }
+  cancel_refund_restores_charge:
+    description: cancel_refund cancels a pending refund, gives the amount back to the charge and clears refunded, and refuses a second cancel and a missing refund.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/v1/charges', { amount: 9000, currency: 'usd' }).body;
+        const first = ctx.api('POST', '/v1/refunds', { charge: c.id, amount: 2000 }).body;
+        const full = ctx.api('POST', '/v1/refunds', { charge: c.id }).body;
+        ctx.assert(full.amount === 7000, 'second refund takes the rest: ' + JSON.stringify(full));
+        ctx.assert(ctx.api('GET', '/v1/charges/' + c.id).body.refunded === true, 'charge refunded before the cancel');
+        const r = ctx.api('POST', '/v1/refunds/' + full.id + '/cancel', {});
+        ctx.assert(r.status === 200 && r.body.status === 'canceled', 'cancel: ' + JSON.stringify(r));
+        const ch = ctx.api('GET', '/v1/charges/' + c.id).body;
+        ctx.assert(ch.amount_refunded === 2000 && ch.refunded === false, 'charge after cancel: ' + JSON.stringify(ch));
+        ctx.assert(ctx.api('GET', '/v1/refunds/' + first.id).body.status === 'pending', 'the other refund is untouched');
+        const again = ctx.api('POST', '/v1/refunds/' + full.id + '/cancel', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'refund_not_cancelable', 'second cancel: ' + JSON.stringify(again));
+        const missing = ctx.api('POST', '/v1/refunds/re_9999/cancel', {});
+        ctx.assert(missing.status === 404, 'missing refund: ' + missing.status);
+        const retry = ctx.api('POST', '/v1/refunds', { charge: c.id });
+        ctx.assert(retry.status === 200 && retry.body.amount === 7000, 'the balance can be refunded again: ' + JSON.stringify(retry));
+      }
+  settle_refunds_job:
+    description: settle_refunds leaves a refund younger than 1 hour pending, then settles it to succeeded with a receipt number, and ignores a canceled refund. For a customer with an expired card, a pending refund fails and is given back to the charge, when the seed has such a charge.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/v1/charges', { amount: 5000, currency: 'usd' }).body;
+        const keep = ctx.api('POST', '/v1/refunds', { charge: c.id, amount: 2000 }).body;
+        const drop = ctx.api('POST', '/v1/refunds', { charge: c.id, amount: 500 }).body;
+        ctx.api('POST', '/v1/refunds/' + drop.id + '/cancel', {});
+        ctx.advance('30m');
+        ctx.assert(ctx.api('GET', '/v1/refunds/' + keep.id).body.status === 'pending', 'refund younger than 1h stays pending');
+        ctx.advance('45m');
+        const r = ctx.api('GET', '/v1/refunds/' + keep.id).body;
+        ctx.assert(r.status === 'succeeded' && typeof r.receipt_number === 'string' && r.receipt_number.length > 0, 'refund settled: ' + JSON.stringify(r));
+        ctx.assert(ctx.api('GET', '/v1/refunds/' + drop.id).body.status === 'canceled', 'canceled refund stays canceled');
+        const ch = ctx.api('GET', '/v1/charges/' + c.id).body;
+        ctx.assert(ch.amount_refunded === 2000 && ch.refunded === false, 'charge keeps the succeeded refund: ' + JSON.stringify(ch));
+        const exp = ctx.api('GET', '/v1/customers?card_state=expired&limit=10').body.data;
+        let target = null;
+        for (const cu of exp) {
+          const cs = ctx.api('GET', '/v1/charges?customer=' + cu.id + '&status=succeeded&captured=true&refunded=false&limit=10').body.data;
+          const t = cs.find((x) => x.amount_captured - x.amount_refunded > 0);
+          if (t) { target = t; break; }
+        }
+        if (target === null) return;
+        const before = ctx.api('GET', '/v1/charges/' + target.id).body;
+        const rf = ctx.api('POST', '/v1/refunds', { charge: target.id });
+        ctx.assert(rf.status === 200, 'refund on an expired-card customer charge: ' + JSON.stringify(rf.body));
+        ctx.advance('2h');
+        const failed = ctx.api('GET', '/v1/refunds/' + rf.body.id).body;
+        ctx.assert(failed.status === 'failed' && failed.failure_reason === 'expired_or_canceled_card', 'refund failed: ' + JSON.stringify(failed));
+        const after = ctx.api('GET', '/v1/charges/' + target.id).body;
+        ctx.assert(after.amount_refunded === before.amount_refunded && after.refunded === false, 'failed refund given back: ' + JSON.stringify(after));
+      }
+  expire_uncaptured_charges_job:
+    description: expire_uncaptured_charges releases an authorization older than 7 days with a succeeded expired_uncaptured_charge refund, and leaves captured charges alone.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/v1/charges', { amount: 4400, currency: 'eur', capture: false }).body;
+        const k = ctx.api('POST', '/v1/charges', { amount: 1500, currency: 'eur' }).body;
+        ctx.advance('100h');
+        const young = ctx.api('GET', '/v1/charges/' + a.id).body;
+        ctx.assert(young.refunded === false && young.amount_refunded === 0, 'authorization under 7 days stays open: ' + JSON.stringify(young));
+        ctx.advance('70h');
+        const ch = ctx.api('GET', '/v1/charges/' + a.id).body;
+        ctx.assert(ch.refunded === true && ch.amount_refunded === 4400 && ch.captured === false, 'authorization released: ' + JSON.stringify(ch));
+        const refunds = ctx.api('GET', '/v1/refunds?charge=' + a.id).body.data;
+        ctx.assert(refunds.length === 1, 'one release refund, got ' + refunds.length);
+        ctx.assert(refunds[0].reason === 'expired_uncaptured_charge' && refunds[0].status === 'succeeded' && refunds[0].amount === 4400 && refunds[0].currency === 'eur' && typeof refunds[0].receipt_number === 'string', 'release refund: ' + JSON.stringify(refunds[0]));
+        const kept = ctx.api('GET', '/v1/charges/' + k.id).body;
+        ctx.assert(kept.refunded === false && kept.amount_refunded === 0 && kept.captured === true, 'captured charge untouched: ' + JSON.stringify(kept));
+        ctx.assert(ctx.api('GET', '/v1/refunds?charge=' + k.id).body.data.length === 0, 'no refund on the captured charge');
+        const late = ctx.api('POST', '/v1/charges/' + a.id + '/capture', {});
+        ctx.assert(late.status === 409, 'a released authorization cannot be captured: ' + late.status);
+      }
+  settle_pending_charges_job:
+    description: settle_pending_charges keeps a bank-debit charge pending for 48 hours, then moves it to succeeded, paid and captured. Skipped when the seed has no bank_debit customer.
+    script: |-
+      (ctx) => {
+        const r = ctx.api('GET', '/v1/customers?card_state=bank_debit&limit=1');
+        if (r.status !== 200 || r.body.data.length === 0) return;
+        const cust = r.body.data[0];
+        const c = ctx.api('POST', '/v1/charges', { amount: 15000, currency: 'usd', customer: cust.id }).body;
+        ctx.assert(c.status === 'pending', 'bank debit charge starts pending: ' + JSON.stringify(c));
+        ctx.advance('47h');
+        ctx.assert(ctx.api('GET', '/v1/charges/' + c.id).body.status === 'pending', 'still pending after 47h');
+        ctx.advance('2h');
+        const s = ctx.api('GET', '/v1/charges/' + c.id).body;
+        ctx.assert(s.status === 'succeeded' && s.paid === true && s.captured === true && s.amount_captured === 15000, 'settled after 48h: ' + JSON.stringify(s));
+        const pending = ctx.api('GET', '/v1/charges?status=pending&limit=10').body.data;
+        ctx.assert(pending.every((p) => ctx.time === undefined || p.id !== c.id), 'settled charge is no longer pending');
+      }
+tasks:
+  capture_pending_authorization:
+    difficulty: easy
+    instruction: The customer 'Harbor Freight Co' has one uncaptured charge, an authorization made with capture=false that is still open. Find that charge and capture it in full. Change nothing else.
+    grader: |-
+      (ctx) => {
+        const cust = ctx.seed.list('customer', { where: { name: 'Harbor Freight Co' } })[0];
+        if (!cust) return 0;
+        const targets = ctx.seed.list('charge', { where: { customer: cust.id, status: 'succeeded', captured: false } }).filter((c) => !c.refunded);
+        if (targets.length !== 1) return 0;
+        const t = targets[0];
+        const collateral = ctx.changes().some((c) => !(c.entity === 'charge' && c.id === t.id));
+        ctx.guard('only the target charge changed', !collateral);
+        const end = ctx.db.get('charge', t.id);
+        ctx.goal(0.5, 'the authorization is captured', end.captured === true && end.paid === true);
+        ctx.goal(0.5, 'it is captured in full', end.captured === true && end.amount_captured === t.amount);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const cust = ctx.api('GET', '/v1/customers?q=Harbor+Freight').body.data.find((c) => c.name === 'Harbor Freight Co');
+        ctx.assert(cust, 'customer Harbor Freight Co not found');
+        const open = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&captured=false&refunded=false').body.data;
+        ctx.assert(open.length === 1, 'expected one open authorization, found ' + open.length);
+        const r = ctx.api('POST', '/v1/charges/' + open[0].id + '/capture', {});
+        ctx.assert(r.status === 200, 'capture failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: captures only part of the authorization, so the rest is released and amount_captured is below the charge amount
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Harbor+Freight').body.data.find((c) => c.name === 'Harbor Freight Co');
+            const open = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&captured=false&refunded=false').body.data[0];
+            ctx.api('POST', '/v1/charges/' + open.id + '/capture', { amount_to_capture: Math.floor(open.amount / 2) });
+          }
+      - why: captures the open authorization of the similarly named customer Harbor Freight Supply instead of Harbor Freight Co
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Harbor+Freight').body.data.find((c) => c.name === 'Harbor Freight Supply');
+            const open = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&captured=false&refunded=false').body.data[0];
+            ctx.api('POST', '/v1/charges/' + open.id + '/capture', {});
+          }
+      - why: creates a new captured charge for the same amount instead of capturing, so the authorization stays open and the customer is billed twice
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Harbor+Freight').body.data.find((c) => c.name === 'Harbor Freight Co');
+            const open = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&captured=false&refunded=false').body.data[0];
+            ctx.api('POST', '/v1/charges', { amount: open.amount, currency: open.currency, customer: cust.id, description: open.description });
+          }
+    alternatives: []
+  refund_duplicate_charge:
+    difficulty: medium
+    instruction: Cedar Analytics says it was billed twice for the same order. Find the two succeeded charges of the same amount and the same description that were created minutes apart, and refund the later one in full with the reason 'duplicate'. Do not touch the earlier charge or any other charge.
+    grader: |-
+      (ctx) => {
+        const cust = ctx.seed.list('customer', { where: { name: 'Cedar Analytics' } })[0];
+        if (!cust) return 0;
+        const groups = {};
+        for (const c of ctx.seed.list('charge', { where: { customer: cust.id, status: 'succeeded' } })) {
+          const k = c.amount + '|' + c.description;
+          if (!groups[k]) groups[k] = [];
+          groups[k].push(c);
+        }
+        const pairs = Object.values(groups).filter((g) => g.length === 2);
+        if (pairs.length !== 1) return 0;
+        const later = pairs[0][0].created_at > pairs[0][1].created_at ? pairs[0][0] : pairs[0][1];
+        const collateral = ctx.changes().some((c) => {
+          if (c.entity === 'charge' && c.id === later.id) return false;
+          if (c.entity === 'refund' && c.kind === 'created') {
+            const r = ctx.db.get('refund', c.id);
+            return !(r && r.charge === later.id);
+          }
+          return true;
+        });
+        ctx.guard('only the later charge and its new refund changed', !collateral);
+        const old = new Set(ctx.seed.list('refund', { where: { charge: later.id } }).map((r) => r.id));
+        const fresh = ctx.db.list('refund', { where: { charge: later.id } }).filter((r) => !old.has(r.id));
+        ctx.goal(0.4, 'one new refund for the full amount of the later charge', fresh.length === 1 && fresh[0].amount === later.amount);
+        ctx.goal(0.3, 'the refund reason is duplicate', fresh.length === 1 && fresh[0].reason === 'duplicate');
+        const end = ctx.db.get('charge', later.id);
+        ctx.goal(0.3, 'the later charge is fully refunded', end.amount_refunded === later.amount && end.refunded === true);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const pages = (path) => {
+          const rows = [];
+          let cursor = null;
+          do {
+            const r = ctx.api('GET', path + '&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+            ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body));
+            rows.push(...r.body.data);
+            cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+          } while (cursor !== null);
+          return rows;
+        };
+        const cust = ctx.api('GET', '/v1/customers?q=Cedar').body.data.find((c) => c.name === 'Cedar Analytics');
+        ctx.assert(cust, 'customer Cedar Analytics not found');
+        const groups = {};
+        for (const c of pages('/v1/charges?customer=' + cust.id + '&status=succeeded')) {
+          const k = c.amount + '|' + c.description;
+          if (!groups[k]) groups[k] = [];
+          groups[k].push(c);
+        }
+        const pairs = Object.values(groups).filter((g) => g.length === 2);
+        ctx.assert(pairs.length === 1, 'expected one duplicate pair, found ' + pairs.length);
+        const later = pairs[0][0].created_at > pairs[0][1].created_at ? pairs[0][0] : pairs[0][1];
+        const r = ctx.api('POST', '/v1/refunds', { charge: later.id, reason: 'duplicate' });
+        ctx.assert(r.status === 200, 'refund failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: refunds the earlier of the two duplicate charges instead of the later one
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Cedar').body.data.find((c) => c.name === 'Cedar Analytics');
+            let cursor = null;
+            const rows = [];
+            do {
+              const r = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+            } while (cursor !== null);
+            const dups = rows.filter((c) => c.description === 'Order #4821').sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+            ctx.api('POST', '/v1/refunds', { charge: dups[0].id, reason: 'duplicate' });
+          }
+      - why: refunds the later duplicate in full but with the reason requested_by_customer instead of duplicate
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Cedar').body.data.find((c) => c.name === 'Cedar Analytics');
+            let cursor = null;
+            const rows = [];
+            do {
+              const r = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+            } while (cursor !== null);
+            const dups = rows.filter((c) => c.description === 'Order #4821').sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+            ctx.api('POST', '/v1/refunds', { charge: dups[1].id, reason: 'requested_by_customer' });
+          }
+      - why: refunds only half of the later duplicate charge
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Cedar').body.data.find((c) => c.name === 'Cedar Analytics');
+            let cursor = null;
+            const rows = [];
+            do {
+              const r = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+            } while (cursor !== null);
+            const dups = rows.filter((c) => c.description === 'Order #4821').sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+            ctx.api('POST', '/v1/refunds', { charge: dups[1].id, amount: Math.floor(dups[1].amount / 2), reason: 'duplicate' });
+          }
+      - why: refunds the Cedar charge that has the same amount but a different description, which is not the duplicate
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Cedar').body.data.find((c) => c.name === 'Cedar Analytics');
+            let cursor = null;
+            const rows = [];
+            do {
+              const r = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+            } while (cursor !== null);
+            const other = rows.find((c) => c.description === 'Order #4790');
+            ctx.api('POST', '/v1/refunds', { charge: other.id, reason: 'duplicate' });
+          }
+    alternatives: []
+  cancel_mistaken_pending_refund:
+    difficulty: medium
+    instruction: "A support agent refunded the wrong charge for the customer Northwind Health: the 'Annual plan renewal' charge. That refund is still pending. Cancel it so the customer keeps the charge. Do not touch Northwind Health's other charges or refunds."
+    grader: |-
+      (ctx) => {
+        const cust = ctx.seed.list('customer', { where: { name: 'Northwind Health' } })[0];
+        if (!cust) return 0;
+        const charge = ctx.seed.list('charge', { where: { customer: cust.id, description: 'Annual plan renewal' } })[0];
+        if (!charge) return 0;
+        const target = ctx.seed.list('refund', { where: { charge: charge.id, status: 'pending' } })[0];
+        if (!target) return 0;
+        const collateral = ctx.changes().some((c) => {
+          if (c.entity === 'refund' && c.id === target.id) return false;
+          if (c.entity === 'charge' && c.id === charge.id) return false;
+          return true;
+        });
+        ctx.guard('only the target refund and its charge changed', !collateral);
+        const r = ctx.db.get('refund', target.id);
+        const ch = ctx.db.get('charge', charge.id);
+        ctx.goal(0.6, 'the pending refund is canceled', r.status === 'canceled');
+        ctx.goal(0.4, 'the charge is no longer refunded', ch.amount_refunded === 0 && ch.refunded === false);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const cust = ctx.api('GET', '/v1/customers?q=Northwind').body.data.find((c) => c.name === 'Northwind Health');
+        ctx.assert(cust, 'customer Northwind Health not found');
+        const charge = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&q=Annual+plan').body.data.find((c) => c.description === 'Annual plan renewal');
+        ctx.assert(charge, 'charge Annual plan renewal not found');
+        const pending = ctx.api('GET', '/v1/refunds?charge=' + charge.id + '&status=pending').body.data;
+        ctx.assert(pending.length === 1, 'expected one pending refund, found ' + pending.length);
+        const r = ctx.api('POST', '/v1/refunds/' + pending[0].id + '/cancel', {});
+        ctx.assert(r.status === 200, 'cancel failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: cancels the pending refund of the Support plan charge, a different Northwind charge, instead of the Annual plan renewal one
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Northwind').body.data.find((c) => c.name === 'Northwind Health');
+            const charge = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&q=Support+plan').body.data.find((c) => c.description === 'Support plan');
+            const pending = ctx.api('GET', '/v1/refunds?charge=' + charge.id + '&status=pending').body.data[0];
+            ctx.api('POST', '/v1/refunds/' + pending.id + '/cancel', {});
+          }
+      - why: cancels every pending refund of Northwind Health charges, which also cancels the unrelated Support plan refund
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Northwind').body.data.find((c) => c.name === 'Northwind Health');
+            const charges = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded').body.data;
+            for (const c of charges) {
+              const pending = ctx.api('GET', '/v1/refunds?charge=' + c.id + '&status=pending').body.data;
+              for (const r of pending) ctx.api('POST', '/v1/refunds/' + r.id + '/cancel', {});
+            }
+          }
+      - why: creates a new charge for the same amount to replace the refunded one, which does not undo the refund
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Northwind').body.data.find((c) => c.name === 'Northwind Health');
+            const charge = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&q=Annual+plan').body.data.find((c) => c.description === 'Annual plan renewal');
+            ctx.api('POST', '/v1/charges', { amount: charge.amount, currency: charge.currency, customer: cust.id, description: 'Annual plan renewal' });
+          }
+    alternatives: []
+  refund_remaining_balance_for_customer:
+    difficulty: hard
+    instruction: Redwood Labs is closing its account. For every Redwood Labs charge that is succeeded and captured and not yet fully refunded, refund the remaining refundable balance (the captured amount minus what is already refunded) with the reason 'requested_by_customer'. Skip charges that are failed, pending, uncaptured or already fully refunded. Do not touch charges of any other customer, including customers with a similar name. The customer has many charges, so check every page of results.
+    grader: |-
+      (ctx) => {
+        const cust = ctx.seed.list('customer', { where: { name: 'Redwood Labs' } })[0];
+        if (!cust) return 0;
+        const targets = ctx.seed.list('charge', { where: { customer: cust.id } })
+          .filter((c) => c.status === 'succeeded' && c.captured === true && c.amount_captured - c.amount_refunded > 0);
+        if (targets.length === 0) return 0;
+        const byId = {};
+        for (const t of targets) byId[t.id] = t;
+        const seedRefunds = new Set(ctx.seed.list('refund').map((r) => r.id));
+        for (const c of ctx.changes()) {
+          if (c.entity === 'charge' && byId[c.id]) continue;
+          if (c.entity === 'refund' && c.kind === 'created') {
+            const r = ctx.db.get('refund', c.id);
+            if (r && byId[r.charge]) continue;
+          }
+          return 0;
+        }
+        let done = 0;
+        for (const t of targets) {
+          const end = ctx.db.get('charge', t.id);
+          const remaining = t.amount_captured - t.amount_refunded;
+          const fresh = ctx.db.list('refund', { where: { charge: t.id } }).filter((r) => !seedRefunds.has(r.id));
+          if (end.amount_refunded === end.amount_captured && fresh.length === 1 && fresh[0].amount === remaining && fresh[0].reason === 'requested_by_customer') done += 1;
+        }
+        return done / targets.length;
+      }
+    solution: |-
+      (ctx) => {
+        const pages = (path) => {
+          const rows = [];
+          let cursor = null;
+          do {
+            const r = ctx.api('GET', path + '&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+            ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body));
+            rows.push(...r.body.data);
+            cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+          } while (cursor !== null);
+          return rows;
+        };
+        const cust = ctx.api('GET', '/v1/customers?q=Redwood').body.data.find((c) => c.name === 'Redwood Labs');
+        ctx.assert(cust, 'customer Redwood Labs not found');
+        const charges = pages('/v1/charges?customer=' + cust.id + '&status=succeeded&captured=true&refunded=false');
+        const targets = charges.filter((c) => c.amount_captured - c.amount_refunded > 0);
+        ctx.assert(targets.length > 0, 'no refundable Redwood Labs charges found');
+        for (const c of targets) {
+          const r = ctx.api('POST', '/v1/refunds', { charge: c.id, amount: c.amount_captured - c.amount_refunded, reason: 'requested_by_customer' });
+          ctx.assert(r.status === 200, 'refund of ' + c.id + ' failed: ' + JSON.stringify(r.body));
+        }
+      }
+    decoys:
+      - why: reads only the first page of the customer's charges, so it misses the targets on later pages
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Redwood').body.data.find((c) => c.name === 'Redwood Labs');
+            const page = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&captured=true&refunded=false').body.data;
+            for (const c of page) {
+              const left = c.amount_captured - c.amount_refunded;
+              if (left > 0) ctx.api('POST', '/v1/refunds', { charge: c.id, amount: left, reason: 'requested_by_customer' });
+            }
+          }
+      - why: refunds the full charge amount instead of the remaining balance, which is refused on partially refunded or partially captured charges so those stay unfinished
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Redwood').body.data.find((c) => c.name === 'Redwood Labs');
+            let cursor = null;
+            const rows = [];
+            do {
+              const r = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&captured=true&refunded=false&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+            } while (cursor !== null);
+            for (const c of rows) ctx.api('POST', '/v1/refunds', { charge: c.id, amount: c.amount, reason: 'requested_by_customer' });
+          }
+      - why: also releases the uncaptured authorizations of the customer, which should stay open
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Redwood').body.data.find((c) => c.name === 'Redwood Labs');
+            let cursor = null;
+            const rows = [];
+            do {
+              const r = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&refunded=false&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+            } while (cursor !== null);
+            for (const c of rows) {
+              if (c.captured) ctx.api('POST', '/v1/refunds', { charge: c.id, amount: c.amount_captured - c.amount_refunded, reason: 'requested_by_customer' });
+              else ctx.api('POST', '/v1/refunds', { charge: c.id, reason: 'requested_by_customer' });
+            }
+          }
+      - why: refunds the right amounts on every page but leaves out the reason, so no refund has requested_by_customer
+        script: |-
+          (ctx) => {
+            const cust = ctx.api('GET', '/v1/customers?q=Redwood').body.data.find((c) => c.name === 'Redwood Labs');
+            let cursor = null;
+            const rows = [];
+            do {
+              const r = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&captured=true&refunded=false&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+            } while (cursor !== null);
+            for (const c of rows) ctx.api('POST', '/v1/refunds', { charge: c.id, amount: c.amount_captured - c.amount_refunded });
+          }
+      - why: also refunds the remaining balances of the similarly named customer Redwood Logistics
+        script: |-
+          (ctx) => {
+            const custs = ctx.api('GET', '/v1/customers?q=Redwood').body.data;
+            for (const cust of custs) {
+              let cursor = null;
+              const rows = [];
+              do {
+                const r = ctx.api('GET', '/v1/charges?customer=' + cust.id + '&status=succeeded&captured=true&refunded=false&limit=100' + (cursor === null ? '' : '&starting_after=' + cursor));
+                rows.push(...r.body.data);
+                cursor = r.body.has_more === true ? r.body.data[r.body.data.length - 1].id : null;
+              } while (cursor !== null);
+              for (const c of rows) ctx.api('POST', '/v1/refunds', { charge: c.id, amount: c.amount_captured - c.amount_refunded, reason: 'requested_by_customer' });
+            }
+          }
+    alternatives: []
+  refund_acme_duplicate_o7301:
+    difficulty: medium
+    instruction: Acme Logistics was charged $149.00 twice for order O-7301. Refund the later of the two O-7301 charges in full, once, with reason duplicate. Do not touch any other charge.
+    grader: |-
+      (ctx) => {
+        const acme = ctx.seed.list('customer', { where: { name: 'Acme Logistics' } })[0];
+        if (!acme) return 0;
+        const pair = ctx.seed.list('charge', { where: { customer: acme.id, description: 'Order O-7301' } });
+        if (pair.length !== 2) return 0;
+        const later = pair[0].created_at > pair[1].created_at ? pair[0] : pair[1];
+        const fresh = ctx.db.list('refund').filter((r) => ctx.seed.get('refund', r.id) === null);
+        ctx.guardChanges('only the later O-7301 charge and its refund changed', [
+          { entity: 'charge', id: later.id, kind: 'updated', fields: ['amount_refunded', 'refunded'] },
+          ...fresh.filter((r) => r.charge === later.id).map((r) => ({ entity: 'refund', id: r.id, kind: 'created', fields: ['charge', 'amount', 'currency', 'reason', 'status', 'failure_reason', 'receipt_number', 'payment_intent'] })),
+        ]);
+        ctx.guard('exactly one refund was created', fresh.length === 1);
+        const refund = fresh.length === 1 && fresh[0].charge === later.id ? fresh[0] : null;
+        ctx.goal(0.4, 'one refund of the later O-7301 charge for its full amount', refund !== null && refund.amount === later.amount);
+        ctx.goal(0.3, 'the refund reason is duplicate', refund !== null && refund.reason === 'duplicate');
+        const end = ctx.db.get('charge', later.id);
+        ctx.goal(0.3, 'the later O-7301 charge is fully refunded', end.amount_refunded === later.amount && end.refunded === true);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const acme = ctx.api('GET', '/v1/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
+        ctx.assert(acme, 'customer Acme Logistics not found');
+        const pair = ctx.api('GET', '/v1/charges?customer=' + acme.id + '&status=succeeded&limit=100').body.data.filter((c) => c.description === 'Order O-7301');
+        ctx.assert(pair.length === 2, 'expected two O-7301 charges, found ' + pair.length);
+        const later = pair[0].created_at > pair[1].created_at ? pair[0] : pair[1];
+        const r = ctx.api('POST', '/v1/refunds', { charge: later.id, reason: 'duplicate' });
+        ctx.assert(r.status === 200, 'refund failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: refunds the earlier of the two O-7301 charges instead of the later one
+        script: |-
+          (ctx) => {
+            const acme = ctx.api('GET', '/v1/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
+            const pair = ctx.api('GET', '/v1/charges?customer=' + acme.id + '&limit=100').body.data.filter((c) => c.description === 'Order O-7301');
+            const earlier = pair[0].created_at < pair[1].created_at ? pair[0] : pair[1];
+            ctx.api('POST', '/v1/refunds', { charge: earlier.id, reason: 'duplicate' });
+          }
+      - why: chooses on amount alone and refunds the newest $149.00 charge, which is order O-7302
+        script: |-
+          (ctx) => {
+            const acme = ctx.api('GET', '/v1/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
+            const newest = ctx.api('GET', '/v1/charges?customer=' + acme.id + '&limit=100').body.data.filter((c) => c.amount === 14900)[0];
+            ctx.api('POST', '/v1/refunds', { charge: newest.id, reason: 'duplicate' });
+          }
+      - why: refunds both O-7301 charges, so the customer gets the order for free
+        script: |-
+          (ctx) => {
+            const acme = ctx.api('GET', '/v1/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
+            for (const c of ctx.api('GET', '/v1/charges?customer=' + acme.id + '&limit=100').body.data.filter((x) => x.description === 'Order O-7301')) {
+              ctx.api('POST', '/v1/refunds', { charge: c.id, reason: 'duplicate' });
+            }
+          }
+    alternatives: []

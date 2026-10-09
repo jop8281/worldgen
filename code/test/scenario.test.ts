@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
+import { checkWorld, loadWorld, renderWorldYaml } from '#engine';
+import { buildScenarioWorlds, worldDirOf } from '../scripts/scenario-worlds.ts';
 import { serveScenario, type ScenarioServer } from '../src/scenario/gateway.ts';
+import { linkResult, type Link } from '../src/scenario/links.ts';
 import { loadScenario, type LoadedScenario } from '../src/scenario/manifest.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const SCENARIOS = path.resolve(CODE_DIR, '../prod/scenarios');
 const SHIPPED = path.join(SCENARIOS, 'support-payments');
+const FLAGSHIP = path.join(SCENARIOS, 'billing-duplicate-charge');
 const HELPDESK = path.resolve(CODE_DIR, '../prod/worlds/helpdesk');
 
 async function loadOk(dir: string): Promise<LoadedScenario> {
@@ -20,8 +24,11 @@ async function loadOk(dir: string): Promise<LoadedScenario> {
 
 const open: ScenarioServer[] = [];
 const temps: string[] = [];
+const loaded = new Map<string, Promise<LoadedScenario>>();
 async function start(dir = SHIPPED): Promise<ScenarioServer> {
-  const s = await serveScenario(await loadOk(dir), { port: 0 });
+  let l = loaded.get(dir);
+  if (l === undefined) loaded.set(dir, (l = loadOk(dir)));
+  const s = await serveScenario(await l, { port: 0 });
   open.push(s);
   return s;
 }
@@ -69,13 +76,47 @@ describe('manifest', () => {
     ]);
   });
 
-  it('loads every scenario under prod/scenarios', async () => {
+  it('loads every scenario under prod/scenarios, with each of its worlds checked and every task verified', async () => {
     const dirs = (await readdir(SCENARIOS, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
-    assert.ok(dirs.includes('support-payments'));
+    assert.ok(dirs.includes('support-payments') && dirs.includes('billing-duplicate-charge'), dirs.join(', '));
     for (const d of dirs) {
       const r = await loadScenario(path.join(SCENARIOS, d));
       assert.ok(r.ok, `${d}: ${r.ok ? '' : r.errors.join('; ')}`);
+      for (const [alias, rel] of Object.entries(r.value.scenario.worlds)) {
+        const world = await loadWorld(path.resolve(SCENARIOS, d, rel));
+        assert.ok(world.ok, `${d}/${alias}: ${world.ok ? '' : JSON.stringify(world.error, null, 2)}`);
+        const report = checkWorld(world.value);
+        assert.ok(report.ok, `${d}/${alias}: ${report.ok ? '' : `reached ${report.reached}:\n${JSON.stringify(report.issues, null, 2)}`}`);
+        assert.deepEqual(Object.keys(report.verdicts), Object.keys(report.world.tasks), `${d}/${alias}: a task without a verdict`);
+      }
     }
+  });
+
+  it('holds the worlds scripts/scenario-worlds.ts builds, with no drift', async () => {
+    const built = await buildScenarioWorlds();
+    for (const alias of ['support', 'payments'] as const) {
+      const committed = await readFile(path.join(worldDirOf(alias), 'world.yaml'), 'utf8');
+      assert.equal(committed, renderWorldYaml(built[alias]), `${alias} drifted: run \`bun scripts/scenario-worlds.ts\` from code/ and commit it`);
+    }
+  });
+
+  it('reports a link on an unknown alias, an unknown entity and unknown fields, together', async () => {
+    const to = '{world: support, entity: ticket_event, where: {ticket_id: tkt_0001}, field: note}';
+    const dir = await tempScenario(
+      `${head}gates:\n  - {world: support, task: assign_newest_acme_ticket}\nlinks:\n`
+        + `  - {name: a, rule: contains, from: {world: ghost, entity: refund, where: {}, field: id}, to: ${to}}\n`
+        + `  - {name: b, rule: contains, from: {world: support, entity: invoice, where: {}, field: id}, to: ${to}}\n`
+        + '  - {name: c, rule: equals, from: {world: support, entity: ticket, where: {id: tkt_0001}, field: id}, to: {world: support, entity: ticket_event, where: {ticket: tkt_0001}, field: body}}\n',
+    );
+    assert.deepEqual(await loadScenario(dir), {
+      ok: false,
+      errors: [
+        'links[0].from: world ghost is not declared in worlds. Worlds: support',
+        'links[1].from: world support has no entity "invoice". Entities: customer, agent, sla_policy, oncall_shift, ticket, ticket_comment, ticket_event',
+        'links[2].to.where: ticket_event in world support has no field "ticket". Fields: id, ticket_id, kind, note, actor_id',
+        'links[2].to.field: ticket_event in world support has no field "body". Fields: id, ticket_id, kind, note, actor_id',
+      ],
+    });
   });
 
   it('reports a gate on an unknown alias', async () => {
@@ -238,6 +279,7 @@ describe('grade', () => {
         { world: 'support', task: 'assign_newest_acme_ticket', score: 0 },
         { world: 'payments', task: 'refund_duplicate_charge', score: 0 },
       ],
+      links: [],
     });
   });
 
@@ -250,6 +292,7 @@ describe('grade', () => {
         { world: 'support', task: 'assign_newest_acme_ticket', score: 1 },
         { world: 'payments', task: 'refund_duplicate_charge', score: 0 },
       ],
+      links: [],
     });
     assert.equal((await refund(s)).status, 504);
     assert.deepEqual((await grade(s)).body, {
@@ -258,6 +301,7 @@ describe('grade', () => {
         { world: 'support', task: 'assign_newest_acme_ticket', score: 1 },
         { world: 'payments', task: 'refund_duplicate_charge', score: 1 },
       ],
+      links: [],
     });
   });
 
@@ -272,6 +316,148 @@ describe('grade', () => {
         { world: 'support', task: 'assign_newest_acme_ticket', score: 1 },
         { world: 'payments', task: 'refund_duplicate_charge', score: 1 },
       ],
+      links: [],
+    });
+  });
+});
+
+describe('linkResult', () => {
+  const link: Link = {
+    name: 'note cites refund',
+    from: { world: 'payments', entity: 'refund', where: { charge: 'ch_0002' }, field: 'id' },
+    to: { world: 'support', entity: 'ticket_event', where: { ticket_id: 'tkt_0001', kind: 'resolved' }, field: 'note' },
+    rule: 'contains',
+  };
+  type Tables = Record<string, Record<string, Record<string, unknown>[]>>;
+  const over = (t: Tables) => (world: string, entity: string) => t[world]?.[entity] ?? [];
+  const refund = (id: string, charge: string) => ({ id, charge, amount: 14900 });
+  const resolved = (id: string, note: string | null) => ({ id, ticket_id: 'tkt_0001', kind: 'resolved', note });
+
+  it('holds when the one matched refund id is in the resolved note', () => {
+    const t = { payments: { refund: [refund('re_0006', 'ch_0001'), refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'Refunded O-7301, refund re_0007.')] } };
+    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note contains re_0007' });
+  });
+
+  it('fails when no from row matches', () => {
+    const t = { payments: { refund: [refund('re_0006', 'ch_0001')] }, support: { ticket_event: [resolved('evt_0009', 'refund re_0006')] } };
+    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '0 refund rows matched where {"charge":"ch_0002"}' });
+  });
+
+  it('fails when two from rows match', () => {
+    const t = { payments: { refund: [refund('re_0007', 'ch_0002'), refund('re_0008', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 're_0007 re_0008')] } };
+    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '2 refund rows matched where {"charge":"ch_0002"}, not exactly 1' });
+  });
+
+  it('fails when the from row has no usable value', () => {
+    const t = { payments: { refund: [{ charge: 'ch_0002' }] }, support: { ticket_event: [resolved('evt_0009', 'refund re_0007')] } };
+    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '1 refund row matched, but its id is missing, not a non-empty string or a number' });
+  });
+
+  it('fails when no to row matches', () => {
+    const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [{ id: 'evt_0009', ticket_id: 'tkt_0001', kind: 'created', note: 'refund re_0007' }] } };
+    assert.deepEqual(linkResult(link, over(t)), {
+      name: 'note cites refund', held: false, found: '1 refund row matched; 0 ticket_event rows matched where {"ticket_id":"tkt_0001","kind":"resolved"}',
+    });
+  });
+
+  it('fails when the to rows hold another id or no text', () => {
+    const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'Refunded O-7301, refund re_0006.'), resolved('evt_0010', null)] } };
+    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '1 refund row matched; no ticket_event note contains re_0007' });
+  });
+
+  it('fails when the note holds the value only inside a longer id', () => {
+    const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'Refunded O-7301, refund re_00071.')] } };
+    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '1 refund row matched; ticket_event evt_0009 note has re_0007 only inside re_00071' });
+  });
+
+  it('equals needs the whole text to be the value', () => {
+    const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'refund re_0007'), resolved('evt_0010', 're_0007')] } };
+    assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t)), { name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0010 note equals re_0007' });
+    t.support.ticket_event.pop();
+    assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t)), { name: 'note cites refund', held: false, found: '1 refund row matched; no ticket_event note equals re_0007' });
+  });
+});
+
+describe('the flagship: billing-duplicate-charge', () => {
+  const LINK = 'the ticket note cites the refund payments created';
+  const gates = (support: number, payments: number) => [
+    { world: 'support', task: 'resolve_acme_double_charge', score: support },
+    { world: 'payments', task: 'refund_acme_duplicate_o7301', score: payments },
+  ];
+  const NO_REFUND = { name: LINK, held: false, found: '0 refund rows matched where {"charge":"ch_0142"}' };
+
+  async function acmeCharges(s: ScenarioServer): Promise<{ id: string; description: string; amount: number }[]> {
+    const acme = (await call(s.url, 'GET', '/payments/v1/customers?q=Acme')).body.data.find((c: any) => c.name === 'Acme Logistics');
+    const rows = (await call(s.url, 'GET', `/payments/v1/charges?customer=${acme.id}&limit=100`)).body.data;
+    return rows.sort((a: any, b: any) => (a.created_at < b.created_at ? -1 : 1));
+  }
+  const refundCharge = (s: ScenarioServer, charge: string): Promise<Res> => call(s.url, 'POST', '/payments/v1/refunds', { charge, reason: 'duplicate' });
+  async function resolveTicket(s: ScenarioServer, note: string): Promise<Res> {
+    const acme = (await call(s.url, 'GET', '/support/customers?q=Acme')).body.data.find((c: any) => c.name === 'Acme Logistics');
+    const ticket = (await call(s.url, 'GET', `/support/tickets?customer_id=${acme.id}&q=O-7301`)).body.data[0];
+    return call(s.url, 'POST', `/support/tickets/${ticket.id}/resolve`, { note });
+  }
+  const refundsOf = async (s: ScenarioServer, charge: string): Promise<string[]> =>
+    (await call(s.url, 'GET', `/payments/v1/refunds?charge=${charge}`)).body.data.map((r: any) => r.id);
+
+  it('the reference: refund the later O-7301 charge, find the refund after the 504 instead of retrying, cite it, and every gate and the link pass', async () => {
+    const s = await start(FLAGSHIP);
+    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(0, 0), links: [NO_REFUND] });
+    const charges = await acmeCharges(s);
+    assert.deepEqual(charges.map((c) => [c.id, c.description]), [['ch_0141', 'Order O-7301'], ['ch_0142', 'Order O-7301'], ['ch_0143', 'Order O-7302']]);
+    const lost = await refundCharge(s, 'ch_0142');
+    assert.deepEqual(lost, { status: 504, body: { error: { code: 'gateway.timeout', message: 'The upstream did not answer in time.' } } });
+    assert.deepEqual(await refundsOf(s, 'ch_0142'), ['re_0051']);
+    assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    assert.deepEqual((await grade(s)).body, {
+      verdict: 1,
+      gates: gates(1, 1),
+      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note contains re_0051' }],
+    });
+    const writes = (await call(s.adminUrl, 'GET', '/_scenario/trace')).body.calls.filter((c: any) => c.method === 'POST');
+    assert.deepEqual(writes.map((c: any) => [c.world, c.path, c.status, c.fault]), [
+      ['payments', '/v1/refunds', 200, 'drop_response'],
+      ['support', '/tickets/tkt_0321/resolve', 200, null],
+    ]);
+  });
+
+  it('refunding on amount alone hits O-7302: the payments gate and the link fail', async () => {
+    const s = await start(FLAGSHIP);
+    const newest = (await acmeCharges(s)).filter((c) => c.amount === 14900).at(-1)!;
+    assert.equal(newest.id, 'ch_0143');
+    assert.equal((await refundCharge(s, newest.id)).status, 504);
+    assert.deepEqual(await refundsOf(s, 'ch_0143'), ['re_0051']);
+    assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(1, 0), links: [NO_REFUND] });
+  });
+
+  it('retrying the other O-7301 charge after the 504 refunds twice: the payments gate and the link fail', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
+    const retry = await refundCharge(s, 'ch_0141');
+    assert.equal(retry.status, 200);
+    assert.equal(retry.body.id, 're_0052');
+    assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0052.')).status, 200);
+    assert.deepEqual((await grade(s)).body, {
+      verdict: 0,
+      gates: gates(1, 0),
+      links: [{ name: LINK, held: false, found: '1 refund row matched; no ticket_event note contains re_0051' }],
+    });
+  });
+
+  it('replying without refunding: the payments gate and the link fail', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(1, 0), links: [NO_REFUND] });
+  });
+
+  it('refunding without replying: the support gate and the link fail', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
+    assert.deepEqual((await grade(s)).body, {
+      verdict: 0,
+      gates: gates(0, 1),
+      links: [{ name: LINK, held: false, found: '1 refund row matched; 0 ticket_event rows matched where {"ticket_id":"tkt_0321","kind":"resolved"}' }],
     });
   });
 });
@@ -292,7 +478,13 @@ describe('cli', () => {
   it('check prints one summary line', () => {
     const r = run('check', '../prod/scenarios/support-payments');
     assert.equal(r.status, 0);
-    assert.equal(r.stdout, 'ok support-payments: 2 worlds (support, payments), 2 gates, 1 fault\n');
+    assert.equal(r.stdout, 'ok support-payments: 2 worlds (support, payments), 2 gates, 1 fault, 0 links\n');
+  });
+
+  it('check prints the flagship\'s summary line', () => {
+    const r = run('check', '../prod/scenarios/billing-duplicate-charge');
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, 'ok billing-duplicate-charge: 2 worlds (support, payments), 2 gates, 1 fault, 1 link\n');
   });
 
   it('check exits 1 and prints each error to stderr', async () => {

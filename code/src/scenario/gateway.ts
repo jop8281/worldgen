@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { serve, type WorldServer } from '#engine';
+import { serve, type StateDump, type WorldServer } from '#engine';
+import { linkResult, type LinkResult } from './links.ts';
 import type { FaultKind, LoadedScenario } from './manifest.ts';
 
 export type BoundaryCall = { readonly seq: number; readonly world: string; readonly method: string; readonly path: string; readonly status: number; readonly fault: FaultKind | null };
 export type GateResult = { readonly world: string; readonly task: string; readonly score: number };
-export type ScenarioVerdict = { readonly verdict: 0 | 1; readonly gates: readonly GateResult[] };
+export type ScenarioVerdict = { readonly verdict: 0 | 1; readonly gates: readonly GateResult[]; readonly links: readonly LinkResult[] };
 export interface ScenarioServer {
   readonly url: string;
   readonly adminUrl: string;
@@ -154,7 +155,14 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
             const score = ((await r.json()) as { score: number }).score;
             gates.push({ world: g.world, task: g.task, score });
           }
-          const verdict: ScenarioVerdict = { verdict: gates.every((g) => g.score === 1) ? 1 : 0, gates };
+          const tables: Record<string, StateDump['tables']> = {};
+          for (const name of new Set(scenario.links.flatMap((l) => [l.from.world, l.to.world]))) {
+            const r = await fetch(`${worlds[name]!.adminUrl}/_world/state`);
+            if (r.status !== 200) return send(res, json(500, { error: { code: 'grade.failed', message: `World ${name}: the world's state route answered ${r.status}.` } }));
+            tables[name] = ((await r.json()) as StateDump).tables;
+          }
+          const links = scenario.links.map((l) => linkResult(l, (world, entity) => tables[world]?.[entity] ?? []));
+          const verdict: ScenarioVerdict = { verdict: gates.every((g) => g.score === 1) && links.every((l) => l.held) ? 1 : 0, gates, links };
           return send(res, json(200, verdict));
         }
         send(res, json(404, { error: { code: 'route.unknown', message: 'No such scenario admin route.' } }));
