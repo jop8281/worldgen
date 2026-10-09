@@ -2,9 +2,9 @@
  * The stage table. Stages are rows of data run by one loop in run.ts, not modules.
  *
  * Invariants:
- * - Each section has exactly one owning step (`SECTION_OWNER`). A stage's tool schema
- *   allows edits only to the sections it owns, and issue ownership follows the same table.
- *   Adding a section to format.ts without an owner here fails to compile.
+ * - Each section has exactly one owning step (`SECTION_OWNER`). Only a stage's write to the
+ *   sections it owns lands (one edit tool serves every stage, A-409), and issue ownership
+ *   follows the same table. Adding a section to format.ts without an owner here fails to compile.
  * - `done` is pure. It reads engine output and the plan only, and never takes a Model.
  * - Stage order is dependency order. On iterate, a stage reruns only if a section it owns
  *   or reads changed (`stagesToRun`).
