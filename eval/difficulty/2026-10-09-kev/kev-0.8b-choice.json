@@ -1,0 +1,1095 @@
+{
+ "endpoint": "Kev-0.8B on one Boat VM (d3, J183), token-gated",
+ "question": "choice",
+ "seconds": 126.9,
+ "train_tasks": 72,
+ "train_episode_pass_rate": 0.9628,
+ "held_out": {
+  "tasks": 23,
+  "episodes": 69,
+  "failing_tasks": 3,
+  "episode_pass_rate": 0.8696,
+  "kev": {
+   "brier": 0.1823,
+   "accuracy": 0.6957
+  },
+  "majority": {
+   "class": "pass",
+   "brier": 0.1304,
+   "accuracy": 0.8696
+  },
+  "base_rate": {
+   "p": 0.9628,
+   "brier": 0.1221
+  },
+  "kev_ranks_failures": 0.8,
+  "beats_baseline": false
+ },
+ "all_tasks": {
+  "tasks": 95,
+  "episodes": 284,
+  "failing_tasks": 6,
+  "episode_pass_rate": 0.9401,
+  "kev": {
+   "brier": 0.1747,
+   "accuracy": 0.7368
+  },
+  "majority": {
+   "class": "pass",
+   "brier": 0.0599,
+   "accuracy": 0.9368
+  },
+  "base_rate": {
+   "p": 0.9628,
+   "brier": 0.0568
+  },
+  "kev_ranks_failures": 0.7172,
+  "beats_baseline": false
+ },
+ "rows": [
+  {
+   "world": "gen-bakery-vague",
+   "task": "bake_croissants_after_restock",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.627
+  },
+  {
+   "world": "gen-bakery-vague",
+   "task": "cancel_tomorrows_orders_for_discontinued_product",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.4638
+  },
+  {
+   "world": "gen-bakery-vague",
+   "task": "mark_marias_order_ready",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.8433
+  },
+  {
+   "world": "gen-billing-dunning",
+   "task": "cancel_final_retry_business_subscriptions",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4587
+  },
+  {
+   "world": "gen-billing-dunning",
+   "task": "cancel_harbor_dental_subscription",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7024
+  },
+  {
+   "world": "gen-billing-dunning",
+   "task": "recover_bluefin_labs_with_backup_card",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6474
+  },
+  {
+   "world": "gen-bookmarks",
+   "task": "mark_postgres_article_read",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.445
+  },
+  {
+   "world": "gen-bookmarks",
+   "task": "merge_maya_ml_tags",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.8267
+  },
+  {
+   "world": "gen-bookmarks",
+   "task": "share_maya_big_private_collections",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.3323
+  },
+  {
+   "world": "gen-bookmarks",
+   "task": "trash_maya_broken_links",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5337
+  },
+  {
+   "world": "gen-clinic-appointments",
+   "task": "book_earliest_cardiology_slot",
+   "ys": [
+    0,
+    0,
+    0
+   ],
+   "held": false,
+   "p": 0.4362
+  },
+  {
+   "world": "gen-clinic-appointments",
+   "task": "cancel_marias_far_appointment",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.5049
+  },
+  {
+   "world": "gen-clinic-appointments",
+   "task": "clear_dr_patel_calendar_for_leave",
+   "ys": [
+    0,
+    0,
+    0
+   ],
+   "held": false,
+   "p": 0.6113
+  },
+  {
+   "world": "gen-clinic-appointments",
+   "task": "record_yesterdays_no_shows",
+   "ys": [
+    0,
+    0,
+    0
+   ],
+   "held": true,
+   "p": 0.5184
+  },
+  {
+   "world": "gen-course-enrollments",
+   "task": "drop_student_from_course",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6611
+  },
+  {
+   "world": "gen-course-enrollments",
+   "task": "enroll_into_full_course",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7302
+  },
+  {
+   "world": "gen-course-enrollments",
+   "task": "grade_completed_department_courses",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4254
+  },
+  {
+   "world": "gen-helpdesk",
+   "task": "assign_newest_acme_ticket",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4904
+  },
+  {
+   "world": "gen-helpdesk",
+   "task": "escalate_breached_enterprise_tickets",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.5252
+  },
+  {
+   "world": "gen-helpdesk",
+   "task": "escalate_breached_printer_ticket",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6165
+  },
+  {
+   "world": "gen-helpdesk",
+   "task": "resolve_and_reopen_stale_ticket",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.3908
+  },
+  {
+   "world": "gen-hotel-booking",
+   "task": "cancel_arriving_tomorrow_with_fee",
+   "ys": [
+    0,
+    0,
+    0
+   ],
+   "held": true,
+   "p": 0.3909
+  },
+  {
+   "world": "gen-hotel-booking",
+   "task": "cancel_distant_reservation",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7696
+  },
+  {
+   "world": "gen-hotel-booking",
+   "task": "move_booking_to_free_room",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7306
+  },
+  {
+   "world": "gen-hotel-booking",
+   "task": "relocate_all_from_maintenance_room",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.5582
+  },
+  {
+   "world": "gen-insurance-claims",
+   "task": "approve_and_pay_clean_claim",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5911
+  },
+  {
+   "world": "gen-insurance-claims",
+   "task": "approve_unflagged_water_damage_claims",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5546
+  },
+  {
+   "world": "gen-insurance-claims",
+   "task": "confirm_high_severity_fraud_flag",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4018
+  },
+  {
+   "world": "gen-insurance-claims",
+   "task": "start_review_newest_submitted_claim",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6749
+  },
+  {
+   "world": "gen-library-loans",
+   "task": "clear_riverside_overdue",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4564
+  },
+  {
+   "world": "gen-library-loans",
+   "task": "collect_top_fines_member",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5607
+  },
+  {
+   "world": "gen-library-loans",
+   "task": "return_longest_overdue_loan",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.6108
+  },
+  {
+   "world": "gen-linear-backlog",
+   "task": "cancel_stale_backlog_in_milestone",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6606
+  },
+  {
+   "world": "gen-linear-backlog",
+   "task": "close_out_epic_with_sub_issues",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7588
+  },
+  {
+   "world": "gen-linear-backlog",
+   "task": "merge_duplicate_issues",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.7919
+  },
+  {
+   "world": "gen-linear-backlog",
+   "task": "start_the_welcome_issue",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6801
+  },
+  {
+   "world": "gen-orders",
+   "task": "cancel_stale_pending_with_gift_note",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4349
+  },
+  {
+   "world": "gen-orders",
+   "task": "pay_oldest_pending_for_customer",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5212
+  },
+  {
+   "world": "gen-orders",
+   "task": "refund_delivered_big_orders_for_customer",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.4325
+  },
+  {
+   "world": "gen-orders",
+   "task": "ship_all_paid_large_orders",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4556
+  },
+  {
+   "world": "gen-orders-customers",
+   "task": "cancel_customer_unpaid_orders",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5047
+  },
+  {
+   "world": "gen-orders-customers",
+   "task": "refund_large_gb_pro_orders",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4337
+  },
+  {
+   "world": "gen-orders-customers",
+   "task": "ship_ada_paid_order",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.6365
+  },
+  {
+   "world": "gen-petstore",
+   "task": "deliver_cat_juniper",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7584
+  },
+  {
+   "world": "gen-petstore",
+   "task": "order_biscuit",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6745
+  },
+  {
+   "world": "gen-petstore",
+   "task": "release_stale_placed_orders",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6997
+  },
+  {
+   "world": "gen-petstore-refunds",
+   "task": "deliver_cat_juniper",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7584
+  },
+  {
+   "world": "gen-petstore-refunds",
+   "task": "order_biscuit",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6745
+  },
+  {
+   "world": "gen-petstore-refunds",
+   "task": "release_stale_placed_orders",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6997
+  },
+  {
+   "world": "gen-petstore-refunds",
+   "task": "request_refund_mochi",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.517
+  },
+  {
+   "world": "gen-petstore-refunds",
+   "task": "restock_pepper_refund",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6751
+  },
+  {
+   "world": "gen-petstore-refunds",
+   "task": "settle_requested_refunds",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5496
+  },
+  {
+   "world": "gen-refunds",
+   "task": "cancel_stale_requires_action_refunds",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.6517
+  },
+  {
+   "world": "gen-refunds",
+   "task": "merge_ticket_into_refund_metadata",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5669
+  },
+  {
+   "world": "gen-refunds",
+   "task": "refund_annual_plan_in_full",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7818
+  },
+  {
+   "world": "gen-refunds",
+   "task": "refund_remaining_balance",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.7417
+  },
+  {
+   "world": "gen-rental-fleet",
+   "task": "cancel_elena_reservation",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6639
+  },
+  {
+   "world": "gen-rental-fleet",
+   "task": "return_tomas_reyes_suv",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.4894
+  },
+  {
+   "world": "gen-rental-fleet",
+   "task": "triage_small_claims",
+   "ys": [
+    0,
+    0,
+    0
+   ],
+   "held": true,
+   "p": 0.4816
+  },
+  {
+   "world": "gen-rental-fleet",
+   "task": "waive_priya_late_fee",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4665
+  },
+  {
+   "world": "gen-repair-desk",
+   "task": "assign_and_start_laptop",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.755
+  },
+  {
+   "world": "gen-repair-desk",
+   "task": "raise_espresso_priority",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6795
+  },
+  {
+   "world": "gen-repair-desk",
+   "task": "reassign_and_start_dana_queue",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.599
+  },
+  {
+   "world": "gen-retail-tau2-known",
+   "task": "cancel_pending_order_mistake",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7986
+  },
+  {
+   "world": "gen-retail-tau2-known",
+   "task": "exchange_delivered_jacket_to_gift_card_diff",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6575
+  },
+  {
+   "world": "gen-retail-tau2-known",
+   "task": "modify_pending_items_once",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7083
+  },
+  {
+   "world": "gen-retail-tau2-known",
+   "task": "return_and_cancel_across_orders",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.44
+  },
+  {
+   "world": "gen-shipments",
+   "task": "claim_for_late_delivered_shipments",
+   "ys": [
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4249
+  },
+  {
+   "world": "gen-shipments",
+   "task": "dispatch_heaviest_created_shipment",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6322
+  },
+  {
+   "world": "gen-shipments",
+   "task": "move_postnl_created_to_dpd",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5335
+  },
+  {
+   "world": "gen-stripe-charges",
+   "task": "cancel_mistaken_pending_refund",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6487
+  },
+  {
+   "world": "gen-stripe-charges",
+   "task": "capture_pending_authorization",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6667
+  },
+  {
+   "world": "gen-stripe-charges",
+   "task": "refund_duplicate_charge",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.692
+  },
+  {
+   "world": "gen-stripe-charges",
+   "task": "refund_remaining_balance_for_customer",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.6155
+  },
+  {
+   "world": "gen-stripe-customers",
+   "task": "delete_older_duplicate_acme",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.8069
+  },
+  {
+   "world": "gen-stripe-customers",
+   "task": "mark_registered_nonprofits_exempt",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6969
+  },
+  {
+   "world": "gen-stripe-customers",
+   "task": "update_northwind_contact",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6888
+  },
+  {
+   "world": "gen-todo-projects",
+   "task": "archive_all_finished_projects",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5656
+  },
+  {
+   "world": "gen-todo-projects",
+   "task": "archive_q3_launch_project",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.4793
+  },
+  {
+   "world": "gen-todo-projects",
+   "task": "assign_team_lunch_task",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.651
+  },
+  {
+   "world": "gen-warehouse-inventory",
+   "task": "cancel_unstarted_northgate_pos",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6086
+  },
+  {
+   "world": "gen-warehouse-inventory",
+   "task": "cycle_count_adjustment",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.7655
+  },
+  {
+   "world": "gen-warehouse-inventory",
+   "task": "receive_rest_of_harbor_po",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.8077
+  },
+  {
+   "world": "gen-warehouse-inventory",
+   "task": "restock_pick_bins",
+   "ys": [
+    0,
+    0,
+    1
+   ],
+   "held": false,
+   "p": 0.661
+  },
+  {
+   "world": "helpdesk",
+   "task": "assign_newest_acme_ticket",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4742
+  },
+  {
+   "world": "helpdesk",
+   "task": "escalate_breached_enterprise_tickets",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.583
+  },
+  {
+   "world": "helpdesk",
+   "task": "escalate_breached_printer_ticket",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.7494
+  },
+  {
+   "world": "retail-tau2",
+   "task": "cancel_mistaken_order",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6851
+  },
+  {
+   "world": "retail-tau2",
+   "task": "cancel_one_order_return_from_another",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.6269
+  },
+  {
+   "world": "retail-tau2",
+   "task": "exchange_lamp_with_gift_card",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.691
+  },
+  {
+   "world": "retail-tau2",
+   "task": "exchange_two_units_of_one_item",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.4583
+  },
+  {
+   "world": "retail-tau2",
+   "task": "modify_three_items_in_one_call",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.5
+  },
+  {
+   "world": "retail-tau2",
+   "task": "modify_two_items_exact_gift_balance",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4833
+  },
+  {
+   "world": "retail-tau2",
+   "task": "resize_shoes_and_move_address",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": false,
+   "p": 0.4544
+  },
+  {
+   "world": "retail-tau2",
+   "task": "return_four_items_to_gift_card",
+   "ys": [
+    1,
+    1,
+    1
+   ],
+   "held": true,
+   "p": 0.5272
+  }
+ ]
+}

@@ -43,7 +43,7 @@ import { frozenTests, parsePlanYaml, planSchemaFor, pressurePlanIssues, renderPl
 import { renderPlanMd } from './plan-md.ts';
 import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
 import { renderReport } from './report.ts';
-import { PLAN_BRIEF, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, dateOnlyColumnLines, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
+import { PLAN_BRIEF, SECTION_OWNER, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, dateOnlyColumnLines, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
 
 export type Job =
   | { readonly kind: 'create'; readonly input: Input; readonly outDir: string }
@@ -133,6 +133,8 @@ export type Feedback = {
   readonly history?: readonly TriedAttempt[];
   /** The attempt `previous` is when it is not the latest: the best full one so far. */
   readonly bestOf?: number;
+  /** The sections another stage owns that the rejected answer named, which were left out of it (A-409). */
+  readonly ignored?: readonly string[];
 };
 
 /** One rejected attempt of the step being retried: its own issues, and the owned items it left out that an earlier attempt wrote. */
@@ -232,13 +234,11 @@ export function pickExample<T>(examples: readonly T[], digest: string): T {
 }
 
 /**
- * The system prompt for a step. The shared part (role, format reference, example world) comes
- * first and is the same for every step, so a prompt cache can reuse it; the step's brief comes last.
+ * The system prompt every step shares: role, format reference and example world, with no step in it (A-409). The cache
+ * prefix runs tools, then system, so the four stages, which share one edit tool, and the plan step each reuse one cached
+ * prefix per example world. The step's own brief opens its user prompt (`stepBrief`).
  */
-export function systemPrompt(step: StepId, exampleWorld: World, mode: 'create' | 'iterate' = 'create'): string {
-  const example = step === 'workflow' ? pathRuleExample(exampleWorld) : null;
-  const planBrief = mode === 'iterate' ? ITERATE_PLAN_BRIEF : PLAN_BRIEF;
-  const brief = step === 'plan' ? planBrief : example === null ? STAGES[step].brief : `${STAGES[step].brief}\n\n${example}`;
+export function systemPrompt(exampleWorld: World): string {
   return [
     'You are WorldGen. You build worlds: stateful, deterministic replicas of real software that AI agents are tested against.',
     'A world is built in steps. The plan step writes plan.yaml and fixes the acceptance tests before implementation starts. Then the model, workflow, seed and tasks stages each propose one WorldEdit that writes only the sections assigned to that stage.',
@@ -253,11 +253,15 @@ export function systemPrompt(step: StepId, exampleWorld: World, mode: 'create' |
     '```yaml',
     renderWorldYaml(exampleWorld).trimEnd(),
     '```',
-    '',
-    `## This step: ${step}`,
-    '',
-    brief,
   ].join('\n');
+}
+
+/** The head of a step's user prompt: which step this is and its brief, with the workflow stage's path rule read from the example world. */
+export function stepBrief(step: StepId, exampleWorld: World, mode: 'create' | 'iterate' = 'create'): string {
+  const example = step === 'workflow' ? pathRuleExample(exampleWorld) : null;
+  const planBrief = mode === 'iterate' ? ITERATE_PLAN_BRIEF : PLAN_BRIEF;
+  const brief = step === 'plan' ? planBrief : example === null ? STAGES[step].brief : `${STAGES[step].brief}\n\n${example}`;
+  return `## This step: ${step}\n\n${brief}`;
 }
 
 /** Issues as the model reads them: code, path, expected, found and hint for each. */
@@ -297,6 +301,7 @@ function feedbackBlock(feedback: Feedback | null, again = 'Answer again in full'
     'Issues:',
     '',
     renderIssues(feedback.issues),
+    ...(feedback.ignored === undefined ? [] : ['', 'Left out of the answer, because another stage writes them:', '', ...feedback.ignored.map((line) => `- ${line}`)]),
   ];
 }
 
@@ -391,14 +396,18 @@ function judgePatch(schema: PlanSchema, input: unknown, base: Plan, approved: Pl
   return { ok: false, outcome: { kind: 'invalid_output', issues }, issues };
 }
 
-function editTool(stage: StageId): ProposeRequest['tool'] {
-  const writes = writesOf(stage);
-  return {
-    name: EDIT_TOOL,
-    description: `Propose one WorldEdit for the ${stage} stage. It may write only ${writes.join(', ')}.`,
-    inputSchema: editJsonSchema(writes),
-  };
-}
+/** Every section a stage writes. One edit tool covers them all, so the four stages share one cached tool prefix (A-409). */
+const STAGE_WRITES: readonly Section[] = STAGE_IDS.flatMap((stage) => writesOf(stage));
+
+/**
+ * The edit tool of every stage. The step's brief and prompt name the sections it may write, and `scopeIssues` refuses any
+ * other, as `invalid_output` the stage repairs itself, or as a rejection the plan gets when it writes the frozen tests.
+ */
+const EDIT_WORLD: ProposeRequest['tool'] = {
+  name: EDIT_TOOL,
+  description: 'Propose one WorldEdit for this stage. Write only the sections this step\'s prompt names: any other is refused.',
+  inputSchema: editJsonSchema(STAGE_WRITES),
+};
 
 function renderFound(v: unknown): string {
   const s = v === undefined ? 'missing' : (JSON.stringify(v) ?? String(v));
@@ -438,6 +447,39 @@ function judgePlan(schema: PlanSchema, input: unknown, approved: Plan | null, di
     return issue('schema.invalid', ['plan', ...rel], { message: zi.message }, renderFound(valueAt(input, rel)));
   });
   return { ok: false, outcome: { kind: 'invalid_output', issues }, issues };
+}
+
+/**
+ * The edit without the sections another stage owns. Every stage answers with one edit tool (A-409), whose schema lets it
+ * name any stage's section; only the owner's write may land, as each stage's own schema once made the only answer it
+ * could give. The owner writes that section in its turn, and an engine issue the leftover causes still names its owner.
+ */
+function ownSectionsOnly(stage: StageId, input: unknown): unknown {
+  if (!isRecord(input)) return input;
+  const mine: readonly string[] = writesOf(stage);
+  const others = new Set<string>(STAGE_WRITES.filter((s) => !mine.includes(s)));
+  const out: Record<string, unknown> = { ...input };
+  for (const op of EDIT_OPS) {
+    const part = input[op];
+    if (isRecord(part)) out[op] = Object.fromEntries(Object.entries(part).filter(([key]) => !others.has(key)));
+  }
+  return out;
+}
+
+/** Each section another stage owns that a stage's edit named with content, as `ignored: <section> (owned by the <stage> stage)` (A-409). */
+export function ignoredLines(stage: StageId, input: unknown): string[] {
+  if (!isRecord(input)) return [];
+  const mine: readonly string[] = writesOf(stage);
+  const named = new Set<string>();
+  for (const op of EDIT_OPS) {
+    const part = input[op];
+    if (!isRecord(part)) continue;
+    for (const [key, value] of Object.entries(part)) {
+      const blank = (isRecord(value) && Object.keys(value).length === 0) || (Array.isArray(value) && value.length === 0);
+      if (!mine.includes(key) && !blank) named.add(key);
+    }
+  }
+  return STAGE_WRITES.filter((s) => named.has(s)).map((s) => `ignored: ${s} (owned by the ${SECTION_OWNER[s]} stage)`);
 }
 
 /** `edit.out_of_scope` for each part of a raw edit outside the stage's sections: meta, unowned or unknown sections, unknown keys. */
@@ -595,10 +637,11 @@ function ownIssues(issues: readonly CheckIssue[], step: StepId, world: World | n
  * `invalid_output`, so policy can send it back to the plan step that owns them.
  */
 function judgeEdit(stage: StageId, world: World, plan: Plan, input: unknown, gate: Gate | null, fidelity: Fidelity, check: (world: World) => CheckReport, digest?: InputDigest): Judged<StageValue> {
-  const scope = scopeIssues(stage, input);
+  const own = ownSectionsOnly(stage, input);
+  const scope = scopeIssues(stage, own);
   if (scope.some((i) => i.path[0] === 'tests')) return { ok: false, outcome: { kind: 'rejected', issues: scope }, issues: scope };
   if (scope.length > 0) return { ok: false, outcome: { kind: 'invalid_output', issues: scope }, issues: scope };
-  const applied = applyEdit(world, input);
+  const applied = applyEdit(world, own);
   if (!applied.ok) return { ok: false, outcome: { kind: 'invalid_output', issues: applied.error }, issues: applied.error };
   return judgeCandidate(stage, withLoweredRules(applied.value.world), applied.value.edit, plan, gate, fidelity, check, digest);
 }
@@ -757,16 +800,15 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
   let unknownCostCalls = 0;
   /** Each step's call durations, for the time preflight. */
   const callMs: Record<StepId, CallRecord[]> = { plan: [], model: [], workflow: [], seed: [], tasks: [] };
-  const systems = new Map<StepId, string>();
-  const systemFor = (step: StepId): string => {
-    const hit = systems.get(step);
-    if (hit !== undefined) return hit;
-    if (inputDigest === null) throw new Error(`the ${step} system prompt needs the input digest, which picks the example world`);
+  /** The example world this run's input picks, once the input digest is known. */
+  const exampleFor = (step: StepId): World => {
+    if (inputDigest === null) throw new Error(`the ${step} prompt needs the input digest, which picks the example world`);
     // concat flattens a list one level and wraps a single world, so both forms give the list to pick from.
-    const text = systemPrompt(step, pickExample(([] as World[]).concat(deps.exampleWorld), inputDigest), job.kind);
-    systems.set(step, text);
-    return text;
+    return pickExample(([] as World[]).concat(deps.exampleWorld), inputDigest);
   };
+  let system: string | null = null;
+  /** One system prompt for every step of the run (A-409). */
+  const systemFor = (step: StepId): string => (system ??= systemPrompt(exampleFor(step)));
 
   /** The run so far. On iterate `before` is the old checked world, which every stage is gated against. */
   let world: World | null = null;
@@ -814,7 +856,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
     const covered = new Set<string>();
     for (;;) {
       const choice = stepModel(config, step, escalated);
-      const asked = { system: systemFor(step), ...ask(feedback) };
+      const question = ask(feedback);
+      const asked = { system: systemFor(step), ...question, prompt: `${stepBrief(step, exampleFor(step), job.kind)}\n\n${question.prompt}` };
       const estimateUsd = estimateCallUsd(config, choice.model, asked.system.length + asked.prompt.length);
       const repair = nextIsRepair(callMs[step], feedback !== null);
       const estimateMs = estimateCallMs(choice.effort, callMs[step], repair, step);
@@ -963,9 +1006,13 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
             const own = ownIssues(issues, step, world);
             if (proposal !== null) tried.push({ n: made, input: proposal.input, issues: own, left });
             const best = bestAttempt(tried);
+            // A stage that keeps naming another stage's sections is told they were left out, so it stops resending them (A-409).
+            const stage = STAGE_IDS.find((s) => s === step);
+            const ignored = stage === undefined || proposal === null ? [] : ignoredLines(stage, proposal.input);
+            const leftOut = ignored.length === 0 ? {} : { ignored };
             feedback = best === undefined
-              ? { issues: own, previous: proposal?.input }
-              : { issues: best.issues, previous: best.input, history: tried, ...(best.n === made ? {} : { bestOf: best.n }) };
+              ? { issues: own, previous: proposal?.input, ...leftOut }
+              : { issues: best.issues, previous: best.input, history: tried, ...(best.n === made ? {} : { bestOf: best.n }), ...leftOut };
           }
           break;
         case 'backtrack':
@@ -1129,7 +1176,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
       }
       const r: StepOutcome<StageValue> = await runStep<StageValue>(
         step, reason, carried,
-        (fb): Pick<ProposeRequest, 'prompt' | 'tool'> => ({ prompt: stagePrompt(step, current, start, fb, request, job.kind === 'create' && job.input.kind === 'openapi'), tool: editTool(step) }),
+        (fb): Pick<ProposeRequest, 'prompt' | 'tool'> => ({ prompt: stagePrompt(step, current, start, fb, request, job.kind === 'create' && job.input.kind === 'openapi'), tool: EDIT_WORLD }),
         (input): Judged<StageValue> => judgeEdit(step, start, current, input, gate, fidelity, check, coverageDigest),
       );
       if (r.kind === 'advance') {

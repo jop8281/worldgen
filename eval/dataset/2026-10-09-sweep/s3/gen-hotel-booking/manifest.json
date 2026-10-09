@@ -1,0 +1,53 @@
+{
+  "manifest_version": 2,
+  "schema_version": 2,
+  "provider": "anthropic",
+  "model": "claude-sonnet-5-5",
+  "prompt_versions": [
+    "solver-prompt-1"
+  ],
+  "config_versions": [
+    "cfg-07e2771c91cb"
+  ],
+  "engine_commits": [
+    "23520120c53ee78b5bdf00530dd982d18aba070c"
+  ],
+  "run_ids": [
+    "s3-gen-hotel-booking"
+  ],
+  "selection": null,
+  "worlds": [
+    {
+      "world_id": "world",
+      "world_version": "0ad03cfa49fac079900f91bba828694605adbdbffa186101a85a8575cd45101b",
+      "artifact": {
+        "path": "private/worlds/0ad03cfa49fac079900f91bba828694605adbdbffa186101a85a8575cd45101b/world.yaml",
+        "sha256": "0ad03cfa49fac079900f91bba828694605adbdbffa186101a85a8575cd45101b"
+      }
+    }
+  ],
+  "counts": {
+    "episodes": 4,
+    "by_verdict": {
+      "success": 3,
+      "partial": 0,
+      "failure": 1,
+      "infra": 0
+    },
+    "by_stop_reason": {
+      "done": 4
+    },
+    "by_failure_cause": {
+      "scored 0": 1
+    }
+  },
+  "files": {
+    "dataset": {
+      "path": "dataset.jsonl",
+      "records": 4,
+      "bytes": 33331,
+      "sha256": "56cbc3cf38bfa33bdc93dc773581d027fe298b4ebe749bc1c8b746e2e5b0c3bb"
+    }
+  },
+  "grading_note": "The engine score certifies the final world state only. It does not independently certify that the final reply is factually correct."
+}

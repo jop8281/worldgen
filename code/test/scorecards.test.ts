@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import { gatherScorecards } from '../src/cli/scorecards.ts';
 import { parseManifest } from '../src/dataset/schema.ts';
 import {
-  exportCounts, fidelityKinds, fidelityRows, generatorRow, graderTaskOf, graderTotals, parseDifficulty, renderScorecards, runParts, suiteFor,
+  exportCounts, exportGroups, fidelityKinds, fidelityRows, generatorRow, graderTaskOf, graderTotals, parseDifficulty, renderScorecards, runParts, suiteFor,
   type ExportInput, type RunInput, type ScorecardInputs,
 } from '../src/scorecards/cards.ts';
 import type { EvalEvidence } from '../src/worldgen/eval-outcomes.ts';
@@ -118,7 +118,7 @@ describe('scorecards (A-402)', () => {
     assert.ok(md.includes('The labeled tier agrees with the measured one in 0 of 1 measured cells.'));
   });
 
-  it('counts a schema-1 export by success and the rest, a schema-2 export by verdict, and names an unreadable or successes-only one', async () => {
+  it('counts a schema-1 export by success and the rest, a schema-2 export by verdict, groups manifests by the folder above their worlds, and names an unreadable or successes-only one', async () => {
     const source = 'eval/dataset/2026-10-07/helpdesk/manifest.json';
     const v1 = parseManifest(JSON.parse(await readFile(path.join(REPO, source), 'utf8')), source);
     assert.deepEqual(exportCounts(v1), { episodes: 6, success: 6, partial: null, failure: null, infra: null, notSuccess: 0 });
@@ -131,12 +131,20 @@ describe('scorecards (A-402)', () => {
     }, 'v2');
     assert.deepEqual(exportCounts(v2), { episodes: 5, success: 1, partial: 1, failure: 2, infra: 1, notSuccess: 4 });
 
-    const exports: ExportInput[] = [{ source, manifest: v1 }, { source: 'eval/dataset/x/w/manifest.json', manifest: v2 }, { source: 'eval/dataset/x/bad/manifest.json', error: 'not JSON' }];
+    const exports: ExportInput[] = [
+      { source, manifest: v1 }, { source: 'eval/dataset/x/p1/w/manifest.json', manifest: v2 }, { source: 'eval/dataset/x/p1/v/manifest.json', manifest: v2 },
+      { source: 'eval/dataset/x/p1/bad/manifest.json', error: 'not JSON' },
+    ];
+    assert.deepEqual(exportGroups(exports), [
+      { folder: 'eval/dataset/2026-10-07', manifests: 1, schemas: [1], models: ['claude-sonnet-5-5'], episodes: 6, success: 6, partial: null, failure: null, infra: null, notSuccess: 0, successesOnly: 0 },
+      { folder: 'eval/dataset/x/p1', manifests: 2, schemas: [2], models: ['claude-sonnet-5-5'], episodes: 10, success: 2, partial: 2, failure: 4, infra: 2, notSuccess: 8, successesOnly: 2 },
+    ]);
     const md = renderScorecards({ ...none, exports });
-    assert.ok(md.includes('| **Total** |  |  | 11 | 7 |  |  |  | 4 |'));
-    assert.ok(md.includes('| `eval/dataset/x/bad/manifest.json` | - | - | - | - | - | - | - | unreadable: not JSON |'));
-    assert.ok(md.includes('1 schema-2 export folder holds 5 episodes: 1 success, 1 partial, 2 failure, 1 infra.'));
-    assert.ok(md.includes('`eval/dataset/x/w/manifest.json` was exported with successes only'));
+    assert.ok(md.includes('| `eval/dataset/x/p1/*/manifest.json` | 2 | 2 | claude-sonnet-5-5 | 10 | 2 | 2 | 4 | 2 | 8 |'));
+    assert.ok(md.includes('| **Total** | 3 |  |  | 16 | 8 |  |  |  | 8 |'));
+    assert.ok(md.includes('- `eval/dataset/x/p1/bad/manifest.json` is unreadable, so it is not counted: not JSON'));
+    assert.ok(md.includes('Schema-2 manifests, in 1 folder, count 10 episodes: 2 success, 2 partial, 4 failure, 2 infra.'));
+    assert.ok(md.includes('`eval/dataset/x/p1/` holds exports made with successes only'));
     assert.ok(md.includes('No difficulty run is committed.'));
   });
 });

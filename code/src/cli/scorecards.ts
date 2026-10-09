@@ -28,7 +28,7 @@ writes them to <file> (default ../prod/scorecards.md):
               bun scripts/analyze-eval.ts scores it against the eval/*.yaml suite that holds its cases
   fidelity    the fidelity events those runs recorded, against the 0.80 floor (A-258)
   grader      the engine's check of every world in prod/worlds, which worldplay verify runs
-  agent       eval/difficulty/*/difficulty.json and each eval/dataset/<export>/<world>/manifest.json
+  agent       eval/difficulty/*/difficulty.json and each eval/dataset/<export>/[<pass>/]<world>/manifest.json
 Exit codes: 0 written, 1 a source could not be read, 2 bad usage.
 `;
 
@@ -108,15 +108,19 @@ async function gatherAgent(repo: string): Promise<Pick<ScorecardInputs, 'difficu
     if (existsSync(file)) difficulty.push({ source: rel(file), text: await readFile(file, 'utf8') });
   }
   const exports: ExportInput[] = [];
+  const readManifest = async (file: string): Promise<void> => {
+    try {
+      exports.push({ source: rel(file), manifest: parseManifest(JSON.parse(await readFile(file, 'utf8')), rel(file)) });
+    } catch (e) {
+      exports.push({ source: rel(file), error: messageOf(e) });
+    }
+  };
+  // An export is <export>/<world>/manifest.json, or <export>/<pass>/<world>/manifest.json when it was made in passes.
   for (const name of await dirs(path.join(repo, 'eval/dataset'))) {
-    for (const world of await dirs(path.join(repo, 'eval/dataset', name))) {
-      const file = path.join(repo, 'eval/dataset', name, world, 'manifest.json');
-      if (!existsSync(file)) continue;
-      try {
-        exports.push({ source: rel(file), manifest: parseManifest(JSON.parse(await readFile(file, 'utf8')), rel(file)) });
-      } catch (e) {
-        exports.push({ source: rel(file), error: messageOf(e) });
-      }
+    for (const sub of await dirs(path.join(repo, 'eval/dataset', name))) {
+      const dir = path.join(repo, 'eval/dataset', name, sub);
+      if (existsSync(path.join(dir, 'manifest.json'))) await readManifest(path.join(dir, 'manifest.json'));
+      else for (const world of await dirs(dir)) if (existsSync(path.join(dir, world, 'manifest.json'))) await readManifest(path.join(dir, world, 'manifest.json'));
     }
   }
   return { difficulty, exports };
