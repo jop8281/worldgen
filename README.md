@@ -5,9 +5,9 @@ Two tools for building **worlds**. A world is a stateful, deterministic replica 
 - **worldplay** is the world engine. It checks a world, serves it over HTTP, enforces its data model and workflows on every write, and grades a task from the final state.
 - **worldgen** is an LLM agent. It turns a description, an OpenAPI spec or a CSV into a world that worldplay accepts. The engine is the only judge. WorldGen never edits the engine and never grades with a model.
 
-The task is in [research/spec.md](research/spec.md). [prod/README.md](prod/README.md) maps every spec item to the file that implements it and the command that shows it. The design doc is [prod/design.md](prod/design.md), and [prod/system.md](prod/system.md) shows how the parts fit together, with diagrams.
+Start here. [prod/system.md](prod/system.md) is the system map, with diagrams. [prod/design.md](prod/design.md) is the design doc. [prod/README.md](prod/README.md) maps every spec item to the file that implements it and the command that shows it. The task itself is [research/spec.md](research/spec.md).
 
-[prod/evidence/README.md](prod/evidence/README.md) gives the command that re-checks most numbers below from a clone, with no model call. It also names the few that rest on a Linear receipt, a GitHub CI run or a committed paid measurement instead. The startup time, the upload part size, row 1's iterate spend and the Haiku price rest on their decision rows and PRs.
+[prod/evidence/README.md](prod/evidence/README.md) gives the command that re-checks most numbers below from a clone, with no model call, and names the few that rest on a Linear receipt, a CI run or a committed paid measurement instead.
 
 ## Run it
 
@@ -108,11 +108,14 @@ One `bun run worldgen` on "an IT asset tracker with laptops, assignments, repair
 
 The `stress` suite has 29 cases: descriptions, OpenAPI specs, CSV files, change requests, and impossible inputs that WorldGen must refuse. Each run gets $3 and 12 minutes, stricter than the default.
 
-[stress-4](eval/runs/2026-10-08-stress-4/summary.md) passed 23 of 29 (79%) for $26.71 settled. [stress-5](eval/runs/2026-10-08-stress-5/summary.md) reran its 6 product failures after their fixes, and 5 of 6 passed. stripe-customers still stopped.
+| Run | Code | Result | Spend |
+|---|---|---|---|
+| [stress-4](eval/runs/2026-10-08-stress-4/summary.md) | `4b3d2be4` | 23 of 29 (79%) passed | $26.71 settled |
+| [stress-5](eval/runs/2026-10-08-stress-5/summary.md) | post-fix trunk | reran stress-4's 6 product failures ([#91](https://github.com/jop8281/worldgen/pull/91)): 5 passed, stripe-customers still stopped | $6.96 |
+| [stress-6](eval/runs/2026-10-08-stress-6/summary.md) | `42ab9ca9` | 27 of 29 (93%): 24 done, 3 impossible inputs refused; p50 4.5 min, p95 8.2, max 8.8 ([#129](https://github.com/jop8281/worldgen/pull/129)) | $25.32 |
+| [stress-7](eval/runs/2026-10-08-stress-7-targeted/summary.md) | `2da7dd17` | the two stress-6 stops and three controls: 5 of 5 done and verified, 24.7 min ([#152](https://github.com/jop8281/worldgen/pull/152)) | $5.74 |
 
-stress-6 reran the whole 29-case suite on `42ab9ca9` with the same settings ([#129](https://github.com/jop8281/worldgen/pull/129)): 27 of 29 (93%), 24 succeeded and 3 impossible inputs were refused. Per case, p50 was 4.5 min, p95 8.2 min and the max 8.8 min, and the suite cost $25.32. stripe-customers now finishes. Its source is [eval/runs/2026-10-08-stress-6/summary.md](eval/runs/2026-10-08-stress-6/summary.md). Its two stops, bookmarks and stripe-charges, have fixes in v1.1.1 (YOS-257 [#145](https://github.com/jop8281/worldgen/pull/145), YOS-258 [#144](https://github.com/jop8281/worldgen/pull/144)).
-
-stress-7 reran those two cases and three stress-6 passes as controls on `2da7dd17`, the v1.1.1 code, with the same settings ([#152](https://github.com/jop8281/worldgen/pull/152)). All 5 ended done with verify passing, in 24.7 min for $5.74. bookmarks now builds its scheduled jobs as jobs, and stripe-charges passed the model step on its first attempt. No case backtracked, so YOS-258's fresh attempt budget after a backtrack rests on its unit tests. Its source is [eval/runs/2026-10-08-stress-7-targeted/summary.md](eval/runs/2026-10-08-stress-7-targeted/summary.md).
+stripe-customers, stress-4's remaining failure, ended done in stress-6. stress-6's two stops, bookmarks and stripe-charges, have fixes in v1.1.1 ([YOS-257](https://linear.app/yossi-zozo123/issue/YOS-257) [#145](https://github.com/jop8281/worldgen/pull/145), [YOS-258](https://linear.app/yossi-zozo123/issue/YOS-258) [#144](https://github.com/jop8281/worldgen/pull/144)); stress-7 reran both, and each ended done. No case in stress-7 backtracked, so YOS-258's fresh attempt budget after a backtrack rests on its unit tests. The v2.5-candidate run and its Haiku arm are rows in the Release table above.
 
 ### The live-run dress rehearsal
 
