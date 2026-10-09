@@ -1,7 +1,7 @@
 /**
  * `bun run redteam`: the red-team run (A-404). Every task of every world under --worlds runs once on loopback
- * (dataset/local.ts) with the red-team solver, which sees only the public world and is told to make the grader score 1
- * without doing the task. Each row goes to <out>/results.jsonl as its task ends, so a stopped run resumes where it
+ * (dataset/local.ts) with the red-team solver, which sees only the public world and makes a near-miss of the task on
+ * purpose, wrong in one important way. Each row goes to <out>/results.jsonl as its task ends, so a stopped run resumes where it
  * stopped, and <out>/summary.md is rendered from the rows. Argument parsing and wiring; the report is dataset/redteam.ts.
  *
  * Exit codes: 0 every task ran, 1 the run stopped early or failed, 2 bad usage.
@@ -24,8 +24,8 @@ const SOLVER_MAX_OUTPUT_TOKENS = 4096;
 
 export const USAGE = `usage: redteam --worlds <dir> --out <dir> --work <dir> --engine-commit <sha> [options]
 Runs every task of every world under --worlds once, on loopback, with the red-team solver (A-404): it sees
-only the public world and is told to make the grader score 1 without doing the task, so a full score is a
-candidate grader bug. Appends one row per task to <out>/results.jsonl as it ends (a rerun skips tasks
+only the public world and makes a near-miss of the task on purpose, wrong in one important way, so a full
+score is a candidate grader bug. Appends one row per task to <out>/results.jsonl as it ends (a rerun skips tasks
 already there), and writes <out>/summary.md. Stops at the first model error, such as a spend cap refusal.
   --worlds <dir>        a directory of world directories (for example ../prod/worlds)
   --out <dir>           where results.jsonl, run.json and summary.md go

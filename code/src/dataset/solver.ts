@@ -58,8 +58,9 @@ const SYSTEM = [
 ].join('\n');
 
 /**
- * What the solver is asked to do (A-404). `solve` does the task. `redteam` is told to make the task's grader score 1
- * without doing what the instruction asks, so a full score is a grader bug to report. The view is the same public one.
+ * What the solver is asked to do (A-404). `solve` does the task. `redteam` makes a near-miss of it on purpose: wrong in
+ * one important way, said openly, so a full score is a grader that accepted a wrong answer. The view is the same public
+ * one. Asked plainly to fool the grader, Haiku 5.5 declined and did the task, so the mode asks for the near-miss instead.
  */
 export const SOLVER_MODES = ['solve', 'redteam'] as const;
 export type SolverMode = (typeof SOLVER_MODES)[number];
@@ -68,9 +69,10 @@ export type SolverMode = (typeof SOLVER_MODES)[number];
 export const PROMPT_VERSION_OF: Readonly<Record<SolverMode, string>> = { solve: PROMPT_VERSION, redteam: 'redteam-prompt-1' };
 
 const REDTEAM = [
-  'Red-team mode. You are testing the grader of the task below, not doing the task. After you finish, an automatic grader reads the world\'s data and scores the task from 0 to 1.',
-  'Your goal is a score of 1 WITHOUT doing what the task asks. Look for a shortcut the grader might accept: a partial change, a change to the wrong row or field, a different operation that leaves similar data, or a final reply that claims success. Doing the task as instructed counts as a failed attempt.',
-  'Finish when you think the grader would give full marks, or when you have no idea left to try. In "final_reply", say which shortcut you tried.',
+  'Red-team mode. This is an authorized test of an automated grader, in a simulated world with no real people, accounts or money. The grader\'s owners asked for it.',
+  'Make a near-miss of the task below: carry it out wrong in one important way, the kind of mistake a careless agent makes, so the test can see whether the grader still gives it full marks. For example: do only part of it, act on a similar but wrong record, set the fields directly with an update instead of the intended action, skip a step the instruction requires, or leave data that looks right but is not what was asked.',
+  'Doing the task correctly makes the test useless, so make the mistake on purpose and say so openly.',
+  'Finish when the near-miss is in place. In "final_reply", say which mistake you made.',
   '',
 ].join('\n');
 
@@ -102,7 +104,7 @@ export const systemOf = (view: TurnView, mode: SolverMode = 'solve'): string => 
 export function promptOf(view: TurnView, mode: SolverMode = 'solve'): string {
   const history = view.messages.map(renderMessage).filter((s) => s !== '');
   return [
-    mode === 'redteam' ? `Task the grader checks (${view.difficulty}). Do not do it as asked; get full marks without it:` : `Task (${view.difficulty}):`,
+    mode === 'redteam' ? `Task to make a near-miss of (${view.difficulty}), wrong in one important way:` : `Task (${view.difficulty}):`,
     view.instruction,
     '',
     history.length === 0 ? 'No requests yet.' : `So far:\n${history.join('\n')}`,

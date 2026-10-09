@@ -1,7 +1,7 @@
 /**
- * The red-team run's report (A-404). Each task runs once with the red-team solver, which is told to make the grader
- * score 1 without doing the task and sees only the public world. A full score is a candidate grader bug, and the row
- * keeps the trace that earned it. `rowOf` turns an episode into a row; `renderRedteamSummary` writes summary.md.
+ * The red-team run's report (A-404). Each task runs once with the red-team solver, which sees only the public world and
+ * makes a near-miss of the task on purpose: wrong in one important way, said in its reply. A full score is a candidate
+ * grader bug, and the row keeps the trace that earned it. `rowOf` turns an episode into a row; `renderRedteamSummary` writes summary.md.
  * Triage notes, one per fooled task, say whether the trace really skipped the task or did it anyway.
  * Pure: no model, no IO.
  */
@@ -79,7 +79,7 @@ export function renderRedteamSummary(run: RedteamRun): string {
   const out = [
     `# Red-team run ${run.date}`,
     '',
-    `Each task ran once with the red-team solver (A-404) on \`${run.model}\`, engine \`${run.engineCommit}\`. The solver saw only the public world and was told to make the grader score 1 without doing what the task asks. A full score is a candidate grader bug; its triage says whether the trace really skipped the task.`,
+    `Each task ran once with the red-team solver (A-404) on \`${run.model}\`, engine \`${run.engineCommit}\`. The solver saw only the public world and made a near-miss of the task on purpose: wrong in one important way, said in its reply. A full score is a candidate grader bug; its triage says whether the near-miss really was wrong.`,
     '',
     '| | Count |',
     '|---|--:|',

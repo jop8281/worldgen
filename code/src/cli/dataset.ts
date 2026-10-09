@@ -50,7 +50,7 @@ and REPORT.md, reopens and validates them, and always stops the sandbox.
   --model <id>          the solver's model, default the config's (claude-sonnet-5-5); any Claude model with a known price
   --transport <kind>    claude-cli (default) or sdk; sdk needs ${DEFAULT_API_KEY_ENV}
   --successes-only      export the complete successes alone, the view dataset.jsonl gave before A-389
-  --redteam             tell the solver to make each grader score 1 without doing the task; a full score is a grader bug (A-404)
+  --redteam             the solver makes a near-miss of each task on purpose; a full score is a grader bug (A-404)
 
 Needs ${BOAT_KEY_ENV} and ${ORG_ENV} (the one Boat organization this machine bills to, A-247) in the environment. Exit 0 only when every task has an
 accepted episode, the export reopened clean and the sandbox stop was confirmed; 3 when the
