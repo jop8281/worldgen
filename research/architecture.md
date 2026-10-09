@@ -104,7 +104,7 @@ worldgen/
     src/boat/      client
     src/sandboxes/ backend files openshell sbx boat registry
     src/dataset/   episode solver pipeline local difficulty redteam store schema verifier evidence
-    src/scenario/  manifest gateway links
+    src/scenario/  manifest gateway links provenance events
     src/scorecards/ cards
     src/studio/    page explorer analytics runstore reconcile server uploads watch
     src/cli/       worldplay worldgen eval eval-args eval-analysis-files eval-retention costs sandbox dataset difficulty episode redteam live models options verifier studio-check episode-prepare studio studio-watch scenario evidence scorecards

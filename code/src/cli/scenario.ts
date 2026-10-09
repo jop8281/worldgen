@@ -12,9 +12,12 @@ Commands:
   serve <dir>          serve every world in process behind one gateway, until SIGINT or SIGTERM
 Options for serve:
   --port <n>           the gateway port, the only one an agent gets (default 4100; 0 picks a free port)
-  --admin-port <n>     the operator's admin port: GET /_scenario/trace, POST /_scenario/grade, which scores every gate and link (default port + 1)
+  --admin-port <n>     the operator's admin port: GET /_scenario/trace and POST /_scenario/grade (default port + 1)
   -h, --help           this text
-The gateway forwards /<alias>/<rest> to that world's world port.`;
+The gateway forwards /<alias>/<rest> to that world's world port.
+POST /_scenario/grade scores every gate, link and provenance gate and delivers nothing, so a mid-run grade
+changes no world; its heldEvents counts the events an out_of_order rule still holds. POST /_scenario/grade?final=1
+first delivers every held event, then grades. Use it at the end of a run.`;
 
 export type Args = { readonly command: 'check' | 'serve'; readonly dir: string; readonly port: number; readonly adminPort: number | undefined };
 
@@ -68,7 +71,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const { scenario } = loaded.value;
   const aliases = Object.keys(scenario.worlds);
   if (args.command === 'check') {
-    process.stdout.write(`ok ${scenario.name}: ${plural(aliases.length, 'world')} (${aliases.join(', ')}), ${plural(scenario.gates.length, 'gate')}, ${plural(scenario.faults.length, 'fault')}, ${plural(scenario.links.length, 'link')}\n`);
+    process.stdout.write(`ok ${scenario.name}: ${plural(aliases.length, 'world')} (${aliases.join(', ')}), ${plural(scenario.gates.length, 'gate')}, ${plural(scenario.faults.length, 'fault')}, ${plural(scenario.events.length, 'event')}, ${plural(scenario.links.length, 'link')}, ${plural(scenario.provenance.length, 'provenance gate')}\n`);
     return 0;
   }
   const server = await serveScenario(loaded.value, { port: args.port, ...(args.adminPort === undefined ? {} : { adminPort: args.adminPort }) });
