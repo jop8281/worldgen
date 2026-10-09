@@ -7,7 +7,7 @@
  * - A task passes only if all of these hold. The solution scores exactly 1 and gets no 5xx.
  *   Doing nothing scores exactly 0. Medium and hard tasks have a decoy. Every decoy gets no
  *   5xx, scores below 1 and is not trivial. Every strict prefix of the solution's successful writes scores
- *   below 1, and so does the solution plus one collateral write (the engine builds both by replaying
+ *   below 1, so does the solution with any one of its writes but the last left out (A-401), and so does the solution plus one collateral write (the engine builds each by replaying
  *   the solution's calls, no model), as does the solution plus a collateral edit it then undoes. Two solution
  *   runs from seed end in the same state hash. Nonsense in each free-text field the solution writes scores below 1 (A-388).
  * - The collateral guards (a task's `allows`, ctx.guardChanges) judge every write a call made, not only the end
@@ -62,6 +62,8 @@ export type TaskVerdict = {
   readonly solutionLaterPageEntities: readonly string[];
   /** Entities the solution changed rows of, where its filtered list calls also returned a row it left unchanged, sorted: near-duplicate distractors it had to tell apart (YOS-180). */
   readonly solutionDistractorEntities: readonly string[];
+  /** Workflow actions (world.actions keys) a successful solution call reached, sorted. WorldGen checks them against the plan (A-398). */
+  readonly solutionActions: readonly string[];
   /** Every engine mutant kind, in order: the call it graded and its score, or nulls when no candidate committed a visible change, so the kind was not probed. */
   readonly collateral: readonly MutantProbe[];
   /** Each grader check and the probes that flipped it: prefixes, decoys, engine mutants and free-text swaps. Doing nothing is not a probe. */
@@ -610,6 +612,37 @@ function prefixScores(
   return { ok: true, scores, runs };
 }
 
+/**
+ * The solution with one successful write left out (A-401): for each write but the last, which a prefix already cuts,
+ * the solution's successful calls replayed from `seed` without that one; a later call that needed it is simply refused.
+ * A replay that ends where the solution ends proves nothing about the grader and is skipped. Stops at the first
+ * omission that scores 1 or cannot be graded.
+ */
+function omissionScores(
+  world: CheckedWorld,
+  seed: State,
+  taskId: string,
+  host: SnippetHost,
+  log: readonly CallRecord[],
+  writes: readonly number[],
+  end: State,
+): { ok: true; full: { write: number; call: string } | null; runs: ProbeRun[] } | { ok: false; issue: CheckIssue } {
+  const runs: ProbeRun[] = [];
+  const solutionContent = contentHash(end);
+  for (const [i, seq] of writes.slice(0, -1).entries()) {
+    const rt = runtime(world, host, seed);
+    for (const c of log) if (succeeded(c) && c.seq !== seq) rt.call(c.req);
+    const state = stateFromDump(world, rt.dump());
+    if (contentHash(state) === solutionContent) continue;
+    const g = grade(world, seed, state, taskId, host, rt.journal(), rt.log());
+    if (!g.ok) return g;
+    runs.push({ probe: `omit_write ${i + 1}`, graded: g });
+    const left = log.find((c) => c.seq === seq);
+    if (g.score === 1) return { ok: true, full: { write: i + 1, call: left === undefined ? '' : `${left.req.method} ${left.req.path}` }, runs };
+  }
+  return { ok: true, full: null, runs };
+}
+
 /** A runtime that starts at `seed` and re-issues `log`'s successful calls, reads too, so engine time matches. */
 function replaySolution(world: CheckedWorld, seed: State, host: SnippetHost, log: readonly CallRecord[]): Runtime {
   const rt = runtime(world, host, seed);
@@ -1106,6 +1139,12 @@ function pagedEntities(world: World, log: readonly CallRecord[]): readonly strin
   return [...out].sort();
 }
 
+/** The workflow actions a log's successful calls reached, sorted: the call's routeId when it names an action. */
+function actionsCalled(world: World, log: readonly CallRecord[]): readonly string[] {
+  const ids = log.filter(succeeded).map((c) => c.routeId).filter((id): id is string => id !== null && Object.hasOwn(world.actions, id));
+  return [...new Set(ids)].sort();
+}
+
 /**
  * What a solution's trace shows about its reach: how many distinct rows its successful calls changed,
  * the entities where it changed a row that appeared only in a later-page list response (a call
@@ -1229,6 +1268,15 @@ export function verifyTask(
       if (prefixes.scores.length > 0) bestPrefixScore = Math.max(...prefixes.scores);
       runs.push(...prefixes.runs);
     }
+    const omissions = omissionScores(world, seed, taskId, host, first.log, writes, first.end);
+    if (!omissions.ok) push(omissions.issue);
+    else {
+      if (omissions.full !== null) {
+        const { write, call } = omissions.full;
+        push(issue('task.omission_full_marks', taskPath, { write, of: writes.length, call }, `the solution without write ${write} of ${writes.length} (${call}) scored 1`));
+      }
+      runs.push(...omissions.runs);
+    }
   }
 
   const decoys: { why: string; score: number }[] = [];
@@ -1302,6 +1350,7 @@ export function verifyTask(
     solutionReadsBeforeWrite: readsBeforeWrite,
     solutionPagedEntities: pagedEntities(world, first.log),
     ...traceCoverage(world, first.log),
+    solutionActions: actionsCalled(world, first.log),
     collateral: probes,
     checks: coverage.checks,
     unattributedProbes: coverage.unattributed,

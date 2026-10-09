@@ -65,6 +65,8 @@ export type LocalEpisodeOptions = {
   readonly engineCommit: string;
   /** The model `nextTurn` calls, recorded on the episode, or null when it calls none, as the noop agent does. */
   readonly model: string | null;
+  /** The prompt version the episode records. Default PROMPT_VERSION; a red-team run passes its own (A-404). */
+  readonly promptVersion?: string;
   readonly nextTurn: NextTurn;
   readonly maxTurns: number;
   readonly budgetUsd: number;
@@ -122,7 +124,7 @@ export async function runLocalEpisode(o: LocalEpisodeOptions): Promise<LocalEpis
     });
     const server = { url: `http://127.0.0.1:${ports.world}`, adminUrl: `http://127.0.0.1:${ports.admin}` };
     const { episode, artifacts } = await runEpisode({
-      runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION,
+      runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: o.promptVersion ?? PROMPT_VERSION,
       configVersion: configVersion({ maxTurns: o.maxTurns, budgetUsd: o.budgetUsd, maxMinutes: o.maxMinutes }), model: o.model,
       task, index: 1, openapi: prep.openapi, seedHash: prep.seedHash, port: loopbackPort(server), grade, nextTurn: o.nextTurn,
       maxTurns: o.maxTurns, budgetLeftUsd: o.budgetUsd, deadline: now() + o.maxMinutes * 60_000, now, redact: o.redact, interrupt: o.interrupt,

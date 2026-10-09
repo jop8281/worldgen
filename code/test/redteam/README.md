@@ -187,6 +187,7 @@ The `mutations.ts` rows run through `G-07` in `redteam-check.test.ts`, and the t
 | `task.decoy_trivial` | GR-decoy-trivial-reads, GR-decoy-trivial-solution | GR-decoy-trivial-failed-writes (RT-08), GR-decoy-trivial-noop (RT-10) |
 | `task.prefix_full_marks` | GR-prefix-any, GR-prefix-medium | — |
 | `task.freetext_unchecked` | GR-freetext-unchecked (G-61, A-388) | — |
+| `task.omission_full_marks` | GR-omission-last-only (G-62, A-401) | — |
 | `task.nondeterministic` | GR-nondeterministic-proto (G-24 in redteam-determinism.test.ts, RT-35 closed) | — |
 | `world.too_few_tasks` | GR-too-few-one, GR-too-few-zero | — |
 | `plan.not_covered`, `plan.fixture_changed`, `edit.out_of_scope`, `iterate.unplanned_change`, `iterate.regression` | WorldGen only. `checkWorld` must never emit them (checked in G-07) | — |

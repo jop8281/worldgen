@@ -12,7 +12,7 @@
 import { ENGINE_ERROR_CODES, OP_SUCCESS_STATUS, issue, machineOf, routeKey, type CheckIssue, type CheckReport, type Difficulty, type IssueCode, type Section, type World, type WorldStats } from '#engine';
 import { assertNever } from '#lib/never';
 import { fixtureFed } from './input-coverage.ts';
-import { HARD_TASK_ACTIONS, MIX_WITHIN, actionRouteIds, planCoverage, plannedItems, pressurePlanIssues, pressureUnreachable, seedPlanIssues, taskKindLines, type Plan, type PlanList } from './plan.ts';
+import { HARD_TASK_ACTIONS, MIX_WITHIN, actionKey, actionRouteIds, planCoverage, plannedItems, pressurePlanIssues, pressureUnreachable, seedPlanIssues, taskKindLines, type Plan, type PlanList } from './plan.ts';
 
 export const STAGE_IDS = ['model', 'workflow', 'seed', 'tasks'] as const;
 export type StageId = (typeof STAGE_IDS)[number];
@@ -80,7 +80,23 @@ function tasksDone(report: OkReport, plan: Plan): readonly CheckIssue[] {
   if (have.length < DIFFICULTIES.length) {
     out.push(issue('tasks.difficulty_not_spread', ['tasks'], { have }, have.join(', ') || 'none'));
   }
-  return [...out, ...pagingBlocking(report), ...pressureIssues(report, plan), ...coverage(report, plan, COVERS.tasks)];
+  return [...out, ...pagingBlocking(report), ...pressureIssues(report, plan), ...plannedActionIssues(report, plan), ...coverage(report, plan, COVERS.tasks)];
+}
+
+/**
+ * task.planned_action_uncalled for each built task whose reference solution called, successfully, not every workflow
+ * action its plan task lists (A-398). A plan task with no actions, as every plan before A-390 has, owes nothing.
+ */
+export function plannedActionIssues(report: OkReport, plan: Plan): readonly CheckIssue[] {
+  return plan.tasks.flatMap((t): CheckIssue[] => {
+    const verdict = Object.hasOwn(report.verdicts, t.id) ? report.verdicts[t.id] : undefined;
+    if (verdict === undefined || t.actions === undefined) return [];
+    const planned = [...new Set(t.actions.map(actionKey))];
+    const missed = planned.filter((a) => !verdict.solutionActions.includes(a));
+    if (missed.length === 0) return [];
+    const called = verdict.solutionActions.length === 0 ? 'no workflow action' : verdict.solutionActions.join(', ');
+    return [issue('task.planned_action_uncalled', ['tasks', t.id, 'solution'], { task: t.id, planned, missed }, `it called ${called}`)];
+  });
 }
 
 /** One pressure claim on a task, checked against its reference trace and the seed. `exempt` says why imported data cannot meet it. */
