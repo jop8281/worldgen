@@ -1248,3 +1248,76 @@ describe('runWorldGen iterate: a plan patch on gen-billing-dunning, whose plan.y
     assert.deepEqual(snapshot(dir), before);
   });
 });
+
+// ------------------------------------------------------------------ an old world the free-text gate rejects (A-395)
+
+const ESCALATE = 'escalate_breached_enterprise_tickets';
+
+/** The golden helpdesk as it was before A-388: its escalation grader never reads the reason, so check fails at tasks. */
+function unguardedHelpdeskCopy(): string {
+  const dir = helpdeskCopy();
+  const text = readFileSync(join(dir, 'world.yaml'), 'utf8')
+    .replace('Give each escalation a reason that names the SLA breach.', 'Give each escalation a reason.')
+    .replace(/\n *\/\/ The reason must name the SLA breach[^\n]*\n *if \(!events\.some\([^\n]*\n/, '\n');
+  writeFileSync(join(dir, 'world.yaml'), text);
+  return dir;
+}
+
+describe('runWorldGen iterate: an old world whose only failing check issues the tasks stage owns (A-395)', () => {
+  const request = `make the ${ESCALATE} grader check the escalation reason`;
+  const tasksPlan = (world: World): Plan => planFor(world, { changes: [`tasks.${ESCALATE}.grader`] });
+
+  it('admits it, and ends done once the tasks stage clears the issue', async () => {
+    const dir = unguardedHelpdeskCopy();
+    const old = (await loadWorld(dir)) as { ok: true; value: World };
+    const first = checkWorld(old.value);
+    assert.deepEqual(first.ok ? [] : first.issues.map((i) => [i.code, i.path.join('.')]), [['task.freetext_unchecked', `tasks.${ESCALATE}.grader`]]);
+    const tolerated = checkWorld(old.value, undefined, { tolerate: new Set(['task.freetext_unchecked']) });
+    assert.deepEqual(tolerated.ok ? tolerated.warnings.filter((w) => w.code === 'task.freetext_unchecked').map((w) => w.path.join('.')) : null, [`tasks.${ESCALATE}.grader`]);
+    const fixed = (await loadChecked(HELPDESK)).tasks[ESCALATE];
+    const { result, events } = await iterate(dir, [
+      { input: tasksPlan(old.value) },
+      { input: { note: 'the grader reads the reason', upsert: { tasks: { [ESCALATE]: fixed } } } },
+    ], { request });
+    assert.equal(result.kind, 'done');
+    assert.deepEqual(attempts(events), [['plan', 1, 'accepted'], ['tasks', 1, 'accepted']]);
+    const after = checkWorld((await loadChecked(dir)));
+    assert.equal(after.ok, true);
+  });
+
+  it('stops, and leaves world.yaml unchanged, when the tasks stage does not clear it', async () => {
+    const dir = unguardedHelpdeskCopy();
+    const before = snapshot(dir);
+    const old = (await loadWorld(dir)) as { ok: true; value: World };
+    const keep = { input: { note: 'keep the grader' } };
+    const { result } = await iterate(dir, [{ input: tasksPlan(old.value) }, keep, keep, keep, keep], { request });
+    assert.equal(result.kind, 'stopped');
+    assert.equal(result.kind === 'stopped' && 'lastIssues' in result.reason ? result.reason.lastIssues.some((i) => i.code === 'task.freetext_unchecked') : false, true);
+    assert.equal(snapshot(dir).world, before.world);
+  });
+
+  it('refuses it when the change plan does not rerun the tasks stage', async () => {
+    const dir = unguardedHelpdeskCopy();
+    const old = (await loadWorld(dir)) as { ok: true; value: World };
+    const { result, calls } = await iterate(dir, [{ input: planFor(old.value, { changes: ['tests.escalate_assigns_oncall_agent'] }) }], { request });
+    assert.equal(result.kind, 'stopped');
+    assert.deepEqual(result.kind === 'stopped' ? result.reason : null, {
+      kind: 'input_rejected',
+      why: `the existing world does not pass the engine, and the change plan does not rerun tasks, which owns task.freetext_unchecked at tasks.${ESCALATE}.grader`,
+    });
+    assert.equal(calls.length, 1);
+  });
+
+  it('still refuses, before any model call, an old world with a failing issue outside the tasks layer', async () => {
+    const dir = unguardedHelpdeskCopy();
+    const text = readFileSync(join(dir, 'world.yaml'), 'utf8');
+    const at = text.indexOf('      (ctx) => {\n', text.indexOf('\ntests:\n'));
+    const broken = `${text.slice(0, at)}      (ctx) => {\n        ctx.assert(false, 'broken on purpose');\n${text.slice(at + '      (ctx) => {\n'.length)}`;
+    assert.notEqual(broken, text);
+    writeFileSync(join(dir, 'world.yaml'), broken);
+    const { result, calls } = await iterate(dir, [], { request });
+    assert.equal(result.kind, 'stopped');
+    assert.equal(result.kind === 'stopped' && result.reason.kind === 'input_rejected' ? result.reason.why.startsWith('the existing world does not pass the engine: test.failed at tests.') : false, true);
+    assert.equal(calls.length, 0);
+  });
+});
