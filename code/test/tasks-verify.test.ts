@@ -376,6 +376,20 @@ describe('the verdict names the workflow actions a successful reference call cha
     ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/${action}').status === 200, '${action} failed');
     ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
   }`;
+  /** Makes the ticket urgent, puts the priority back through the update route, then resolves it. */
+  const alertReverted = `(ctx) => {
+    const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/alert').status === 200, 'alert failed');
+    ctx.assert(ctx.api('PATCH', '/tickets/' + t.id, { priority: 'normal' }).status === 200, 'patch failed');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
+  }`;
+  /** Nothing unless the trace shows an alert; then half for the priority back at normal, half for the ticket resolved. */
+  const revertedGrader = `(ctx) => {
+    const t = ctx.db.list('ticket', { where: { subject: 'Password reset loop' } })[0];
+    if (!t || !ctx.trace().some((c) => c.routeId === 'alert_ticket')) return 0;
+    if (!ctx.changes().every((c) => c.id === t.id && c.fields.every((f) => f === 'status' || f === 'priority'))) return 0;
+    return (t.priority === 'normal' ? 0.5 : 0) + (t.status === 'resolved' ? 0.5 : 0);
+  }`;
   const patchOnly = `(ctx) => {
     const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
     ctx.assert(ctx.api('PATCH', '/tickets/' + t.id, { status: 'resolved' }).status === 200, 'patch failed');
@@ -386,6 +400,7 @@ describe('the verdict names the workflow actions a successful reference call cha
     ['a refused action and one that writes nothing left out', only(EASY, { solution: viaNote }, extra), EASY, ['resolve_ticket']],
     ['an update that changes no field left out', only(EASY, { solution: afterNoop('touch') }, extra), EASY, ['resolve_ticket']],
     ['an update that sets the value a field already has left out', only(EASY, { solution: afterNoop('restate') }, extra), EASY, ['resolve_ticket']],
+    ['a change a later call reverts still counts', only(EASY, { solution: alertReverted, grader: revertedGrader }, extra), EASY, ['alert_ticket', 'resolve_ticket']],
     ['standard routes only', only(EASY, { solution: patchOnly }), EASY, []],
     ['an update route and an action', only(HARD), HARD, ['resolve_ticket']],
   ];
