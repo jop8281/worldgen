@@ -10,12 +10,13 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 const CODE = path.resolve(import.meta.dirname, '..');
-const ORDERS = path.resolve(CODE, '../prod/worlds/gen-orders');
+/** A csv-created world (its capsule records a create from csv input) that no iterate has rewritten since. */
+const LOANS = path.resolve(CODE, '../prod/worlds/gen-library-loans');
 
-function copyOfOrders(): { root: string; dir: string } {
+function copyOfLoans(): { root: string; dir: string } {
   const root = mkdtempSync(path.join(tmpdir(), 'rerender-'));
-  const dir = path.join(root, 'gen-orders');
-  cpSync(ORDERS, dir, { recursive: true });
+  const dir = path.join(root, 'gen-library-loans');
+  cpSync(LOANS, dir, { recursive: true });
   return { root, dir };
 }
 
@@ -23,19 +24,19 @@ const rerender = (...args: string[]) => spawnSync('bun', ['scripts/rerender-repo
 
 describe('rerender-report.ts reads the run input from capsule.json (A-351)', () => {
   it('re-renders a world with no arguments, and the report and capsule come out unchanged', () => {
-    const { root, dir } = copyOfOrders();
+    const { root, dir } = copyOfLoans();
     try {
       const r = rerender(dir);
       assert.equal(r.status, 0, r.stderr);
-      assert.equal(r.stdout, 'gen-orders: wid_1c5930a8dd46e0e53a803a779af16cf46e776569a7a940a4a1401ca7218e231f -> wid_1c5930a8dd46e0e53a803a779af16cf46e776569a7a940a4a1401ca7218e231f\n');
-      for (const f of ['REPORT.md', 'capsule.json']) assert.equal(readFileSync(path.join(dir, f), 'utf8'), readFileSync(path.join(ORDERS, f), 'utf8'), f);
+      assert.equal(r.stdout, 'gen-library-loans: wid_14b93ec57fdb9839d5023a5aa1069ed87f3c187d8afbe2c27e563fb3bd664297 -> wid_14b93ec57fdb9839d5023a5aa1069ed87f3c187d8afbe2c27e563fb3bd664297\n');
+      for (const f of ['REPORT.md', 'capsule.json']) assert.equal(readFileSync(path.join(dir, f), 'utf8'), readFileSync(path.join(LOANS, f), 'utf8'), f);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
   it('refuses a capsule that records no input when no override is given', () => {
-    const { root, dir } = copyOfOrders();
+    const { root, dir } = copyOfLoans();
     try {
       const file = path.join(dir, 'capsule.json');
       const capsule = JSON.parse(readFileSync(file, 'utf8')) as { input: Record<string, unknown> };
@@ -43,7 +44,7 @@ describe('rerender-report.ts reads the run input from capsule.json (A-351)', () 
       writeFileSync(file, `${JSON.stringify(capsule, null, 2)}\n`);
       const r = rerender(dir);
       assert.equal(r.status, 1);
-      assert.equal(r.stderr, "gen-orders: refused: capsule.json records no usable csv input (A-351): pass the run's input after --\n");
+      assert.equal(r.stderr, "gen-library-loans: refused: capsule.json records no usable csv input (A-351): pass the run's input after --\n");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

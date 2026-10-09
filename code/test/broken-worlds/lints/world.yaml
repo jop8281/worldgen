@@ -1,9 +1,7 @@
 format: 1
 meta:
   name: helpdesk
-  description: A customer-support helpdesk with SLA tiers and on-call escalation.
-    Customers file tickets, agents work them through a fixed lifecycle, and
-    urgent work escalates to the on-call agent.
+  description: A customer-support helpdesk with SLA tiers and on-call escalation. Customers file tickets, agents work them through a fixed lifecycle, and urgent work escalates to the on-call agent.
   resembles: Zendesk Support tickets API
   source: hand
   seed: 1337
@@ -12,149 +10,206 @@ meta:
     tick: 1s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
         message: $message
 entities:
   customer:
-    description: A company that files tickets. Zendesk calls them end users
-      (requesters). The tier picks the SLA policy.
+    description: A company that files tickets. Zendesk calls them end users (requesters). The tier picks the SLA policy.
     idPrefix: cus
     fields:
       name:
         type: string
         required: true
+        nullable: false
+        unique: false
+        readonly: false
         maxLength: 120
       tier:
         type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
         values:
           - standard
           - premium
           - enterprise
-        required: true
       email:
         type: string
-        format: email
+        required: false
         nullable: true
         unique: true
+        readonly: false
+        format: email
   agent:
-    description: A support agent who works tickets and takes on-call shifts. tier2
-      staffs on-call level 1, sre staffs level 2.
+    description: A support agent who works tickets and takes on-call shifts. tier2 staffs on-call level 1, sre staffs level 2.
     idPrefix: agt
     fields:
       name:
         type: string
         required: true
+        nullable: false
+        unique: false
+        readonly: false
         maxLength: 120
       email:
         type: string
-        format: email
         required: true
+        nullable: false
         unique: true
+        readonly: false
+        format: email
       team:
         type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
         values:
           - tier1
           - tier2
           - sre
-        required: true
       active:
         type: bool
         required: true
+        nullable: false
+        unique: false
+        readonly: false
         default: true
   sla_policy:
-    description: Resolution target in minutes for one (customer tier, ticket
-      priority) pair. code is <tier>_<priority> and stands in for a composite
-      unique key.
+    description: Resolution target in minutes for one (customer tier, ticket priority) pair. code is <tier>_<priority> and stands in for a composite unique key.
     idPrefix: sla
     fields:
       code:
         type: string
         required: true
+        nullable: false
         unique: true
+        readonly: false
         maxLength: 40
       tier:
         type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
         values:
           - standard
           - premium
           - enterprise
-        required: true
       priority:
         type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
         values:
           - low
           - normal
           - high
           - urgent
-        required: true
       resolution_minutes:
         type: int
         required: true
+        nullable: false
+        unique: false
+        readonly: false
         min: 5
   oncall_shift:
-    description: A half-open window [starts_at, ends_at) in which one agent is on
-      call at an escalation level.
+    description: A half-open window [starts_at, ends_at) in which one agent is on call at an escalation level.
     idPrefix: onc
     fields:
       agent_id:
         type: ref
-        entity: agent
         required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: agent
         onDelete: restrict
       level:
         type: int
+        description: 1 is first responder (tier2), 2 is the backup (sre).
         required: true
+        nullable: false
+        unique: false
+        readonly: false
         min: 1
         max: 2
-        description: 1 is first responder (tier2), 2 is the backup (sre).
       starts_at:
         type: datetime
         required: true
+        nullable: false
+        unique: false
+        readonly: false
       ends_at:
         type: datetime
         required: true
+        nullable: false
+        unique: false
+        readonly: false
   ticket:
-    description: A support request from a customer, worked by an agent through the
-      status lifecycle. The SLA clock starts at creation.
+    description: A support request from a customer, worked by an agent through the status lifecycle. The SLA clock starts at creation.
     idPrefix: tkt
     fields:
       subject:
         type: string
         required: true
+        nullable: false
+        unique: false
+        readonly: false
         maxLength: 200
       description:
         type: text
+        required: false
         nullable: true
+        unique: false
+        readonly: false
       customer_id:
         type: ref
-        entity: customer
         required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
         onDelete: restrict
       assignee_id:
         type: ref
-        entity: agent
-        nullable: true
-        readonly: true
-        onDelete: nullify
         description: Set by the assign and escalate actions.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: agent
+        onDelete: nullify
       priority:
         type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
         values:
           - low
           - normal
           - high
           - urgent
-        required: true
       status:
         type: state
-        description: Lifecycle. Any declared move is a plain PATCH. No de-escalation.
-          closed is final.
+        description: Lifecycle. Any declared move is a plain PATCH. No de-escalation. closed is final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
         states:
           - new
           - open
@@ -184,70 +239,98 @@ entities:
       escalation_level:
         type: int
         required: true
-        default: 0
+        nullable: false
+        unique: false
+        readonly: true
         min: 0
         max: 2
-        readonly: true
+        default: 0
       escalated_at:
         type: datetime
+        required: false
         nullable: true
+        unique: false
         readonly: true
       sla_started_at:
         type: datetime
-        required: true
-        default: now
-        readonly: true
         description: Creation or last reopen.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: now
       sla_due_at:
         type: datetime
+        description: Resolution deadline, sla_started_at plus the policy target. Set by the workflow, never by a client.
+        required: false
         nullable: true
+        unique: false
         readonly: true
-        description: Resolution deadline, sla_started_at plus the policy target. Set by
-          the workflow, never by a client.
       sla_breached:
         type: bool
         required: true
-        default: false
+        nullable: false
+        unique: false
         readonly: true
+        default: false
       resolved_at:
         type: datetime
+        required: false
         nullable: true
+        unique: false
         readonly: true
   ticket_comment:
-    description: A message on a ticket. Public comments reach the customer, private
-      ones are internal notes.
+    description: A message on a ticket. Public comments reach the customer, private ones are internal notes.
     idPrefix: cmt
     fields:
       ticket_id:
         type: ref
-        entity: ticket
         required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: ticket
         onDelete: cascade
       author_id:
         type: ref
-        entity: agent
-        nullable: true
-        onDelete: nullify
         description: The agent who wrote it. null means the customer did.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: agent
+        onDelete: nullify
       body:
         type: text
         required: true
+        nullable: false
+        unique: false
+        readonly: false
       public:
         type: bool
         required: true
+        nullable: false
+        unique: false
+        readonly: false
         default: true
   ticket_event:
-    description: Append-only audit trail of what happened to a ticket. Written by
-      actions and jobs.
+    description: Append-only audit trail of what happened to a ticket. Written by actions and jobs.
     idPrefix: evt
     fields:
       ticket_id:
         type: ref
-        entity: ticket
         required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: ticket
         onDelete: restrict
       kind:
         type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
         values:
           - created
           - assigned
@@ -257,20 +340,23 @@ entities:
           - resolved
           - reopened
           - closed
-        required: true
       note:
         type: text
+        required: false
         nullable: true
+        unique: false
+        readonly: false
       actor_id:
         type: ref
-        entity: agent
+        required: false
         nullable: true
+        unique: false
+        readonly: false
+        entity: agent
         onDelete: nullify
 routes:
   list_tickets:
     op: list
-    method: GET
-    path: /tickets
     entity: ticket
     filters:
       - status
@@ -285,39 +371,45 @@ routes:
       - created_at
       - sla_due_at
     pageSize: 25
+    method: GET
+    path: /tickets
   get_ticket:
     op: get
+    entity: ticket
     method: GET
     path: /tickets/{id}
-    entity: ticket
   create_ticket:
     op: create
+    entity: ticket
     method: POST
     path: /tickets
-    entity: ticket
   update_ticket:
     op: update
+    entity: ticket
     method: PATCH
     path: /tickets/{id}
-    entity: ticket
   list_ticket_events:
     op: list
+    entity: ticket_event
+    filters: []
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
     method: GET
     path: /tickets/{ticket_id}/events
-    entity: ticket_event
-    sort:
-      - created_at
   list_ticket_comments:
     op: list
-    method: GET
-    path: /tickets/{ticket_id}/comments
     entity: ticket_comment
+    filters: []
+    search: []
     sort:
       - created_at
+    pageSize: 25
+    method: GET
+    path: /tickets/{ticket_id}/comments
   list_customers:
     op: list
-    method: GET
-    path: /customers
     entity: customer
     filters:
       - tier
@@ -325,25 +417,26 @@ routes:
       - name
     sort:
       - name
+    pageSize: 25
+    method: GET
+    path: /customers
   get_customer:
     op: get
+    entity: customer
     method: GET
     path: /customers/{id}
-    entity: customer
   create_customer:
     op: create
+    entity: customer
     method: POST
     path: /customers
-    entity: customer
   update_customer:
     op: update
+    entity: customer
     method: PATCH
     path: /customers/{id}
-    entity: customer
   list_agents:
     op: list
-    method: GET
-    path: /agents
     entity: agent
     filters:
       - team
@@ -351,37 +444,49 @@ routes:
     search:
       - name
       - email
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /agents
   list_oncall:
     op: list
-    method: GET
-    path: /oncall
     entity: oncall_shift
     filters:
       - level
       - agent_id
+    search: []
     sort:
       - starts_at
+    pageSize: 25
+    method: GET
+    path: /oncall
   list_sla_policies:
     op: list
-    method: GET
-    path: /sla_policies
     entity: sla_policy
     filters:
       - tier
       - priority
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /sla_policies
 actions:
   assign_ticket:
     method: POST
     path: /tickets/{id}/assign
-    description: Assign a new, open or pending ticket to an active agent. A new
-      ticket moves to open.
+    description: Assign a new, open or pending ticket to an active agent. A new ticket moves to open.
     input:
       agent_id:
         type: ref
-        entity: agent
-        required: true
         description: The agent who will work the ticket. Must be active.
-    handler: >
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: agent
+        onDelete: restrict
+    handler: |
       (ctx) => {
         const id = ctx.params.id;
         const t = ctx.db.get('ticket', id);
@@ -400,15 +505,16 @@ actions:
   escalate_ticket:
     method: POST
     path: /tickets/{id}/escalate
-    description: Escalate a new, open or pending ticket to level 1 and reassign it
-      to the agent on call at level 1 right now. Level 2 is reached only by the
-      escalation_timeout job.
+    description: Escalate a new, open or pending ticket to level 1 and reassign it to the agent on call at level 1 right now. Level 2 is reached only by the escalation_timeout job.
     input:
       reason:
         type: text
-        required: true
         description: Why the ticket needs on-call attention. Stored on the escalated event.
-    handler: >
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |
       (ctx) => {
         const id = ctx.params.id;
         const t = ctx.db.get('ticket', id);
@@ -428,14 +534,16 @@ actions:
   resolve_ticket:
     method: POST
     path: /tickets/{id}/resolve
-    description: Resolve an open, pending or escalated ticket. Sets resolved_at and
-      stops the SLA clock. The escalation level is kept for history.
+    description: Resolve an open, pending or escalated ticket. Sets resolved_at and stops the SLA clock. The escalation level is kept for history.
     input:
       note:
         type: text
-        nullable: true
         description: Optional resolution note, stored on the resolved event.
-    handler: >
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |
       (ctx) => {
         const id = ctx.params.id;
         const t = ctx.db.get('ticket', id);
@@ -451,15 +559,16 @@ actions:
   reopen_ticket:
     method: POST
     path: /tickets/{id}/reopen
-    description: Reopen a resolved ticket. It goes back to open with its assignee,
-      level 0, and a fresh SLA clock from the customer's tier policy. Closed
-      tickets cannot be reopened.
+    description: Reopen a resolved ticket. It goes back to open with its assignee, level 0, and a fresh SLA clock from the customer's tier policy. Closed tickets cannot be reopened.
     input:
       reason:
         type: text
-        required: true
         description: Why the ticket is reopened. Stored on the reopened event.
-    handler: >
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |
       (ctx) => {
         const id = ctx.params.id;
         const t = ctx.db.get('ticket', id);
@@ -482,12 +591,9 @@ actions:
       }
 jobs:
   sla_breach:
-    description: Every 15 minutes. Pass 1 applies the tier policy to active tickets
-      created without a due time. Pass 2 flags active tickets whose sla_due_at
-      has passed. Pass 3 escalates breached urgent tickets at level 0 to the
-      level 1 on-call agent, the same rule as escalate_ticket.
+    description: Every 15 minutes. Pass 1 applies the tier policy to active tickets created without a due time. Pass 2 flags active tickets whose sla_due_at has passed. Pass 3 escalates breached urgent tickets at level 0 to the level 1 on-call agent, the same rule as escalate_ticket.
     every: 15m
-    run: >
+    run: |
       (ctx) => {
         const now = ctx.now();
         const active = ['new', 'open', 'pending', 'escalated'];
@@ -518,11 +624,9 @@ jobs:
         }
       }
   escalation_timeout:
-    description: Every 15 minutes. An urgent ticket that has sat at level 1 for 60
-      minutes moves to level 2 and to the level 2 on-call agent. Skipped while
-      no level 2 shift covers now.
+    description: Every 15 minutes. An urgent ticket that has sat at level 1 for 60 minutes moves to level 2 and to the level 2 on-call agent. Skipped while no level 2 shift covers now.
     every: 15m
-    run: >
+    run: |
       (ctx) => {
         const now = ctx.now();
         const shift = ctx.db.list('oncall_shift', { where: { level: 2 } })
@@ -537,7 +641,7 @@ jobs:
   auto_close:
     description: Every hour. A ticket resolved at least 72 hours ago is closed.
     every: 1h
-    run: >
+    run: |
       (ctx) => {
         const now = ctx.now();
         for (const t of ctx.db.list('ticket', { where: { status: 'resolved' } })) {
@@ -548,7 +652,7 @@ jobs:
       }
 fixtures: {}
 seed:
-  customer: >
+  customer: |
     (ctx) => {
       const rows = [
         { name: 'Acme Logistics', tier: 'enterprise', email: 'support@acmelogistics.example' },
@@ -582,7 +686,7 @@ seed:
         return { ...r, created_at: since, updated_at: since };
       });
     }
-  agent: >
+  agent: |
     (ctx) => [
       ['Priya Raman', 'tier1'], ['Priya Shah', 'tier1'], ['Marcus Bell', 'tier2'], ['Dana Okafor', 'sre'],
       ['Lena Fischer', 'tier1'], ['Omar Haddad', 'tier2'], ['Sofia Alvarez', 'tier1'], ['Kenji Watanabe', 'sre'],
@@ -598,7 +702,7 @@ seed:
         updated_at: hired,
       };
     })
-  sla_policy: >
+  sla_policy: |
     (ctx) => {
       const minutes = {
         enterprise: { urgent: 60, high: 240, normal: 480, low: 1440 },
@@ -614,7 +718,7 @@ seed:
       }
       return rows;
     }
-  oncall_shift: >
+  oncall_shift: |
     (ctx) => {
       // 12h blocks from S - 7d to S + 3d. Level 1 (tier2) is continuous. Level 2 (sre) has one gap,
       // S + 12h to S + 24h. Block 14 starts at S: Marcus Bell (agt_0003) at level 1, Dana Okafor (agt_0004) at level 2.
@@ -631,7 +735,7 @@ seed:
       }
       return rows;
     }
-  ticket: >
+  ticket: |
     (ctx) => {
       const BASE = '2026-01-01T00:00:00.000Z';
       const X = ctx.time.minutesBetween(BASE, ctx.now());
@@ -832,7 +936,7 @@ seed:
       }
       return rows;
     }
-  ticket_comment: >
+  ticket_comment: |
     (ctx) => {
       const BASE = '2026-01-01T00:00:00.000Z';
       const X = ctx.time.minutesBetween(BASE, ctx.now());
@@ -877,7 +981,7 @@ seed:
         return { ...c.row, created_at: when, updated_at: when };
       });
     }
-  ticket_event: >
+  ticket_event: |
     (ctx) => {
       // Derived from each ticket's fields with the same timing rules as the ticket seed, then put in time order.
       const BASE = '2026-01-01T00:00:00.000Z';
@@ -918,10 +1022,8 @@ seed:
     }
 tests:
   escalate_assigns_oncall_agent:
-    description: escalate_ticket moves an open ticket to escalated level 1, assigns
-      the level 1 on-call agent (agt_0003 at clock.start) and records the
-      reason.
-    script: >
+    description: escalate_ticket moves an open ticket to escalated level 1, assigns the level 1 on-call agent (agt_0003 at clock.start) and records the reason.
+    script: |
       (ctx) => {
         const before = ctx.api('GET', '/tickets/tkt_0001').body;
         ctx.assert(before.status === 'open' && before.sla_breached === true && before.assignee_id === 'agt_0001', 'seed: tkt_0001 is open, breached and assigned to agt_0001');
@@ -935,9 +1037,8 @@ tests:
         ctx.assert(last.kind === 'escalated' && last.note === 'SLA breached, printer still offline', 'last event is the escalation with its reason, got ' + JSON.stringify(last));
       }
   escalate_twice_is_409:
-    description: A second escalation of the same ticket is refused with 409
-      already_escalated and changes nothing.
-    script: >
+    description: A second escalation of the same ticket is refused with 409 already_escalated and changes nothing.
+    script: |
       (ctx) => {
         const first = ctx.api('POST', '/tickets/tkt_0002/escalate', { reason: 'Jams block outbound shipping' });
         ctx.assert(first.status === 200, 'first escalation returned ' + first.status + ' ' + JSON.stringify(first.body));
@@ -950,9 +1051,8 @@ tests:
         ctx.assert(events.length === 1, 'one escalated event, got ' + events.length);
       }
   escalate_refusals:
-    description: escalate_ticket refuses a missing ticket (404), a missing reason
-      (400) and a resolved ticket (409 invalid_state).
-    script: >
+    description: escalate_ticket refuses a missing ticket (404), a missing reason (400) and a resolved ticket (409 invalid_state).
+    script: |
       (ctx) => {
         const missing = ctx.api('POST', '/tickets/tkt_9999/escalate', { reason: 'down' });
         ctx.assert(missing.status === 404 && missing.body.error.code === 'not_found', 'missing ticket: ' + JSON.stringify(missing));
@@ -965,9 +1065,8 @@ tests:
         ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'resolved ticket: ' + JSON.stringify(late));
       }
   resolve_sets_resolved_at:
-    description: resolve_ticket moves an open ticket to resolved, sets resolved_at,
-      records the note, and refuses new and already resolved tickets.
-    script: >
+    description: resolve_ticket moves an open ticket to resolved, sets resolved_at, records the note, and refuses new and already resolved tickets.
+    script: |
       (ctx) => {
         const at = ctx.now();
         const r = ctx.api('POST', '/tickets/tkt_0002/resolve', { note: 'Replaced the feed roller' });
@@ -981,10 +1080,8 @@ tests:
         ctx.assert(fresh.status === 409 && fresh.body.error.code === 'invalid_state', 'new ticket: ' + JSON.stringify(fresh));
       }
   reopen_restarts_sla:
-    description: reopen_ticket moves a resolved ticket back to open, keeps the
-      assignee, clears resolved_at and restarts the SLA from the tier policy
-      (enterprise normal is 480 minutes). Closed tickets stay closed.
-    script: >
+    description: reopen_ticket moves a resolved ticket back to open, keeps the assignee, clears resolved_at and restarts the SLA from the tier policy (enterprise normal is 480 minutes). Closed tickets stay closed.
+    script: |
       (ctx) => {
         ctx.assert(ctx.api('POST', '/tickets/tkt_0002/resolve', {}).status === 200, 'resolve tkt_0002 first');
         const at = ctx.now();
@@ -1000,10 +1097,8 @@ tests:
         ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'reopen of a closed ticket: ' + JSON.stringify(late));
       }
   assign_opens_new_ticket:
-    description: assign_ticket moves a new ticket to open with the agent, and
-      refuses the same agent, an inactive agent, an unknown agent and an
-      escalated ticket.
-    script: >
+    description: assign_ticket moves a new ticket to open with the agent, and refuses the same agent, an inactive agent, an unknown agent and an escalated ticket.
+    script: |
       (ctx) => {
         const r = ctx.api('POST', '/tickets/tkt_0004/assign', { agent_id: 'agt_0001' });
         ctx.assert(r.status === 200 && r.body.status === 'open' && r.body.assignee_id === 'agt_0001', 'assign: ' + JSON.stringify(r));
@@ -1020,9 +1115,8 @@ tests:
 tasks:
   assign_newest_acme_ticket:
     difficulty: easy
-    instruction: Assign the most recently created unassigned ticket from the
-      customer Acme Logistics to the agent Priya Raman.
-    grader: >
+    instruction: Assign the most recently created unassigned ticket from the customer Acme Logistics to the agent Priya Raman.
+    grader: |
       (ctx) => {
         const acme = ctx.seed.list('customer', { where: { name: 'Acme Logistics' } })[0];
         const priya = ctx.seed.list('agent', { where: { name: 'Priya Raman' } })[0];
@@ -1041,7 +1135,7 @@ tasks:
         const end = ctx.db.get('ticket', target.id);
         return end.status === 'open' && end.assignee_id === priya.id ? 1 : 0;
       }
-    solution: >
+    solution: |
       (ctx) => {
         const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
         ctx.assert(acme, 'customer Acme Logistics not found');
@@ -1053,30 +1147,26 @@ tasks:
         ctx.assert(r.status === 200, 'assign failed: ' + JSON.stringify(r.body));
       }
     decoys:
-      - why: takes the first new Acme Logistics ticket in id order instead of the most
-          recently created one
-        script: >
+      - why: takes the first new Acme Logistics ticket in id order instead of the most recently created one
+        script: |
           (ctx) => {
             const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
             const first = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&status=new').body.data[0];
             const priya = ctx.api('GET', '/agents?q=Priya+Raman').body.data[0];
             ctx.api('POST', '/tickets/' + first.id + '/assign', { agent_id: priya.id });
           }
-      - why: PATCHes the ticket status to open instead of assigning it, so the ticket
-          has no assignee
-        script: >
+      - why: PATCHes the ticket status to open instead of assigning it, so the ticket has no assignee
+        script: |
           (ctx) => {
             const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
             const newest = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&status=new&sort=-created_at&limit=1').body.data[0];
             ctx.api('PATCH', '/tickets/' + newest.id, { status: 'open' });
           }
+    alternatives: []
   escalate_breached_printer_ticket:
     difficulty: medium
-    instruction: Acme Logistics says one of their label printer tickets has blown
-      its SLA. Escalate that ticket to the on-call agent, with a reason that
-      mentions the SLA. Do not reassign or edit the ticket yourself before the
-      escalation.
-    grader: >
+    instruction: Acme Logistics says one of their label printer tickets has blown its SLA. Escalate that ticket to the on-call agent, with a reason that mentions the SLA. Do not reassign or edit the ticket yourself before the escalation.
+    grader: |
       (ctx) => {
         const acme = ctx.seed.list('customer', { where: { name: 'Acme Logistics' } })[0];
         if (!acme) return 0;
@@ -1103,7 +1193,7 @@ tasks:
         ctx.goal(0.3, 'the escalation reason mentions the SLA', escalated && reasons.some((e) => typeof e.note === 'string' && /\bsla\b/i.test(e.note)));
         return ctx.score();
       }
-    solution: >
+    solution: |
       (ctx) => {
         const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
         ctx.assert(acme, 'customer Acme Logistics not found');
@@ -1114,32 +1204,29 @@ tasks:
         ctx.assert(r.status === 200, 'escalate failed: ' + JSON.stringify(r.body));
       }
     decoys:
-      - why: escalates the newest label printer ticket without checking which one
-          breached its SLA
-        script: >
+      - why: escalates the newest label printer ticket without checking which one breached its SLA
+        script: |
           (ctx) => {
             const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
             const newest = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&q=label+printer&sort=-created_at').body.data[0];
             ctx.api('POST', '/tickets/' + newest.id + '/escalate', { reason: 'SLA breached on a label printer ticket' });
           }
       - why: escalates the right ticket but gives a reason that does not mention the SLA
-        script: >
+        script: |
           (ctx) => {
             const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
             const hit = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&q=label+printer&sla_breached=true').body.data[0];
             ctx.api('POST', '/tickets/' + hit.id + '/escalate', { reason: 'Customer asked us to escalate' });
           }
-      - why: PATCHes the status to escalated instead of calling the escalate action, so
-          no on-call agent is assigned
-        script: >
+      - why: PATCHes the status to escalated instead of calling the escalate action, so no on-call agent is assigned
+        script: |
           (ctx) => {
             const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
             const hit = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&q=label+printer&sla_breached=true').body.data[0];
             ctx.api('PATCH', '/tickets/' + hit.id, { status: 'escalated' });
           }
-      - why: assigns the ticket to the on-call agent by hand before escalating it, so
-          its end state passes but its history has a hand edit
-        script: >
+      - why: assigns the ticket to the on-call agent by hand before escalating it, so its end state passes but its history has a hand edit
+        script: |
           (ctx) => {
             const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
             const hit = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&q=label+printer&sla_breached=true').body.data[0];
@@ -1148,12 +1235,11 @@ tasks:
             ctx.api('POST', '/tickets/' + hit.id + '/assign', { agent_id: shift.agent_id });
             ctx.api('POST', '/tickets/' + hit.id + '/escalate', { reason: 'SLA breached on a label printer ticket' });
           }
+    alternatives: []
   escalate_breached_enterprise_tickets:
     difficulty: hard
-    instruction: Escalate every ticket that is in status open, has high priority,
-      belongs to an enterprise customer and has breached its SLA. Give each
-      escalation a reason. Change nothing else.
-    grader: >
+    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason that names the SLA breach. Change nothing else.
+    grader: |-
       (ctx) => {
         const tierOf = {};
         for (const c of ctx.seed.list('customer')) tierOf[c.id] = c.tier;
@@ -1172,13 +1258,15 @@ tasks:
         for (const t of targets) {
           const end = ctx.db.get('ticket', t.id);
           if (end.status !== 'escalated' || end.escalation_level !== 1 || end.escalated_at === null) continue;
+          // The reason must name the SLA breach the instruction asks for, so nonsense in it scores below 1 (A-388).
+          if (!events.some((e) => e.ticket_id === t.id && /\bSLA\b/i.test(e.note ?? ''))) continue;
           const at = end.escalated_at;
           const shift = shifts.find((s) => ctx.time.minutesBetween(s.starts_at, at) >= 0 && ctx.time.minutesBetween(at, s.ends_at) > 0);
           if (shift && end.assignee_id === shift.agent_id) done += 1;
         }
         return done / targets.length;
       }
-    solution: >
+    solution: |
       (ctx) => {
         const pages = (path) => {
           const rows = [];
@@ -1200,9 +1288,8 @@ tasks:
         }
       }
     decoys:
-      - why: reads only the first page of open, high, breached tickets, so it misses the
-          enterprise tickets on page 2
-        script: >
+      - why: reads only the first page of open, high, breached tickets, so it misses the enterprise tickets on page 2
+        script: |
           (ctx) => {
             const enterprise = new Set(ctx.api('GET', '/customers?tier=enterprise').body.data.map((c) => c.id));
             const page = ctx.api('GET', '/tickets?status=open&priority=high&sla_breached=true').body.data;
@@ -1210,9 +1297,8 @@ tasks:
               if (enterprise.has(t.customer_id)) ctx.api('POST', '/tickets/' + t.id + '/escalate', { reason: 'SLA breached' });
             }
           }
-      - why: ignores the customer tier and escalates every open, high-priority ticket
-          that breached its SLA
-        script: >
+      - why: ignores the customer tier and escalates every open, high-priority ticket that breached its SLA
+        script: |
           (ctx) => {
             let cursor = null;
             const ids = [];
@@ -1223,9 +1309,8 @@ tasks:
             } while (cursor !== null);
             for (const id of ids) ctx.api('POST', '/tickets/' + id + '/escalate', { reason: 'SLA breached' });
           }
-      - why: reads 'open' as 'not resolved yet' and also escalates new and pending
-          enterprise tickets that breached
-        script: >
+      - why: reads 'open' as 'not resolved yet' and also escalates new and pending enterprise tickets that breached
+        script: |
           (ctx) => {
             const enterprise = new Set(ctx.api('GET', '/customers?tier=enterprise').body.data.map((c) => c.id));
             let cursor = null;
@@ -1239,9 +1324,8 @@ tasks:
             } while (cursor !== null);
             for (const id of ids) ctx.api('POST', '/tickets/' + id + '/escalate', { reason: 'SLA breached' });
           }
-      - why: forgets the SLA filter and escalates every open, high-priority enterprise
-          ticket
-        script: >
+      - why: forgets the SLA filter and escalates every open, high-priority enterprise ticket
+        script: |
           (ctx) => {
             const enterprise = new Set(ctx.api('GET', '/customers?tier=enterprise').body.data.map((c) => c.id));
             let cursor = null;
@@ -1253,9 +1337,8 @@ tasks:
             } while (cursor !== null);
             for (const id of ids) ctx.api('POST', '/tickets/' + id + '/escalate', { reason: 'SLA breached' });
           }
-      - why: PATCHes each target's status to escalated instead of calling the escalate
-          action, so nobody on call is assigned
-        script: >
+      - why: PATCHes each target's status to escalated instead of calling the escalate action, so nobody on call is assigned
+        script: |
           (ctx) => {
             const enterprise = new Set(ctx.api('GET', '/customers?tier=enterprise').body.data.map((c) => c.id));
             let cursor = null;
@@ -1267,3 +1350,4 @@ tasks:
             } while (cursor !== null);
             for (const id of ids) ctx.api('PATCH', '/tickets/' + id, { status: 'escalated' });
           }
+    alternatives: []
