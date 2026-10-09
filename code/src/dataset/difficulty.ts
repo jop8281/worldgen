@@ -221,13 +221,13 @@ export function localRunner(o: LocalRunnerOptions): EpisodeRunner {
 /**
  * Which stops measure the agent on the task: it finished, ran out of turns, budget or time, or gave an answer that is
  * not a valid turn (A-389).
- * A failed model call, a refused, ungraded or interrupted episode, and one the world or the grader
- * broke measure the transport, the infrastructure or the operator, so they are not trials: a call
- * that fails reads as unmeasured, not as hard. A slow call still counts against the time limit.
+ * A failed model call, a refused, ungraded or interrupted episode, one the world or the grader broke, and one a run's
+ * shared budget or deadline cut (A-396) measure the transport, the infrastructure or the operator, so they are not
+ * trials: a call that fails reads as unmeasured, not as hard. A slow call still counts against the time limit.
  */
 const MEASURES: Record<StopReason, boolean> = {
   done: true, turn_limit: true, budget_limit: true, time_limit: true, invalid_turn: true,
-  model_error: false, world_error: false, grade_error: false, interrupted: false,
+  run_budget_limit: false, run_time_limit: false, model_error: false, world_error: false, grade_error: false, interrupted: false,
 };
 export const isTrial = (r: EpisodeOutcome): boolean => r.refusal === null && r.score !== null && MEASURES[r.stopReason];
 /** A pass is the engine's full score. */

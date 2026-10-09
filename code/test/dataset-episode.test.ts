@@ -207,15 +207,26 @@ describe('runEpisode against the golden helpdesk over HTTP', () => {
     assert.equal(isCompleteSuccess(episode), false);
   });
 
-  it('stops when the model budget is spent, after the call that spent it', async () => {
+  it("stops when the model budget is spent, after the call that spent it: its own budget, so the agent's failure (A-396)", async () => {
     const remaining: number[] = [];
     const solver: NextTurn = async view => { remaining.push(view.budgetLeftUsd); return turn(get('/agents'), '', 0.01); };
     const { episode } = await runEpisode(await episodeInput(world.port, solver, { ...fixed, budgetLeftUsd: 0.025 }));
     assert.equal(episode.stop_reason, 'budget_limit');
+    assert.deepEqual([episode.outcome.verdict, episode.outcome.failure_cause], ['failure', 'budget_limit']);
     assert.equal(episode.usage.model_calls, 3);
     assert.equal(episode.usage.cost_usd, 0.03);
     assert.deepEqual(remaining.map(n => Math.round(n * 1e9) / 1e9), [0.025, 0.015, 0.005]);
     assert.equal(episode.error?.startsWith('the model budget is spent'), true);
+  });
+
+  it("names a cut by a run's shared budget or deadline run_budget_limit or run_time_limit: infra, the run budget or run time (A-396)", async () => {
+    const solver: NextTurn = async () => turn(get('/agents'), '', 0.01);
+    const budget = await runEpisode(await episodeInput(world.port, solver, { ...fixed, budgetLeftUsd: 0.015, limitScope: 'run' }));
+    assert.deepEqual([budget.episode.stop_reason, budget.episode.outcome.verdict, budget.episode.outcome.failure_cause], ['run_budget_limit', 'infra', 'run budget']);
+    assert.equal(budget.episode.error?.startsWith("the run's model budget is spent"), true);
+    const late = await runEpisode(await episodeInput(world.port, solver, { now: () => 5000, deadline: 5000, limitScope: 'run' }));
+    assert.deepEqual([late.episode.stop_reason, late.episode.outcome.verdict, late.episode.outcome.failure_cause], ['run_time_limit', 'infra', 'run time']);
+    assert.equal(late.episode.error, "the run's time limit passed before the episode started");
   });
 
   it('does not even reset the world when no budget is left', async () => {
@@ -245,6 +256,7 @@ describe('runEpisode against the golden helpdesk over HTTP', () => {
     assert.equal(aborted, true);
     assert.equal(Date.now() - t0 < 5000, true);
     assert.equal(episode.stop_reason, 'time_limit');
+    assert.deepEqual([episode.outcome.verdict, episode.outcome.failure_cause], ['failure', 'time_limit'], 'its own deadline: the agent\'s failure (A-396)');
     assert.equal(episode.usage.model_calls, 0);
     assert.equal(episode.usage.unaccounted_calls, 1);
     assert.equal(episode.score, 0);

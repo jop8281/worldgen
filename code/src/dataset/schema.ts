@@ -102,8 +102,14 @@ export function redactor(secrets: readonly string[]): Redactor {
 // ---------------------------------------------------------------------------------------------
 // Episode record
 
-/** `model_error` is a model call that failed; `invalid_turn` is an answer the agent gave that is not a valid turn (A-389). */
-export const STOP_REASONS = ['done', 'turn_limit', 'budget_limit', 'time_limit', 'model_error', 'invalid_turn', 'world_error', 'grade_error', 'interrupted'] as const;
+/**
+ * `model_error` is a model call that failed; `invalid_turn` is an answer the agent gave that is not a valid turn (A-389).
+ * `budget_limit` and `time_limit` are the episode's own limits; `run_budget_limit` and `run_time_limit` are a run's shared
+ * budget or deadline running out while the episode ran, which is not the agent's doing (A-396).
+ */
+export const STOP_REASONS = [
+  'done', 'turn_limit', 'budget_limit', 'time_limit', 'run_budget_limit', 'run_time_limit', 'model_error', 'invalid_turn', 'world_error', 'grade_error', 'interrupted',
+] as const;
 export type StopReason = (typeof STOP_REASONS)[number];
 
 const sha = z.string().regex(/^[0-9a-f]{64}$/, 'a lowercase hex sha-256');
@@ -213,7 +219,9 @@ const episodeShape = {
 export const VERDICTS = ['success', 'partial', 'failure', 'infra'] as const;
 export type Verdict = (typeof VERDICTS)[number];
 /** Stops that say the machinery failed, not the agent: such a row is `infra`, whatever its score (A-389). */
-export const INFRA_STOPS: readonly StopReason[] = ['model_error', 'world_error', 'grade_error', 'interrupted'];
+export const INFRA_STOPS: readonly StopReason[] = ['run_budget_limit', 'run_time_limit', 'model_error', 'world_error', 'grade_error', 'interrupted'];
+/** The failure cause of a cut by a run's shared limit, in the words of A-396. Every other stop is its own cause. */
+const RUN_LIMIT_CAUSES: Partial<Record<StopReason, string>> = { run_budget_limit: 'run budget', run_time_limit: 'run time' };
 
 /** What a training consumer reads off a row. It follows from the record, and the schema refuses one that does not. */
 const outcomeSchema = z.strictObject({
@@ -308,7 +316,7 @@ export function isCompleteSuccess(ep: Graded): boolean {
  */
 export function failureCauseOf(ep: Graded, counts: GradeCounts | null): string | null {
   if (isCompleteSuccess(ep)) return null;
-  if (ep.stop_reason !== 'done') return ep.stop_reason;
+  if (ep.stop_reason !== 'done') return RUN_LIMIT_CAUSES[ep.stop_reason] ?? ep.stop_reason;
   if (ep.score === null) return 'scored none';
   if (ep.score !== 1) {
     if (counts !== null && counts.guards.held < counts.guards.total) return 'guard broken';

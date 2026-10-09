@@ -111,6 +111,13 @@ describe('isCostRefusal, isBudgetStop and modelCapLeft', () => {
   });
 });
 
+describe('isTrial', () => {
+  it("counts an episode its own limits cut as a trial, and one a run's shared limits cut as unmeasured (A-396)", () => {
+    const at = (stop: StopReason): boolean => isTrial({ ...outcome(0, 0.1, stop), episodeId: 'e' });
+    assert.deepEqual((['budget_limit', 'time_limit', 'run_budget_limit', 'run_time_limit', 'invalid_turn', 'model_error'] as const).map(at), [true, true, false, false, true, false]);
+  });
+});
+
 describe('runDifficulty and difficultyMatrix', () => {
   it('runs every task with every model once per round and builds the literal matrix', async () => {
     const { run, jobs } = scriptedRunner({

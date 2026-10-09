@@ -289,20 +289,20 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.deepEqual(result.manifest?.counts.by_verdict, { success: 1, partial: 0, failure: 0, infra: 0 });
   });
 
-  it('shares the model budget across episodes: once it is spent no later episode starts', RUN_BUDGET, async () => {
+  it('shares the model budget across episodes: once it is spent no later episode starts, and the cut is infra, the run budget (A-396)', RUN_BUDGET, async () => {
     const solver: NextTurn = async (v, s) => ({ ...(await solveAll(v, s)), costUsd: 0.01 });
     const { result } = await run({ solver, opts: { budgetUsd: 0.05 } });
-    assert.deepEqual(result.episodes.map((e) => [e.stop_reason, e.usage.cost_usd, e.initial_state_hash === null]), [
-      ['done', 0.05, false],
-      ['budget_limit', 0, true],
-      ['budget_limit', 0, true],
+    assert.deepEqual(result.episodes.map((e) => [e.stop_reason, e.usage.cost_usd, e.initial_state_hash === null, e.outcome.verdict, e.outcome.failure_cause]), [
+      ['done', 0.05, false, 'success', null],
+      ['run_budget_limit', 0, true, 'infra', 'run budget'],
+      ['run_budget_limit', 0, true, 'infra', 'run budget'],
     ]);
     assert.equal(result.accepted, 1);
     assert.equal(result.modelCostUsd, 0.05);
     assert.equal(result.status, 'incomplete');
   });
 
-  it('stops every episode at the time limit, skips the remaining resets, and still stops the sandbox', RUN_BUDGET, async (t) => {
+  it("stops every episode at the run's time limit, skips the remaining resets, labels each cut infra, the run time (A-396), and still stops the sandbox", RUN_BUDGET, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     let clock = 0;
     let modelCalls = 0;
@@ -319,7 +319,9 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       deps: { now: () => clock, fetch: async () => new Response('{}', { status: 200 }) },
     });
     assert.equal(modelCalls, 1);
-    assert.deepEqual(result.episodes.map((e) => e.stop_reason), ['time_limit', 'time_limit', 'time_limit']);
+    assert.deepEqual(result.episodes.map((e) => [e.stop_reason, e.outcome.verdict, e.outcome.failure_cause]), [
+      ['run_time_limit', 'infra', 'run time'], ['run_time_limit', 'infra', 'run time'], ['run_time_limit', 'infra', 'run time'],
+    ]);
     assert.equal(result.episodes[1]?.initial_state_hash, null);
     assert.equal(result.episodes[2]?.initial_state_hash, null);
     assert.equal(result.accepted, 0);

@@ -473,7 +473,8 @@ export async function runPipeline(o: PipelineOptions, deps: PipelineDeps): Promi
       const { episode, artifacts } = await runEpisode({
         runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION, configVersion: cfg, model: o.model,
         task, index: 1, openapi: prep.openapi, seedHash: prep.seedHash, port: world, grade, nextTurn: deps.nextTurn,
-        maxTurns: o.maxTurns, budgetLeftUsd: o.budgetUsd - spent, deadline, now, redact, interrupt: deps.interrupt,
+        // The budget and deadline are the run's, shared by its episodes, so a cut by them is the run's, not the agent's (A-396).
+        maxTurns: o.maxTurns, budgetLeftUsd: o.budgetUsd - spent, deadline, limitScope: 'run', now, redact, interrupt: deps.interrupt,
       });
       spent += episode.usage.cost_usd;
       episodes.push(episode);
