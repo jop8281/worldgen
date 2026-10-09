@@ -14,7 +14,7 @@ import type { TurnView } from '../src/dataset/episode.ts';
 import { finishAtOnce, runLocalEpisode } from '../src/dataset/local.ts';
 import { renderRedteamSummary, rowOf, type RedteamRow } from '../src/dataset/redteam.ts';
 import { redactor } from '../src/dataset/schema.ts';
-import { PROMPT_VERSION_OF, promptOf, solverTurn, systemOf, type SolverProposer } from '../src/dataset/solver.ts';
+import { PROMPT_VERSION_OF, blocksOf, promptOf, solverTurn, systemOf, type SolverProposer } from '../src/dataset/solver.ts';
 
 const WORLDS = path.resolve(import.meta.dirname, '../../prod/worlds');
 const HELPDESK = path.join(WORLDS, 'helpdesk');
@@ -28,7 +28,8 @@ const EASY_DECISIONS: readonly unknown[] = [
   { action: 'request', method: 'POST', path: '/tickets/tkt_0004/assign', body: { agent_id: 'agt_0001' }, query: {} },
   { action: 'finish', final_reply: 'Assigned tkt_0004 to Priya Raman.' },
 ];
-const turnOf = (prompt: string): number => Number(/This is turn (\d+) of/.exec(prompt)?.[1]);
+/** The turn the prompt is on: its last counter, since append-only prompts keep the earlier ones (A-400). */
+const turnOf = (prompt: string): number => Number([...prompt.matchAll(/This is turn (\d+) of/g)].at(-1)?.[1]);
 
 /** A proposer that plays EASY_DECISIONS and records every request it is sent. */
 function scripted(): { proposer: SolverProposer; seen: Parameters<SolverProposer['propose']>[0][] } {
@@ -63,10 +64,18 @@ describe('the red-team solver mode (A-404)', () => {
     assert.deepEqual(PROMPT_VERSION_OF, { solve: 'solver-prompt-1', redteam: 'redteam-prompt-1' });
   });
 
+  it('opens the red-team append-only blocks with the near-miss task line (A-400, A-404)', () => {
+    assert.deepEqual(blocksOf(view, 'redteam'), [
+      'Task to make a near-miss of (easy), wrong in one important way:\nAssign the newest Acme ticket to Priya Raman.',
+      'This is turn 1 of at most 10. Call solver_turn.',
+    ]);
+    assert.deepEqual(blocksOf(view, 'redteam').slice(1), blocksOf(view).slice(1));
+  });
+
   it('sends the red-team prompts through the same tool, step and run id', async () => {
     const { proposer, seen } = scripted();
     await solverTurn(proposer, 'rt-1', 'redteam')(view, new AbortController().signal);
-    assert.deepEqual(seen.map((q) => [q.system === systemOf(view, 'redteam'), q.prompt === promptOf(view, 'redteam'), q.tool.name, q.step, q.runId]), [[true, true, 'solver_turn', 'solver', 'rt-1']]);
+    assert.deepEqual(seen.map((q) => [q.system === systemOf(view, 'redteam'), q.prompt === promptOf(view, 'redteam'), JSON.stringify(q.blocks) === JSON.stringify(blocksOf(view, 'redteam')), q.tool.name, q.step, q.runId]), [[true, true, true, 'solver_turn', 'solver', 'rt-1']]);
   });
 });
 

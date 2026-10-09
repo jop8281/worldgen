@@ -79,7 +79,7 @@ const workflowItem = z.object({ name: z.string(), entity: z.string(), states: z.
 const pressureItem = z.object({
   paging: z.string().optional().describe('entity whose list the reference must page past the first page to reach a target row'),
   states: z.array(z.string()).optional().describe('entity.state values the task needs seeded rows in, such as ticket.pending; never a state only a workflow with a declared lifecycle names, since no state field holds it'),
-  distractors: z.string().optional().describe('entity whose near-duplicate rows the reference must tell apart: a filtered list must return a row it leaves unchanged'),
+  distractors: z.string().optional().describe('an entity the task changes rows of, whose near-duplicate rows the reference must tell apart: a filtered list must return a row of it the task leaves unchanged; never an entity the task only looks up'),
 }).describe('what makes the task as hard as its label; the judge checks it against the reference trace and the seed (A-226, A-227)');
 /** What a task is about beyond its difficulty, and what each kind means; the plan step and the tasks step are told (A-390). */
 export const TASK_KINDS = {

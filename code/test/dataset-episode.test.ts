@@ -3,7 +3,7 @@ import { after, before, describe, it } from 'node:test';
 import { openApiOf } from '#engine';
 import { checkRequest, routesOf, runEpisode, type EpisodeInput, type NextTurn, type SendableRequest, type TurnView, type WorldPort } from '../src/dataset/episode.ts';
 import { isCompleteSuccess, redactor } from '../src/dataset/schema.ts';
-import { SOLVER_TOOL, promptOf, solverTurn, systemOf, type SolverProposer } from '../src/dataset/solver.ts';
+import { SOLVER_TOOL, blocksOf, promptOf, solverTurn, systemOf, type SolverProposer } from '../src/dataset/solver.ts';
 import { configSchema } from '../src/worldgen/config.ts';
 import { anthropicModel, ModelError, type MessagesClient } from '../src/worldgen/llm.ts';
 import {
@@ -434,21 +434,19 @@ describe('the solver turn over the Anthropic model', () => {
     };
   };
 
-  it('renders the task, the history and the API documentation, and nothing hidden', async () => {
+  it('renders the task, the history and the API documentation as append-only blocks, and nothing hidden (A-400)', async () => {
     const v = await view();
-    assert.equal(
-      promptOf(v),
-      [
-        'Task (easy):',
-        'Assign the newest unassigned ticket from Acme to Priya.',
-        '',
-        'So far:',
-        'You said: Looking up.\nRequest c1: GET /customers query {"q":"Acme"}',
-        'Result c1: HTTP 200 {"data":[{"id":"cus_0001"}]}',
-        '',
-        'This is turn 2 of at most 10. Call solver_turn.',
-      ].join('\n'),
-    );
+    assert.deepEqual(blocksOf(v), [
+      'Task (easy):\nAssign the newest unassigned ticket from Acme to Priya.',
+      'This is turn 1 of at most 10. Call solver_turn.',
+      'You said: Looking up.\nRequest c1: GET /customers query {"q":"Acme"}',
+      'Result c1: HTTP 200 {"data":[{"id":"cus_0001"}]}',
+      'This is turn 2 of at most 10. Call solver_turn.',
+    ]);
+    assert.equal(promptOf(v), blocksOf(v).join('\n\n'));
+    const first = blocksOf({ ...v, turn: 1, messages: v.messages.slice(0, 1) });
+    assert.deepEqual(first, ['Task (easy):\nAssign the newest unassigned ticket from Acme to Priya.', 'This is turn 1 of at most 10. Call solver_turn.']);
+    assert.deepEqual(blocksOf(v).slice(0, first.length), first);
     assert.equal(systemOf(v).endsWith(JSON.stringify(v.openapi)), true);
     const w = await helpdesk();
     const all = `${systemOf(v)}\n${promptOf(v)}`;
@@ -507,6 +505,8 @@ describe('the solver turn over the Anthropic model', () => {
     await solverTurn(proposer, 'ds-run-7')(await view(), new AbortController().signal);
     await solverTurn(proposer)(await view(), new AbortController().signal);
     assert.deepEqual(seen.map((q) => ['runId' in q ? q.runId : 'absent', q.step]), [['ds-run-7', 'solver'], ['absent', 'solver']]);
+    assert.deepEqual(seen[0]?.blocks, blocksOf(await view()));
+    assert.equal(seen[0]?.prompt, promptOf(await view()));
   });
 
   it('sends nothing when the signal is already aborted', async () => {

@@ -39,9 +39,9 @@ import { ITERATE_PLAN_BRIEF, admissibleIssues, applyPlanPatch, changedSections, 
 import { FIDELITY_FLOOR, fidelityGate, fidelityScore, parseFidelityReference } from './fidelity.ts';
 import { blockingIssues, checkJudgeable, infraIssues, preservationIssues, requestScopeIssues, unplannedChanges } from './judge.ts';
 import { CallStalled, ModelError, StepShareExpired, estimateCallUsd, type CallProgress, type Model, type Proposal, type ProposeRequest, type Usage } from './llm.ts';
-import { frozenTests, parsePlanYaml, planSchemaFor, pressurePlanIssues, renderPlanYaml, type Plan, type planSchema } from './plan.ts';
+import { actionKey, frozenTests, parsePlanYaml, planSchemaFor, pressurePlanIssues, renderPlanYaml, type Plan, type planSchema } from './plan.ts';
 import { renderPlanMd } from './plan-md.ts';
-import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
+import { attemptIssueSet, decide, estimateCallMs, nextIsRepair, operationKey, ownerOf, preflight, remainingMs, stepShareMs, type CallRecord, record, recordBacktrack, recordStallRetry, type Ledger } from './policy.ts';
 import { renderReport } from './report.ts';
 import { PLAN_BRIEF, SECTION_OWNER, SPEC_FIELD_NAMES, STAGES, STAGE_IDS, actionRoutesLeftOut, dateOnlyColumnLines, engineErrorCodes, engineSuccessStatuses, isTestRun, pathRuleExample, seedNeedLines, seedNeeds, stageChecklist, taskPressureLines, stagesToRun, takenPaths, writesOf, type StageId, type StepId } from './stages.ts';
 
@@ -160,6 +160,43 @@ function bestAttempt(tried: readonly TriedAttempt[]): TriedAttempt | undefined {
   return best ?? tried.at(-1);
 }
 
+/**
+ * For each frozen acceptance test of `plan`, the operations it exercises, as `operationKey`s: the planned route of each
+ * action it declares (an action's route shares its id), and each planned route a literal `ctx.api('METHOD', '/path')` in
+ * its script matches. A path the script builds at run time is not read, so it may be missed, never wrongly added (A-406).
+ */
+export function testOperations(plan: Plan): ReadonlyMap<string, readonly string[]> {
+  const routes = plan.routes.map((r) => ({ id: r.id, method: r.method.toUpperCase(), path: r.path, pattern: new RegExp(`^${r.path.split('/').map((seg) => (/^\{[^}]*\}$/.test(seg) ? '[^/]+' : seg.replace(/[.*+?^$()|[\]\\]/g, '\\$&'))).join('/')}$`) }));
+  const literal = /ctx\.api\(\s*['"`]([A-Za-z]+)['"`]\s*,\s*['"`]([^'"`?]*)(?:\?[^'"`]*)?['"`]\s*[,)]/g;
+  return new Map(plan.acceptanceTests.map((t) => {
+    const declared = new Set(t.actions.map(actionKey));
+    const ops = new Set(routes.filter((r) => declared.has(r.id)).map((r) => operationKey(r.method, r.path)));
+    for (const m of t.script.matchAll(literal)) {
+      const method = (m[1] ?? '').toUpperCase();
+      for (const r of routes) if (r.method === method && r.pattern.test(m[2] ?? '')) ops.add(operationKey(r.method, r.path));
+    }
+    return [t.id, [...ops].sort()];
+  }));
+}
+
+/**
+ * The other side of a trade between the plan's frozen tests and a check the input fixes (A-406): when `issues` holds the
+ * input check, the latest attempt that failed only frozen tests (its `layer.blocked` left out); when it holds the tests,
+ * the input-rooted issues of the latest attempt that had any. Issues already in `issues` are left out.
+ */
+function tradedSide(tried: readonly TriedAttempt[], issues: readonly CheckIssue[]): readonly CheckIssue[] {
+  const fromInput = (i: CheckIssue): boolean => i.path[0] === 'input';
+  const failedTest = (i: CheckIssue): boolean => isTestRun(i) && i.code !== 'layer.blocked';
+  const same = (a: CheckIssue, b: CheckIssue): boolean => a.code === b.code && a.path.join('/') === b.path.join('/') && a.found === b.found;
+  const side = (t: TriedAttempt): readonly CheckIssue[] => {
+    if (!issues.some(fromInput)) return t.issues.filter(fromInput);
+    const real = t.issues.filter((i) => i.code !== 'layer.blocked');
+    return real.length > 0 && real.every(failedTest) ? real : [];
+  };
+  const found = [...tried].reverse().map(side).find((s) => s.length > 0) ?? [];
+  return found.filter((i) => !issues.some((j) => same(i, j)));
+}
+
 /** The owned items an edit writes, as `section.key`. A plan answer is always whole, so it writes none here. */
 function touchedItems(step: StepId, input: unknown): ReadonlySet<string> {
   const out = new Set<string>();
@@ -181,7 +218,8 @@ type Judged<T> =
 
 type StepOutcome<T> =
   | { readonly kind: 'advance'; readonly value: T }
-  | { readonly kind: 'backtrack'; readonly to: StepId; readonly because: readonly CheckIssue[]; readonly previous: unknown }
+  /** `alsoForTarget`: issues of earlier attempts the backtrack target needs as well; the step that backtracked is not shown them again (A-406). */
+  | { readonly kind: 'backtrack'; readonly to: StepId; readonly because: readonly CheckIssue[]; readonly alsoForTarget: readonly CheckIssue[]; readonly previous: unknown }
   | { readonly kind: 'stop'; readonly reason: StopReason };
 
 /** A stage's accepted edit: the new world, the edit that made it (null when a skipped stage changed nothing), and the checked world when the engine report is ok. */
@@ -980,7 +1018,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
         return { kind: 'stop', reason: { kind: 'transport_stalled', step, idleMs: judged.outcome.idleMs } };
       }
 
-      const decision = decide(config, { step, ledger, nowMs: now(), last: step === LAST_STEP }, judged.outcome, owned);
+      const decision = decide(config, { step, ledger, nowMs: now(), last: step === LAST_STEP, ...(plan === null ? {} : { testOperations: testOperations(plan) }) }, judged.outcome, owned);
       switch (decision.kind) {
         case 'advance':
           if (!judged.ok) throw new Error(`policy advanced ${step} on a ${judged.outcome.kind} attempt`);
@@ -1016,7 +1054,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
           }
           break;
         case 'backtrack':
-          return { kind: 'backtrack', to: decision.to, because: issues, previous: proposal?.input };
+          // A step that traded the frozen tests against an input check hands the plan the other side too (A-406).
+          return { kind: 'backtrack', to: decision.to, because: issues, alsoForTarget: decision.tradedTests === true ? tradedSide(tried, issues) : [], previous: proposal?.input };
         case 'stop':
           return { kind: 'stop', reason: decision.reason };
         default:
@@ -1194,13 +1233,13 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
         carried = null;
         break;
       case 'backtrack':
-        emit({ ...at(), t: 'backtracked', from: step, to: outcome.to, because: outcome.because });
+        emit({ ...at(), t: 'backtracked', from: step, to: outcome.to, because: [...outcome.because, ...outcome.alsoForTarget] });
         rejectedBefore.set(step, { issues: outcome.because, previous: outcome.previous, rerunBy: outcome.to });
         ledger = recordBacktrack(ledger, outcome.to);
         index = STEPS.indexOf(outcome.to);
         reason = 'backtracked';
         // The world is not rolled back, so a stage sees its earlier answer in it; the plan gets its earlier plan.
-        carried = { issues: outcome.because, previous: outcome.to === 'plan' ? (plan ?? undefined) : undefined, from: step };
+        carried = { issues: [...outcome.because, ...outcome.alsoForTarget], previous: outcome.to === 'plan' ? (plan ?? undefined) : undefined, from: step };
         break;
       case 'stop':
           return await stop(outcome.reason);
