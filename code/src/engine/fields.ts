@@ -70,6 +70,11 @@ export type FieldKind<T extends string, D> = {
   ref?(def: D): RefTarget;
   /** Present on a type with declared transitions. Callers read it through `machineOf`. */
   machine?(def: D): Machine;
+  /**
+   * Present on a type that can hold free text: a value of the same type that says nothing, as long as `like`, or
+   * undefined when this definition holds no free text (a pattern or a format). Callers read it through `nonsenseOf` (A-388).
+   */
+  nonsense?(def: D, like: string): string | undefined;
   /** Propose this type for a CSV column, or null. Called by worldgen/input.ts in FIELD_TYPE_ORDER. */
   inferFromCsv(column: readonly string[]): D | null;
   readonly examples: { readonly def: unknown; readonly valid: readonly unknown[]; readonly invalid: readonly unknown[] };
@@ -101,6 +106,19 @@ function normalizeInstant(raw: string): string | null {
   const [y, mo, d, h, mi, se] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number];
   if (mo < 1 || mo > 12 || d < 1 || d > daysIn(y, mo) || h > 23 || mi > 59 || se > 59) return null;
   return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}.${(m[7] ?? '').padEnd(9, '0')}Z`;
+}
+
+/**
+ * Text that says nothing (A-388): "bananas" repeated to the length of `like` (at least one word), cut to `max`, and
+ * never equal to `like`, so a grader that checks only presence or length cannot tell it from real text.
+ */
+function nonsenseText(like: string, max: number | undefined): string {
+  const say = (word: string): string => {
+    const n = Math.min(Math.max(like.length, word.length), max ?? Infinity);
+    return `${word} `.repeat(Math.ceil(n / (word.length + 1))).slice(0, n);
+  };
+  const text = say('bananas');
+  return text === like ? say('zebras') : text;
 }
 
 /** Code-unit order, so the result never depends on a locale. */
@@ -284,6 +302,7 @@ const KINDS = [
     validate: checkString,
     compare: (a, b) => nullOrder(a, b) ?? cmpStr(String(a), String(b)),
     parseQuery: checkString,
+    nonsense: (def, like) => (def.pattern === undefined && def.format === undefined ? nonsenseText(like, def.maxLength) : undefined),
     inferFromCsv: (column) => {
       const cells = filled(column);
       return cells.length > 0 && cells.every((c) => c.length <= STRING_MAX_CHARS) ? schema.parse({ type: 'string', nullable: hasBlank(column) }) : null;
@@ -295,6 +314,7 @@ const KINDS = [
     validate: (value) => (typeof value === 'string' ? ok(value) : bad('a string')),
     compare: (a, b) => nullOrder(a, b) ?? cmpStr(String(a), String(b)),
     parseQuery: () => bad('no filter, text fields are not filterable'),
+    nonsense: (_def, like) => nonsenseText(like, undefined),
     inferFromCsv: (column) => (filled(column).length > 0 ? schema.parse({ type: 'text', nullable: hasBlank(column) }) : null),
     examples: { def: { type: 'text' }, valid: ['a long note'], invalid: [true] },
   })),
@@ -422,6 +442,9 @@ export const choicesOf = (def: Field): readonly string[] | undefined => kindOf(d
 
 /** The transitions of a `state` field, or undefined for any other type. */
 export const machineOf = (def: Field): Machine | undefined => kindOf(def).machine?.(def);
+
+/** A nonsense value of the field's type as long as `like`, or undefined when the field holds no free text (A-388). */
+export const nonsenseOf = (def: Field, like: string): string | undefined => kindOf(def).nonsense?.(def, like);
 
 /** The value a create fills in when the field is absent, or undefined when there is none. */
 export function initialOf(def: Field, nowIso: string): Value | undefined {

@@ -59,6 +59,12 @@ Jobs (2):
 - `expire_policies`: every 1d
 - `auto_close_paid`: every 1d
 
+## Changes
+
+- snippet_changed `tasks.confirm_high_severity_fraud_flag.grader`
+- item_changed `tasks.confirm_high_severity_fraud_flag.instruction`
+- snippet_changed `tasks.confirm_high_severity_fraud_flag.solution`
+
 ## Assumed and why
 
 - Clock starts 2026-10-07T09:00:00.000Z with tick 0s. Time moves only by explicit advance. Seed history lies before it. Policy end dates and the daily jobs lie after it.
@@ -89,6 +95,8 @@ Jobs (2):
   - Why: Fixes the contract the acceptance tests assert.
 - Error bodies use the default world template {error:{code,message}}. An unknown ref in an action input is refused by input validation with 400 input.invalid.
   - Why: Matches the engine defaults.
+- The confirm_high_severity_fraud_flag instruction will require the resolution note to contain the keyword 'forged', and the grader checks fraud_flag.resolution_note for it, case-insensitively.
+  - Why: A-388 free-text gate: the grader must read the text the solution writes, so nonsense scores below 1.
 
 ## Questions asked of the input
 
@@ -128,14 +136,14 @@ Jobs (2):
 
 The engine check passed: 10 world tests, 2 warnings. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_4398d84dc7700f549d3001c3e80a120af67f8c55a5a878129cfe98dab7e7fc8d`.
+World id (WID): `wid_44e89e39667b44433bf15661a8ecf2c5511308317ec3f7bd6c23862743cd5693`.
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| start_review_newest_submitted_claim | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 5/7 | `tid_b528a823c2768b5d51694e64ab4b9758b52ac229e5a5f1ac8a11506ff4a47c39` |
-| confirm_high_severity_fraud_flag | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | n/a | legacy; mutants 4/7 | `tid_38a8cd8e05b0e87d5c04cf82b82bc601583c6171139cd0c48a50277a6ae474fa` |
-| approve_and_pay_clean_claim | medium | 1.000 | 0.000 | 0.300, 0.000, 0.300, 0.000 | 0.300 | legacy; mutants 5/7 | `tid_b67d5d49a82f8d73b3e1bc153d6dbfe373feff9c482d26e5f940656293939bdb` |
-| approve_unflagged_water_damage_claims | hard | 1.000 | 0.000 | 0.800, 0.000, 0.000, 0.000 | 0.800 | legacy; mutants 4/7 | `tid_95e84d7a2497c679ac5378691e90ba29bb706ea9a28b0cdbcdad072bf9636790` |
+| start_review_newest_submitted_claim | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 6/8 | `tid_b528a823c2768b5d51694e64ab4b9758b52ac229e5a5f1ac8a11506ff4a47c39` |
+| confirm_high_severity_fraud_flag | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | n/a | legacy; mutants 5/8 | `tid_d30cf5eba7938ff9849a66c0ff34255498638c33cbf50bed06cb5934dc9985de` |
+| approve_and_pay_clean_claim | medium | 1.000 | 0.000 | 0.300, 0.000, 0.300, 0.000 | 0.300 | legacy; mutants 6/8 | `tid_b67d5d49a82f8d73b3e1bc153d6dbfe373feff9c482d26e5f940656293939bdb` |
+| approve_unflagged_water_damage_claims | hard | 1.000 | 0.000 | 0.800, 0.000, 0.000, 0.000 | 0.800 | legacy; mutants 5/8 | `tid_95e84d7a2497c679ac5378691e90ba29bb706ea9a28b0cdbcdad072bf9636790` |
 
 Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
@@ -170,15 +178,18 @@ From each reference solution's trace. A hard task must change more than one row 
 
 ## Run
 
-Mode: create from description. Model: claude-sonnet-5-5. Budget: $5.00.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $3.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 3.50 | 0.5205 |
-| model | 1 | 0.57 | 0.2087 |
-| workflow | 1 | 0.69 | 0.2428 |
-| seed | 1 | 2.95 | 0.4183 |
-| tasks | 1 | 3.02 | 0.5116 |
-| Total | 5 | 10.73 | 1.9018 |
+| plan | 1 | 0.08 | 0.1043 |
+| tasks | 1 | 0.22 | 0.2814 |
+| Total | 2 | 0.30 | 0.3857 |
 
-Run total: 10.78 minutes, $1.9018.
+Skipped:
+
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures; it keeps 2 issue(s) the world had before this iterate: plan.seed_rows_short
+
+Run total: 0.36 minutes, $0.3857.

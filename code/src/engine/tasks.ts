@@ -8,7 +8,10 @@
  *   Doing nothing scores exactly 0. Medium and hard tasks have a decoy. Every decoy gets no
  *   5xx, scores below 1 and is not trivial. Every strict prefix of the solution's successful writes scores
  *   below 1, and so does the solution plus one collateral write (the engine builds both by replaying
- *   the solution's calls, no model). Two solution runs from seed end in the same state hash.
+ *   the solution's calls, no model), as does the solution plus a collateral edit it then undoes. Two solution
+ *   runs from seed end in the same state hash. Nonsense in each free-text field the solution writes scores below 1 (A-388).
+ * - The collateral guards (a task's `allows`, ctx.guardChanges) judge every write a call made, not only the end
+ *   state's net changes, so an edit later undone still counts (A-387).
  * - A grader scores V(seed, trace, end) (design law L7): ctx.trace() is the graded run's own
  *   successful calls with their writes, ctx.guard gates the score to 0, ctx.goal adds weights.
  *   A grader that returns a plain number keeps working.
@@ -16,7 +19,7 @@
  *   verdicts the engine produced.
  */
 import {
-  changesSince, queryOf, runtime, type ApiRequest, type CallRecord, type DumpInput, type HttpMethod, type OriginJournal, type Runtime,
+  changesSince, queryOf, runtime, type ApiRequest, type CallRecord, type DumpInput, type HttpMethod, type JournalRow, type OriginJournal, type Runtime,
 } from './api.ts';
 import type { CheckedWorld } from './check.ts';
 import { fromIso, parseDuration, timeMath, toIso, type Iso } from './clock.ts';
@@ -24,7 +27,7 @@ import {
   changeGuardSchema, SnippetFault, type Change, type ClientCtx, type GraderCtx, type ReadDb, type SnippetHost, type TraceCall,
 } from './ctx.ts';
 import type { Difficulty, World } from './format.ts';
-import { machineOf } from './fields.ts';
+import { machineOf, nonsenseOf } from './fields.ts';
 import { issue, type CheckIssue, type IssuePath, type MutantKind, type NonEmpty } from './issues.ts';
 import { seedState, stateHash, transact, type IdempotencyEntry, type Row, type RowId, type State } from './store.ts';
 
@@ -131,11 +134,26 @@ function withReader<T>(world: World, state: State, fn: (db: ReadDb) => T): T {
   throw r.error.code === 'tx.aborted' && r.error.cause !== undefined ? r.error.cause : r.error;
 }
 
-/** ctx.changes(): every change since seed, minus ignored entities and, unless asked, job changes. */
-function changesFn(seed: State, end: State, journal: OriginJournal): GraderCtx['changes'] {
+/**
+ * The rows the run's calls wrote (A-387): the journal's call entries, or the call log's writes when no journal was
+ * given (a state graded over HTTP has the log, GET /_world/log, and no journal).
+ */
+function callWritesOf(journal: OriginJournal, log: readonly CallRecord[]): JournalRow[] {
+  const fromJournal = journal.filter((e) => e.origin === 'call').flatMap((e) => e.rows);
+  if (fromJournal.length > 0) return fromJournal;
+  return log.filter(succeeded).flatMap((c) => c.writes.map((w) => ({ entity: w.entity, id: w.id, kind: w.op, fields: w.fields })));
+}
+
+/**
+ * ctx.changes(): every change since seed, minus ignored entities and, unless asked, job changes. A call change counts
+ * every field a call wrote, so a reverted call edit appears as an updated change (A-387); a job change is the net one.
+ * `onRead` runs on every call, so gradeDump knows the run's changes were judged.
+ */
+function changesFn(seed: State, end: State, journal: OriginJournal, log: readonly CallRecord[], onRead: () => void): GraderCtx['changes'] {
   let all: readonly Change[] | null = null;
   return (opts) => {
-    all ??= changesSince(seed, end, journal);
+    onRead();
+    all ??= changesSince(seed, end, journal, callWritesOf(journal, log));
     const ignore = Array.isArray(opts?.ignore) ? opts.ignore.map(String) : [];
     const includeJobs = opts?.includeJobs === true;
     return all.filter((c) => !ignore.includes(c.entity) && (includeJobs || c.origin !== 'job'));
@@ -197,8 +215,8 @@ function scorer(): Pick<GraderCtx, 'goal' | 'guard' | 'score'> & { goals: GoalRe
 /** The name of the guard the engine adds for a task's `allows`. */
 export const allowsGuard = (taskId: string): string => `engine: only the changes tasks.${taskId}.allows declares`;
 
-/** A grader run's score, what it recorded, and whether it read ctx.trace(). */
-type GradeRun = { ok: true; graded: Extract<Graded, { ok: true }>; readTrace: boolean } | { ok: false; issue: CheckIssue };
+/** A grader run's score, what it recorded, whether it read ctx.trace(), and whether it or a guard read the run's changes. */
+type GradeRun = { ok: true; graded: Extract<Graded, { ok: true }>; readTrace: boolean; judgedWrites: boolean } | { ok: false; issue: CheckIssue };
 
 function gradeRun(world: World, seed: State, end: State, taskId: string, host: SnippetHost, journal: OriginJournal, log: readonly CallRecord[]): GradeRun {
   const t = taskOf(world, taskId);
@@ -219,7 +237,10 @@ function gradeRun(world: World, seed: State, end: State, taskId: string, host: S
     return trace;
   };
   const s = scorer();
-  const changes = changesFn(seed, end, journal);
+  let judgedWrites = false;
+  const changes = changesFn(seed, end, journal, log, () => {
+    judgedWrites = true;
+  });
   let score: unknown;
   try {
     score = withReader(world, end, (db) =>
@@ -269,7 +290,7 @@ function gradeRun(world: World, seed: State, end: State, taskId: string, host: S
   // A failed guard is a hard gate: it zeroes the score even when the grader returns its own number.
   const final = s.failedGuard() ? 0 : score;
   const recorded = s.goals.length + s.guards.length > 0 ? { goals: s.goals, guards: s.guards } : {};
-  return { ok: true, graded: { ok: true, score: final, ...recorded }, readTrace };
+  return { ok: true, graded: { ok: true, score: final, ...recorded }, readTrace, judgedWrites };
 }
 
 /**
@@ -412,6 +433,9 @@ export function gradeDump(
   }
   if (run.readTrace && log === undefined) {
     caveats.push('no call log given, so ctx.trace() was empty; a history guard judged this state as if no call had been made');
+  }
+  if (run.judgedWrites && journal === undefined && log === undefined) {
+    caveats.push('no journal or call log given, so ctx.changes() and the collateral guards saw only the end state; an edit undone before it was not judged');
   }
   return caveats.length === 0 ? run.graded : { ...run.graded, caveat: caveats.join('; ') };
 }
@@ -828,6 +852,149 @@ function collateralIssues(world: CheckedWorld, seed: State, taskId: string, host
 }
 
 /**
+ * Pairs that set one field on a seed row through its entity's update route and then put the old value back (A-387):
+ * rows the solution never touched first, then fields it did not write on rows it wrote. The value is another seed
+ * row's, so the world already holds it. Readonly, unique and state fields are not tried, since a state machine may
+ * refuse the way back.
+ */
+function* undoneEdits({ world, seed, end, log }: MutantInput): Generator<readonly [ApiRequest, ApiRequest]> {
+  const touched = touchedIds(log);
+  const wrote = new Map(writtenRows(log).map((r) => [`${r.entity}/${r.id}`, r.fields]));
+  const untouched: [string, string, ReadonlySet<string>][] = [];
+  const target: [string, string, ReadonlySet<string>][] = [];
+  for (const [entity, rows] of Object.entries(seed.tables)) {
+    for (const id of rows.keys()) {
+      const fields = wrote.get(`${entity}/${id}`);
+      if (fields !== undefined) target.push([entity, id, fields]);
+      else if (!touched.has(id)) untouched.push([entity, id, new Set()]);
+    }
+  }
+  for (const [entity, id, skip] of [...untouched, ...target]) {
+    const route = Object.values(world.routes).find((r) => r.op === 'update' && r.entity === entity && r.path.match(PATH_PARAM)?.length === 1);
+    const row = [...(end.tables[entity]?.values() ?? [])].find((r) => r.id === id);
+    if (route === undefined || row === undefined) continue;
+    const path = route.path.replace(PATH_PARAM, id);
+    for (const [name, def] of Object.entries(world.entities[entity]?.fields ?? {})) {
+      if (skip.has(name) || def.readonly || def.unique || machineOf(def) !== undefined || row[name] === undefined) continue;
+      const now = JSON.stringify(row[name]);
+      const value = [...(seed.tables[entity]?.values() ?? [])].map((r) => r[name]).find((v) => v !== undefined && JSON.stringify(v) !== now);
+      if (value !== undefined) yield [{ method: route.method, path, query: {}, body: { [name]: value } }, { method: route.method, path, query: {}, body: { [name]: row[name] } }];
+    }
+  }
+}
+
+/**
+ * The undone collateral mutant (A-387): the solution's calls replayed from `seed`, then one edit and the edit that
+ * puts the old value back, until a pair commits both and ends where the solution ends, at most MUTANT_TRIES pairs.
+ * The end state is the solution's, so only a grader that judges the writes (the task's allows, ctx.guardChanges or
+ * ctx.trace()) can score it below 1; a score of 1 outside the task's allows is task.mutant_full_marks.
+ */
+function undoneIssues(world: CheckedWorld, seed: State, taskId: string, host: SnippetHost, log: readonly CallRecord[], end: State): Probed {
+  const out: CheckIssue[] = [];
+  let probe: MutantProbe = { kind: 'undone_write', call: null, score: null };
+  const solutionContent = contentHash(end);
+  let rt = replaySolution(world, seed, host, log);
+  let tries = 0;
+  for (const [edit, undo] of undoneEdits({ world, seed, end, log })) {
+    if (tries++ === MUTANT_TRIES) break;
+    if (rt.call(edit).status >= 400) continue;
+    // An edit that changed nothing a grader can see proves nothing once undone.
+    if (contentHash(stateFromDump(world, rt.dump())) === solutionContent) {
+      rt = replaySolution(world, seed, host, log);
+      continue;
+    }
+    const back = rt.call(undo).status < 400;
+    const state = stateFromDump(world, rt.dump());
+    // A pair that did not end where the solution ends is not an undone edit, so the next starts from a fresh replay.
+    if (!back || contentHash(state) !== solutionContent) {
+      rt = replaySolution(world, seed, host, log);
+      continue;
+    }
+    const g = grade(world, seed, state, taskId, host, rt.journal(), rt.log());
+    const call = `${edit.method} ${edit.path} ${show(edit.body)} then ${show(undo.body)}`;
+    probe = { kind: 'undone_write', call, score: g.ok ? g.score : null };
+    if (!g.ok) out.push(g.issue);
+    else if (g.score === 1 && !withinAllows(g, taskId)) out.push(issue('task.mutant_full_marks', ['tasks', taskId, 'grader'], { kind: 'undone_write', call }, `the solution plus ${call} scored 1`));
+    break;
+  }
+  return { issues: out, probes: [probe] };
+}
+
+/** The fields two states' rows differ in, without engine timestamps, or null when they hold different rows. */
+function fieldDiff(a: State, b: State): { entity: string; id: string; field: string }[] | null {
+  const out: { entity: string; id: string; field: string }[] = [];
+  for (const entity of new Set([...Object.keys(a.tables), ...Object.keys(b.tables)])) {
+    const ra = a.tables[entity] ?? new Map<RowId, Row>();
+    const rb = b.tables[entity] ?? new Map<RowId, Row>();
+    if (ra.size !== rb.size) return null;
+    for (const [id, row] of ra) {
+      const other = rb.get(id);
+      if (other === undefined) return null;
+      for (const field of new Set([...Object.keys(row), ...Object.keys(other)])) {
+        if (field === 'created_at' || field === 'updated_at') continue;
+        if (JSON.stringify(row[field] ?? null) !== JSON.stringify(other[field] ?? null)) out.push({ entity, id, field });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The free-text probe (A-388): each top-level string the solution's successful writes send for a free-text field
+ * (one the call wrote by that name, or whose stored value is that string), swapped for nonsense of the same length,
+ * then the solution's calls replayed from `seed`, at most MUTANT_TRIES replays. A replay whose swapped call is
+ * refused, or whose end differs from the solution's anywhere but in free text, is skipped. One that still scores 1
+ * is task.freetext_unchecked, once per field: the grader never reads that text.
+ */
+function freeTextIssues(world: CheckedWorld, seed: State, taskId: string, host: SnippetHost, log: readonly CallRecord[], end: State): CheckIssue[] {
+  const out: CheckIssue[] = [];
+  const flagged = new Set<string>();
+  let tries = 0;
+  for (const [index, c] of log.entries()) {
+    if (!succeeded(c) || c.writes.length === 0 || c.req.body === null || typeof c.req.body !== 'object' || Array.isArray(c.req.body)) continue;
+    const body = c.req.body as Record<string, unknown>;
+    for (const [key, value] of Object.entries(body)) {
+      if (typeof value !== 'string' || value === '') continue;
+      const holder = c.writes.flatMap((w) => {
+        const fields = world.entities[w.entity]?.fields ?? {};
+        const named = w.fields.includes(key) ? fields[key] : undefined;
+        if (named !== undefined) return [{ entity: w.entity, field: key, def: named }];
+        const stored = [...(end.tables[w.entity]?.values() ?? [])].find((r) => r.id === w.id);
+        return w.fields.filter((f) => stored?.[f] === value && fields[f] !== undefined).map((f) => ({ entity: w.entity, field: f, def: fields[f]! }));
+      })[0];
+      const nonsense = holder === undefined ? undefined : nonsenseOf(holder.def, value);
+      if (holder === undefined || nonsense === undefined || flagged.has(`${holder.entity}.${holder.field}`)) continue;
+      if (tries++ === MUTANT_TRIES) return out;
+      const rt = runtime(world, host, seed);
+      let refused = false;
+      for (const [i, cc] of log.entries()) {
+        if (i === index) refused = rt.call({ ...cc.req, body: { ...body, [key]: nonsense } }).status >= 400;
+        else if (succeeded(cc)) rt.call(cc.req);
+      }
+      if (refused) continue;
+      const state = stateFromDump(world, rt.dump());
+      const diff = fieldDiff(end, state);
+      const free = (d: { entity: string; field: string }): boolean => {
+        const def = world.entities[d.entity]?.fields[d.field];
+        return def !== undefined && nonsenseOf(def, '') !== undefined;
+      };
+      if (diff === null || diff.length === 0 || !diff.every(free)) continue;
+      const g = grade(world, seed, state, taskId, host, rt.journal(), rt.log());
+      if (!g.ok) {
+        out.push(g.issue);
+        continue;
+      }
+      if (g.score !== 1) continue;
+      const field = `${holder.entity}.${holder.field}`;
+      const call = `${c.req.method} ${c.req.path} with ${key} ${show(nonsense)}`;
+      flagged.add(field);
+      out.push(issue('task.freetext_unchecked', ['tasks', taskId, 'grader'], { field, call }, `${field}: the solution with ${call} scored 1`));
+    }
+  }
+  return out;
+}
+
+/**
  * Doing nothing while the solution's engine time passes (A-198): a fresh seed advanced by that time in whole
  * seconds, with due jobs firing, graded with the jobs' journal. Null when less than a second passes, since
  * that state is the plain noop's.
@@ -1042,10 +1209,15 @@ export function verifyTask(
   // After the decoys, which the author declared and so name the more specific fix. A grader that
   // already fails noop is broken at the root, and collateral issues would only repeat it.
   if (solution.ok && solution.score === 1 && noop.ok && noop.score === 0) {
-    for (const pass of [collateralIssues(world, seed, taskId, host, first.log, first.end), swapIssues(world, seed, taskId, host, first.log, first.end)]) {
+    for (const pass of [
+      collateralIssues(world, seed, taskId, host, first.log, first.end),
+      undoneIssues(world, seed, taskId, host, first.log, first.end),
+      swapIssues(world, seed, taskId, host, first.log, first.end),
+    ]) {
       for (const i of pass.issues) push(i);
       probes.push(...pass.probes);
     }
+    for (const i of freeTextIssues(world, seed, taskId, host, first.log, first.end)) push(i);
   }
 
   const [head, ...rest] = issues;

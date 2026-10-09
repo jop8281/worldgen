@@ -1313,9 +1313,10 @@ tasks:
             ctx.assert(ctx.api('POST', '/orders/' + rows[0].id + '/pay', {}).status === 200, 'pay failed');
             ctx.assert(ctx.api('PATCH', '/orders/' + rows[0].id, { note: 'paid by phone' }).status === 200, 'note patch failed');
           }
+    alternatives: []
   refund_delivered_big_orders_for_customer:
     difficulty: medium
-    instruction: Grace Liu has asked for refunds on her big orders. Refund every one of her delivered orders with a total above $300.00, giving each a reason. Leave all her other orders alone.
+    instruction: Grace Liu has asked for refunds on her big orders. Refund every one of her delivered orders with a total above $300.00, giving each a reason that contains the word "damaged". Leave all her other orders alone.
     grader: |-
       (ctx) => {
         const cust = ctx.seed.list('customer', { where: { name: 'Grace Liu' } })[0];
@@ -1334,8 +1335,8 @@ tasks:
           const end = ctx.db.get('order', o.id);
           return end.status === 'refunded' && end.refunded_at !== null;
         }));
-        ctx.goal(0.3, 'each refund records a reason', targets.every((o) =>
-          events.some((e) => e.order_id === o.id && typeof e.note === 'string' && e.note.trim() !== '')));
+        ctx.goal(0.3, 'each refund reason contains the word damaged', targets.every((o) =>
+          events.some((e) => e.order_id === o.id && typeof e.note === 'string' && /damaged/i.test(e.note))));
         return ctx.score();
       }
     solution: |-
@@ -1353,7 +1354,7 @@ tasks:
         const targets = rows.filter((o) => o.total_cents > 30000);
         ctx.assert(targets.length > 0, 'no delivered orders above $300');
         for (const o of targets) {
-          const r = ctx.api('POST', '/orders/' + o.id + '/refund', { reason: 'Customer requested refund of large order' });
+          const r = ctx.api('POST', '/orders/' + o.id + '/refund', { reason: 'Arrived damaged, refunding large order' });
           ctx.assert(r.status === 200, 'refund ' + o.id + ' failed: ' + JSON.stringify(r.body));
         }
       }
@@ -1385,9 +1386,10 @@ tasks:
               ctx.assert(ctx.api('PATCH', '/orders/' + o.id, { note: 'refunded' }).status === 200, 'note patch failed');
             }
           }
+    alternatives: []
   cancel_stale_pending_with_gift_note:
     difficulty: medium
-    instruction: "Clean up stale pending orders: cancel every pending order placed before 25 March 2026 that has a customer note on it, giving each a reason. Pending orders without a note, and orders in any other status, must stay as they are."
+    instruction: 'Clean up stale pending orders: cancel every pending order placed before 25 March 2026 that has a customer note on it, giving each a reason that contains the word "stale". Pending orders without a note, and orders in any other status, must stay as they are.'
     grader: |-
       (ctx) => {
         const cutoff = '2026-03-25T00:00:00.000Z';
@@ -1404,7 +1406,7 @@ tasks:
         let done = 0;
         for (const o of targets) {
           const end = ctx.db.get('order', o.id);
-          const hasReason = events.some((e) => e.order_id === o.id && typeof e.note === 'string' && e.note.trim() !== '');
+          const hasReason = events.some((e) => e.order_id === o.id && typeof e.note === 'string' && /stale/i.test(e.note));
           if (end.status === 'cancelled' && end.cancelled_at !== null && hasReason) done += 1;
         }
         return done / targets.length;
@@ -1462,9 +1464,10 @@ tasks:
               }
             }
           }
+    alternatives: []
   ship_all_paid_large_orders:
     difficulty: hard
-    instruction: Ship every paid order that has at least 4 items and a total above $300.00. Give each shipment a tracking number of your choice. Do not change any other order.
+    instruction: Ship every paid order that has at least 4 items and a total above $300.00. Give each shipment a tracking number that starts with "TRK-" (for example TRK- followed by the order id). Do not change any other order.
     grader: |-
       (ctx) => {
         const targets = ctx.seed.list('order', { where: { status: 'paid' } })
@@ -1480,7 +1483,7 @@ tasks:
         let done = 0;
         for (const o of targets) {
           const end = ctx.db.get('order', o.id);
-          if (end.status === 'shipped' && end.shipped_at !== null && typeof end.tracking_number === 'string' && end.tracking_number.trim() !== '') done += 1;
+          if (end.status === 'shipped' && end.shipped_at !== null && typeof end.tracking_number === 'string' && end.tracking_number.startsWith('TRK-') && end.tracking_number.length > 4) done += 1;
         }
         return done / targets.length;
       }
@@ -1543,3 +1546,4 @@ tasks:
               ctx.api('POST', '/orders/' + o.id + '/deliver', {});
             }
           }
+    alternatives: []

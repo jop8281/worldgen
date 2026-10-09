@@ -819,7 +819,7 @@ tests:
 tasks:
   cancel_elena_reservation:
     difficulty: easy
-    instruction: Elena Voss has called off her trip. Cancel her upcoming reservation and give a reason for the cancellation. Do not change anything else.
+    instruction: Elena Voss has called off her trip. Cancel her upcoming reservation and give a reason for the cancellation that contains the word "trip". Do not change anything else.
     decoys: []
     alternatives: []
   return_tomas_reyes_suv:
@@ -834,6 +834,6 @@ tasks:
     alternatives: []
   triage_small_claims:
     difficulty: hard
-    instruction: Triage every damage claim that is currently under review. Deny each one whose estimated cost is under $150 as minor wear and tear, with a reason. Approve each one whose estimated cost is $150 or more at its full estimated cost. Do not settle anything and do not touch claims in any other status.
+    instruction: Triage every damage claim that is currently under review. Deny each one whose estimated cost is under $150 as minor wear and tear, with a denial reason that contains the phrase "wear and tear". Approve each one whose estimated cost is $150 or more at its full estimated cost. Do not settle anything and do not touch claims in any other status.
     decoys: []
     alternatives: []

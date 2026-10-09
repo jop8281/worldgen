@@ -41,6 +41,7 @@ function print(f: FolderCheck, out: (line: string) => void): void {
   for (const r of f.replays) {
     out(`  ${r.agrees ? 'ok  ' : 'DIFF'} ${r.episode}  recorded ${r.recorded ?? 'none'}  replayed ${r.replayed}  task ${r.taskOk ? 'ok' : 'DIFF'}  seed ${r.seedOk ? 'ok' : 'DIFF'}  calls ${r.calls - r.mismatches}/${r.calls}  final ${r.finalOk ? 'ok' : 'DIFF'}`);
   }
+  for (const g of f.gaps) out(`  note   frozen world predates A-388: ${g}`);
   if (f.failedRuns > 0) out(`  ${f.failedRuns} run(s) that are not a complete success, counted and not replayed`);
 }
 

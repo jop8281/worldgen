@@ -52,6 +52,13 @@ Jobs (2):
 - `late_fee_assessment`: every 1d
 - `expire_no_shows`: every 1d
 
+## Changes
+
+- snippet_changed `tasks.cancel_elena_reservation.grader`
+- item_changed `tasks.cancel_elena_reservation.instruction`
+- snippet_changed `tasks.triage_small_claims.grader`
+- item_changed `tasks.triage_small_claims.instruction`
+
 ## Assumed and why
 
 - Clock start is 2026-10-06T09:00:00.000Z with tick 1s. Historical rentals, returns and claims all precede it. Future items are reserved rentals with pickup_at after the start, and the next runs of the daily jobs.
@@ -78,6 +85,8 @@ Jobs (2):
   - Why: The input does not describe one-way rentals. This is the simplest model that keeps fleet location current.
 - Routes use no auth, in a REST style with cursor pagination and a page size of 25.
   - Why: Matches the engine conventions. Authentication is not in the input.
+- The required keyword for cancel_reason is "trip" and for denial_reason is "wear and tear", both matched case-insensitively.
+  - Why: Each word comes from the task's own wording, so the instruction states what the text must contain and the grader can check it.
 
 ## Questions asked of the input
 
@@ -121,12 +130,16 @@ Jobs (2):
 
 The engine check passed: 7 world tests, 0 warnings. Each row is one engine TaskVerdict.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix |
-|---|---|---|---|---|---|
-| cancel_elena_reservation | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a |
-| return_tomas_reyes_suv | medium | 1.000 | 0.000 | 0.400, 0.000 | n/a |
-| waive_priya_late_fee | medium | 1.000 | 0.000 | 0.000, 0.000, 0.600 | n/a |
-| triage_small_claims | hard | 1.000 | 0.000 | 0.893, 0.964, 0.321, 0.000, 0.000 | 0.964 |
+World id (WID): `wid_4d45e1557f119a3fda21f83d6e84e4311fac38727b410a47b2c6d2e1d56c48ef`.
+
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| cancel_elena_reservation | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 3/8 | `tid_5457f1a1464e8432ff1efc7bb3397afce2de051123af2b957c266798e7b5dd14` |
+| return_tomas_reyes_suv | medium | 1.000 | 0.000 | 0.400, 0.000, 0.000 | n/a | legacy; mutants 4/8 | `tid_83a8d9a19bb938815790ee99988deb03e0fdaca90ca6e5969d5fd2b16740184c` |
+| waive_priya_late_fee | medium | 1.000 | 0.000 | 0.000, 0.000, 0.600 | n/a | legacy; mutants 4/8 | `tid_dfbba3e3abfae1f8413b9128dd799d56262710292e910ffd72dcc37312b4df37` |
+| triage_small_claims | hard | 1.000 | 0.000 | 0.893, 0.000, 0.321, 0.000, 0.000, 0.000 | 0.964 | legacy; mutants 2/8 | `tid_8a27208f9c6055e25ea5c51106f30de3b314aa24642deeeb141fd0aaec1e2787` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -134,26 +147,42 @@ Decoys:
 - `cancel_elena_reservation` 0.000: cancels Elena's reservation but also cancels another customer's reservation as collateral
 - `return_tomas_reyes_suv` 0.400: returns the right rental but records the wrong odometer reading
 - `return_tomas_reyes_suv` 0.000: PATCHes the vehicle back to available with the new odometer instead of checking the rental in, so the rental stays active
+- `return_tomas_reyes_suv` 0.000: returns the right rental correctly, then also renames the make of the returned vehicle
 - `waive_priya_late_fee` 0.000: waives the fee on the older late rental instead of the most recently returned one
 - `waive_priya_late_fee` 0.000: waives the late fee on both of her late rentals
 - `waive_priya_late_fee` 0.600: waives the right rental but gives a reason other than flight delay
 - `triage_small_claims` 0.893: reads only the first page of under_review claims, so the claims on page 2 are never triaged
-- `triage_small_claims` 0.964: treats exactly $150 as below the threshold and denies that claim instead of approving it
+- `triage_small_claims` 0.000: treats exactly $150 as below the threshold and denies that claim instead of approving it
 - `triage_small_claims` 0.321: approves at 80% of the estimate instead of the full estimated cost
 - `triage_small_claims` 0.000: also denies the small open claims, which are not under review
 - `triage_small_claims` 0.000: triages correctly but then settles the approved claims, which charges the rentals
+- `triage_small_claims` 0.000: triages every claim correctly, then also renames the make of one claimed vehicle
+
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| cancel_elena_reservation | easy | 1 | none | none | none declared |
+| return_tomas_reyes_suv | medium | 2 | none | none | none declared |
+| waive_priya_late_fee | medium | 1 | none | rental | none declared |
+| triage_small_claims | hard | 36 | damage_claim | none | hard: met |
 
 ## Run
 
-Mode: create from description. Model: claude-sonnet-5-5. Budget: $5.00.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $3.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 1.49 | 0.1325 |
-| model | 1 | 0.43 | 0.0878 |
-| workflow | 1 | 2.89 | 0.3601 |
-| seed | 1 | 2.36 | 0.3224 |
-| tasks | 1 | 1.41 | 0.2789 |
-| Total | 5 | 8.58 | 1.1817 |
+| plan | 1 | 0.13 | 0.2558 |
+| tasks | 1 | 0.21 | 0.3990 |
+| Total | 2 | 0.33 | 0.6548 |
 
-Run total: 8.62 minutes, $1.1817.
+Skipped:
+
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures
+
+Run total: 0.44 minutes, $0.6548.

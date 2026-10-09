@@ -19,6 +19,7 @@ Each public claim in [README.md](../../README.md), with the files behind it and 
 - `analyze-eval` recomputes each scorecard from the committed `events.jsonl` files. It exits 0 only when a run covers the whole suite and every case passed, so read the numbers, not the exit code. Times and costs in those events are client-side estimates, not invoices.
 - `bun run evidence` replays each episode on this checkout's engine. The episodes declare the engine commit of an earlier repository, so agreement shows that today's engine reproduces the recorded run. For each episode it checks the seed state hash, the status and body of every call, the end-state hash and the score, which it gets by grading the replay through the verifier.
 - Each export folder keeps the world its episodes ran on, in `world/world.yaml`. `bun scripts/freeze-export-world.ts ../prod/worlds/gen-orders ../eval/dataset/2026-10-07/gen-orders` writes one, and refuses unless its hash is the version the manifest names. Five came from `prod/worlds`. helpdesk came from the root commit (`git show 733538fd:prod/worlds/helpdesk/world.yaml`), because A-356 changed helpdesk after the export.
+- Three frozen worlds (gen-orders, gen-insurance-claims, helpdesk) predate the free-text gate (A-388), so their graders never read some text the solution writes; `bun run evidence` replays them anyway, since that does not change a recorded score, and prints a `note  frozen world predates A-388: <task> grader never reads <field>` line for each gap.
 
 ## Check on GitHub
 

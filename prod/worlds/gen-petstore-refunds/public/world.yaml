@@ -934,7 +934,7 @@ tasks:
     alternatives: []
   request_refund_mochi:
     difficulty: easy
-    instruction: "The customer who bought the pet named Mochi wants money back: 6000 (USD minor units), because the pet was not as described. Earlier requests for that order were rejected, but file a new refund request for it with that reason. Change nothing else."
+    instruction: 'The customer who bought the pet named Mochi wants money back: 6000 (USD minor units), because the pet was not as described. Earlier requests for that order were rejected, but file a new refund request for it. The refund reason must include the phrase "not as described". Change nothing else.'
     decoys: []
     alternatives: []
   restock_pepper_refund:
@@ -944,6 +944,6 @@ tasks:
     alternatives: []
   settle_requested_refunds:
     difficulty: hard
-    instruction: Go through every refund that is still in status requested. Reject each one above 10000 (USD minor units) with a note that says why, and approve each one at or below 10000 without restocking the pet. Refunds that are already approved or rejected stay as they are, and no pet or order changes.
+    instruction: Go through every refund that is still in status requested. Reject each one above 10000 (USD minor units) with a note that says why and includes the limit number 10000, and approve each one at or below 10000 without restocking the pet. Each rejection note must include the number 10000. Refunds that are already approved or rejected stay as they are, and no pet or order changes.
     decoys: []
     alternatives: []

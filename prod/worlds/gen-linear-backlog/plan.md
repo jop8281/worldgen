@@ -2,7 +2,7 @@
 
 A single-team issue tracker seeded from a real 123-issue Linear backlog (team key YOS, project WorldGen). Issues move through Backlog, In Progress, In Review, Done, Canceled and Duplicate. They carry a priority, a project, a milestone, labels, an optional parent and a completion time. Agents triage, move, relabel, re-milestone, close out and de-duplicate issues. Status changes go through actions that enforce the workflow rules and write an audit history. Two jobs auto-close parents and archive old done issues.
 
-- Revision: 1
+- Revision: 2
 - Verdict: proceed
 - Clock: starts 2026-10-07T09:00:00.000Z, tick 1s
 
@@ -89,8 +89,8 @@ None. The plan records no acceptance test.
 
 - `start_the_welcome_issue` (easy): Find the one backlog issue titled 'Get familiar with Linear' (or the seed's equivalent single backlog onboarding issue the seed stage pins) and move it to In Progress. Nothing else may change. The grader checks status = in_progress and that only that issue and its own history events changed.
   - Decoy idea: Moves a different issue with a similar 'Get familiar' style title, or PATCHes status (refused) and then cancels it instead of starting it.
-- `cancel_stale_backlog_in_milestone` (medium): Cancel every Backlog issue in the milestone named in the instruction (a seeded later-stage milestone such as 'Later: Fidelity and factory operations') that carries the label named in the instruction (such as 'factory'). Give a reason. Leave issues in other milestones, issues with other statuses and issues with a different label alone. The list spans more than one page, so the agent has to read milestones and labels first and then page issues and issue_labels.
-  - Decoy idea: Cancels every backlog issue in that milestone and ignores the label, or filters by label but reads only page 1, or cancels the issues in all milestones with that label.
+- `cancel_stale_backlog_in_milestone` (medium): Cancel every Backlog issue in the milestone named in the instruction (a seeded later-stage milestone such as 'Later: Fidelity and factory operations') that carries the label named in the instruction (such as 'factory'). Give each cancellation a reason, and the instruction states the reason must contain the keyword 'stale'. The grader checks that each cancel comment (comment.body) on a target issue contains 'stale' (case-insensitive), so nonsense such as 'bananas' scores below 1. Leave issues in other milestones, issues with other statuses and issues with a different label alone. The list spans more than one page, so the agent has to read milestones and labels first and then page issues and issue_labels.
+  - Decoy idea: Cancels every backlog issue in that milestone and ignores the label, or filters by label but reads only page 1, or cancels the issues in all milestones with that label, or cancels the right issues with a reason that does not contain 'stale'.
 - `close_out_epic_with_sub_issues` (hard): Close out the parent issue YOS-91 (a seeded parent that has open sub-issues): complete each sub-issue that is in_review or in_progress, cancel each sub-issue still in backlog with a reason, then complete the parent. complete_issue on the parent is refused until every child is closed, so order matters. The grader checks the ending statuses, that no unrelated issue changed, and through ctx.trace that every child was closed before the parent was completed.
   - Decoy idea: Tries to complete the parent first and gives up after the 409, completes the children but skips the backlog ones so the parent stays open, or cancels all the children, which loses the done work.
 - `merge_duplicate_issues` (hard): Two non-closed issues that the seed pins carry near-identical titles. Mark the newer one as a duplicate of the older one, and copy its labels onto the older one that are not there yet. The older issue keeps its status and priority. The grader checks status = duplicate with duplicate_of_id equal to the older issue, the label union on the older issue, and that no other issue changed.
@@ -151,6 +151,8 @@ None. The plan records no acceptance test.
   - Why: Linear auto-archives closed issues. The imported data spans only one day, so the job is quiet at the start and only tests move the clock.
 - The list envelope uses the engine defaults: data, next_cursor, limit and cursor. The error body is {error:{code,message}}.
   - Why: No source API spec was given, so nothing contradicts the defaults.
+- The required keyword in the cancel reason is 'stale', matching the task name, checked case-insensitively against the new comment.body on each target issue.
+  - Why: The request asks for a keyword the task already gives; the task id says stale backlog.
 
 ## Out of scope
 
@@ -169,4 +171,4 @@ None. The plan records no acceptance test.
 
 ## Changes
 
-None. The plan changes no existing item.
+- tasks.cancel_stale_backlog_in_milestone

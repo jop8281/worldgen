@@ -906,8 +906,13 @@ export type TablesView = { readonly tables: Readonly<Record<string, ReadonlyMap<
  * the entry that created it; fields the other origin wrote afterwards come as an 'updated' Change.
  * A deleted row carries the origin of the entry that deleted it. A field no entry wrote counts as
  * 'call'. Entities in `end` table order (then seed-only ones), rows in id order.
+ *
+ * With `callWrites`, the rows the run's calls wrote (A-387), a call change counts every field a call wrote, not only
+ * the ones it changed for good: a seed row a call edited and then put back appears as an updated call change of the
+ * fields written, and a call's updated change also lists fields a call wrote that a job or a later call reverted. A
+ * row a call created is judged by its created change alone, and a write that changed no field counts for nothing.
  */
-export function changesSince(seed: TablesView, end: TablesView, journal: OriginJournal): Change[] {
+export function changesSince(seed: TablesView, end: TablesView, journal: OriginJournal, callWrites?: readonly JournalRow[]): Change[] {
   // Per row: the last origin to write each field, and the last origin to create or delete the row.
   const writers = new Map<string, Map<string, Change['origin']>>();
   const lifecycle = new Map<string, { created?: Change['origin']; deleted?: Change['origin'] }>();
@@ -920,6 +925,19 @@ export function changesSince(seed: TablesView, end: TablesView, journal: OriginJ
       if (r.kind !== 'updated') lifecycle.set(key, { ...lifecycle.get(key), [r.kind]: e.origin });
     }
   }
+  const wrote = new Map<string, { fields: string[]; created: boolean }>();
+  for (const r of callWrites ?? []) {
+    const key = `${r.entity}\u0000${r.id}`;
+    const w = wrote.get(key) ?? { fields: [], created: false };
+    if (r.kind === 'created') w.created = true;
+    for (const f of r.fields) if (!w.fields.includes(f)) w.fields.push(f);
+    wrote.set(key, w);
+  }
+  /** Fields the run's calls wrote on a row they did not create, beyond `net`. */
+  const callFields = (key: string, net: readonly string[]): string[] => {
+    const w = wrote.get(key);
+    return w === undefined || w.created ? [...net] : [...new Set([...net, ...w.fields])];
+  };
   const rowsOf = (t: TablesView, entity: string): Map<string, Row> => {
     const v = Object.hasOwn(t.tables, entity) ? t.tables[entity] : undefined;
     return new Map([...(v === undefined ? [] : Array.isArray(v) ? v : (v as ReadonlyMap<string, Row>).values())].map((r: Row) => [r.id, r]));
@@ -932,8 +950,12 @@ export function changesSince(seed: TablesView, end: TablesView, journal: OriginJ
     const ids = [...new Set([...before.keys(), ...after.keys()])].sort(cmpId);
     for (const id of ids) {
       const diff = rowDiff(before.get(id), after.get(id));
-      if (diff === null) continue;
       const key = `${entity}\u0000${id}`;
+      if (diff === null) {
+        const undone = before.has(id) ? callFields(key, []) : [];
+        if (undone.length > 0) out.push({ entity, id, kind: 'updated', fields: undone, origin: 'call' });
+        continue;
+      }
       if (diff.kind === 'deleted') {
         out.push({ entity, id, kind: 'deleted', fields: diff.fields, origin: lifecycle.get(key)?.deleted ?? 'call' });
         continue;
@@ -942,7 +964,7 @@ export function changesSince(seed: TablesView, end: TablesView, journal: OriginJ
       const by = (origin: Change['origin']): string[] => diff.fields.filter((f) => (w?.get(f) ?? 'call') === origin);
       const creator = diff.kind === 'created' ? (lifecycle.get(key)?.created ?? 'call') : null;
       for (const origin of ['call', 'job'] as const) {
-        const fields = by(origin);
+        const fields = origin === 'call' && creator !== 'call' ? callFields(key, by(origin)) : by(origin);
         if (origin === creator) out.push({ entity, id, kind: 'created', fields, origin });
         else if (fields.length > 0) out.push({ entity, id, kind: 'updated', fields, origin });
       }

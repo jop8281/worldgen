@@ -1267,16 +1267,16 @@ tasks:
     alternatives: []
   refund_delivered_big_orders_for_customer:
     difficulty: medium
-    instruction: Grace Liu has asked for refunds on her big orders. Refund every one of her delivered orders with a total above $300.00, giving each a reason. Leave all her other orders alone.
+    instruction: Grace Liu has asked for refunds on her big orders. Refund every one of her delivered orders with a total above $300.00, giving each a reason that contains the word "damaged". Leave all her other orders alone.
     decoys: []
     alternatives: []
   cancel_stale_pending_with_gift_note:
     difficulty: medium
-    instruction: "Clean up stale pending orders: cancel every pending order placed before 25 March 2026 that has a customer note on it, giving each a reason. Pending orders without a note, and orders in any other status, must stay as they are."
+    instruction: 'Clean up stale pending orders: cancel every pending order placed before 25 March 2026 that has a customer note on it, giving each a reason that contains the word "stale". Pending orders without a note, and orders in any other status, must stay as they are.'
     decoys: []
     alternatives: []
   ship_all_paid_large_orders:
     difficulty: hard
-    instruction: Ship every paid order that has at least 4 items and a total above $300.00. Give each shipment a tracking number of your choice. Do not change any other order.
+    instruction: Ship every paid order that has at least 4 items and a total above $300.00. Give each shipment a tracking number that starts with "TRK-" (for example TRK- followed by the order id). Do not change any other order.
     decoys: []
     alternatives: []

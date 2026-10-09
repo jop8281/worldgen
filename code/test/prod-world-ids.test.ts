@@ -46,10 +46,10 @@ describe('prod world reports and capsules cite the committed world', async () =>
 });
 
 describe('the hand-built helpdesk', () => {
-  it('has the pinned WID: A-356 moved it by marking customer.email sensitive, and no other world moved', async () => {
+  it('has the pinned WID: A-388 moved it by naming what an escalation reason must say, and no other world moved', async () => {
     const loaded = await loadWorld(path.join(WORLDS, 'helpdesk'));
     assert.equal(loaded.ok, true);
     if (!loaded.ok) return;
-    assert.equal(worldIdOf(worldSchema.parse(loaded.value)), 'wid_7c919f61f9a3c2b046e6367b99035ce8ae8d2aafc48601b23ed5d4c5b60eda2f');
+    assert.equal(worldIdOf(worldSchema.parse(loaded.value)), 'wid_78022e7c8b47831046898e2a90b23702a173c2c01ece934c2d9ba2b1f5425dc4');
   });
 });
