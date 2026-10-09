@@ -67,7 +67,7 @@ describe('fixtures', () => {
     const allowed: readonly IssueCode[] = [
       'task.grader_out_of_range', 'task.solution_not_full_marks', 'task.noop_not_zero', 'task.decoy_required',
       'task.decoy_full_marks', 'task.decoy_trivial', 'task.prefix_full_marks', 'task.mutant_full_marks', 'task.nondeterministic',
-      'task.idle_not_zero', 'task.alternative_not_full_marks',
+      'task.idle_not_zero', 'task.alternative_not_full_marks', 'task.freetext_unchecked',
       'world.too_few_tasks', 'snippet.runtime_error',
     ];
     for (const b of BAD_TASKS) assert.ok(allowed.includes(b.code), `${b.id} uses ${b.code}`);
