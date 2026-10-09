@@ -1,6 +1,7 @@
 /** Offline analysis against an explicit expected set; no providers or file IO. */
 import { CASE_ID, caseFileSchema, outcomeOf, OUTCOMES, type Outcome, type PhaseName } from './eval.ts';
 import type { RunEvent, StopReason } from './events.ts';
+import { STEP_ORDER } from './policy.ts';
 
 export type ExpectedEvalCase = { readonly id: string; readonly expect: 'done' | 'stopped'; readonly change?: string };
 export type EvalEvidence = {
@@ -88,8 +89,9 @@ function analyzeLog(text: string | null | undefined): PhaseAnalysis {
   let attemptsKnown = starts.length === 1;
   let attempts = 0;
   const sequence = new Map<string, number>();
-  // step_finished.attempts is per invocation. A backtrack resets the target's attempt.n, and since YOS-258 every step it
-  // reruns restarts at 1 too; runs recorded before that continue a later step's count, so either is accepted.
+  // step_finished.attempts is per invocation. A backtrack resets the target's attempt.n, and since YOS-258 every later
+  // step in STEP_ORDER restarts at 1 too; runs recorded before that continue a later step's count, so either is accepted.
+  // An earlier step keeps its count, as recordBacktrack keeps its attempts (A-399).
   const restartable = new Set<string>();
   const active = new Map<string, { attempts: number; refused: boolean }>();
   let refused = false;
@@ -129,7 +131,9 @@ function analyzeLog(text: string | null | undefined): PhaseAnalysis {
       if (step === undefined || step.attempts === 0 || step.refused || typeof e.to !== 'string') attemptsKnown = false;
       if (typeof e.from === 'string') active.delete(e.from);
       if (typeof e.to === 'string') {
-        for (const step of sequence.keys()) restartable.add(step);
+        const to = e.to;
+        const target = STEP_ORDER.findIndex((s) => s === to);
+        for (const step of sequence.keys()) if (target >= 0 && STEP_ORDER.findIndex((s) => s === step) >= target) restartable.add(step);
         sequence.set(e.to, 0);
         backtrackTo = e.to;
       }
