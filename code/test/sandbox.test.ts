@@ -367,6 +367,17 @@ describe('ctx call quota', () => {
     assert.equal(f.issue.code, 'snippet.call_quota');
   });
 
+  it('never leaves a stale answer for the next request on a pooled process after a quota trip', () => {
+    // The watchdog reports a tripped quota by claiming the run's token. A worker that read the claimed token after the
+    // claim used to answer anyway, so its answer and the watchdog's dead frame both reached the lane, and the next request
+    // read the dead one: about one trip in 800 on a quiet machine, more under load. Many trips in a row make it show.
+    const tight = createVmHost({ ...SNIPPET_LIMITS, ctxCallsPerRun: 1, guardMs: 2000 });
+    for (let i = 0; i < 1000; i++) {
+      assert.equal(fault(() => run('(ctx) => { ctx.now(); ctx.now(); return 0; }', jobCtx(), tight)).issue.code, 'snippet.call_quota');
+      assert.equal(run('(ctx) => ctx.now()', jobCtx(), tight), NOW);
+    }
+  });
+
   it('resets the counter on every run', () => {
     const h = createVmHost({ ctxCallsPerRun: 2, guardMs: 2000 });
     const src = '(ctx) => { ctx.now(); return ctx.now(); }';
