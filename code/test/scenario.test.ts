@@ -7,7 +7,8 @@ import { afterEach, describe, it } from 'node:test';
 import { checkWorld, loadWorld, renderWorldYaml } from '#engine';
 import { buildScenarioWorlds, worldDirOf } from '../scripts/scenario-worlds.ts';
 import { serveScenario, type ScenarioServer } from '../src/scenario/gateway.ts';
-import { linkResult, type Link } from '../src/scenario/links.ts';
+import type { CallWrite } from '#engine';
+import { linkResult, SEQ_HEADER, type Link, type LinkEvidence } from '../src/scenario/links.ts';
 import { loadScenario, type LoadedScenario } from '../src/scenario/manifest.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
@@ -46,8 +47,8 @@ async function tempScenario(yaml: string): Promise<string> {
 const head = `name: t\ndescription: d\nworlds:\n  support: ${HELPDESK}\n`;
 
 type Res = { status: number; body: any };
-async function call(base: string, method: string, p: string, body?: unknown): Promise<Res> {
-  const r = await fetch(base + p, { method, ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }) });
+async function call(base: string, method: string, p: string, body?: unknown, headers: Record<string, string> = {}): Promise<Res> {
+  const r = await fetch(base + p, { method, headers: { ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   return { status: r.status, body: await r.json() };
 }
 
@@ -228,6 +229,7 @@ describe('faults', () => {
     assert.equal(log.length, 1);
     assert.equal(log[0].req.path, '/v1/refunds');
     assert.equal(log[0].res.status, 200);
+    assert.equal(log[0].req.headers[SEQ_HEADER], '3');
     const retry = await refund(s);
     assert.equal(retry.status, 409);
     assert.equal(retry.body.error.code, 'charge_already_refunded');
@@ -251,9 +253,30 @@ describe('faults', () => {
       { seq: 2, world: 'support', method: 'POST', path: '/tickets/tkt_0004/assign', status: 409, fault: 'duplicate' },
     ]);
     const log = (await call(s.worlds['support']!.adminUrl, 'GET', '/_world/log')).body.calls;
-    assert.deepEqual(log.map((c: any) => [c.req.method, c.req.path, c.res.status]), [
-      ['POST', '/tickets/tkt_0004/assign', 200],
-      ['POST', '/tickets/tkt_0004/assign', 409],
+    assert.deepEqual(log.map((c: any) => [c.req.headers[SEQ_HEADER], c.req.method, c.req.path, c.res.status]), [
+      ['1', 'POST', '/tickets/tkt_0004/assign', 200],
+      ['2', 'POST', '/tickets/tkt_0004/assign', 409],
+    ]);
+  });
+
+  it('stamps each delivery with its trace seq, so a logged call is placed by its stamp and not by its place in the log', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await call(s.url, 'GET', '/payments/openapi.json')).status, 200);
+    assert.equal((await call(s.url, 'POST', '/payments/v1/refunds', { charge: 'ch_0142', reason: 'duplicate' })).status, 504);
+    assert.equal((await call(s.url, 'GET', '/support/_world/state', undefined, { [SEQ_HEADER]: '1' })).status, 404);
+    assert.equal((await call(s.url, 'POST', '/support/tickets/tkt_0321/resolve', { note: 'refund re_0051' }, { [SEQ_HEADER]: '1' })).status, 200);
+    assert.deepEqual((await call(s.adminUrl, 'GET', '/_scenario/trace')).body.calls, [
+      { seq: 1, world: 'payments', method: 'GET', path: '/openapi.json', status: 200, fault: null },
+      { seq: 2, world: 'payments', method: 'POST', path: '/v1/refunds', status: 200, fault: 'drop_response' },
+      { seq: 3, world: 'support', method: 'GET', path: '/_world/state', status: 404, fault: null },
+      { seq: 4, world: 'support', method: 'POST', path: '/tickets/tkt_0321/resolve', status: 200, fault: null },
+    ]);
+    const logged = async (world: string) =>
+      (await call(s.worlds[world]!.adminUrl, 'GET', '/_world/log')).body.calls.map((c: any) => [c.req.headers?.[SEQ_HEADER] ?? null, c.req.method, c.req.path, c.res.status, c.writes.map((w: any) => `${w.op} ${w.entity} ${w.id}`)]);
+    assert.deepEqual(await logged('payments'), [['2', 'POST', '/v1/refunds', 200, ['updated charge ch_0142', 'created refund re_0051']]]);
+    assert.deepEqual(await logged('support'), [
+      [null, 'GET', '/_world/state', 404, []],
+      ['4', 'POST', '/tickets/tkt_0321/resolve', 200, ['updated ticket tkt_0321', 'created ticket_event evt_1036']],
     ]);
   });
 
@@ -336,75 +359,119 @@ describe('linkResult', () => {
     payments: { refund: [refund('re_0006', 'ch_0001'), refund('re_0007', 'ch_0002')] },
     support: { ticket_event: notes.map((n, i) => resolved(`evt_${String(9 + i).padStart(4, '0')}`, n)) },
   });
+  type Placed = { seq: number; world: string; path: string; writes: CallWrite[]; stamp?: string };
+  const evidenceOf = (...placed: Placed[]): LinkEvidence => ({
+    trace: placed.map(({ seq, world, path }) => ({ seq, world, method: 'POST', path, status: 200, fault: null })),
+    logs: (world) => placed.filter((p) => p.world === world).map((p) => ({ req: { method: 'POST', path: p.path, headers: { [SEQ_HEADER]: p.stamp ?? String(p.seq) } }, res: { status: 200 }, writes: p.writes })),
+  });
+  const refundCall = (seq: number): Placed => ({ seq, world: 'payments', path: '/v1/refunds', writes: [{ entity: 'refund', id: 're_0007', op: 'created', fields: ['charge', 'amount'] }] });
+  const resolveCall = (seq: number, id = 'evt_0009'): Placed => ({ seq, world: 'support', path: '/tickets/tkt_0001/resolve', writes: [{ entity: 'ticket_event', id, op: 'created', fields: ['ticket_id', 'kind', 'note'] }] });
+  const inOrder = evidenceOf(refundCall(2), resolveCall(5), resolveCall(6, 'evt_0010'));
 
   it('holds when the resolved note cites the one matched refund id and no other, whatever other ids it names', () => {
-    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301 on charge ch_0002, refund re_0007.'))), {
-      name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note cites re_0007',
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301 on charge ch_0002, refund re_0007.')), inOrder), {
+      name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note cites re_0007, written at gateway seq 5 after refund re_0007 was created at seq 2',
     });
   });
 
   it('counts a token only between characters that are not letters, digits or "_"', () => {
-    assert.deepEqual(linkResult(link, over(cited('see xre_0006, re_0006_b and (re_0007).'))), {
-      name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note cites re_0007',
+    assert.deepEqual(linkResult(link, over(cited('see xre_0006, re_0006_b and (re_0007).')), inOrder), {
+      name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note cites re_0007, written at gateway seq 5 after refund re_0007 was created at seq 2',
     });
   });
 
   it('fails when no from row matches', () => {
     const t = { payments: { refund: [refund('re_0006', 'ch_0001')] }, support: { ticket_event: [resolved('evt_0009', 'refund re_0006')] } };
-    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '0 refund rows matched where {"charge":"ch_0002"}' });
+    assert.deepEqual(linkResult(link, over(t), inOrder), { name: 'note cites refund', held: false, found: '0 refund rows matched where {"charge":"ch_0002"}' });
   });
 
   it('fails when two from rows match', () => {
     const t = { payments: { refund: [refund('re_0007', 'ch_0002'), refund('re_0008', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 're_0007 re_0008')] } };
-    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '2 refund rows matched where {"charge":"ch_0002"}, not exactly 1' });
+    assert.deepEqual(linkResult(link, over(t), inOrder), { name: 'note cites refund', held: false, found: '2 refund rows matched where {"charge":"ch_0002"}, not exactly 1' });
   });
 
   it('fails when the from row has no usable value', () => {
     const t = { payments: { refund: [{ charge: 'ch_0002' }] }, support: { ticket_event: [resolved('evt_0009', 'refund re_0007')] } };
-    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '1 refund row matched, but its id is missing, not a non-empty string or a number' });
+    assert.deepEqual(linkResult(link, over(t), inOrder), { name: 'note cites refund', held: false, found: '1 refund row matched, but its id is missing, not a non-empty string or a number' });
   });
 
   it('fails when no to row matches', () => {
     const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [{ id: 'evt_0009', ticket_id: 'tkt_0001', kind: 'created', note: 'refund re_0007' }] } };
-    assert.deepEqual(linkResult(link, over(t)), {
+    assert.deepEqual(linkResult(link, over(t), inOrder), {
       name: 'note cites refund', held: false, found: '1 refund row matched; 0 ticket_event rows matched where {"ticket_id":"tkt_0001","kind":"resolved"}',
     });
   });
 
   it('fails when the note cites no refund id, and names each to row that fails', () => {
-    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301.', null))), {
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301.', null)), inOrder), {
       name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cites no refund id; ticket_event evt_0010 note cites no refund id',
     });
   });
 
   it('fails when the note cites more than one refund id, the matched one among them', () => {
     const shotgun = Array.from({ length: 99 }, (_, i) => `re_${String(i + 1).padStart(4, '0')}`).join(' ');
-    assert.deepEqual(linkResult(link, over(cited(`Refunded O-7301: ${shotgun}.`))), {
+    assert.deepEqual(linkResult(link, over(cited(`Refunded O-7301: ${shotgun}.`)), inOrder), {
       name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cites 99 refund ids, not exactly 1',
     });
   });
 
   it('fails when the one cited id is another refund, or holds the value only inside a longer id', () => {
-    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301, refund re_0006.'))), {
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301, refund re_0006.')), inOrder), {
       name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cites re_0006, not re_0007',
     });
-    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301, refund re_00071.'))), {
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301, refund re_00071.')), inOrder), {
       name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cites re_00071, not re_0007',
     });
   });
 
   it('fails when the linked value is not shaped like an id, so no text can cite it', () => {
     const t = { payments: { refund: [{ id: 42, charge: 'ch_0002' }] }, support: { ticket_event: [resolved('evt_0009', 'refund 42')] } };
-    assert.deepEqual(linkResult(link, over(t)), {
+    assert.deepEqual(linkResult(link, over(t), inOrder), {
       name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cannot cite 42, which is not letters and "_" then letters or digits',
+    });
+  });
+
+  it('fails when the citing row was written before the cited row was created, or in the same call', () => {
+    const t = cited('Refunded O-7301, refund re_0007.');
+    assert.deepEqual(linkResult(link, over(t), evidenceOf(resolveCall(1), refundCall(2))), {
+      name: 'note cites refund', held: false, found: 'ticket_event evt_0009 was written at gateway seq 1, before refund re_0007 was created at seq 2',
+    });
+    const oneWorld: Link = { ...link, from: { ...link.from, world: 'support' } };
+    const both: Placed = { seq: 3, world: 'support', path: '/tickets/tkt_0001/resolve', writes: [...refundCall(3).writes, ...resolveCall(3).writes] };
+    assert.deepEqual(linkResult(oneWorld, over({ support: { ...t.payments, ...t.support } }), evidenceOf(both)), {
+      name: 'note cites refund', held: false, found: 'ticket_event evt_0009 was written at gateway seq 3, in the call that created refund re_0007',
+    });
+  });
+
+  it('fails when no call in the trace created the cited row, as for a seeded one', () => {
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301, refund re_0007.')), evidenceOf(resolveCall(5))), {
+      name: 'note cites refund', held: false, found: 'refund re_0007 was created by no call in the gateway trace',
+    });
+  });
+
+  it('fails when the citing call has no stamp, or a stamp that names another world\'s trace entry', () => {
+    const t = cited('Refunded O-7301, refund re_0007.');
+    const unplaced = 'ticket_event evt_0009 note was written by no call in the gateway trace';
+    assert.deepEqual(linkResult(link, over(t), evidenceOf(refundCall(2), { ...resolveCall(5), stamp: '' })), { name: 'note cites refund', held: false, found: unplaced });
+    assert.deepEqual(linkResult(link, over(t), evidenceOf(refundCall(2), { ...resolveCall(5), stamp: '2' })), { name: 'note cites refund', held: false, found: unplaced });
+  });
+
+  it('places the citing row by the last call that wrote its field, not by a later write of another field', () => {
+    const t = cited('Refunded O-7301, refund re_0007.');
+    const touch = (seq: number, field: string): Placed => ({ seq, world: 'support', path: '/ticket_events/evt_0009', writes: [{ entity: 'ticket_event', id: 'evt_0009', op: 'updated', fields: [field] }] });
+    assert.deepEqual(linkResult(link, over(t), evidenceOf(resolveCall(1), refundCall(2), touch(3, 'actor_id'))), {
+      name: 'note cites refund', held: false, found: 'ticket_event evt_0009 was written at gateway seq 1, before refund re_0007 was created at seq 2',
+    });
+    assert.deepEqual(linkResult(link, over(t), evidenceOf(resolveCall(1), refundCall(2), touch(3, 'note'))), {
+      name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note cites re_0007, written at gateway seq 3 after refund re_0007 was created at seq 2',
     });
   });
 
   it('equals needs the whole text to be the value', () => {
     const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'refund re_0007'), resolved('evt_0010', 're_0007')] } };
-    assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t)), { name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0010 note equals re_0007' });
+    assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t), inOrder), { name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0010 note equals re_0007, written at gateway seq 6 after refund re_0007 was created at seq 2' });
     t.support.ticket_event.pop();
-    assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t)), { name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note does not equal re_0007' });
+    assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t), inOrder), { name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note does not equal re_0007' });
   });
 });
 
@@ -442,7 +509,7 @@ describe('the flagship: billing-duplicate-charge', () => {
     assert.deepEqual((await grade(s)).body, {
       verdict: 1,
       gates: gates(1, 1),
-      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051' }],
+      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051, written at gateway seq 7 after refund re_0051 was created at seq 3' }],
     });
     const writes = (await call(s.adminUrl, 'GET', '/_scenario/trace')).body.calls.filter((c: any) => c.method === 'POST');
     assert.deepEqual(writes.map((c: any) => [c.world, c.path, c.status, c.fault]), [
@@ -504,14 +571,14 @@ describe('the flagship: billing-duplicate-charge', () => {
     });
   });
 
-  it('a limit: citing the predicted id re_0051 before refunding passes, because the link does not order the two writes', async () => {
+  it('citing the predicted id re_0051 before refunding: both gates pass and only the link fails, on order', async () => {
     const s = await start(FLAGSHIP);
     assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
     assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
     assert.deepEqual((await grade(s)).body, {
-      verdict: 1,
+      verdict: 0,
       gates: gates(1, 1),
-      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051' }],
+      links: [{ name: LINK, held: false, found: 'ticket_event evt_1036 was written at gateway seq 3, before refund re_0051 was created at seq 4' }],
     });
   });
 
@@ -526,7 +593,7 @@ describe('the flagship: billing-duplicate-charge', () => {
     assert.deepEqual((await grade(s)).body, {
       verdict: 1,
       gates: gates(1, 1),
-      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051' }],
+      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051, written at gateway seq 6 after refund re_0051 was created at seq 1' }],
     });
   });
 
