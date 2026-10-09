@@ -280,6 +280,22 @@ describe('faults', () => {
     ]);
   });
 
+  it('overwrites an agent-supplied stamp: a write the agent marks seq 1 but that runs at seq 5 is placed at 5, so the link holds', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await call(s.url, 'GET', '/payments/openapi.json')).status, 200);
+    assert.equal((await call(s.url, 'GET', '/support/tickets/tkt_0321')).status, 200);
+    assert.equal((await call(s.url, 'POST', '/payments/v1/refunds', { charge: 'ch_0142', reason: 'duplicate' })).status, 504);
+    assert.equal((await call(s.url, 'GET', '/payments/v1/refunds?charge=ch_0142')).status, 200);
+    assert.equal((await call(s.url, 'POST', '/support/tickets/tkt_0321/resolve', { note: 'Refunded the duplicate O-7301 charge, refund re_0051.' }, { [SEQ_HEADER]: '1' })).status, 200);
+    const support = (await call(s.worlds['support']!.adminUrl, 'GET', '/_world/log')).body.calls.map((c: any) => [c.req.headers?.[SEQ_HEADER] ?? null, c.req.method, c.req.path]);
+    assert.deepEqual(support, [['2', 'GET', '/tickets/tkt_0321'], ['5', 'POST', '/tickets/tkt_0321/resolve']]);
+    assert.deepEqual((await grade(s)).body.links, [{
+      name: 'the ticket note cites the refund payments created',
+      held: true,
+      found: '1 refund row matched; ticket_event evt_1036 note cites re_0051, written at gateway seq 5 after refund re_0051 was created at seq 3',
+    }]);
+  });
+
   it('fires once, on the nth match only', async () => {
     const dir = await tempScenario(
       `${head}gates:\n  - {world: support, task: assign_newest_acme_ticket}\nfaults:\n  - {world: support, method: GET, path: /customers, nth: 2, kind: drop_response}\n`,
@@ -454,6 +470,7 @@ describe('linkResult', () => {
     const unplaced = 'ticket_event evt_0009 note was written by no call in the gateway trace';
     assert.deepEqual(linkResult(link, over(t), evidenceOf(refundCall(2), { ...resolveCall(5), stamp: '' })), { name: 'note cites refund', held: false, found: unplaced });
     assert.deepEqual(linkResult(link, over(t), evidenceOf(refundCall(2), { ...resolveCall(5), stamp: '2' })), { name: 'note cites refund', held: false, found: unplaced });
+    assert.deepEqual(linkResult(link, over(t), evidenceOf(refundCall(2), { ...resolveCall(5), stamp: '99' })), { name: 'note cites refund', held: false, found: unplaced });
   });
 
   it('places the citing row by the last call that wrote its field, not by a later write of another field', () => {
