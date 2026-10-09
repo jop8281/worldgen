@@ -1047,7 +1047,7 @@ tasks:
     alternatives: []
   confirm_high_severity_fraud_flag:
     difficulty: medium
-    instruction: Aisha Lindqvist has two claims under review, and each carries an open fraud flag. Confirm the fraud flag with high severity, with a note that states the finding, so that claim is denied for fraud. Leave her other claim and its flag as they are.
+    instruction: Aisha Lindqvist has two claims under review, and each carries an open fraud flag. Confirm the fraud flag with high severity, with a resolution note that contains the word 'forged', so that claim is denied for fraud. Leave her other claim and its flag as they are.
     decoys: []
     alternatives: []
   approve_and_pay_clean_claim:

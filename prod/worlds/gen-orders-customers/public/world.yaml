@@ -1060,7 +1060,7 @@ tasks:
     alternatives: []
   cancel_customer_unpaid_orders:
     difficulty: medium
-    instruction: The customer with the email edsger.dijkstra@example.com wants all of their unpaid (pending) orders cancelled. Cancel every pending order of that customer, with a reason. Leave their orders in any other status and every other customer's orders untouched.
+    instruction: The customer with the email edsger.dijkstra@example.com wants all of their unpaid (pending) orders cancelled. Cancel every pending order of that customer, and give each cancellation a reason that contains the word 'unpaid'. Leave their orders in any other status and every other customer's orders untouched.
     decoys: []
     alternatives: []
   refund_large_gb_pro_orders:
