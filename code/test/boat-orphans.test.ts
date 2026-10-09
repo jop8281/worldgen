@@ -438,7 +438,7 @@ describe('bun run sandbox reconcile-orphans', () => {
       });
       const out = JSON.parse(r.stdout) as { receipts: { action: string; error?: string }[] };
       assert.deepEqual([r.code, out.receipts.map(x => [x.action, x.error ?? null]), r.stderr], [1, [['archive_started', null], ['archive_failed', 'boat.dev stop failed: HTTP 503 busy']], 'next: bun run sandbox -- reconcile-orphans --apply --id sb_cli\n']);
-      assert.deepEqual(seen, ['GET /v1/sandboxes', 'POST /v1/sandboxes/sb_cli/stop']);
+      assert.deepEqual(seen, ['GET /v1/sandboxes', 'POST /v1/sandboxes/sb_cli/stop', 'POST /v1/sandboxes/sb_cli/stop', 'POST /v1/sandboxes/sb_cli/stop']);
       assert.equal(r.stdout.includes(KEY) || r.stderr.includes(KEY), false);
     } finally {
       await new Promise<void>((resolve) => boat.close(() => resolve()));
