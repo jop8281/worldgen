@@ -43,6 +43,13 @@ export function isTestRun(i: CheckIssue): boolean {
   return i.path[0] === 'tests' && TEST_RUN_CODES.has(i.code);
 }
 
+/** `isTestRun` for one entry of an issue-set key, `code@path: found` (policy.ts `issueSetKey`). */
+export function isTestRunEntry(entry: string): boolean {
+  const at = entry.indexOf('@');
+  const code = entry.slice(0, at);
+  return at > 0 && [...TEST_RUN_CODES].some((c) => c === code) && /^tests(?:[/:]|$)/.test(entry.slice(at + 1));
+}
+
 export type Stage = {
   readonly id: StageId;
   /** Sections this stage reads. Their change makes it rerun on iterate. */
@@ -105,8 +112,8 @@ export type PressureCheck = {
   readonly need: string;
   readonly met: boolean;
   readonly exempt: string | null;
-  /** Where a miss is repaired: the seed when it lacks the rows, else the task. */
-  readonly path: readonly ['seed' | 'tasks', string];
+  /** Where a miss is repaired: the seed when it lacks the rows, the plan when it pressed what no reference can show, else the task. */
+  readonly path: readonly ['seed' | 'tasks', string] | readonly ['plan', 'tasks', number, 'pressure', 'distractors'];
   /** What the trace and the seed show, with the numbers a repair needs. */
   readonly found: string;
 };
@@ -215,6 +222,7 @@ export function seedNeedIssues(plan: Plan, world: World, stats: Pick<WorldStats,
 export function pressureChecks(report: OkReport, plan: Plan): readonly PressureCheck[] {
   const fed = fixtureFed(report.world);
   const planned = new Map(plan.tasks.map((t) => [t.id, t]));
+  const planIndex = new Map(plan.tasks.map((t, i) => [t.id, i]));
   const out: PressureCheck[] = [];
   for (const v of Object.values(report.verdicts)) {
     if (v.difficulty === 'hard') {
@@ -241,13 +249,20 @@ export function pressureChecks(report: OkReport, plan: Plan): readonly PressureC
       const rows = report.stats.rows[e] ?? 0;
       // With two rows the seed can hold a near-duplicate, so a miss is the reference's filter to change, not the seed's (A-317).
       const seeded = rows >= 2;
+      // A distractor counts only on an entity the reference changes rows of (A-230). A claim on one the task only looks up,
+      // as the agent of a ticket assignment, no seed or reference can meet, so it is the plan's to fix (A-406). When a
+      // planned action of the task acts on the entity, the reference left out a write it owes, so the task repairs it.
+      const plannedOn = (planned.get(v.taskId)?.actions ?? []).some((a) => plan.workflows.some((w) => w.entity === e && w.actions.some((wa) => actionKey(wa) === actionKey(a))));
+      const lookup = !v.solutionChangedEntities.includes(e) && !plannedOn;
       out.push({
         task: v.taskId, need: `distractors: a filtered ${e} list returns a row the reference leaves unchanged`, met: v.solutionDistractorEntities.includes(e),
         exempt: fed.has(e) ? `${e} is imported; the input decides which near-duplicate rows exist, and none were fabricated` : null,
-        path: seeded ? ['tasks', v.taskId] : ['seed', e],
-        found: seeded
-          ? `${rows} ${e} rows seeded, and no filtered ${e} list in the reference returned a row it left unchanged`
-          : `${rows} ${e} rows seeded; seed at least 2 that one filtered list returns`,
+        path: lookup ? ['plan', 'tasks', planIndex.get(v.taskId) ?? 0, 'pressure', 'distractors'] : seeded ? ['tasks', v.taskId] : ['seed', e],
+        found: lookup
+          ? `the reference changes no ${e} row, so no ${e} row can be a distractor: a distractor is a near-duplicate of a row the task changes`
+          : seeded
+            ? `${rows} ${e} rows seeded, and no filtered ${e} list in the reference returned a row it left unchanged`
+            : `${rows} ${e} rows seeded; seed at least 2 that one filtered list returns`,
       });
     }
     for (const es of (p?.states ?? []).filter((pressed) => !pressureUnreachable(plan, pressed))) {
