@@ -389,11 +389,20 @@ describe('difficulty CLI', () => {
     );
   });
 
+  it('accepts claude-haiku-5-5 past the price check and the world check, and stops at the model build with no call (A-403)', () => {
+    const out = tmp('cli-haiku');
+    const env = { PATH: process.env.PATH ?? '', HOME: out, WORLDGEN_COSTS_FILE: path.join(out, 'costs.jsonl'), WORLDGEN_CLAUDE_BIN: '/nonexistent/claude' };
+    const r = spawnSync('bun', ['src/cli/difficulty.ts', HELPDESK, ...ARGS.slice(1, 3), '--out', path.join(out, 'run'), ...ARGS.slice(5), '--models', 'claude-haiku-5-5', '--task', EASY.task], { cwd: CODE_DIR, encoding: 'utf8', env });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /^the claude CLI "\/nonexistent\/claude" was not found on PATH/);
+    assert.deepEqual([existsSync(path.join(out, 'run', 'difficulty.json')), existsSync(path.join(out, 'costs.jsonl'))], [false, false]);
+  });
+
   it('refuses a model with no known price with exit 2, before it checks a world or calls a model', () => {
     const out = tmp('cli');
-    const r = spawnSync('bun', ['src/cli/difficulty.ts', HELPDESK, ...ARGS.slice(1, 3), '--out', out, ...ARGS.slice(5), '--models', `${SONNET},claude-haiku-5-5`], { cwd: CODE_DIR, encoding: 'utf8' });
+    const r = spawnSync('bun', ['src/cli/difficulty.ts', HELPDESK, ...ARGS.slice(1, 3), '--out', out, ...ARGS.slice(5), '--models', `${SONNET},claude-haiku-4-5`], { cwd: CODE_DIR, encoding: 'utf8' });
     assert.equal(r.status, 2);
-    assert.equal(r.stderr, 'no known price for claude-haiku-5-5: add prices.<model> with inputPerMTok and outputPerMTok to worldgen.config.json; no other model stands in\n');
+    assert.equal(r.stderr, 'no known price for claude-haiku-4-5: add prices.<model> with inputPerMTok and outputPerMTok to worldgen.config.json; no other model stands in\n');
     assert.equal(existsSync(path.join(out, 'difficulty.json')), false);
   });
 });
