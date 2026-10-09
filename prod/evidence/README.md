@@ -51,13 +51,15 @@ Training benefit is not claimed: [research/training-experiment.md](../../researc
 
 ## Check on GitHub
 
-- v1.1.1's code, `71f84d45`, passed CI twice. `gh run view 37860510831 --repo jop8281/worldgen --json headSha,conclusion` prints `{"conclusion":"success","headSha":"71f84d45efdc7144e17b858df535ba66c120d83b"}`, and so does run 37860513520. The [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1) links both.
+- v2.5.0, the hand-in (A-417), on `aa553a91`, passed CI twice. `gh run view 37970719856 --repo jop8281/worldgen --json headSha,conclusion` prints `{"conclusion":"success","headSha":"aa553a91ce19707276849b92726ce5f8e906478c"}`, and so does run 37970723299. Main's later `e2ff35b6` passed runs 37992964864 and 37992967357 the same way.
+- v1.1.1's code, `71f84d45`, the earlier hand-in, passed CI twice. `gh run view 37860510831 --repo jop8281/worldgen --json headSha,conclusion` prints `{"conclusion":"success","headSha":"71f84d45efdc7144e17b858df535ba66c120d83b"}`, and so does run 37860513520. The [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1) links both.
 
 ## Not re-checkable from a clone
 
 - The live `--only /store` acceptance run: 248 s and $0.82 on `e034036c`, done, with `check` and `verify` passing. Its output stays outside the repository. The receipt is a comment on [YOS-244](https://linear.app/yossi-zozo123/issue/YOS-244).
 - The live-run dress rehearsal: 3 of 3 delivered in 13.2 minutes for $3.55. The receipt is on [YOS-100](https://linear.app/yossi-zozo123/issue/YOS-100).
-- The full check on a Boat VM: the [GitHub Release page for v2.5.0](https://github.com/jop8281/worldgen/releases/tag/v2.5.0) gives the VM and the pass and fail counts for the tagged commit. [scripts/boat-ci.sh](../../scripts/boat-ci.sh) runs the typecheck and every test on a ref in a large Boat VM, and prints the test counts and a PASS or FAIL line. It needs a Boat key, so a clone without one cannot rerun it.
+- The full check on a Boat VM for main's later `e2ff35b6`: on large VM `bx_embwa82u`, the typecheck and every test gave 5568 pass, 0 fail and 2 skipped, and the end-to-end check exited 0. The receipt is a comment on the Linear project [P-YOS-6](https://linear.app/yossi-zozo123/project/worldgen-v20-proof-37d11583f8cd).
+- The full check on a Boat VM for the hand-in, v2.5.0: the [GitHub Release page for v2.5.0](https://github.com/jop8281/worldgen/releases/tag/v2.5.0) gives the VM and the pass and fail counts for the tagged commit. [scripts/boat-ci.sh](../../scripts/boat-ci.sh) runs the typecheck and every test on a ref in a large Boat VM, and prints the test counts and a PASS or FAIL line. It needs a Boat key, so a clone without one cannot rerun it.
 - The difficulty pilot. Its numbers rest on the committed `difficulty.json` and `difficulty.md` in `eval/difficulty/2026-10-09-pilot/`, which keep the matrix and a row for each episode that ran to the end. The episode traces stay outside the repository. Measuring again calls a model, at a new cost.
 
 ## Answers in the committed worlds
