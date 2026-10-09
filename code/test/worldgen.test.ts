@@ -1149,6 +1149,25 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
   const specCheck = (world: World): CheckReport =>
     world.actions.escalate_ticket?.description?.includes('(reason optional)') === true ? { ok: false, reached: 'lints', issues: [reasonOptional], warnings: [] } : checkWorld(world);
 
+  // J191 (e3's follow-up on #179): the plan is shown only the failing tests of the operation the input check names.
+  const teapot = { id: 'customers_teapot', intent: 'Customers answer 418.', actions: ['resolve_ticket'], description: 'customers are a teapot',
+    script: "(ctx) => { const r = ctx.api('GET', '/customers'); ctx.assert(r.status === 418, 'customers: ' + r.status); }" };
+
+  it('hands the plan only the failing frozen tests of the traded operation, never one of another operation (J191)', async () => {
+    const withTeapot = { ...planWith('not_found', 1), acceptanceTests: [...planWith('not_found', 1).acceptanceTests, teapot] };
+    const { result, events } = await run([
+      { input: withTeapot }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { check: specCheck });
+    const failedTests = events.flatMap((e) => (e.t === 'attempt' && e.step === 'workflow' && e.outcome.kind === 'rejected' ? e.outcome.issues.filter((i) => i.code === 'test.failed').map((i) => i.path[1]) : []));
+    assert.deepEqual(failedTests, ['unknown_ticket_404', 'customers_teapot']);
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? back.because.map((i) => [i.code, i.path]) : [], [
+      ['openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason']], ['test.failed', ['tests', 'unknown_ticket_404', 'script']],
+    ]);
+    assert.equal(result.kind, 'done');
+  });
+
   it('backtracks to plan when workflow trades a frozen test against a check the input fixes, and tells the plan both (A-406)', async () => {
     const { result, events, calls } = await run([
       { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },

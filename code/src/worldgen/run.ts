@@ -180,18 +180,29 @@ export function testOperations(plan: Plan): ReadonlyMap<string, readonly string[
 }
 
 /**
- * The other side of a trade between the plan's frozen tests and a check the input fixes (A-406): when `issues` holds the
- * input check, the latest attempt that failed only frozen tests (its `layer.blocked` left out); when it holds the tests,
- * the input-rooted issues of the latest attempt that had any. Issues already in `issues` are left out.
+ * The other side of a trade between the plan's frozen tests and a check the input fixes (A-406), only about the operations
+ * the two share (`testOperations`, `{param}` compared as `{}`): when `issues` holds the input check, the failing tests of the
+ * latest tests-only attempt (its `layer.blocked` left out) that exercise an operation the check names; when it holds the
+ * tests, the input-rooted issues of the latest attempt that name an operation one of those tests exercises. A failing
+ * test of another operation is the step's own to fix, so the plan is never shown it as the conflict (J191). Issues
+ * already in `issues` are left out.
  */
-function tradedSide(tried: readonly TriedAttempt[], issues: readonly CheckIssue[]): readonly CheckIssue[] {
+function tradedSide(tried: readonly TriedAttempt[], issues: readonly CheckIssue[], tests: ReadonlyMap<string, readonly string[]>): readonly CheckIssue[] {
   const fromInput = (i: CheckIssue): boolean => i.path[0] === 'input';
   const failedTest = (i: CheckIssue): boolean => isTestRun(i) && i.code !== 'layer.blocked';
   const same = (a: CheckIssue, b: CheckIssue): boolean => a.code === b.code && a.path.join('/') === b.path.join('/') && a.found === b.found;
+  /** The operation an input issue names at `input/openapi/<METHOD path>`, as `operationKey` writes it. */
+  const named = (i: CheckIssue): string | null => (fromInput(i) && i.path[1] === 'openapi' && typeof i.path[2] === 'string' ? i.path[2].replace(/\{[^}]*\}/g, '{}') : null);
+  const exercised = (i: CheckIssue): readonly string[] => tests.get(String(i.path[1])) ?? [];
   const side = (t: TriedAttempt): readonly CheckIssue[] => {
-    if (!issues.some(fromInput)) return t.issues.filter(fromInput);
+    if (!issues.some(fromInput)) {
+      const ops = new Set(issues.filter(failedTest).flatMap(exercised));
+      return t.issues.filter((i) => ops.has(named(i) ?? ''));
+    }
     const real = t.issues.filter((i) => i.code !== 'layer.blocked');
-    return real.length > 0 && real.every(failedTest) ? real : [];
+    if (!(real.length > 0 && real.every(failedTest))) return [];
+    const ops = new Set(issues.map(named).filter((op): op is string => op !== null));
+    return real.filter((i) => exercised(i).some((op) => ops.has(op)));
   };
   const found = [...tried].reverse().map(side).find((s) => s.length > 0) ?? [];
   return found.filter((i) => !issues.some((j) => same(i, j)));
@@ -1055,7 +1066,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
           break;
         case 'backtrack':
           // A step that traded the frozen tests against an input check hands the plan the other side too (A-406).
-          return { kind: 'backtrack', to: decision.to, because: issues, alsoForTarget: decision.tradedTests === true ? tradedSide(tried, issues) : [], previous: proposal?.input };
+          return { kind: 'backtrack', to: decision.to, because: issues, alsoForTarget: decision.tradedTests === true && plan !== null ? tradedSide(tried, issues, testOperations(plan)) : [], previous: proposal?.input };
         case 'stop':
           return { kind: 'stop', reason: decision.reason };
         default:
