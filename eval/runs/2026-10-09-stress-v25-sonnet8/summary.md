@@ -2,6 +2,10 @@
 
 This is the release-gate arm of the v2.5 stress run. It ran on trunk `f2a6f0ed` (origin/stabilize/main, the v2.5 candidate), with the shipped default generator `claude-sonnet-5-5` over the logged-in `claude-cli`. It used the eight stress-8 cases, so it compares case for case with stress-8 (v2.0.0, `5600d0f3`). The settings were the same: $3 and 12 min per run.
 
+**Build:** `f2a6f0ed` is v2.0.0 plus #170 to #178, #180 and #183. It does not hold:
+- #179 (stress-8's two stops, A-406) and #181 (append-only solver turns, A-400), both still open;
+- #182 (one shared system prompt and stage edit tool, A-409), merged at 16:00Z, after this run started.
+
 The Haiku arm (`../2026-10-09-stress-v25-haiku/`) and this arm share one isolated ledger, capped at $30. Two lanes took cases from one queue, this arm first. Each lane had its own empty `TMPDIR`. There was no cost refusal.
 
 Each case directory keeps `case.json` and `events.jsonl`, plus `change/events.jsonl` for the iterate case. Each done case also keeps `world/` (world.yaml, plan.yaml, plan.md, REPORT.md and capsule.json, without the attempt dumps). `analyze-eval.json` is the output of `bun scripts/analyze-eval.ts ../eval/suite.yaml ../eval/runs/2026-10-09-stress-v25-sonnet8`: 29 expected, 8 observed, 8 valid, 7 passed. The 21 missing cases were left out by design.
