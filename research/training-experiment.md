@@ -10,7 +10,7 @@ Does a small open model, fine-tuned on graded episodes from WorldGen worlds, sco
 
 1. **Worlds.** Use the 25 worlds in `prod/worlds/`, which hold 95 tasks. Leave out `retail-tau2` and `gen-retail-tau2-known`, the two worlds built from τ² retail, because the outside benchmark below is τ²-bench. Hold out 5 further worlds as an in-distribution check. That check is not the claim.
 2. **Measured difficulty (J155).** Run the teacher on every task first, and keep the tasks it solves sometimes but not always. The committed export shows why: all 38 Sonnet episodes in `eval/dataset/2026-10-07/` scored 1. A set that the teacher always solves teaches a student little about recovering from mistakes.
-3. **Episodes, failures included (J152).** Run 8 teacher episodes per kept task with `bun run dataset` on Boat sandboxes. Export the successes and the failed or partial episodes too. Today an export keeps only complete successes (see `eval/dataset/2026-10-07/MANIFEST.md`); J152 adds the failures.
+3. **Episodes, failures included (J152).** Run 8 teacher episodes per kept task with `bun run dataset` on Boat sandboxes. Export the successes and the failed or partial episodes too. J152 ([#161](https://github.com/jop8281/worldgen/pull/161)) added the failures to the export; the committed export in `eval/dataset/2026-10-07/` predates it and keeps only complete successes (see its `MANIFEST.md`).
 4. **Train.** Base model: one 7 to 8B open-weight instruct model with native tool calling. Three arms, each run with 3 seeds:
    - **A, base:** no training.
    - **B, successes:** supervised fine-tuning (LoRA) on the successful episodes only.
@@ -44,7 +44,8 @@ This is fixed before the run:
 
 - **No training code and no GPU.** Steps 4 and 5 run outside the repo, and nothing in `code/` trains a model.
 - **The solver runs Claude only** (A-66). The student model cannot go through `bun run dataset`, so the outside benchmark scores it in τ²'s own harness, and the held-out worlds need an open-model solver that does not exist yet.
-- **J152 and J155 are not merged.** Until they are, the export has no failures and no measured difficulty.
+- **Difficulty is measured at n = 3.** J152 and J155 are merged ([#161](https://github.com/jop8281/worldgen/pull/161), [#158](https://github.com/jop8281/worldgen/pull/158)). The pilot ([#171](https://github.com/jop8281/worldgen/pull/171)) ran Sonnet 5.5 three times on 6 tasks and passed all 18. The J175 sweep ([#190](https://github.com/jop8281/worldgen/pull/190), `eval/dataset/2026-10-09-sweep/`) ran Haiku 5.5 three times on all 95 tasks: 89 measure easy, and 6 were missed at least once, one of them flaky (1 of 3). Sonnet ran only on the 4 worlds where Haiku missed, and 2 of those tasks stayed unmeasured for it on the run budget. The sweep is a schema-2 export with failures; the 2026-10-07 export predates it.
 - **Using the teacher's outputs as training data** must be checked against the model provider's terms before the run. That is the user's decision.
 - **The engine grades the final state only, not the final reply** (the `grading_note`). A success label can therefore reward a correct end state reached with a wrong explanation.
 - **The budget above needs the user's approval.** No paid run is part of this note.
+- **v2.5 runs none of it** (A-414): no training run and no GPU host, by the user's decision on 2026-10-09. This note stays the design.
