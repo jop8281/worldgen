@@ -18,6 +18,7 @@
     "sandbox": "bun src/cli/sandbox.ts",
     "costs": "bun src/cli/costs.ts",
     "dataset": "bun src/cli/dataset.ts",
+    "difficulty": "bun src/cli/difficulty.ts",
     "episode": "bun src/cli/episode.ts",
     "evidence": "bun src/cli/evidence.ts",
     "studio": "bun src/cli/studio.ts",

@@ -10,6 +10,8 @@ What gets handed in. Tests in `code/` check and verify every world here, so a br
 - `worlds/<world>/public/world.yaml` is the public form of each world, the one a sandboxed agent gets: no grader, solution or decoy. `code/scripts/render-public-worlds.ts` writes it, and `code/test/worlds.test.ts` fails if it drifts from `world.yaml`. Rerun the script after changing a world; `bun run live` writes it for each world it delivers.
 - `evidence/README.md` names each public claim and the command that re-checks it from a clone.
 
+Training benefit has not been shown yet. See [research/training-experiment.md](../research/training-experiment.md).
+
 ```sh
 bun run worldplay check ../prod/worlds/helpdesk   # from code/
 bun run worldgen "A helpdesk with SLA tiers" --out ../prod/worlds/gen-helpdesk-sla
