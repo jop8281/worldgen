@@ -19,7 +19,7 @@ import { inputSchema, parseInputArgs, type Input } from '../worldgen/input.ts';
 import { commitLabel, delivered, planIntake, renderLiveRun, type LiveCase, type LiveCheck, type LiveMeta, type LiveRow } from '../worldgen/live.ts';
 import { nodeRunner, type Runner } from '../sandboxes/backend.ts';
 import { runWorldGen, type Job } from '../worldgen/run.ts';
-import { loadExampleWorld, makeModel, mtimeOf, writeReport } from './models.ts';
+import { loadExampleWorlds, makeModel, mtimeOf, writeReport } from './models.ts';
 import { CONFIG_FILE, MODEL_OPTIONS, UsageError, modelOverrides, optionValue } from './options.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
@@ -284,7 +284,7 @@ async function main(argv: readonly string[]): Promise<number> {
   try {
     config = await loadConfig(CONFIG_FILE, args.overrides);
     const model = makeModel(config, process.env, transportOf(config));
-    const exampleWorld: World = await loadExampleWorld(config);
+    const exampleWorld: readonly World[] = await loadExampleWorlds(config);
     deps = {
       verify: verifyWorld,
       run: async (job) => {

@@ -36,7 +36,7 @@ const plan: Plan = {
   tasks: [
     { id: 'assign_oldest', difficulty: 'easy', intent: 'assign the oldest ticket', decoyIdea: 'assigns the newest' },
     { id: 'solve_vip', difficulty: 'medium', intent: 'solve VIP tickets', decoyIdea: 'skips page 2' },
-    { id: 'rebalance', difficulty: 'hard', intent: 'rebalance load', decoyIdea: 'moves one ticket' },
+    { id: 'rebalance', difficulty: 'hard', kind: 'scarce_resource', intent: 'rebalance load', actions: ['assign', 'solve'], decoyIdea: 'moves one ticket' },
   ],
   open_questions: [{ question: 'How many SLA tiers?', default_answer: 'two' }],
   assumptions: [{ decision: 'Two SLA tiers', why: 'the input names gold and standard only' }],
@@ -288,7 +288,11 @@ tasks:
     decoyIdea: skips page 2
   - id: rebalance
     difficulty: hard
+    kind: scarce_resource
     intent: rebalance load
+    actions:
+      - assign
+      - solve
     decoyIdea: moves one ticket
 open_questions:
   - question: How many SLA tiers?
@@ -632,6 +636,57 @@ describe('acceptance test actions are declared workflow actions (YOS-53)', () =>
   it('tells the model in the tool schema that a test names only declared workflow actions', () => {
     const json = JSON.stringify(z.toJSONSchema(planSchema, { io: 'input' }));
     assert.ok(json.includes('"description":"the workflow actions this test exercises, each one declared in the actions of a workflow above; to test an operation such as create_customer, declare it in its workflow\'s actions first"'));
+  });
+});
+
+describe('task variety in a proposed plan (A-390)', () => {
+  const KIND = 'a plan to build needs at least one task with a kind, one of ' +
+    'permissions: the world records who may act on a row, such as a role, an owner or an assignee, and an action checks it, so the task acts only where it is allowed and a decoy acts where it is not; ' +
+    'scarce_resource: a limited supply, such as seats, stock, rooms, slots or budget, that competing requests draw on, so the task allocates within capacity and a decoy overbooks or serves the wrong request; ' +
+    "two_actors: two parties act on the same records in turn, such as a requester and an approver, so the task makes both sides' calls in order and a decoy makes only one side's; " +
+    'irreversible: a step that cannot be undone, such as a refund, a cancellation or a deletion, so the task checks its preconditions before acting and a decoy acts on the wrong row or before checking';
+  const HARD = 'a plan to build needs at least one hard task whose actions name 2 or more distinct workflow actions its reference solution calls, such as one that assigns a row and then resolves it';
+  const built: Plan = { ...plan, seed: { ...plan.seed, stateMix: { ticket: { open: 80, solved: 20 } } } };
+  const withTasks = (tasks: Plan['tasks']): Plan => ({ ...built, tasks });
+  const [easy, medium, hard] = plan.tasks as [Plan['tasks'][number], Plan['tasks'][number], Plan['tasks'][number]];
+  const plain = (t: Plan['tasks'][number]) => ({ id: t.id, difficulty: t.difficulty, intent: t.intent, decoyIdea: t.decoyIdea });
+  const issuesOf = (schema: { safeParse: (v: unknown) => { success: boolean; error?: { issues: readonly { message: string; path: readonly PropertyKey[] }[] } } }, value: unknown) => {
+    const r = schema.safeParse(value);
+    return r.success ? [] : (r.error?.issues ?? []).map((i) => [i.path.join('.'), i.message]);
+  };
+  const rows: [string, Plan, string[][]][] = [
+    ['a kind and a hard task naming two actions', built, []],
+    ['no task has a kind', withTasks([easy, medium, { ...hard, kind: undefined }]), [['tasks', KIND]]],
+    ['the hard task names one action', withTasks([easy, medium, { ...hard, actions: ['assign'] }]), [['tasks', HARD]]],
+    ['the hard task names one action twice', withTasks([easy, medium, { ...hard, actions: ['assign', 'assign (POST /tickets/{id}/assign)'] }]), [['tasks', HARD]]],
+    ['only a medium task names two actions', withTasks([easy, { ...medium, actions: ['assign', 'solve'] }, { ...hard, actions: undefined }]), [['tasks', HARD]]],
+    ['a task names an undeclared action', withTasks([easy, medium, { ...hard, actions: ['assign', 'refund'] }]),
+      [['tasks.2.actions.1', 'task rebalance names refund in its actions, which no workflow declares in its actions'], ['tasks', HARD]]],
+    ['a plan written before A-390', withTasks([plain(easy), plain(medium), plain(hard)]), [['tasks', HARD], ['tasks', KIND]]],
+  ];
+  for (const [name, value, want] of rows) {
+    it(`a create plan: ${name}`, () => assert.deepEqual(issuesOf(planSchemaFor('description'), value), want));
+  }
+
+  it('leaves a refusal, the base schema and parsePlanYaml alone, so a committed plan still loads', () => {
+    const before = withTasks([plain(easy), plain(medium), plain(hard)]);
+    assert.deepEqual(issuesOf(planSchemaFor('description'), { ...before, verdict: { kind: 'refuse', why: 'harmful' }, workflows: [], tasks: [] }), []);
+    assert.deepEqual(issuesOf(planSchema, before), []);
+    assert.notEqual(parsePlanYaml(renderPlanYaml(before)), null);
+  });
+
+  it('on iterate, keeps each existing task\'s kind and actions unless changes names the task, and checks action names', () => {
+    const w = world({ meta: { ...meta, clock: plan.clock } });
+    const dropped = withTasks([easy, medium, plain(hard)]);
+    assert.deepEqual(issuesOf(iteratePlanSchema(w, built), dropped),
+      [['tasks.2', 'task rebalance changes its kind and actions from the existing plan: keep them as the existing plan has them, or name tasks.rebalance in changes']]);
+    assert.deepEqual(issuesOf(iteratePlanSchema(w, built), withTasks([easy, medium, { ...hard, actions: ['solve', 'assign'] }])),
+      [['tasks.2', 'task rebalance changes its actions from the existing plan: keep it as the existing plan has it, or name tasks.rebalance in changes']]);
+    assert.deepEqual(issuesOf(iteratePlanSchema(w, built), { ...dropped, changes: ['tasks.rebalance because the request drops the second action'] }), []);
+    assert.deepEqual(issuesOf(iteratePlanSchema(w, built), withTasks([easy, medium, hard, { ...plain(medium), id: 'new_one' }])), []);
+    assert.deepEqual(issuesOf(iteratePlanSchema(w, dropped), dropped), []);
+    assert.deepEqual(issuesOf(iteratePlanSchema(w, null), withTasks([easy, medium, { ...hard, actions: ['refund'] }])),
+      [['tasks.2.actions.0', 'task rebalance names refund in its actions, which no workflow declares in its actions']]);
   });
 });
 

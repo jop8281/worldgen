@@ -96,7 +96,8 @@ export const configSchema = z
     stepModels: perStep(modelChoice.optional()).optional().describe('model and effort per step'),
     escalate: modelChoice.optional().describe('model and effort for a step that stalls'),
     prices: z.record(z.string(), priceEntry).default({}),
-    exampleWorld: z.string().default('../prod/worlds/helpdesk').describe('few-shot world, read by path'),
+    exampleWorld: z.union([z.string().min(1).transform((p) => [p]), z.array(z.string().min(1)).min(1)]).default(['../prod/worlds/helpdesk'])
+      .describe('few-shot worlds, read by path; a run renders the one its input digest picks (A-390). One path, the older form, is a list of one'),
   })
   .superRefine((c, ctx) => {
     // Refused at load, before any call: a model with no price could not be metered against the caps.
@@ -131,7 +132,7 @@ export function stepModel(config: Config, step: StepId, escalated: boolean): Mod
 }
 
 /**
- * Reads `file`, applies `overrides` on top, and parses strictly. `exampleWorld` from the file
+ * Reads `file`, applies `overrides` on top, and parses strictly. Each `exampleWorld` path from the file
  * resolves against the file's directory; an override resolves against the process cwd.
  */
 export async function loadConfig(file: string, overrides: Partial<Config>): Promise<Config> {
@@ -152,13 +153,9 @@ export async function loadConfig(file: string, overrides: Partial<Config>): Prom
     throw new Error(`config ${abs} must be a JSON object`);
   }
   const fromFile = raw as Record<string, unknown>;
-  if (typeof fromFile['exampleWorld'] === 'string') {
-    fromFile['exampleWorld'] = resolve(dirname(abs), fromFile['exampleWorld']);
-  }
-  const defined = Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined));
-  if (typeof defined['exampleWorld'] === 'string') {
-    defined['exampleWorld'] = resolve(defined['exampleWorld']);
-  }
+  if (fromFile['exampleWorld'] !== undefined) fromFile['exampleWorld'] = resolvePaths(fromFile['exampleWorld'], dirname(abs));
+  const defined: Record<string, unknown> = Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined));
+  if (defined['exampleWorld'] !== undefined) defined['exampleWorld'] = resolvePaths(defined['exampleWorld'], process.cwd());
   const parsed = configSchema.safeParse({ ...fromFile, ...defined });
   if (!parsed.success) {
     const lines = parsed.error.issues.map((i) => {
@@ -169,5 +166,11 @@ export async function loadConfig(file: string, overrides: Partial<Config>): Prom
     throw new Error(`invalid config ${abs}:\n${lines.join('\n')}`);
   }
   // A schema default (key absent from file and overrides) is still relative; anchor it to the config dir.
-  return { ...parsed.data, exampleWorld: resolve(dirname(abs), parsed.data.exampleWorld) };
+  return { ...parsed.data, exampleWorld: parsed.data.exampleWorld.map((p) => resolve(dirname(abs), p)) };
+}
+
+/** A path, or each path of a list, resolved against `base`; an empty path or anything else is left for the schema to refuse. */
+function resolvePaths(value: unknown, base: string): unknown {
+  const one = (p: unknown): unknown => (typeof p === 'string' && p !== '' ? resolve(base, p) : p);
+  return Array.isArray(value) ? value.map(one) : one(value);
 }
