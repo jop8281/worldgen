@@ -214,11 +214,14 @@ function tradedSide(tried: readonly TriedAttempt[], issues: readonly CheckIssue[
 
 /**
  * What the plan is told on a traded backtrack: the step's last issues, each failing test among them kept only when it
- * exercises an operation the trade's input check names, then the other side (`tradedSide`). The step that backtracked
- * still gets its whole last rejection when it runs again (J192, follow-up to A-416).
+ * exercises an operation the trade's input check names, then the other side (`tradedSide`). When no other side is found,
+ * the step's issues go whole. The step that backtracked still gets its whole last rejection when it runs again (J192,
+ * follow-up to A-416).
  */
 function tradedForTarget(tried: readonly TriedAttempt[], issues: readonly CheckIssue[], tests: ReadonlyMap<string, readonly string[]>): readonly CheckIssue[] {
   const other = tradedSide(tried, issues, tests);
+  // With no other side found there is nothing to narrow against, so the plan gets the step's issues whole, never none.
+  if (other.length === 0) return issues;
   const ops = new Set([...issues, ...other].map(namedOperation).filter((op): op is string => op !== null));
   return [...issues.filter((i) => !failedTest(i) || exercisedBy(i, tests).some((op) => ops.has(op))), ...other];
 }
