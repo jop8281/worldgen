@@ -62,7 +62,7 @@ export type TaskVerdict = {
   readonly solutionLaterPageEntities: readonly string[];
   /** Entities the solution changed rows of, where its filtered list calls also returned a row it left unchanged, sorted: near-duplicate distractors it had to tell apart (YOS-180). */
   readonly solutionDistractorEntities: readonly string[];
-  /** Workflow actions (world.actions keys) a successful solution call reached, sorted. WorldGen checks them against the plan (A-398). */
+  /** Workflow actions (world.actions keys) a successful solution call that wrote a row reached, sorted. WorldGen checks them against the plan (A-398, A-411). */
   readonly solutionActions: readonly string[];
   /** Every engine mutant kind, in order: the call it graded and its score, or nulls when no candidate committed a visible change, so the kind was not probed. */
   readonly collateral: readonly MutantProbe[];
@@ -1139,9 +1139,12 @@ function pagedEntities(world: World, log: readonly CallRecord[]): readonly strin
   return [...out].sort();
 }
 
-/** The workflow actions a log's successful calls reached, sorted: the call's routeId when it names an action. */
+/**
+ * The workflow actions a log's successful calls wrote through, sorted: the call's routeId when it names an action. A
+ * call that changed no row does not count, so a reference cannot claim an action with a no-op call (A-411).
+ */
 function actionsCalled(world: World, log: readonly CallRecord[]): readonly string[] {
-  const ids = log.filter(succeeded).map((c) => c.routeId).filter((id): id is string => id !== null && Object.hasOwn(world.actions, id));
+  const ids = log.filter((c) => succeeded(c) && c.writes.length > 0).map((c) => c.routeId).filter((id): id is string => id !== null && Object.hasOwn(world.actions, id));
   return [...new Set(ids)].sort();
 }
 

@@ -344,9 +344,10 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
   });
 });
 
-describe('the verdict names the workflow actions the reference called successfully (A-398)', () => {
-  /** An action that answers 200 and writes nothing, and one that always refuses. */
+describe('the verdict names the workflow actions a successful reference call wrote through (A-398, A-411)', () => {
+  /** An action that writes, one that answers 200 and writes nothing, and one that always refuses. */
   const extra = {
+    alert_ticket: { method: 'POST', path: '/tickets/{id}/alert', description: 'Make a ticket urgent.', handler: "(ctx) => ({ status: 200, body: ctx.db.update('ticket', ctx.params.id, { priority: 'urgent' }) })" },
     note_ticket: { method: 'POST', path: '/tickets/{id}/note', description: 'Acknowledge a ticket.', handler: '(ctx) => ({ status: 200, body: { ok: true } })' },
     archive_ticket: { method: 'POST', path: '/tickets/{id}/archive', description: 'Never allowed.', handler: "(ctx) => ctx.fail(409, 'ticket.locked', 'Archiving is off.')" },
   };
@@ -356,13 +357,25 @@ describe('the verdict names the workflow actions the reference called successful
     ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
     ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/note').status === 200, 'note failed');
   }`;
+  const viaAlert = `(ctx) => {
+    const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/alert').status === 200, 'alert failed');
+    ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
+  }`;
+  /** Half for resolving the ticket, half for making it urgent; nothing for any other change. */
+  const alertGrader = `(ctx) => {
+    const t = ctx.db.list('ticket', { where: { subject: 'Password reset loop' } })[0];
+    if (!t || !ctx.changes().every((c) => c.id === t.id && c.fields.every((f) => f === 'status' || f === 'priority'))) return 0;
+    return (t.status === 'resolved' ? 0.5 : 0) + (t.priority === 'urgent' ? 0.5 : 0);
+  }`;
   const patchOnly = `(ctx) => {
     const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
     ctx.assert(ctx.api('PATCH', '/tickets/' + t.id, { status: 'resolved' }).status === 200, 'patch failed');
   }`;
   const rows: [string, World, TaskId, readonly string[]][] = [
     ['an action call', only(EASY), EASY, ['resolve_ticket']],
-    ['actions sorted, a refused one left out', only(EASY, { solution: viaNote }, extra), EASY, ['note_ticket', 'resolve_ticket']],
+    ['two writing actions, sorted', only(EASY, { solution: viaAlert, grader: alertGrader }, extra), EASY, ['alert_ticket', 'resolve_ticket']],
+    ['a refused action and one that writes nothing left out', only(EASY, { solution: viaNote }, extra), EASY, ['resolve_ticket']],
     ['standard routes only', only(EASY, { solution: patchOnly }), EASY, []],
     ['an update route and an action', only(HARD), HARD, ['resolve_ticket']],
   ];
