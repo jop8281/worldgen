@@ -1,0 +1,103 @@
+{
+  "runId": "v25-hard-warehouse",
+  "models": [
+    "claude-haiku-5-5"
+  ],
+  "episodesPerCell": 3,
+  "budgetUsd": 2,
+  "episodeBudgetUsd": 0.5,
+  "spentUsd": 0.057041,
+  "stop": {
+    "kind": "complete"
+  },
+  "tasks": [
+    {
+      "world": "gen-warehouse",
+      "task": "reconcile_zone_counts",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    }
+  ],
+  "cells": [
+    {
+      "world": "gen-warehouse",
+      "task": "reconcile_zone_counts",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.05704,
+      "usdPerPass": 0.019013,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    }
+  ],
+  "episodes": [
+    {
+      "world": "gen-warehouse",
+      "task": "reconcile_zone_counts",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 1,
+      "runId": "v25-hard-warehouse.1",
+      "episodeId": "v25-hard-warehouse.1__reconcile_zone_counts__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.02531873,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.025319
+    },
+    {
+      "world": "gen-warehouse",
+      "task": "reconcile_zone_counts",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 2,
+      "runId": "v25-hard-warehouse.2",
+      "episodeId": "v25-hard-warehouse.2__reconcile_zone_counts__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.01581897,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.015819
+    },
+    {
+      "world": "gen-warehouse",
+      "task": "reconcile_zone_counts",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 3,
+      "runId": "v25-hard-warehouse.3",
+      "episodeId": "v25-hard-warehouse.3__reconcile_zone_counts__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.01590272,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.015903
+    }
+  ]
+}

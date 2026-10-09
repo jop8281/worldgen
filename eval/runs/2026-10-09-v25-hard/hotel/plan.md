@@ -1,0 +1,236 @@
+# WorldGen plan: Cloudbeds/Opera-style hotel property management booking desk
+
+A hotel front desk where guests hold reservations for room types. The desk enforces an overbooking limit per room type, charges a late-cancellation fee inside 48h of arrival (waived for VIPs), automatically marks no-shows and charges a no-show fee, and checks guests into and out of physical rooms.
+
+- Revision: 1
+- Verdict: proceed
+- Clock: starts 2026-10-09T12:00:00.000Z, tick 0s
+
+## Entities
+
+| Entity | Purpose | Key fields |
+|---|---|---|
+| `guest` | A person who books stays. Tier standard or vip; vip guests are exempt from late-cancellation fees. | name, email, tier |
+| `room_type` | A sellable category (standard, deluxe, suite, family) with nightly rate, sellable capacity and an overbook percentage. | name, nightly_rate, capacity, overbook_percent |
+| `room` | A physical room of a room type with a status of available, occupied or out_of_service. | room_number, room_type_id, status |
+| `reservation` | A booking of a room type for arrival and departure dates, with status lifecycle, assigned room, rate snapshot and fee total. | guest_id, room_type_id, room_id, arrival_date, departure_date, status, nightly_rate, fee_amount, notes |
+| `charge` | A fee posted against a reservation: late_cancellation or no_show, equal to the first night rate. | reservation_id, kind, amount |
+
+## Workflows
+
+### reservation_lifecycle (reservation)
+- States: booked, checked_in, checked_out, cancelled, no_show
+- Actions: create_reservation, cancel_reservation, check_in_reservation, check_out_reservation
+- Rules:
+  - A reservation is refused with 409 overbooked when active (booked or checked_in) overlapping reservations of the room type already reach capacity plus overbook allowance; departure must be after arrival. Enforced by: create_reservation. Tested by: overbooking_limit
+  - Cancelling a booked reservation less than 48 hours before arrival by a standard guest posts a late_cancellation charge of one night at the reservation's nightly rate and records it in fee_amount. Enforced by: cancel_reservation. Tested by: late_cancellation_fee
+  - Cancelling at least 48 hours before arrival, or any cancellation by a vip guest, posts no charge. Only booked reservations can be cancelled (409 invalid_state otherwise). Enforced by: cancel_reservation. Tested by: free_cancellation_and_vip_waiver
+  - A booked reservation 12 hours past its arrival time becomes no_show and a no_show charge of one night is posted; other reservations are untouched. Enforced by: no_show_sweep. Tested by: no_show_fee_job
+  - Check-in needs a booked reservation arriving today or earlier and an available room of the booked type (409 too_early / no_room_available); it assigns the room and marks it occupied. Check-out of a checked_in reservation frees the room. Enforced by: check_in_reservation, check_out_reservation. Tested by: check_in_and_out_rooms
+  - Terminal states cancelled, no_show and checked_out never change.
+
+## Jobs
+
+- `no_show_sweep` runs every 1h: Mark booked reservations whose arrival_date plus 12h has passed as no_show, post a no_show charge equal to one night, and set fee_amount.
+
+## Acceptance tests
+
+### overbooking_limit
+- Intent: Reservations beyond capacity plus overbook allowance are refused; adjacent stays are allowed.
+- Actions: create_reservation
+- Description: Room type capacity 2 with 50% overbook allows 3 overlapping reservations; the 4th is refused with 409 overbooked; a back-to-back stay and invalid dates behave correctly.
+
+```js
+(ctx) => {
+  const g = ctx.api('POST', '/guests', { name: 'Acceptance Guest A', email: 'acc-a@acceptance.example', tier: 'standard' });
+  ctx.assert(g.status === 201, 'guest create ' + g.status + JSON.stringify(g.body));
+  const rt = ctx.api('POST', '/room_types', { name: 'Acceptance Overbook Type', nightly_rate: 10000, capacity: 2, overbook_percent: 50 });
+  ctx.assert(rt.status === 201, 'room type create ' + rt.status + JSON.stringify(rt.body));
+  const mk = (a, d) => ctx.api('POST', '/reservations', { guest_id: g.body.id, room_type_id: rt.body.id, arrival_date: a, departure_date: d });
+  for (let i = 0; i < 3; i++) {
+    const r = mk('2026-12-01T15:00:00.000Z', '2026-12-03T11:00:00.000Z');
+    ctx.assert(r.status === 201 && r.body.status === 'booked' && r.body.nightly_rate === 10000, 'reservation ' + i + ': ' + r.status + JSON.stringify(r.body));
+  }
+  const over = mk('2026-12-02T15:00:00.000Z', '2026-12-04T11:00:00.000Z');
+  ctx.assert(over.status === 409 && over.body.error.code === 'overbooked', 'fourth should be overbooked: ' + over.status + JSON.stringify(over.body));
+  const next = mk('2026-12-03T15:00:00.000Z', '2026-12-05T11:00:00.000Z');
+  ctx.assert(next.status === 201, 'back-to-back stay allowed: ' + next.status + JSON.stringify(next.body));
+  const bad = mk('2026-12-10T15:00:00.000Z', '2026-12-10T11:00:00.000Z');
+  ctx.assert(bad.status === 422 && bad.body.error.code === 'invalid_dates', 'bad dates: ' + bad.status + JSON.stringify(bad.body));
+}
+```
+### late_cancellation_fee
+- Intent: Cancelling a standard guest's reservation inside 48h of arrival posts a one-night fee.
+- Actions: create_reservation, cancel_reservation
+- Description: Arrival 27h after clock start: cancel yields cancelled status, fee_amount equal to a night, one late_cancellation charge; a second cancel is 409 invalid_state.
+
+```js
+(ctx) => {
+  const g = ctx.api('POST', '/guests', { name: 'Acceptance Guest B', email: 'acc-b@acceptance.example', tier: 'standard' });
+  const rt = ctx.api('POST', '/room_types', { name: 'Acceptance Late Type', nightly_rate: 12000, capacity: 5, overbook_percent: 0 });
+  const r = ctx.api('POST', '/reservations', { guest_id: g.body.id, room_type_id: rt.body.id, arrival_date: '2026-10-10T15:00:00.000Z', departure_date: '2026-10-12T11:00:00.000Z' });
+  ctx.assert(r.status === 201, 'create ' + r.status + JSON.stringify(r.body));
+  const c = ctx.api('POST', '/reservations/' + r.body.id + '/cancel', { reason: 'Change of plans' });
+  ctx.assert(c.status === 200 && c.body.status === 'cancelled' && c.body.fee_amount === 12000, 'cancel: ' + c.status + JSON.stringify(c.body));
+  const ch = ctx.api('GET', '/charges?reservation_id=' + r.body.id);
+  ctx.assert(ch.status === 200 && ch.body.data.length === 1, 'one charge: ' + JSON.stringify(ch.body));
+  ctx.assert(ch.body.data[0].kind === 'late_cancellation' && ch.body.data[0].amount === 12000, 'charge content ' + JSON.stringify(ch.body.data[0]));
+  const again = ctx.api('POST', '/reservations/' + r.body.id + '/cancel', {});
+  ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second cancel: ' + again.status + JSON.stringify(again.body));
+}
+```
+### free_cancellation_and_vip_waiver
+- Intent: Early cancellations and vip cancellations post no fee.
+- Actions: create_reservation, cancel_reservation
+- Description: A standard guest cancelling a stay weeks away and a vip guest cancelling inside 48h both end cancelled with fee_amount 0 and no charges.
+
+```js
+(ctx) => {
+  const g = ctx.api('POST', '/guests', { name: 'Acceptance Guest C', email: 'acc-c@acceptance.example', tier: 'standard' });
+  const v = ctx.api('POST', '/guests', { name: 'Acceptance Guest VIP', email: 'acc-vip@acceptance.example', tier: 'vip' });
+  const rt = ctx.api('POST', '/room_types', { name: 'Acceptance Free Type', nightly_rate: 15000, capacity: 5, overbook_percent: 0 });
+  const early = ctx.api('POST', '/reservations', { guest_id: g.body.id, room_type_id: rt.body.id, arrival_date: '2026-11-20T15:00:00.000Z', departure_date: '2026-11-22T11:00:00.000Z' });
+  const c1 = ctx.api('POST', '/reservations/' + early.body.id + '/cancel', {});
+  ctx.assert(c1.status === 200 && c1.body.status === 'cancelled' && c1.body.fee_amount === 0, 'early cancel: ' + c1.status + JSON.stringify(c1.body));
+  const vip = ctx.api('POST', '/reservations', { guest_id: v.body.id, room_type_id: rt.body.id, arrival_date: '2026-10-10T15:00:00.000Z', departure_date: '2026-10-12T11:00:00.000Z' });
+  const c2 = ctx.api('POST', '/reservations/' + vip.body.id + '/cancel', {});
+  ctx.assert(c2.status === 200 && c2.body.status === 'cancelled' && c2.body.fee_amount === 0, 'vip cancel: ' + c2.status + JSON.stringify(c2.body));
+  const ch1 = ctx.api('GET', '/charges?reservation_id=' + early.body.id);
+  const ch2 = ctx.api('GET', '/charges?reservation_id=' + vip.body.id);
+  ctx.assert(ch1.body.data.length === 0 && ch2.body.data.length === 0, 'no charges expected');
+}
+```
+### no_show_fee_job
+- Intent: The hourly job marks overdue booked reservations as no_show and charges one night.
+- Actions: create_reservation
+- Description: A reservation arriving today stays booked 10h later, becomes no_show after 16h with a no_show charge; a future reservation is untouched.
+
+```js
+(ctx) => {
+  const g = ctx.api('POST', '/guests', { name: 'Acceptance Guest D', email: 'acc-d@acceptance.example', tier: 'standard' });
+  const rt = ctx.api('POST', '/room_types', { name: 'Acceptance NoShow Type', nightly_rate: 9000, capacity: 5, overbook_percent: 0 });
+  const a = ctx.api('POST', '/reservations', { guest_id: g.body.id, room_type_id: rt.body.id, arrival_date: '2026-10-09T15:00:00.000Z', departure_date: '2026-10-11T11:00:00.000Z' });
+  const b = ctx.api('POST', '/reservations', { guest_id: g.body.id, room_type_id: rt.body.id, arrival_date: '2026-11-01T15:00:00.000Z', departure_date: '2026-11-03T11:00:00.000Z' });
+  ctx.assert(a.status === 201 && b.status === 201, 'creates ' + a.status + ' ' + b.status);
+  ctx.advance('10h');
+  ctx.assert(ctx.api('GET', '/reservations/' + a.body.id).body.status === 'booked', 'still booked before the 12h grace');
+  ctx.advance('6h');
+  const ra = ctx.api('GET', '/reservations/' + a.body.id).body;
+  ctx.assert(ra.status === 'no_show' && ra.fee_amount === 9000, 'no_show: ' + JSON.stringify(ra));
+  const ch = ctx.api('GET', '/charges?reservation_id=' + a.body.id).body.data;
+  ctx.assert(ch.length === 1 && ch[0].kind === 'no_show' && ch[0].amount === 9000, 'no_show charge ' + JSON.stringify(ch));
+  ctx.assert(ctx.api('GET', '/reservations/' + b.body.id).body.status === 'booked', 'future reservation untouched');
+}
+```
+### check_in_and_out_rooms
+- Intent: Check-in assigns an available room, respects arrival date and room scarcity; check-out frees the room.
+- Actions: create_reservation, check_in_reservation, check_out_reservation
+- Description: With one room, the first arrival checks in, a second is refused no_room_available, a future arrival is refused too_early, and after check-out the second can check in.
+
+```js
+(ctx) => {
+  const g = ctx.api('POST', '/guests', { name: 'Acceptance Guest E', email: 'acc-e@acceptance.example', tier: 'standard' });
+  const rt = ctx.api('POST', '/room_types', { name: 'Acceptance Room Type', nightly_rate: 8000, capacity: 3, overbook_percent: 0 });
+  const room = ctx.api('POST', '/rooms', { room_number: 'ACC-501', room_type_id: rt.body.id });
+  ctx.assert(room.status === 201 && room.body.status === 'available', 'room create ' + room.status + JSON.stringify(room.body));
+  const mk = (a, d) => ctx.api('POST', '/reservations', { guest_id: g.body.id, room_type_id: rt.body.id, arrival_date: a, departure_date: d }).body;
+  const r1 = mk('2026-10-09T15:00:00.000Z', '2026-10-10T11:00:00.000Z');
+  const r2 = mk('2026-10-09T15:00:00.000Z', '2026-10-10T11:00:00.000Z');
+  const r3 = mk('2026-10-10T15:00:00.000Z', '2026-10-11T11:00:00.000Z');
+  const i1 = ctx.api('POST', '/reservations/' + r1.id + '/check_in', {});
+  ctx.assert(i1.status === 200 && i1.body.status === 'checked_in' && i1.body.room_id === room.body.id, 'check in: ' + i1.status + JSON.stringify(i1.body));
+  ctx.assert(ctx.api('GET', '/rooms/' + room.body.id).body.status === 'occupied', 'room occupied');
+  const i2 = ctx.api('POST', '/reservations/' + r2.id + '/check_in', {});
+  ctx.assert(i2.status === 409 && i2.body.error.code === 'no_room_available', 'second: ' + i2.status + JSON.stringify(i2.body));
+  const i3 = ctx.api('POST', '/reservations/' + r3.id + '/check_in', {});
+  ctx.assert(i3.status === 409 && i3.body.error.code === 'too_early', 'tomorrow: ' + i3.status + JSON.stringify(i3.body));
+  const o = ctx.api('POST', '/reservations/' + r1.id + '/check_out', {});
+  ctx.assert(o.status === 200 && o.body.status === 'checked_out', 'check out: ' + o.status + JSON.stringify(o.body));
+  ctx.assert(ctx.api('GET', '/rooms/' + room.body.id).body.status === 'available', 'room freed');
+  const i4 = ctx.api('POST', '/reservations/' + r2.id + '/check_in', {});
+  ctx.assert(i4.status === 200 && i4.body.room_id === room.body.id, 'second now checks in: ' + i4.status + JSON.stringify(i4.body));
+}
+```
+
+## Routes
+
+| Route | Method | Path | Purpose |
+|---|---|---|---|
+| `list_guests` | GET | /guests | List and search guests, filter by tier |
+| `get_guest` | GET | /guests/{id} | Get a guest |
+| `create_guest` | POST | /guests | Create a guest |
+| `list_room_types` | GET | /room_types | List room types |
+| `get_room_type` | GET | /room_types/{id} | Get a room type |
+| `create_room_type` | POST | /room_types | Create a room type |
+| `list_rooms` | GET | /rooms | List rooms, filter by room_type_id and status |
+| `get_room` | GET | /rooms/{id} | Get a room |
+| `create_room` | POST | /rooms | Create a room |
+| `list_reservations` | GET | /reservations | List reservations, filter by status, guest_id, room_type_id, room_id; sort by arrival_date |
+| `get_reservation` | GET | /reservations/{id} | Get a reservation |
+| `create_reservation` | POST | /reservations | Action: create a booking enforcing the overbooking limit |
+| `cancel_reservation` | POST | /reservations/{id}/cancel | Action: cancel with late-fee policy |
+| `check_in_reservation` | POST | /reservations/{id}/check_in | Action: check in and assign a room |
+| `check_out_reservation` | POST | /reservations/{id}/check_out | Action: check out and free the room |
+| `list_charges` | GET | /charges | List charges, filter by reservation_id and kind |
+| `get_charge` | GET | /charges/{id} | Get a charge |
+
+## Seed
+
+- Rows per entity: guest: 24, room_type: 4, room: 24, reservation: 40, charge: 9
+- Mix: Reservations: ~40 across 4 room types, spread over states. Suite type has 4 rooms: two occupied by checked_in stays departing 2026-10-09, one occupied by a stay departing 2026-10-10, one available; three booked suite reservations arrive 2026-10-09 and one booked suite reservation arrives 2026-10-10 (near miss). Guest Tomas Becker has two booked deluxe reservations, one arriving 2026-10-10 with notes saying 'fee waived by manager' (misleading) and one arriving 2026-12-20. Guest Elena Marchetti has booked reservations arriving 2026-12-15 and 2027-01-10. Cancelled/no_show reservations carry matching charge rows. Seed names avoid 'Acceptance' prefixes used by tests.
+- State mix: reservation: booked 40%, checked_in 15%, checked_out 20%, cancelled 15%, no_show 10%
+
+## Tasks
+
+- `cancel_elena_december_stay` (easy, irreversible): Cancel guest Elena Marchetti's reservation arriving 2026-12-15 (she also has one arriving 2027-01-10 that must stay booked).
+  - Actions: `cancel_reservation`
+  - Decoy idea: Cancels her other reservation, or PATCHes status instead of using the cancel action.
+- `cancel_tomas_tomorrow_stay` (medium, misleading_text): Tomas Becker wants to cancel the stay arriving tomorrow; cancel it through the desk so the late-cancellation fee policy applies, ignoring the note claiming the fee is waived. His other reservation (2026-12-20) stays booked.
+  - Actions: `cancel_reservation`
+  - Decoy idea: Cancels the December booking, or follows the 'fee waived' note and edits fee fields / deletes the charge.
+  - Pressure: seeded rows in reservation.booked; distractor rows of reservation
+- `suite_turnover_today` (hard, time_sensitive): Today is 2026-10-09. For suites: check out every checked-in suite stay departing today, then check in every booked suite reservation arriving today (rooms are scarce, so checkouts must come first). Leave the suite stay departing tomorrow and the booking arriving tomorrow alone.
+  - Actions: `check_out_reservation`, `check_in_reservation`
+  - Decoy idea: Checks in before checking out (fails for lack of rooms), or also processes the tomorrow rows by going on status alone.
+  - Pressure: seeded rows in reservation.booked, reservation.checked_in; distractor rows of reservation
+
+## Open questions
+
+- How is the overbooking limit defined?
+  - Default answer: capacity plus overbook_percent of capacity (rounded down) per room type, over overlapping active stays.
+- What is the late cancellation window and fee?
+  - Default answer: Under 48 hours before arrival; one night's rate; waived for vip guests.
+- When is a guest a no-show and what is the fee?
+  - Default answer: 12 hours after the arrival time without check-in; one night's rate.
+- Can staff create reservations through a plain create route?
+  - Default answer: No; only the create_reservation action, to enforce overbooking.
+
+## Assumptions
+
+- Clock starts 2026-10-09T12:00:00Z with tick 0s; arrivals today at 15:00 and later are planned future events.
+  - Why: Explicit deterministic time; seeded history is before start.
+- Overbooking limit per room type = capacity + floor(capacity*overbook_percent/100), counted over booked and checked_in reservations whose stay overlaps (departure day equals next arrival is not overlap).
+  - Why: Common hotel practice; request gives no formula.
+- Late cancellation = cancel less than 48h before arrival_date; fee = one night at the reservation's nightly_rate snapshot; vip guests waived.
+  - Why: Typical policy; request names only late cancellations.
+- No-show fee = one night; the hourly no_show_sweep job marks booked reservations no_show once now >= arrival_date + 12h.
+  - Why: No-shows are detected by time, so a job.
+- Reservations are created only by the create_reservation action (POST /reservations), not a standard create route; status changes happen via actions.
+  - Why: So the overbooking rule cannot be bypassed.
+- check_in requires arrival date (UTC day) on or before today, a booked reservation and an available room of the booked type; room chosen is lowest id.
+  - Why: Simple deterministic room assignment.
+- Money is USD in minor units.
+  - Why: Single currency.
+
+## Out of scope
+
+- Payments, deposits, taxes, invoicing
+  - Why: Only fees recorded as charge rows matter for the desk workflow.
+- Room upgrades/moves, multi-room group bookings, rate plans and seasonal pricing
+  - Why: Keeps the world focused on overbooking, cancellation and no-show rules.
+- Modification of an existing reservation's dates
+  - Why: Cancel and rebook instead.
+
+## Changes
+
+None. The plan changes no existing item.

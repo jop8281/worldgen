@@ -1,0 +1,758 @@
+format: 1
+meta:
+  name: gen_insurance
+  description: Claims against policies are assigned to adjusters whose approval limits cap what they can approve. Fraud flags can put a claim on hold; approved claims are paid.
+  resembles: Guidewire-style insurance claims desk (ClaimCenter-like)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  adjuster:
+    description: Claims adjuster. The approval limit caps the amount they can approve; only active adjusters can be assigned claims.
+    idPrefix: adj
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      approval_limit:
+        type: money
+        description: Largest approved amount this adjuster may sign off, in cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      active:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  policy:
+    description: Insurance policy with a coverage limit. A claim on a lapsed policy cannot be approved.
+    idPrefix: pol
+    fields:
+      number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      holder_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      coverage_limit:
+        type: money
+        description: Maximum payable under the policy, in cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      status:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - active
+          - lapsed
+        default: active
+  claim:
+    description: "A claim against a policy moving through the desk: submitted, assigned, then approved or denied, and approved claims are paid."
+    idPrefix: clm
+    fields:
+      number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      policy_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: policy
+        onDelete: restrict
+      adjuster_id:
+        type: ref
+        description: Set when the claim is assigned.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: adjuster
+        onDelete: restrict
+      amount_claimed:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      approved_amount:
+        type: money
+        description: Set when the claim is approved.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      description:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      deny_reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - submitted
+          - assigned
+          - approved
+          - denied
+          - paid
+        initial: submitted
+        transitions:
+          submitted:
+            - assigned
+            - denied
+          assigned:
+            - approved
+            - denied
+          approved:
+            - paid
+            - denied
+          denied: []
+          paid: []
+  fraud_flag:
+    description: Fraud suspicion on a claim. Open until cleared or confirmed; an open flag blocks approval.
+    idPrefix: frd
+    fields:
+      claim_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: claim
+        onDelete: restrict
+      severity:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - low
+          - medium
+          - high
+      reason:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - open
+          - cleared
+          - confirmed
+        initial: open
+        transitions:
+          open:
+            - cleared
+            - confirmed
+          cleared: []
+          confirmed: []
+routes:
+  list_adjusters:
+    op: list
+    entity: adjuster
+    filters:
+      - active
+    search:
+      - name
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /adjusters
+    description: List adjusters.
+  create_adjuster:
+    op: create
+    entity: adjuster
+    method: POST
+    path: /adjusters
+    description: Create an adjuster.
+  get_adjuster:
+    op: get
+    entity: adjuster
+    method: GET
+    path: /adjusters/{id}
+    description: Get an adjuster.
+  list_policies:
+    op: list
+    entity: policy
+    filters:
+      - number
+      - holder_name
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /policies
+    description: List policies filtered by number, holder_name or status.
+  create_policy:
+    op: create
+    entity: policy
+    method: POST
+    path: /policies
+    description: Create a policy.
+  get_policy:
+    op: get
+    entity: policy
+    method: GET
+    path: /policies/{id}
+    description: Get a policy.
+  list_claims:
+    op: list
+    entity: claim
+    filters:
+      - status
+      - policy_id
+      - adjuster_id
+      - number
+    search:
+      - description
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /claims
+    description: List claims filtered by status, policy_id, adjuster_id or number.
+  create_claim:
+    op: create
+    entity: claim
+    method: POST
+    path: /claims
+    description: File a claim. It starts as submitted.
+  get_claim:
+    op: get
+    entity: claim
+    method: GET
+    path: /claims/{id}
+    description: Get a claim.
+  list_fraud_flags:
+    op: list
+    entity: fraud_flag
+    filters:
+      - claim_id
+      - status
+      - severity
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /fraud_flags
+    description: List fraud flags filtered by claim_id, status or severity.
+  get_fraud_flag:
+    op: get
+    entity: fraud_flag
+    method: GET
+    path: /fraud_flags/{id}
+    description: Get a fraud flag.
+actions:
+  assign_claim:
+    method: POST
+    path: /claims/{id}/assign
+    description: Assign a submitted claim to an active adjuster.
+    input:
+      adjuster_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const c = ctx.db.get('claim', ctx.params.id);
+       if (c === null) ctx.fail(404, 'not_found', 'claim not found');
+       if (c.status !== 'submitted') ctx.fail(409, 'invalid_state', 'only a submitted claim can be assigned');
+       const a = ctx.db.get('adjuster', ctx.body.adjuster_id);
+       if (a === null) ctx.fail(404, 'not_found', 'adjuster not found');
+       if (!a.active) ctx.fail(409, 'adjuster_inactive', 'adjuster is not active');
+       return { status: 200, body: ctx.db.update('claim', c.id, { status: 'assigned', adjuster_id: a.id }) };
+      }
+  approve_claim:
+    method: POST
+    path: /claims/{id}/approve
+    description: Approve an assigned claim up to the adjuster limit, claimed amount and coverage limit.
+    input:
+      approved_amount:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+    handler: |-
+      (ctx) => {
+       const c = ctx.db.get('claim', ctx.params.id);
+       if (c === null) ctx.fail(404, 'not_found', 'claim not found');
+       if (c.status !== 'assigned') ctx.fail(409, 'invalid_state', 'only an assigned claim can be approved');
+       const open = ctx.db.list('fraud_flag', { where: { claim_id: c.id, status: 'open' } });
+       if (open.length > 0) ctx.fail(409, 'fraud_hold', 'claim has an open fraud flag');
+       const p = ctx.db.get('policy', c.policy_id);
+       if (p.status === 'lapsed') ctx.fail(409, 'policy_lapsed', 'policy has lapsed');
+       const a = ctx.db.get('adjuster', c.adjuster_id);
+       const amt = ctx.body.approved_amount;
+       if (amt > a.approval_limit) ctx.fail(409, 'over_limit', 'amount exceeds the adjuster approval limit');
+       if (amt > c.amount_claimed) ctx.fail(409, 'over_limit', 'amount exceeds the amount claimed');
+       if (amt > p.coverage_limit) ctx.fail(409, 'over_limit', 'amount exceeds the policy coverage limit');
+       return { status: 200, body: ctx.db.update('claim', c.id, { status: 'approved', approved_amount: amt }) };
+      }
+  deny_claim:
+    method: POST
+    path: /claims/{id}/deny
+    description: Deny a claim that is not yet paid or denied.
+    input:
+      reason:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const c = ctx.db.get('claim', ctx.params.id);
+       if (c === null) ctx.fail(404, 'not_found', 'claim not found');
+       if (c.status === 'denied' || c.status === 'paid') ctx.fail(409, 'invalid_state', 'claim is ' + c.status + ' and cannot be denied');
+       return { status: 200, body: ctx.db.update('claim', c.id, { status: 'denied', deny_reason: ctx.body.reason }) };
+      }
+  pay_claim:
+    method: POST
+    path: /claims/{id}/pay
+    description: Pay an approved claim once.
+    input: {}
+    handler: |-
+      (ctx) => {
+       const c = ctx.db.get('claim', ctx.params.id);
+       if (c === null) ctx.fail(404, 'not_found', 'claim not found');
+       if (c.status !== 'approved') ctx.fail(409, 'invalid_state', 'only an approved claim can be paid');
+       return { status: 200, body: ctx.db.update('claim', c.id, { status: 'paid' }) };
+      }
+  flag_claim:
+    method: POST
+    path: /claims/{id}/flag
+    description: Raise a fraud flag on a claim.
+    input:
+      severity:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - low
+          - medium
+          - high
+      reason:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const c = ctx.db.get('claim', ctx.params.id);
+       if (c === null) ctx.fail(404, 'not_found', 'claim not found');
+       if (c.status === 'denied' || c.status === 'paid') ctx.fail(409, 'invalid_state', 'claim is ' + c.status + ' and cannot be flagged');
+       const f = ctx.db.create('fraud_flag', { claim_id: c.id, severity: ctx.body.severity, reason: ctx.body.reason });
+       return { status: 201, body: f };
+      }
+  resolve_fraud_flag:
+    method: POST
+    path: /fraud_flags/{id}/resolve
+    description: Clear or confirm an open fraud flag. Confirming denies the claim unless it is paid.
+    input:
+      outcome:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - cleared
+          - confirmed
+    handler: |-
+      (ctx) => {
+       const f = ctx.db.get('fraud_flag', ctx.params.id);
+       if (f === null) ctx.fail(404, 'not_found', 'fraud flag not found');
+       if (f.status !== 'open') ctx.fail(409, 'invalid_state', 'fraud flag is already resolved');
+       const out = ctx.body.outcome;
+       const res = ctx.db.update('fraud_flag', f.id, { status: out });
+       if (out === 'confirmed') {
+       const c = ctx.db.get('claim', f.claim_id);
+       if (c.status !== 'paid' && c.status !== 'denied') ctx.db.update('claim', c.id, { status: 'denied', deny_reason: 'Fraud confirmed: ' + f.reason });
+       }
+       return { status: 200, body: res };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  adjuster: |-
+    (ctx) => [
+     { name: 'Marcus Webb', approval_limit: 500000, active: true },
+     { name: 'Dana Whitfield', approval_limit: 1500000, active: true },
+     { name: 'Priya Raman', approval_limit: 5000000, active: true },
+     { name: 'Leon Hartley', approval_limit: 25000000, active: false },
+     { name: 'Marcus Webster', approval_limit: 10000000, active: true },
+     { name: 'Elena Ortiz', approval_limit: 25000000, active: true },
+    ]
+  policy: |-
+    (ctx) => [
+     { number: 'POL-1001', holder_name: 'Harold Becker', coverage_limit: 50000000, status: 'active' },
+     { number: 'POL-1002', holder_name: 'Harold Becker', coverage_limit: 20000000, status: 'lapsed' },
+     { number: 'POL-1003', holder_name: 'Grace Lin', coverage_limit: 30000000, status: 'active' },
+     { number: 'POL-1004', holder_name: 'Tomas Reyes', coverage_limit: 15000000, status: 'active' },
+     { number: 'POL-1005', holder_name: 'Aisha Khan', coverage_limit: 40000000, status: 'active' },
+     { number: 'POL-1006', holder_name: "Brian O'Neill", coverage_limit: 10000000, status: 'active' },
+     { number: 'POL-1007', holder_name: 'Carla Mendes', coverage_limit: 25000000, status: 'active' },
+     { number: 'POL-1008', holder_name: 'Derek Shaw', coverage_limit: 8000000, status: 'lapsed' },
+     { number: 'POL-1009', holder_name: 'Elaine Cho', coverage_limit: 35000000, status: 'active' },
+     { number: 'POL-1010', holder_name: 'Frank Dubois', coverage_limit: 60000000, status: 'active' },
+     { number: 'POL-1011', holder_name: 'Grace Lim', coverage_limit: 30000000, status: 'active' },
+     { number: 'POL-1012', holder_name: 'Hiro Tanaka', coverage_limit: 12000000, status: 'active' },
+    ]
+  claim: |-
+    (ctx) => {
+     const pol = ctx.rows('policy');
+     const adj = ctx.rows('adjuster');
+     const S = 'submitted', A = 'assigned', P = 'approved', D = 'denied', Z = 'paid';
+     // [policyIdx, adjusterIdx|null, claimed, approved|null, status, description, denyReason]
+     const specs = [
+     [2, null, 900000, null, S, 'Hail damage to roof'],
+     [3, null, 1200000, null, S, 'Kitchen fire smoke damage'],
+     [5, null, 450000, null, S, 'Stolen bicycle'],
+     [6, null, 4200000, null, S, 'Basement flooding'],
+     [8, null, 4800000, null, S, 'Storm damage to garage'],
+     [9, null, 5100000, null, S, 'Fallen tree on carport'],
+     [11, null, 300000, null, S, 'Cracked windshield'],
+     [10, null, 2200000, null, S, 'Burst pipe in bathroom'],
+     [0, 1, 800000, null, A, 'Wind damage to fence'],
+     [0, 1, 1200000, null, A, 'Water damage to living room'],
+     [0, 0, 3000000, null, A, 'Fire damage to shed'],
+     [0, 4, 600000, null, A, 'Broken patio door'],
+     [1, 4, 700000, null, A, 'Lightning damage to electronics'],
+     [5, 2, 900000, null, A, 'Theft of laptop'],
+     [6, 5, 1750000, null, A, 'Jewelry loss'],
+     [2, 2, 2000000, 2000000, P, 'Roof leak repair'],
+     [8, 4, 1000000, 950000, P, 'Vehicle collision damage'],
+     [9, 5, 3000000, 3000000, P, 'Hail damage to vehicle'],
+     [10, 2, 700000, 700000, Z, 'Garage door damage'],
+     [2, 1, 500000, 500000, Z, 'Stolen luggage'],
+     [11, 4, 1100000, 1100000, Z, 'Flood damage to basement'],
+     [6, 5, 2500000, 2500000, Z, 'Kitchen fire'],
+     [3, null, 800000, null, D, 'Pre-existing damage claim', 'Loss not covered'],
+     [7, 5, 1400000, null, D, 'Collision damage', 'Fraud confirmed: staged accident'],
+     [5, 2, 650000, null, D, 'Electronics theft', 'Fraud confirmed: forged receipts'],
+     [4, 4, 1850000, null, A, 'Diamond ring theft'],
+     [4, 2, 1500000, 1500000, P, 'Water damage to kitchen'],
+     [8, 4, 1850000, null, A, 'Antique furniture damage'],
+     [4, 2, 640000, null, A, 'Smoke damage to curtains'],
+     [11, 1, 1300000, 1300000, P, 'Storm damage to roof'],
+     ];
+     return specs.map((s, i) => ({
+     number: 'CLM-2026-' + String(i + 1).padStart(4, '0'),
+     policy_id: pol[s[0]].id,
+     adjuster_id: s[1] === null ? null : adj[s[1]].id,
+     amount_claimed: s[2],
+     approved_amount: s[3],
+     description: s[5],
+     deny_reason: s[6] || null,
+     status: s[4],
+     }));
+    }
+  fraud_flag: |-
+    (ctx) => {
+     const c = ctx.rows('claim');
+     const f = (n, severity, reason, status) => ({ claim_id: c[n - 1].id, severity, reason, status });
+     return [
+     f(10, 'medium', 'Repair estimate inconsistent with photos', 'open'),
+     f(14, 'low', 'Receipt date mismatch', 'open'),
+     f(15, 'medium', 'Prior similar claim at another insurer', 'open'),
+     f(26, 'high', 'Claimant history shows repeated jewelry claims', 'open'),
+     f(16, 'low', 'Duplicate submission suspected', 'cleared'),
+     f(20, 'medium', 'Address mismatch', 'cleared'),
+     f(21, 'low', 'Late reporting', 'cleared'),
+     f(23, 'high', 'Damage predates policy', 'confirmed'),
+     f(24, 'high', 'Staged accident', 'confirmed'),
+     f(25, 'medium', 'Forged receipts', 'confirmed'),
+     ];
+    }
+tests:
+  t_assign:
+    description: Assign a claim, assign again, assign to an inactive adjuster
+    script: |-
+      (ctx) => {
+      const a = ctx.api('POST','/adjusters',{name:'ACC Test Adjuster A',approval_limit:100000,active:true});
+      ctx.assert(a.status===201,'adjuster create '+JSON.stringify(a.body));
+      const p = ctx.api('POST','/policies',{number:'ACC-TP-1',holder_name:'ACC Test Holder',coverage_limit:500000,status:'active'});
+      ctx.assert(p.status===201,'policy create');
+      const c = ctx.api('POST','/claims',{number:'ACC-TC-1',policy_id:p.body.id,amount_claimed:50000,description:'Water damage'});
+      ctx.assert(c.status===201 && c.body.status==='submitted','claim create');
+      const r = ctx.api('POST','/claims/'+c.body.id+'/assign',{adjuster_id:a.body.id});
+      ctx.assert(r.status===200 && r.body.status==='assigned' && r.body.adjuster_id===a.body.id,'assign '+JSON.stringify(r.body));
+      const r2 = ctx.api('POST','/claims/'+c.body.id+'/assign',{adjuster_id:a.body.id});
+      ctx.assert(r2.status===409 && r2.body.error.code==='invalid_state','second assign refused');
+      const b = ctx.api('POST','/adjusters',{name:'ACC Test Adjuster B',approval_limit:100000,active:false});
+      const c2 = ctx.api('POST','/claims',{number:'ACC-TC-2',policy_id:p.body.id,amount_claimed:1000,description:'Scratch'});
+      const r3 = ctx.api('POST','/claims/'+c2.body.id+'/assign',{adjuster_id:b.body.id});
+      ctx.assert(r3.status===409 && r3.body.error.code==='adjuster_inactive','inactive adjuster refused');
+      }
+  t_limit:
+    description: Approve above limit fails, within limit succeeds
+    script: |-
+      (ctx) => {
+      const a = ctx.api('POST','/adjusters',{name:'ACC Limit Adjuster',approval_limit:100000,active:true});
+      const p = ctx.api('POST','/policies',{number:'ACC-TP-2',holder_name:'ACC Limit Holder',coverage_limit:500000,status:'active'});
+      const c = ctx.api('POST','/claims',{number:'ACC-TC-3',policy_id:p.body.id,amount_claimed:150000,description:'Roof collapse'});
+      ctx.assert(ctx.api('POST','/claims/'+c.body.id+'/assign',{adjuster_id:a.body.id}).status===200,'assign');
+      const r = ctx.api('POST','/claims/'+c.body.id+'/approve',{approved_amount:150000});
+      ctx.assert(r.status===409 && r.body.error.code==='over_limit','over limit refused '+JSON.stringify(r.body));
+      const r2 = ctx.api('POST','/claims/'+c.body.id+'/approve',{approved_amount:90000});
+      ctx.assert(r2.status===200 && r2.body.status==='approved' && r2.body.approved_amount===90000,'approve within limit '+JSON.stringify(r2.body));
+      }
+  t_fraud_block:
+    description: Flag, approve refused, clear, approve succeeds
+    script: |-
+      (ctx) => {
+      const a = ctx.api('POST','/adjusters',{name:'ACC Fraud Adjuster',approval_limit:100000,active:true});
+      const p = ctx.api('POST','/policies',{number:'ACC-TP-3',holder_name:'ACC Fraud Holder',coverage_limit:500000,status:'active'});
+      const c = ctx.api('POST','/claims',{number:'ACC-TC-4',policy_id:p.body.id,amount_claimed:20000,description:'Theft'});
+      ctx.api('POST','/claims/'+c.body.id+'/assign',{adjuster_id:a.body.id});
+      const f = ctx.api('POST','/claims/'+c.body.id+'/flag',{severity:'high',reason:'Duplicate submission'});
+      ctx.assert(f.status===201 && f.body.status==='open' && f.body.claim_id===c.body.id,'flag '+JSON.stringify(f.body));
+      const r = ctx.api('POST','/claims/'+c.body.id+'/approve',{approved_amount:20000});
+      ctx.assert(r.status===409 && r.body.error.code==='fraud_hold','approve blocked '+JSON.stringify(r.body));
+      const cl = ctx.api('POST','/fraud_flags/'+f.body.id+'/resolve',{outcome:'cleared'});
+      ctx.assert(cl.status===200 && cl.body.status==='cleared','cleared');
+      const r2 = ctx.api('POST','/claims/'+c.body.id+'/approve',{approved_amount:20000});
+      ctx.assert(r2.status===200 && r2.body.status==='approved','approve after clearing');
+      }
+  t_lapsed:
+    description: Approve on lapsed policy refused, deny works once
+    script: |-
+      (ctx) => {
+      const a = ctx.api('POST','/adjusters',{name:'ACC Lapsed Adjuster',approval_limit:100000,active:true});
+      const p = ctx.api('POST','/policies',{number:'ACC-TP-4',holder_name:'ACC Lapsed Holder',coverage_limit:500000,status:'lapsed'});
+      const c = ctx.api('POST','/claims',{number:'ACC-TC-5',policy_id:p.body.id,amount_claimed:10000,description:'Collision'});
+      ctx.api('POST','/claims/'+c.body.id+'/assign',{adjuster_id:a.body.id});
+      const r = ctx.api('POST','/claims/'+c.body.id+'/approve',{approved_amount:10000});
+      ctx.assert(r.status===409 && r.body.error.code==='policy_lapsed','lapsed refused '+JSON.stringify(r.body));
+      const d = ctx.api('POST','/claims/'+c.body.id+'/deny',{reason:'Policy lapsed'});
+      ctx.assert(d.status===200 && d.body.status==='denied' && d.body.deny_reason==='Policy lapsed','deny '+JSON.stringify(d.body));
+      const d2 = ctx.api('POST','/claims/'+c.body.id+'/deny',{reason:'Again'});
+      ctx.assert(d2.status===409 && d2.body.error.code==='invalid_state','second deny refused');
+      }
+  t_pay:
+    description: Pay before approval fails, after approval succeeds, repeat fails
+    script: |-
+      (ctx) => {
+      const a = ctx.api('POST','/adjusters',{name:'ACC Pay Adjuster',approval_limit:100000,active:true});
+      const p = ctx.api('POST','/policies',{number:'ACC-TP-5',holder_name:'ACC Pay Holder',coverage_limit:500000,status:'active'});
+      const c = ctx.api('POST','/claims',{number:'ACC-TC-6',policy_id:p.body.id,amount_claimed:30000,description:'Fire'});
+      ctx.api('POST','/claims/'+c.body.id+'/assign',{adjuster_id:a.body.id});
+      const e = ctx.api('POST','/claims/'+c.body.id+'/pay',{});
+      ctx.assert(e.status===409 && e.body.error.code==='invalid_state','pay before approval refused');
+      ctx.api('POST','/claims/'+c.body.id+'/approve',{approved_amount:30000});
+      const r = ctx.api('POST','/claims/'+c.body.id+'/pay',{});
+      ctx.assert(r.status===200 && r.body.status==='paid','paid '+JSON.stringify(r.body));
+      const r2 = ctx.api('POST','/claims/'+c.body.id+'/pay',{});
+      ctx.assert(r2.status===409 && r2.body.error.code==='invalid_state','second pay refused');
+      }
+  t_confirm:
+    description: Flag, confirm, claim denied, resolve again refused
+    script: |-
+      (ctx) => {
+      const a = ctx.api('POST','/adjusters',{name:'ACC Confirm Adjuster',approval_limit:100000,active:true});
+      const p = ctx.api('POST','/policies',{number:'ACC-TP-6',holder_name:'ACC Confirm Holder',coverage_limit:500000,status:'active'});
+      const c = ctx.api('POST','/claims',{number:'ACC-TC-7',policy_id:p.body.id,amount_claimed:40000,description:'Jewelry loss'});
+      ctx.api('POST','/claims/'+c.body.id+'/assign',{adjuster_id:a.body.id});
+      const f = ctx.api('POST','/claims/'+c.body.id+'/flag',{severity:'medium',reason:'Inconsistent statements'});
+      ctx.assert(f.status===201,'flag');
+      const r = ctx.api('POST','/fraud_flags/'+f.body.id+'/resolve',{outcome:'confirmed'});
+      ctx.assert(r.status===200 && r.body.status==='confirmed','confirmed '+JSON.stringify(r.body));
+      const cl = ctx.api('GET','/claims/'+c.body.id);
+      ctx.assert(cl.body.status==='denied','claim denied after confirmation');
+      const r2 = ctx.api('POST','/fraud_flags/'+f.body.id+'/resolve',{outcome:'cleared'});
+      ctx.assert(r2.status===409 && r2.body.error.code==='invalid_state','resolved flag cannot be resolved again');
+      }
+tasks:
+  assign_submitted_claim:
+    difficulty: easy
+    instruction: Claim CLM-2026-0003 (a stolen bicycle) is still submitted. Assign it to the active adjuster Marcus Webb. Note that there is also an adjuster called Marcus Webster; he is not the one.
+    grader: "(ctx) => { const c = ctx.seed.list('claim', { where: { number: 'CLM-2026-0003' } })[0]; const a = ctx.seed.list('adjuster', { where: { name: 'Marcus Webb' } })[0]; if (!c || !a) return 0; ctx.guardChanges('only the target claim changed', [{ entity: 'claim', id: c.id, kind: 'updated', fields: ['status', 'adjuster_id'] }]); const end = ctx.db.get('claim', c.id); ctx.goal(0.5, 'the claim is assigned', end.status === 'assigned'); ctx.goal(0.5, 'it is assigned to Marcus Webb', end.adjuster_id === a.id); return ctx.score(); }"
+    solution: "(ctx) => { const cl = ctx.api('GET', '/claims?number=CLM-2026-0003').body.data; ctx.assert(cl.length === 1 && cl[0].status === 'submitted', 'claim CLM-2026-0003 not found or not submitted'); const adjs = ctx.api('GET', '/adjusters').body.data; const a = adjs.find((x) => x.name === 'Marcus Webb'); ctx.assert(a && a.active, 'Marcus Webb not found or inactive'); const r = ctx.api('POST', '/claims/' + cl[0].id + '/assign', { adjuster_id: a.id }); ctx.assert(r.status === 200, 'assign failed: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: assigns the claim to Marcus Webster, the adjuster with the similar name, instead of Marcus Webb
+        script: "(ctx) => { const cl = ctx.api('GET', '/claims?number=CLM-2026-0003').body.data; const adjs = ctx.api('GET', '/adjusters').body.data; const a = adjs.find((x) => x.name === 'Marcus Webster'); ctx.api('POST', '/claims/' + cl[0].id + '/assign', { adjuster_id: a.id }); }"
+    alternatives: []
+    allows:
+      - entity: claim
+        kind: updated
+        fields:
+          - status
+          - adjuster_id
+        where:
+          number: CLM-2026-0003
+  approve_within_limit:
+    difficulty: medium
+    instruction: Claim CLM-2026-0006 (a fallen tree on a carport, $51,000.00 claimed) is submitted and needs a decision, and the desk wants a new adjuster to take it. First check the active adjusters so that nobody called Sam Idris is already on the desk. Then register a new active adjuster named Sam Idris with an approval limit of $60,000.00, assign the claim to him, and approve it for the full claimed amount.
+    grader: "(ctx) => { const c = ctx.seed.list('claim', { where: { number: 'CLM-2026-0006' } })[0]; if (!c) return 0; const made = ctx.db.list('adjuster', { where: { name: 'Sam Idris' } }); if (made.length === 0) return 0; const a = made[0]; ctx.guardChanges('only the new adjuster and the target claim changed', [{ entity: 'adjuster', id: a.id, kind: 'created', fields: ['name', 'approval_limit', 'active'] }, { entity: 'claim', id: c.id, kind: 'updated', fields: ['status', 'adjuster_id', 'approved_amount'] }]); const end = ctx.db.get('claim', c.id); ctx.goal(0.3, 'Sam Idris is registered active with a 60000 dollar limit', made.length === 1 && a.active === true && a.approval_limit === 6000000); ctx.goal(0.3, 'the claim is assigned to Sam Idris', end.adjuster_id === a.id); ctx.goal(0.4, 'approved for the full claimed amount', end.status === 'approved' && end.approved_amount === c.amount_claimed); return ctx.score(); }"
+    solution: "(ctx) => { const cl = ctx.api('GET', '/claims?number=CLM-2026-0006').body.data; ctx.assert(cl.length === 1 && cl[0].status === 'submitted', 'claim CLM-2026-0006 not found or not submitted'); const claim = cl[0]; const adjs = ctx.api('GET', '/adjusters?active=true').body.data; ctx.assert(adjs.length > 0, 'expected active adjusters'); ctx.assert(!adjs.some((x) => x.name === 'Sam Idris'), 'Sam Idris already exists'); const made = ctx.api('POST', '/adjusters', { name: 'Sam Idris', approval_limit: 6000000, active: true }); ctx.assert(made.status === 201, 'create adjuster failed: ' + JSON.stringify(made.body)); const r1 = ctx.api('POST', '/claims/' + claim.id + '/assign', { adjuster_id: made.body.id }); ctx.assert(r1.status === 200, 'assign failed: ' + JSON.stringify(r1.body)); const r2 = ctx.api('POST', '/claims/' + claim.id + '/approve', { approved_amount: claim.amount_claimed }); ctx.assert(r2.status === 200, 'approve failed: ' + JSON.stringify(r2.body)); }"
+    decoys:
+      - why: registers Sam Idris with a $50,000.00 limit, below the claimed amount, so the full approval is refused and the claim stays assigned
+        script: "(ctx) => { const cl = ctx.api('GET', '/claims?number=CLM-2026-0006').body.data; ctx.api('GET', '/adjusters?active=true'); const made = ctx.api('POST', '/adjusters', { name: 'Sam Idris', approval_limit: 5000000, active: true }); ctx.api('POST', '/claims/' + cl[0].id + '/assign', { adjuster_id: made.body.id }); ctx.api('POST', '/claims/' + cl[0].id + '/approve', { approved_amount: cl[0].amount_claimed }); }"
+      - why: registers Sam Idris correctly and assigns the claim but approves only $50,000.00 instead of the full claimed amount
+        script: "(ctx) => { const cl = ctx.api('GET', '/claims?number=CLM-2026-0006').body.data; ctx.api('GET', '/adjusters?active=true'); const made = ctx.api('POST', '/adjusters', { name: 'Sam Idris', approval_limit: 6000000, active: true }); ctx.api('POST', '/claims/' + cl[0].id + '/assign', { adjuster_id: made.body.id }); ctx.api('POST', '/claims/' + cl[0].id + '/approve', { approved_amount: 5000000 }); }"
+    alternatives: []
+    allows:
+      - entity: adjuster
+        kind: created
+        fields:
+          - name
+          - approval_limit
+          - active
+        where:
+          name: Sam Idris
+      - entity: claim
+        kind: updated
+        fields:
+          - status
+          - adjuster_id
+          - approved_amount
+        where:
+          number: CLM-2026-0006
+  review_holder_claims:
+    difficulty: hard
+    instruction: "Harold Becker holds two policies and has five assigned claims across them. Review them. Approve a claim for its full claimed amount only if it has no open fraud flag, the assigned adjuster's approval limit covers the amount, and its policy is active. The open fraud flag on his 'Water damage to living room' claim is a false alarm: clear that flag, then approve the claim as well. Deny any claim whose policy has lapsed with the reason 'Policy lapsed'. Leave every other claim, including any the assigned adjuster cannot approve, unchanged."
+    grader: "(ctx) => { const byNum = (n) => ctx.seed.list('claim', { where: { number: n } })[0]; const c9 = byNum('CLM-2026-0009'); const c10 = byNum('CLM-2026-0010'); const c12 = byNum('CLM-2026-0012'); const c13 = byNum('CLM-2026-0013'); if (!c9 || !c10 || !c12 || !c13) return 0; const flag = ctx.seed.list('fraud_flag', { where: { claim_id: c10.id } })[0]; if (!flag) return 0; ctx.guardChanges('only the reviewed claims and the false alarm flag changed', [{ entity: 'claim', id: c9.id, kind: 'updated', fields: ['status', 'approved_amount'] }, { entity: 'claim', id: c10.id, kind: 'updated', fields: ['status', 'approved_amount'] }, { entity: 'claim', id: c12.id, kind: 'updated', fields: ['status', 'approved_amount'] }, { entity: 'claim', id: c13.id, kind: 'updated', fields: ['status', 'deny_reason'] }, { entity: 'fraud_flag', id: flag.id, kind: 'updated', fields: ['status'] }]); const approved = (c) => { const e = ctx.db.get('claim', c.id); return e.status === 'approved' && e.approved_amount === c.amount_claimed; }; ctx.goal(0.2, 'the clean claim on the active policy is approved in full', approved(c9)); ctx.goal(0.1, 'the false alarm flag is cleared', ctx.db.get('fraud_flag', flag.id).status === 'cleared'); ctx.goal(0.2, 'the living room claim is approved in full', approved(c10)); ctx.goal(0.2, 'the patio door claim is approved in full', approved(c12)); const d = ctx.db.get('claim', c13.id); ctx.goal(0.3, 'the claim on the lapsed policy is denied as Policy lapsed', d.status === 'denied' && d.deny_reason === 'Policy lapsed'); return ctx.score(); }"
+    solution: "(ctx) => { const pols = ctx.api('GET', '/policies?holder_name=Harold%20Becker').body.data; ctx.assert(pols.length === 2, 'expected two policies for Harold Becker'); for (const p of pols) { const cl = ctx.api('GET', '/claims?policy_id=' + p.id + '&status=assigned').body.data; for (const c of cl) { if (p.status === 'lapsed') { const d = ctx.api('POST', '/claims/' + c.id + '/deny', { reason: 'Policy lapsed' }); ctx.assert(d.status === 200, 'deny failed: ' + JSON.stringify(d.body)); continue; } const adj = ctx.api('GET', '/adjusters/' + c.adjuster_id).body; if (c.amount_claimed > adj.approval_limit) continue; const open = ctx.api('GET', '/fraud_flags?claim_id=' + c.id + '&status=open').body.data; if (open.length > 0) { if (c.description !== 'Water damage to living room') continue; for (const f of open) { const rf = ctx.api('POST', '/fraud_flags/' + f.id + '/resolve', { outcome: 'cleared' }); ctx.assert(rf.status === 200, 'clear failed: ' + JSON.stringify(rf.body)); } } const a = ctx.api('POST', '/claims/' + c.id + '/approve', { approved_amount: c.amount_claimed }); ctx.assert(a.status === 200, 'approve failed: ' + JSON.stringify(a.body)); } } }"
+    decoys:
+      - why: tries to approve every assigned claim of the holder, ignoring fraud holds, limits and the lapsed policy; the desk refuses the blocked ones, so only the clean claims are approved
+        script: "(ctx) => { const pols = ctx.api('GET', '/policies?holder_name=Harold%20Becker').body.data; for (const p of pols) { const cl = ctx.api('GET', '/claims?policy_id=' + p.id + '&status=assigned').body.data; for (const c of cl) { ctx.api('POST', '/claims/' + c.id + '/approve', { approved_amount: c.amount_claimed }); } } }"
+      - why: approves the clean claims and denies the lapsed one but never clears the false alarm flag, so the living room claim stays unapproved
+        script: "(ctx) => { const pols = ctx.api('GET', '/policies?holder_name=Harold%20Becker').body.data; for (const p of pols) { const cl = ctx.api('GET', '/claims?policy_id=' + p.id + '&status=assigned').body.data; for (const c of cl) { if (p.status === 'lapsed') { ctx.api('POST', '/claims/' + c.id + '/deny', { reason: 'Policy lapsed' }); continue; } const adj = ctx.api('GET', '/adjusters/' + c.adjuster_id).body; if (c.amount_claimed > adj.approval_limit) continue; const open = ctx.api('GET', '/fraud_flags?claim_id=' + c.id + '&status=open').body.data; if (open.length > 0) continue; ctx.api('POST', '/claims/' + c.id + '/approve', { approved_amount: c.amount_claimed }); } } }"
+    alternatives: []
+    allows:
+      - entity: claim
+        kind: updated
+        fields:
+          - status
+          - approved_amount
+        where:
+          number: CLM-2026-0009
+      - entity: claim
+        kind: updated
+        fields:
+          - status
+          - approved_amount
+        where:
+          number: CLM-2026-0010
+      - entity: claim
+        kind: updated
+        fields:
+          - status
+          - approved_amount
+        where:
+          number: CLM-2026-0012
+      - entity: claim
+        kind: updated
+        fields:
+          - status
+          - deny_reason
+        where:
+          number: CLM-2026-0013
+      - entity: fraud_flag
+        kind: updated
+        fields:
+          - status
+        where:
+          reason: Repair estimate inconsistent with photos
+  find_and_confirm_fraud:
+    difficulty: hard
+    instruction: Aisha Khan has an assigned claim for $18,500.00 on which a high-severity fraud flag is still open. Confirm that flag. Then pay Aisha Khan's other claim that has already been approved. Other policyholders have similar claims, so go by the holder, the amount and the flag.
+    grader: "(ctx) => { const c26 = ctx.seed.list('claim', { where: { number: 'CLM-2026-0026' } })[0]; const c27 = ctx.seed.list('claim', { where: { number: 'CLM-2026-0027' } })[0]; if (!c26 || !c27) return 0; const f = ctx.seed.list('fraud_flag', { where: { claim_id: c26.id } })[0]; if (!f) return 0; ctx.guardChanges('only the confirmed flag, its claim and the approved claim changed', [{ entity: 'fraud_flag', id: f.id, kind: 'updated', fields: ['status'] }, { entity: 'claim', id: c26.id, kind: 'updated', fields: ['status', 'deny_reason'] }, { entity: 'claim', id: c27.id, kind: 'updated', fields: ['status'] }]); ctx.goal(0.3, 'the high-severity flag is confirmed', ctx.db.get('fraud_flag', f.id).status === 'confirmed'); ctx.goal(0.2, 'the flagged claim is denied', ctx.db.get('claim', c26.id).status === 'denied'); const e27 = ctx.db.get('claim', c27.id); ctx.goal(0.5, 'the approved claim of the same holder is paid in full', e27.status === 'paid' && e27.approved_amount === c27.approved_amount); return ctx.score(); }"
+    solution: "(ctx) => { const pols = ctx.api('GET', '/policies?holder_name=Aisha%20Khan').body.data; ctx.assert(pols.length === 1, 'expected one policy for Aisha Khan'); const claims = []; let cursor = null; for (let i = 0; i < 20; i++) { const r = ctx.api('GET', '/claims?limit=25' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')); ctx.assert(r.status === 200, 'claims page failed'); for (const c of r.body.data) claims.push(c); cursor = r.body.next_cursor; if (!cursor) break; } const mine = claims.filter((c) => c.policy_id === pols[0].id); const other = ctx.api('GET', '/policies?holder_name=Elaine%20Cho').body.data; ctx.assert(other.length === 1, 'expected one policy for Elaine Cho'); const otherClaims = ctx.api('GET', '/claims?policy_id=' + other[0].id).body.data; for (const oc of otherClaims) { if (oc.amount_claimed === 1850000) { const nf = ctx.api('GET', '/fraud_flags?claim_id=' + oc.id + '&status=open&severity=high').body.data; ctx.assert(nf.length === 0, 'near miss should have no open high flag'); } } const targets = mine.filter((c) => c.amount_claimed === 1850000 && c.status === 'assigned'); ctx.assert(targets.length === 1, 'expected one matching claim, found ' + targets.length); const flags = ctx.api('GET', '/fraud_flags?claim_id=' + targets[0].id + '&status=open&severity=high').body.data; ctx.assert(flags.length === 1, 'expected one open high flag'); const approved = mine.filter((c) => c.status === 'approved'); ctx.assert(approved.length === 1, 'expected one approved claim for the holder'); const r1 = ctx.api('POST', '/fraud_flags/' + flags[0].id + '/resolve', { outcome: 'confirmed' }); ctx.assert(r1.status === 200, 'confirm failed: ' + JSON.stringify(r1.body)); const r2 = ctx.api('POST', '/claims/' + approved[0].id + '/pay', {}); ctx.assert(r2.status === 200, 'pay failed: ' + JSON.stringify(r2.body)); }"
+    decoys:
+      - why: confirms the right high-severity flag but forgets to pay the holder's approved claim
+        script: "(ctx) => { const flags = ctx.api('GET', '/fraud_flags?status=open&severity=high').body.data; ctx.api('POST', '/fraud_flags/' + flags[0].id + '/resolve', { outcome: 'confirmed' }); }"
+      - why: pays the holder's approved claim but confirms the open flag on a near-miss claim of another holder instead of the high-severity flag
+        script: "(ctx) => { const pols = ctx.api('GET', '/policies?holder_name=Aisha%20Khan').body.data; const approved = ctx.api('GET', '/claims?policy_id=' + pols[0].id + '&status=approved').body.data; const flags = ctx.api('GET', '/fraud_flags?status=open').body.data; const wrong = flags.find((f) => f.reason === 'Prior similar claim at another insurer'); ctx.api('POST', '/fraud_flags/' + wrong.id + '/resolve', { outcome: 'confirmed' }); ctx.api('POST', '/claims/' + approved[0].id + '/pay', {}); }"
+    alternatives: []
+    allows:
+      - entity: fraud_flag
+        kind: updated
+        fields:
+          - status
+        where:
+          reason: Claimant history shows repeated jewelry claims
+      - entity: claim
+        kind: updated
+        fields:
+          - status
+          - deny_reason
+        where:
+          number: CLM-2026-0026
+      - entity: claim
+        kind: updated
+        fields:
+          - status
+        where:
+          number: CLM-2026-0027
