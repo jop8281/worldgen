@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { issue, type CheckIssue, type CheckReport, type World, type WorldStats } from '#engine';
+import { ISSUES, issue, type CheckIssue, type CheckReport, type World, type WorldStats } from '#engine';
 import type { Plan } from '../src/worldgen/plan.ts';
 import { PLAN_BRIEF, STAGES, pressureChecks, pressureIssues, seedNeedLines, seedNeeds, stagesToRun, taskPressureLines } from '../src/worldgen/stages.ts';
 
@@ -159,6 +159,35 @@ describe('STAGES.seed.done', () => {
   it('is not blocked by seed.too_few_rows_for_paging alone', () => {
     const paging = issue('seed.too_few_rows_for_paging', ['seed', 'customer'], { entity: 'customer', rows: 5, pageSize: 25 }, '5 rows');
     assert.deepEqual(STAGES.seed.done(report(world(), {}, [paging]), plan), []);
+  });
+});
+
+describe('the tasks stage checks the reference calls its planned actions (A-398)', () => {
+  const planned: Plan = { ...plan, tasks: [plan.tasks[0]!, plan.tasks[1]!, { ...plan.tasks[2]!, actions: ['assign', 'solve (POST /tickets/{id}/solve)'] }] };
+  /** The report with a verdict for the hard task whose reference called `actions`. */
+  const called = (actions: readonly string[]): OkReport => ({
+    ...report(world()),
+    verdicts: { rebalance: { taskId: 'rebalance', difficulty: 'hard', solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionActions: actions } },
+  }) as unknown as OkReport;
+
+  it('passes a reference that called every planned action', () => {
+    assert.deepEqual(STAGES.tasks.done(called(['assign', 'solve']), planned), []);
+  });
+
+  it('refuses a reference that misses one, at the task\'s solution, for the tasks step', () => {
+    const issues = STAGES.tasks.done(called(['assign']), planned);
+    assert.deepEqual(issues.map((i) => [i.code, i.severity, i.path, i.expected, i.found, i.hint]), [[
+      'task.planned_action_uncalled', 'error', ['tasks', 'rebalance', 'solution'],
+      'the reference solution of rebalance calls each workflow action the plan lists for it: assign, solve',
+      'it called assign',
+      'Make the solution of rebalance call solve through ctx.api, as the task needs, or drop solve from the plan\'s actions for rebalance in the plan step.',
+    ]]);
+    assert.equal(ISSUES['task.planned_action_uncalled'].owner, 'tasks');
+    assert.deepEqual(STAGES.tasks.done(called([]), planned).map((i) => i.found), ['it called no workflow action']);
+  });
+
+  it('leaves a plan task that lists no actions alone, as every committed plan is', () => {
+    assert.deepEqual(STAGES.tasks.done(called([]), plan), []);
   });
 });
 

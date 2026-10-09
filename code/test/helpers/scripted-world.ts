@@ -51,14 +51,32 @@ export const ESCALATE_HANDLER = `(ctx) => {
   return { status: 200, body: ctx.db.update('ticket', t.id, { priority: 'urgent' }) };
 }`;
 
+/** minimalWorld's hard reference, escalating through escalate_ticket where it patched the priority, so it calls both actions its plan task lists (A-398). */
+export const ESCALATE_SOLUTION = `(ctx) => {
+  const c = ctx.api('GET', '/customers').body.data.find((x) => x.name === 'Acme');
+  ctx.assert(c, 'customer not found');
+  const tickets = ctx.api('GET', '/tickets?customer=' + c.id).body.data;
+  for (const t of tickets) {
+    if (t.status === 'resolved') continue;
+    const p = ctx.api('POST', '/tickets/' + t.id + '/escalate');
+    ctx.assert(p.status === 200, 'escalate failed');
+    if (t.status === 'pending') {
+      const r = ctx.api('POST', '/tickets/' + t.id + '/resolve');
+      ctx.assert(r.status === 200, 'resolve failed');
+    }
+  }
+}`;
+
 /**
  * What the fake model builds: minimalWorld with 15 customers, page sizes 5 and 4, an escalate action beside resolve,
- * so the plan's hard task can name two workflow actions (A-390), and a test for each action.
+ * so the plan's hard task can name two workflow actions (A-390), a hard reference that calls both (A-398), and a
+ * test for each action.
  */
 export const TARGET: World = minimalWorld({
   routes: { list_customers: { pageSize: 5 }, list_tickets: { pageSize: 4 } },
   actions: { escalate_ticket: { method: 'POST', path: '/tickets/{id}/escalate', description: 'Make an unresolved ticket urgent.', handler: ESCALATE_HANDLER } },
   seed: { customer: CUSTOMERS },
+  tasks: { escalate_acme: { solution: ESCALATE_SOLUTION } },
   tests: {
     resolve_pending_ticket: { description: 'a pending ticket can be resolved', script: RESOLVE_TEST },
     escalate_open_ticket: { description: 'an unresolved ticket can be escalated', script: ESCALATE_TEST },
