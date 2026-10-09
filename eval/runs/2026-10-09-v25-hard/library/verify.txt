@@ -1,0 +1,6 @@
+world.yaml:523: warning seed.too_few_rows_for_paging seed.book: expected more than 25 book rows, found 8 rows. 8 rows fit on one page. Paging never matters.
+pay_patron_open_fine easy solution 1.000 noop 0.000 decoys [0.000] prefix - mutants 3/8 probed (not probed: target_field, extra_action, extra_delete, undone_write, perturb) checks 3/3 flipped
+renew_only_unheld_loans medium solution 1.000 noop 0.000 decoys [0.500] prefix 0.500 mutants 4/8 probed (not probed: target_field, extra_delete, undone_write, perturb) checks 4/4 flipped
+fulfil_earliest_hold medium solution 1.000 noop 0.000 decoys [0.400] prefix 0.400 mutants 3/8 probed (not probed: target_field, other_row, extra_delete, undone_write, retarget) checks 5/5 flipped
+waive_lost_charge_of_returned_title hard solution 1.000 noop 0.000 decoys [0.550, 0.000] prefix 0.550 mutants 3/8 probed (not probed: target_field, extra_action, extra_delete, undone_write, perturb) checks 5/5 flipped
+total: checks 17/17 flipped, mutants 13/32 probed, 4 tasks

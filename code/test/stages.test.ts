@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { issue, type CheckIssue, type CheckReport, type World, type WorldStats } from '#engine';
+import { ISSUES, issue, type CheckIssue, type CheckReport, type World, type WorldStats } from '#engine';
 import type { Plan } from '../src/worldgen/plan.ts';
 import { PLAN_BRIEF, STAGES, pressureChecks, pressureIssues, seedNeedLines, seedNeeds, stagesToRun, taskPressureLines } from '../src/worldgen/stages.ts';
 
@@ -162,6 +162,35 @@ describe('STAGES.seed.done', () => {
   });
 });
 
+describe('the tasks stage checks the reference calls its planned actions (A-398)', () => {
+  const planned: Plan = { ...plan, tasks: [plan.tasks[0]!, plan.tasks[1]!, { ...plan.tasks[2]!, actions: ['assign', 'solve (POST /tickets/{id}/solve)'] }] };
+  /** The report with a verdict for the hard task whose reference called `actions`. */
+  const called = (actions: readonly string[]): OkReport => ({
+    ...report(world()),
+    verdicts: { rebalance: { taskId: 'rebalance', difficulty: 'hard', solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionActions: actions } },
+  }) as unknown as OkReport;
+
+  it('passes a reference that called every planned action', () => {
+    assert.deepEqual(STAGES.tasks.done(called(['assign', 'solve']), planned), []);
+  });
+
+  it('refuses a reference that misses one, at the task\'s solution, for the tasks step', () => {
+    const issues = STAGES.tasks.done(called(['assign']), planned);
+    assert.deepEqual(issues.map((i) => [i.code, i.severity, i.path, i.expected, i.found, i.hint]), [[
+      'task.planned_action_uncalled', 'error', ['tasks', 'rebalance', 'solution'],
+      'the reference solution of rebalance calls each workflow action the plan lists for it: assign, solve',
+      'it called assign',
+      'Make the solution of rebalance call solve through ctx.api, as the task needs, or drop solve from the plan\'s actions for rebalance in the plan step.',
+    ]]);
+    assert.equal(ISSUES['task.planned_action_uncalled'].owner, 'tasks');
+    assert.deepEqual(STAGES.tasks.done(called([]), planned).map((i) => i.found), ['it called no workflow action']);
+  });
+
+  it('leaves a plan task that lists no actions alone, as every committed plan is', () => {
+    assert.deepEqual(STAGES.tasks.done(called([]), plan), []);
+  });
+});
+
 describe('STAGES.tasks.done', () => {
   it('passes with three tasks covering easy, medium and hard', () => {
     assert.deepEqual(STAGES.tasks.done(report(world()), plan), []);
@@ -289,9 +318,9 @@ describe('task pressure from reference traces (A-225..A-227)', () => {
     routes: { list_tickets: listRoute } as unknown as World['routes'],
     ...over,
   });
-  type Trace = { taskId: string; difficulty: 'easy' | 'medium' | 'hard'; solutionRowsChanged: number; solutionLaterPageEntities: string[]; solutionDistractorEntities: string[] };
-  const v = (taskId: string, difficulty: Trace['difficulty'], rows: number, later: string[] = [], distractors: string[] = []): Trace =>
-    ({ taskId, difficulty, solutionRowsChanged: rows, solutionLaterPageEntities: later, solutionDistractorEntities: distractors });
+  type Trace = { taskId: string; difficulty: 'easy' | 'medium' | 'hard'; solutionRowsChanged: number; solutionLaterPageEntities: string[]; solutionDistractorEntities: string[]; solutionChangedEntities: string[] };
+  const v = (taskId: string, difficulty: Trace['difficulty'], rows: number, later: string[] = [], distractors: string[] = [], changed: string[] = ['ticket']): Trace =>
+    ({ taskId, difficulty, solutionRowsChanged: rows, solutionLaterPageEntities: later, solutionDistractorEntities: distractors, solutionChangedEntities: changed });
   const withTraces = (w: World, traces: readonly Trace[], stats: Partial<WorldStats> = {}): OkReport =>
     ({ ...report(w, stats), verdicts: Object.fromEntries(traces.map((t) => [t.taskId, t])) }) as unknown as OkReport;
   const pressed = (id: string, pressure: NonNullable<Plan['tasks'][number]['pressure']>): Plan =>
@@ -348,6 +377,31 @@ describe('task pressure from reference traces (A-225..A-227)', () => {
     const imported = traced({ fixtures: { tickets: [{ subject: 'a' }] } as unknown as World['fixtures'] });
     assert.deepEqual(pressureChecks(withTraces(imported, [v('solve_vip', 'medium', 2)]), near).map((c) => [c.met, c.exempt]), [
       [false, 'ticket is imported; the input decides which near-duplicate rows exist, and none were fabricated'],
+    ]);
+  });
+
+  it('sends a distractor claim on an entity the reference changes no row of to the plan, whatever the seed holds (A-406)', () => {
+    // stress-8 helpdesk-sla: assigning a ticket to a named agent changes the ticket; the agent is only looked up.
+    const lookup = pressed('solve_vip', { distractors: 'agent' });
+    for (const rows of [8, 1]) {
+      assert.deepEqual(pressureIssues(withTraces(traced(), [v('solve_vip', 'medium', 2)], { rows: { ticket: 40, agent: rows } }), lookup).map((i) => [i.code, i.path, i.expected, i.found]), [
+        ['task.pressure_unmet', ['plan', 'tasks', 1, 'pressure', 'distractors'], 'the pressure task solve_vip declares: distractors: a filtered agent list returns a row the reference leaves unchanged',
+          'the reference changes no agent row, so no agent row can be a distractor: a distractor is a near-duplicate of a row the task changes'],
+      ]);
+    }
+    // Once the reference changes an agent row, the claim is the reference's or the seed's again (A-317).
+    assert.deepEqual(pressureIssues(withTraces(traced(), [v('solve_vip', 'medium', 2, [], [], ['agent', 'ticket'])], { rows: { agent: 8 } }), lookup).map((i) => [i.code, i.path]), [
+      ['task.pressure_unmet', ['tasks', 'solve_vip']],
+    ]);
+    // A planned action of the task acts on the entity, so a reference that changed no row of it left out a write: the task repairs it.
+    const acting: Plan = { ...pressed('solve_vip', { distractors: 'ticket' }), tasks: pressed('solve_vip', { distractors: 'ticket' }).tasks.map((t) => (t.id === 'solve_vip' ? { ...t, actions: ['solve'] } : t)) };
+    assert.deepEqual(pressureIssues(withTraces(traced(), [v('solve_vip', 'medium', 2, [], [], ['agent'])], { rows: { ticket: 40 } }), acting).map((i) => [i.code, i.path]), [
+      ['task.pressure_unmet', ['tasks', 'solve_vip']],
+    ]);
+    // Real plans annotate an action with its route, as "solve (POST /tickets/{id}/solve)": it still names the workflow's solve.
+    const annotated: Plan = { ...acting, tasks: acting.tasks.map((t) => (t.id === 'solve_vip' ? { ...t, actions: ['solve (POST /tickets/{id}/solve)'] } : t)) };
+    assert.deepEqual(pressureIssues(withTraces(traced(), [v('solve_vip', 'medium', 2, [], [], ['agent'])], { rows: { ticket: 40 } }), annotated).map((i) => [i.code, i.path]), [
+      ['task.pressure_unmet', ['tasks', 'solve_vip']],
     ]);
   });
 

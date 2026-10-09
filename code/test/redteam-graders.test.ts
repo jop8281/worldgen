@@ -259,11 +259,12 @@ const GROUPS: readonly { readonly gid: string; readonly codes: readonly IssueCod
   { gid: 'G-40', codes: ['world.too_few_tasks'] },
   { gid: 'G-60', codes: ['task.mutant_full_marks'] },
   { gid: 'G-61', codes: ['task.freetext_unchecked'] },
+  { gid: 'G-62', codes: ['task.omission_full_marks'] },
 ];
 /** Rows with their own test: in 'verify: graders that misbehave', and G-24 in redteam-determinism.test.ts for GR-nondeterministic-proto. */
 const DEDICATED_ROWS: readonly string[] = ['GR-grader-throws', 'GR-grader-writes', 'GR-nondeterministic-proto'];
 /** Hand count of graders.ts rows without a todo, per group: 12 values x 2 states + exact ends + -0 (RT-07) = 26 for G-34. */
-const GROUP_ROWS: Readonly<Record<string, number>> = { 'G-34': 26, 'G-35': 3, 'G-36': 3, 'G-37': 2, 'G-38': 4, 'G-39': 4, 'G-40': 2, 'G-60': 2, 'G-61': 1 };
+const GROUP_ROWS: Readonly<Record<string, number>> = { 'G-34': 26, 'G-35': 3, 'G-36': 3, 'G-37': 2, 'G-38': 4, 'G-39': 4, 'G-40': 2, 'G-60': 2, 'G-61': 1, 'G-62': 1 };
 
 describe('grader fixtures', () => {
   it('G-00 grader-suite solution calls match FACTS.solutionWrites', () => {

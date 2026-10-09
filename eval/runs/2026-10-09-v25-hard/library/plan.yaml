@@ -1,0 +1,381 @@
+revision: 1
+software: Koha-style public library circulation API
+summary: 'A public library circulation desk: patrons borrow copies of books, return them, renew them, place and fulfil holds on a title, and pay or waive the overdue and lost-item fines that returns and losses create. Copies are items, titles are books, and each loan, hold and fine has its own status workflow.'
+clock:
+  start: 2026-10-09T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: patron
+    purpose: A library cardholder who borrows items and owes fines.
+    keyFields:
+      - card_number
+      - email
+  - name: book
+    purpose: A title in the catalogue. Copies of a title are items.
+    keyFields:
+      - title
+  - name: item
+    purpose: One physical copy of a book, with a barcode, a replacement cost and a circulation status (available, on_loan, lost).
+    keyFields:
+      - barcode
+      - book_id
+      - status
+  - name: loan
+    purpose: A checkout of one item by one patron, with loaned_at, due_at, returned_at, renewals and a status (active, returned, lost).
+    keyFields:
+      - item_id
+      - patron_id
+      - status
+      - due_at
+  - name: hold
+    purpose: A patron's request for the next available copy of a book, with placed_at and a status (waiting, fulfilled, cancelled).
+    keyFields:
+      - patron_id
+      - book_id
+      - status
+      - placed_at
+  - name: fine
+    purpose: 'A charge on a patron: an overdue fine or a lost-item charge, with an amount in cents and a status (open, paid, waived).'
+    keyFields:
+      - patron_id
+      - loan_id
+      - kind
+      - status
+workflows:
+  - name: loan_circulation
+    entity: loan
+    states:
+      - active
+      - returned
+      - lost
+    rules:
+      - rule: return_item opens an overdue fine of 25 cents per full day past due, and marks the loan returned
+        by:
+          - return_item
+        test: t_return_overdue_fine
+      - rule: report_lost marks the loan and its item lost and opens a lost_item fine for the item's replacement cost
+        by:
+          - report_lost
+        test: t_lost_charge
+      - rule: renew_loan refuses while another patron holds a waiting hold on the book, and allows one renewal
+        by:
+          - renew_loan
+        test: t_renew_policy
+      - Loans run 14 days from loaned_at, the due date an overdue fine is measured against
+      - rule: a loan's item and patron must exist
+        schema: ref fields item_id and patron_id resolve on every write
+    actions:
+      - checkout_item
+      - return_item
+      - report_lost
+      - renew_loan
+  - name: copy_status
+    entity: item
+    states:
+      - available
+      - on_loan
+      - lost
+    rules:
+      - rule: an item on loan cannot be checked out again
+        by:
+          - checkout_item
+        test: t_checkout_unavailable
+      - rule: barcode is unique per item
+        schema: unique field item.barcode
+    actions: []
+  - name: hold_queue
+    entity: hold
+    states:
+      - waiting
+      - fulfilled
+      - cancelled
+    rules:
+      - rule: a patron has at most one waiting hold per book
+        by:
+          - place_hold
+        test: t_hold_duplicate
+      - rule: fulfill_hold moves a waiting hold to fulfilled with a copy of its book that is available, and opens a loan for the hold's patron
+        by:
+          - fulfill_hold
+        test: t_hold_fulfill
+      - rule: cancel_hold moves a waiting hold to cancelled and refuses any other status
+        by:
+          - cancel_hold
+        test: t_cancel_hold
+    actions:
+      - place_hold
+      - cancel_hold
+      - fulfill_hold
+  - name: fine_settlement
+    entity: fine
+    states:
+      - open
+      - paid
+      - waived
+    rules:
+      - rule: pay_fine moves an open fine to paid, once
+        by:
+          - pay_fine
+        test: t_pay_fine
+      - rule: waive_fine moves an open fine to waived, once
+        by:
+          - waive_fine
+        test: t_waive_fine
+    actions:
+      - pay_fine
+      - waive_fine
+jobs: []
+acceptanceTests:
+  - id: t_checkout_and_return
+    intent: A checkout puts the copy on loan and a return puts it back on the shelf.
+    actions:
+      - checkout_item
+      - return_item
+    description: Create a patron, book and copy, check the copy out, then return it.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.a1@example.org', card_number: 'TST-A-0001', category: 'adult' }); ctx.assert(p.status === 201, 'create patron: ' + JSON.stringify(p.body)); const b = ctx.api('POST', '/books', { title: 'Test Book A', author: 'Test Author', isbn: null }); ctx.assert(b.status === 201, 'create book: ' + JSON.stringify(b.body)); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-A-ITEM', replacement_cost: 4500 }); ctx.assert(i.status === 201, 'create item: ' + JSON.stringify(i.body)); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201 && c.body.status === 'active', 'checkout: ' + JSON.stringify(c.body)); ctx.assert(typeof c.body.due_at === 'string' && c.body.due_at > c.body.loaned_at, 'due date after loan date'); ctx.assert(ctx.api('GET', '/items/' + i.body.id).body.status === 'on_loan', 'item should be on_loan'); const r = ctx.api('POST', '/items/' + i.body.id + '/return', {}); ctx.assert(r.status === 200 && r.body.status === 'returned', 'return: ' + JSON.stringify(r.body)); ctx.assert(ctx.api('GET', '/items/' + i.body.id).body.status === 'available', 'item should be available'); }"
+  - id: t_checkout_unavailable
+    intent: A copy already on loan cannot be checked out to a second patron.
+    actions:
+      - checkout_item
+    description: Check a copy out to one patron, then try to check the same copy out to another; the second answers 409 item.unavailable.
+    script: "(ctx) => { const p1 = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.b1@example.org', card_number: 'TST-B-0001', category: 'adult' }); const p2 = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Other', email: 'test.reader.b2@example.org', card_number: 'TST-B-0002', category: 'adult' }); ctx.assert(p1.status === 201 && p2.status === 201, 'create patrons'); const b = ctx.api('POST', '/books', { title: 'Test Book B', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-B-ITEM', replacement_cost: 4500 }); ctx.assert(i.status === 201, 'create item'); const first = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p1.body.id }); ctx.assert(first.status === 201, 'first checkout'); const second = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p2.body.id }); ctx.assert(second.status === 409 && second.body.error.code === 'item.unavailable', 'second checkout: ' + JSON.stringify(second.body)); }"
+  - id: t_return_overdue_fine
+    intent: Returning a loan past its due date opens an overdue fine of 25 cents per full day.
+    actions:
+      - checkout_item
+      - return_item
+    description: Check a copy out, let 16 days pass, return it, and find one open overdue fine of 50 cents.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.c1@example.org', card_number: 'TST-C-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book C', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-C-ITEM', replacement_cost: 4500 }); ctx.assert(p.status === 201 && i.status === 201, 'create rows'); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201, 'checkout'); ctx.advance('16d'); const r = ctx.api('POST', '/items/' + i.body.id + '/return', {}); ctx.assert(r.status === 200, 'return: ' + JSON.stringify(r.body)); const f = ctx.api('GET', '/fines?patron_id=' + p.body.id).body.data; ctx.assert(f.length === 1 && f[0].kind === 'overdue' && f[0].amount === 50 && f[0].status === 'open', 'expected one open overdue fine of 50: ' + JSON.stringify(f)); }"
+  - id: t_lost_charge
+    intent: Reporting a loan lost marks the loan and copy lost and charges the replacement cost.
+    actions:
+      - checkout_item
+      - report_lost
+    description: Check a copy out, report the loan lost, and find a lost_item fine for the replacement cost.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.d1@example.org', card_number: 'TST-D-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book D', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-D-ITEM', replacement_cost: 4500 }); ctx.assert(p.status === 201 && i.status === 201, 'create rows'); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201, 'checkout'); const r = ctx.api('POST', '/loans/' + c.body.id + '/report_lost', {}); ctx.assert(r.status === 200 && r.body.status === 'lost', 'report lost: ' + JSON.stringify(r.body)); ctx.assert(ctx.api('GET', '/items/' + i.body.id).body.status === 'lost', 'item should be lost'); const f = ctx.api('GET', '/fines?patron_id=' + p.body.id + '&kind=lost_item').body.data; ctx.assert(f.length === 1 && f[0].amount === 4500 && f[0].status === 'open' && f[0].loan_id === c.body.id, 'expected one open lost_item fine of 4500: ' + JSON.stringify(f)); }"
+  - id: t_waive_fine
+    intent: An open fine can be waived once; a waived fine cannot be waived again.
+    actions:
+      - checkout_item
+      - report_lost
+      - waive_fine
+    description: Create a lost-item fine, waive it to status waived, then try to waive it again and get 409 fine.not_open.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.e1@example.org', card_number: 'TST-E-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book E', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-E-ITEM', replacement_cost: 4500 }); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201, 'checkout'); ctx.api('POST', '/loans/' + c.body.id + '/report_lost', {}); const f = ctx.api('GET', '/fines?patron_id=' + p.body.id).body.data[0]; const w = ctx.api('POST', '/fines/' + f.id + '/waive', {}); ctx.assert(w.status === 200 && w.body.status === 'waived', 'waive: ' + JSON.stringify(w.body)); const again = ctx.api('POST', '/fines/' + f.id + '/waive', {}); ctx.assert(again.status === 409 && again.body.error.code === 'fine.not_open', 'second waive: ' + JSON.stringify(again.body)); }"
+  - id: t_pay_fine
+    intent: An open fine can be paid once; a paid fine cannot be paid again.
+    actions:
+      - checkout_item
+      - return_item
+      - pay_fine
+    description: Return a copy one day late to get a 25-cent overdue fine, pay it to status paid, then pay again and get 409 fine.not_open.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.f1@example.org', card_number: 'TST-F-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book F', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-F-ITEM', replacement_cost: 4500 }); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201, 'checkout'); ctx.advance('15d'); ctx.api('POST', '/items/' + i.body.id + '/return', {}); const f = ctx.api('GET', '/fines?patron_id=' + p.body.id).body.data[0]; ctx.assert(f && f.amount === 25, 'expected a 25 cent fine: ' + JSON.stringify(f)); const pay = ctx.api('POST', '/fines/' + f.id + '/pay', {}); ctx.assert(pay.status === 200 && pay.body.status === 'paid', 'pay: ' + JSON.stringify(pay.body)); const again = ctx.api('POST', '/fines/' + f.id + '/pay', {}); ctx.assert(again.status === 409 && again.body.error.code === 'fine.not_open', 'second pay: ' + JSON.stringify(again.body)); }"
+  - id: t_hold_duplicate
+    intent: A patron cannot hold the same book twice while the first hold is waiting.
+    actions:
+      - place_hold
+    description: Place a hold, then place a second hold on the same book for the same patron; the second answers 409 hold.duplicate.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.g1@example.org', card_number: 'TST-G-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book G', author: 'Test Author', isbn: null }); ctx.assert(p.status === 201 && b.status === 201, 'create rows'); const h = ctx.api('POST', '/holds', { patron_id: p.body.id, book_id: b.body.id }); ctx.assert(h.status === 201 && h.body.status === 'waiting', 'place hold: ' + JSON.stringify(h.body)); const dup = ctx.api('POST', '/holds', { patron_id: p.body.id, book_id: b.body.id }); ctx.assert(dup.status === 409 && dup.body.error.code === 'hold.duplicate', 'duplicate hold: ' + JSON.stringify(dup.body)); }"
+  - id: t_hold_fulfill
+    intent: A returned copy goes to the waiting hold of another patron, which becomes fulfilled and opens a loan for that patron.
+    actions:
+      - checkout_item
+      - place_hold
+      - return_item
+      - fulfill_hold
+    description: Patron A borrows a copy; patron B places a hold on the title; A returns the copy; fulfil B's hold with that copy and check B now has an active loan of it.
+    script: "(ctx) => { const a = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.h1@example.org', card_number: 'TST-H-0001', category: 'adult' }); const bp = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Waiter', email: 'test.reader.h2@example.org', card_number: 'TST-H-0002', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book H', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-H-ITEM', replacement_cost: 4500 }); ctx.assert(a.status === 201 && bp.status === 201 && i.status === 201, 'create rows'); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: a.body.id }); ctx.assert(c.status === 201, 'checkout'); const h = ctx.api('POST', '/holds', { patron_id: bp.body.id, book_id: b.body.id }); ctx.assert(h.status === 201, 'hold'); ctx.assert(ctx.api('POST', '/items/' + i.body.id + '/return', {}).status === 200, 'return'); const f = ctx.api('POST', '/holds/' + h.body.id + '/fulfill', { item_id: i.body.id }); ctx.assert(f.status === 200 && f.body.status === 'fulfilled', 'fulfill: ' + JSON.stringify(f.body)); const loans = ctx.api('GET', '/loans?patron_id=' + bp.body.id).body.data; ctx.assert(loans.length === 1 && loans[0].item_id === i.body.id && loans[0].status === 'active', 'expected an active loan for the waiter: ' + JSON.stringify(loans)); ctx.assert(ctx.api('GET', '/items/' + i.body.id).body.status === 'on_loan', 'item should be on_loan'); }"
+  - id: t_renew_policy
+    intent: A loan cannot be renewed while another patron waits for the book, and renews once.
+    actions:
+      - checkout_item
+      - place_hold
+      - cancel_hold
+      - renew_loan
+    description: With a waiting hold by another patron the renewal answers 409 loan.renewal_blocked; after the hold is cancelled the renewal moves due_at later; a second renewal answers 409 loan.renew_limit.
+    script: "(ctx) => { const a = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.i1@example.org', card_number: 'TST-I-0001', category: 'adult' }); const bp = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Waiter', email: 'test.reader.i2@example.org', card_number: 'TST-I-0002', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book I', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-I-ITEM', replacement_cost: 4500 }); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: a.body.id }); ctx.assert(c.status === 201, 'checkout'); const h = ctx.api('POST', '/holds', { patron_id: bp.body.id, book_id: b.body.id }); ctx.assert(h.status === 201, 'hold'); const blocked = ctx.api('POST', '/loans/' + c.body.id + '/renew', {}); ctx.assert(blocked.status === 409 && blocked.body.error.code === 'loan.renewal_blocked', 'renew while held: ' + JSON.stringify(blocked.body)); ctx.assert(ctx.api('POST', '/holds/' + h.body.id + '/cancel', {}).status === 200, 'cancel hold'); const ok = ctx.api('POST', '/loans/' + c.body.id + '/renew', {}); ctx.assert(ok.status === 200 && ok.body.due_at > c.body.due_at, 'renew: ' + JSON.stringify(ok.body)); const again = ctx.api('POST', '/loans/' + c.body.id + '/renew', {}); ctx.assert(again.status === 409 && again.body.error.code === 'loan.renew_limit', 'second renew: ' + JSON.stringify(again.body)); }"
+  - id: t_cancel_hold
+    intent: A waiting hold can be cancelled once; a cancelled hold cannot be cancelled again.
+    actions:
+      - place_hold
+      - cancel_hold
+    description: Place a hold, cancel it to status cancelled, then cancel again and get 409 hold.not_waiting.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.j1@example.org', card_number: 'TST-J-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book J', author: 'Test Author', isbn: null }); const h = ctx.api('POST', '/holds', { patron_id: p.body.id, book_id: b.body.id }); ctx.assert(h.status === 201, 'place hold'); const c = ctx.api('POST', '/holds/' + h.body.id + '/cancel', {}); ctx.assert(c.status === 200 && c.body.status === 'cancelled', 'cancel: ' + JSON.stringify(c.body)); const again = ctx.api('POST', '/holds/' + h.body.id + '/cancel', {}); ctx.assert(again.status === 409 && again.body.error.code === 'hold.not_waiting', 'second cancel: ' + JSON.stringify(again.body)); }"
+routes:
+  - id: list_patrons
+    method: GET
+    path: /patrons
+    purpose: Find a patron by card number or email.
+  - id: get_patron
+    method: GET
+    path: /patrons/{id}
+    purpose: Read one patron.
+  - id: create_patron
+    method: POST
+    path: /patrons
+    purpose: Register a patron.
+  - id: list_books
+    method: GET
+    path: /books
+    purpose: Search the catalogue by title.
+  - id: get_book
+    method: GET
+    path: /books/{id}
+    purpose: Read one book.
+  - id: create_book
+    method: POST
+    path: /books
+    purpose: Add a title to the catalogue.
+  - id: list_items
+    method: GET
+    path: /items
+    purpose: List the copies of a book, filtered by status.
+  - id: get_item
+    method: GET
+    path: /items/{id}
+    purpose: Read one copy and its circulation status.
+  - id: create_item
+    method: POST
+    path: /items
+    purpose: Add a copy of a book.
+  - id: list_loans
+    method: GET
+    path: /loans
+    purpose: List loans by patron, item, book or status, soonest due first.
+  - id: get_loan
+    method: GET
+    path: /loans/{id}
+    purpose: Read one loan.
+  - id: list_holds
+    method: GET
+    path: /holds
+    purpose: List holds by patron, book or status.
+  - id: get_hold
+    method: GET
+    path: /holds/{id}
+    purpose: Read one hold.
+  - id: list_fines
+    method: GET
+    path: /fines
+    purpose: List fines by patron, kind or status.
+  - id: get_fine
+    method: GET
+    path: /fines/{id}
+    purpose: Read one fine.
+seed:
+  rowsPerEntity:
+    patron: 28
+    book: 8
+    item: 40
+    loan: 30
+    hold: 10
+    fine: 12
+  mix: 'Patrons just over one 25-row page. Items spread over the books, with lost copies and on-loan copies. Loans: active ones, some already past due, returned ones and a few lost ones, spread over patrons so one patron has several loans. Holds: waiting holds on titles whose copies are out, fulfilled and cancelled ones. Fines: open overdue fines, paid and waived ones and a few open lost-item charges. Seeded history is dated before the clock start. Plausible titles, names and emails, never lorem ipsum.'
+  stateMix:
+    item:
+      available: 50
+      on_loan: 40
+      lost: 10
+    loan:
+      active: 50
+      returned: 40
+      lost: 10
+    hold:
+      waiting: 50
+      fulfilled: 30
+      cancelled: 20
+    fine:
+      open: 50
+      paid: 33
+      waived: 17
+tasks:
+  - id: pay_patron_open_fine
+    difficulty: easy
+    intent: Pay the one open fine on a named patron's account.
+    actions:
+      - pay_fine
+    decoyIdea: Waives the fine instead of paying it, which leaves the status wrong.
+    pressure:
+      states:
+        - fine.open
+  - id: renew_only_unheld_loans
+    difficulty: medium
+    kind: policy_conflict
+    intent: Renew each active loan of a named patron that the library allows to renew, and leave the rest unchanged.
+    actions:
+      - renew_loan
+    decoyIdea: Renews every active loan, including the one whose book another patron is waiting for.
+    pressure:
+      states:
+        - loan.active
+        - hold.waiting
+      distractors: loan
+  - id: fulfil_earliest_hold
+    difficulty: medium
+    kind: scarce_resource
+    intent: A returned copy of a title goes to the hold placed first for that title, and that hold is fulfilled with it.
+    actions:
+      - fulfill_hold
+    decoyIdea: Fulfils the most recently placed hold, which is the newest row on the first page.
+    pressure:
+      states:
+        - hold.waiting
+      distractors: hold
+  - id: waive_lost_charge_of_returned_title
+    difficulty: hard
+    kind: investigation
+    intent: Find the loan of a named title that a named patron still holds, report it lost, and waive the lost-item charge it creates.
+    actions:
+      - report_lost
+      - waive_fine
+    decoyIdea: Reports the first loan the patron has, or a loan of the same title held by another patron, or a loan already returned.
+    pressure:
+      states:
+        - loan.active
+        - loan.returned
+      distractors: loan
+open_questions:
+  - question: How long is a loan period?
+    default_answer: 14 days from checkout, and a renewal adds 14 days to due_at.
+  - question: What is the overdue fine rate, and is it capped?
+    default_answer: 25 cents per full day past due, with no cap.
+  - question: Can a patron with open fines still borrow or place holds?
+    default_answer: Yes; no block is named in the request.
+  - question: Can a fine be paid or waived in part?
+    default_answer: No; each fine is paid or waived whole, once.
+  - question: How many times can a loan be renewed, and is a renewal blocked by holds?
+    default_answer: Once, and not while another patron has a waiting hold on the book.
+  - question: How are copies allocated to holds?
+    default_answer: Earliest placed hold first, fulfilled by an available copy of the same book.
+assumptions:
+  - decision: Loans run 14 days from loaned_at, and checkout sets due_at to 14 days after now.
+    why: The request names due dates but not a loan period, and 14 days is the common public-library default.
+  - decision: Overdue fine is 25 cents per full day past due, charged on return as an open overdue fine. No cap.
+    why: The request names overdue fines without a rate, so a flat daily rate in cents is the smallest deterministic rule.
+  - decision: A loan can be renewed once, for another 14 days from its current due_at. Renewal is refused while another patron has a waiting hold on the book.
+    why: The request names renewals only implicitly; one renewal and a hold block are the usual library policy and make a policy conflict testable.
+  - decision: report_lost sets the loan to lost and the item to lost and opens a lost_item fine for the item replacement_cost in cents.
+    why: The request names lost-item charges without an amount; the item's replacement cost is the natural source.
+  - decision: A hold is fulfilled by fulfill_hold with a copy of the same book that is available, and the hold's patron gets a new active loan. Holds are served in placed_at order.
+    why: The request names holds but not how copies are allocated; first-placed-first-served matches the scarce resource.
+  - decision: pay_fine and waive_fine act on a whole fine and cannot be partly applied.
+    why: No partial payment is named, so each fine moves once from open to paid or waived.
+  - decision: Patrons with open fines may still borrow.
+    why: No borrowing block is named in the request; keeping it out avoids inventing a policy.
+  - decision: clock.start is 2026-10-09T09:00:00.000Z with tick 0s, so time moves only by explicit advances; seeded loans, holds and fines are dated before it.
+    why: Deterministic time after imported history, as the clock rule requires; overdue status depends on the clock, so explicit time keeps it testable.
+  - decision: Each item is one copy of one book; barcode is unique.
+    why: A copy-level barcode is how libraries identify items; uniqueness is a data-model rule.
+outOfScope:
+  - what: Reservations for pickup at a branch, shelf locations and transit between branches
+    why: The request is about loans, holds, due dates and fines, not branch logistics.
+  - what: Notices, reminders and email to patrons
+    why: Messaging is not stateful records an agent changes through the API.
+  - what: Membership renewal, patron categories and fee schedules per category
+    why: The request names no membership rules.
+  - what: Partial fine payments, payment methods and receipts
+    why: The request names no payment handling.
+  - what: Recalling a loan early and blocking patrons with fines
+    why: No such policy is named; both would invent behaviour.
+changes: []

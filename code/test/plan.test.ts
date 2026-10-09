@@ -36,7 +36,7 @@ const plan: Plan = {
   tasks: [
     { id: 'assign_oldest', difficulty: 'easy', intent: 'assign the oldest ticket', decoyIdea: 'assigns the newest' },
     { id: 'solve_vip', difficulty: 'medium', intent: 'solve VIP tickets', decoyIdea: 'skips page 2' },
-    { id: 'rebalance', difficulty: 'hard', kind: 'scarce_resource', intent: 'rebalance load', actions: ['assign', 'solve'], decoyIdea: 'moves one ticket' },
+    { id: 'rebalance', difficulty: 'hard', kind: 'investigation', intent: 'rebalance load', actions: ['assign', 'solve'], decoyIdea: 'moves one ticket' },
   ],
   open_questions: [{ question: 'How many SLA tiers?', default_answer: 'two' }],
   assumptions: [{ decision: 'Two SLA tiers', why: 'the input names gold and standard only' }],
@@ -288,7 +288,7 @@ tasks:
     decoyIdea: skips page 2
   - id: rebalance
     difficulty: hard
-    kind: scarce_resource
+    kind: investigation
     intent: rebalance load
     actions:
       - assign
@@ -639,12 +639,8 @@ describe('acceptance test actions are declared workflow actions (YOS-53)', () =>
   });
 });
 
-describe('task variety in a proposed plan (A-390)', () => {
-  const KIND = 'a plan to build needs at least one task with a kind, one of ' +
-    'permissions: the world records who may act on a row, such as a role, an owner or an assignee, and an action checks it, so the task acts only where it is allowed and a decoy acts where it is not; ' +
-    'scarce_resource: a limited supply, such as seats, stock, rooms, slots or budget, that competing requests draw on, so the task allocates within capacity and a decoy overbooks or serves the wrong request; ' +
-    "two_actors: two parties act on the same records in turn, such as a requester and an approver, so the task makes both sides' calls in order and a decoy makes only one side's; " +
-    'irreversible: a step that cannot be undone, such as a refund, a cancellation or a deletion, so the task checks its preconditions before acting and a decoy acts on the wrong row or before checking';
+describe('task variety in a proposed plan (A-390, A-405)', () => {
+  const HARD_KIND = 'hard task rebalance needs a hard kind, one of time_sensitive, policy_conflict, investigation, misleading_text, irreversible: a hard task is hard for what it asks an agent to notice, not for its size';
   const HARD = 'a plan to build needs at least one hard task whose actions name 2 or more distinct workflow actions its reference solution calls, such as one that assigns a row and then resolves it';
   const built: Plan = { ...plan, seed: { ...plan.seed, stateMix: { ticket: { open: 80, solved: 20 } } } };
   const withTasks = (tasks: Plan['tasks']): Plan => ({ ...built, tasks });
@@ -655,14 +651,17 @@ describe('task variety in a proposed plan (A-390)', () => {
     return r.success ? [] : (r.error?.issues ?? []).map((i) => [i.path.join('.'), i.message]);
   };
   const rows: [string, Plan, string[][]][] = [
-    ['a kind and a hard task naming two actions', built, []],
-    ['no task has a kind', withTasks([easy, medium, { ...hard, kind: undefined }]), [['tasks', KIND]]],
+    ['a hard kind and a hard task naming two actions', built, []],
+    ['the hard task has no kind', withTasks([easy, medium, { ...hard, kind: undefined }]), [['tasks.2.kind', HARD_KIND]]],
+    ['the hard task has a kind that is not a hard one', withTasks([easy, medium, { ...hard, kind: 'scarce_resource' }]), [['tasks.2.kind', HARD_KIND]]],
+    ['the hard task with another hard kind', withTasks([easy, { ...medium, kind: 'two_actors' }, { ...hard, kind: 'misleading_text' }]), []],
+    ['an easy or medium task needs no hard kind', withTasks([{ ...easy, kind: 'permissions' }, plain(medium), hard]), []],
     ['the hard task names one action', withTasks([easy, medium, { ...hard, actions: ['assign'] }]), [['tasks', HARD]]],
     ['the hard task names one action twice', withTasks([easy, medium, { ...hard, actions: ['assign', 'assign (POST /tickets/{id}/assign)'] }]), [['tasks', HARD]]],
     ['only a medium task names two actions', withTasks([easy, { ...medium, actions: ['assign', 'solve'] }, { ...hard, actions: undefined }]), [['tasks', HARD]]],
     ['a task names an undeclared action', withTasks([easy, medium, { ...hard, actions: ['assign', 'refund'] }]),
       [['tasks.2.actions.1', 'task rebalance names refund in its actions, which no workflow declares in its actions'], ['tasks', HARD]]],
-    ['a plan written before A-390', withTasks([plain(easy), plain(medium), plain(hard)]), [['tasks', HARD], ['tasks', KIND]]],
+    ['a plan written before A-390', withTasks([plain(easy), plain(medium), plain(hard)]), [['tasks', HARD], ['tasks.2.kind', HARD_KIND]]],
   ];
   for (const [name, value, want] of rows) {
     it(`a create plan: ${name}`, () => assert.deepEqual(issuesOf(planSchemaFor('description'), value), want));

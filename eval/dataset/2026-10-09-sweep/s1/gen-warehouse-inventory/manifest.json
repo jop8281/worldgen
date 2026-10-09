@@ -1,0 +1,54 @@
+{
+  "manifest_version": 2,
+  "schema_version": 2,
+  "provider": "anthropic",
+  "model": "claude-sonnet-5-5",
+  "prompt_versions": [
+    "solver-prompt-1"
+  ],
+  "config_versions": [
+    "cfg-07e2771c91cb"
+  ],
+  "engine_commits": [
+    "23520120c53ee78b5bdf00530dd982d18aba070c"
+  ],
+  "run_ids": [
+    "s1-gen-warehouse-inventory"
+  ],
+  "selection": null,
+  "worlds": [
+    {
+      "world_id": "gen_warehouse_inventory",
+      "world_version": "c5db2dda0bd70210625ee109c5a228a32deae04cb52d0412e3480cb898c08c38",
+      "artifact": {
+        "path": "private/worlds/c5db2dda0bd70210625ee109c5a228a32deae04cb52d0412e3480cb898c08c38/world.yaml",
+        "sha256": "c5db2dda0bd70210625ee109c5a228a32deae04cb52d0412e3480cb898c08c38"
+      }
+    }
+  ],
+  "counts": {
+    "episodes": 4,
+    "by_verdict": {
+      "success": 3,
+      "partial": 0,
+      "failure": 0,
+      "infra": 1
+    },
+    "by_stop_reason": {
+      "done": 3,
+      "model_error": 1
+    },
+    "by_failure_cause": {
+      "model_error": 1
+    }
+  },
+  "files": {
+    "dataset": {
+      "path": "dataset.jsonl",
+      "records": 4,
+      "bytes": 45977,
+      "sha256": "621ec5014c714358d253450303b7c5f8b5f6eae66231d832ce323d48d7671886"
+    }
+  },
+  "grading_note": "The engine score certifies the final world state only. It does not independently certify that the final reply is factually correct."
+}

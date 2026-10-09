@@ -1,0 +1,8 @@
+world.yaml:514: warning seed.too_few_rows_for_paging seed.guest: expected more than 25 guest rows, found 24 rows. 24 rows fit on one page. Paging never matters.
+world.yaml:524: warning seed.too_few_rows_for_paging seed.room_type: expected more than 25 room_type rows, found 4 rows. 4 rows fit on one page. Paging never matters.
+world.yaml:534: warning seed.too_few_rows_for_paging seed.room: expected more than 25 room rows, found 24 rows. 24 rows fit on one page. Paging never matters.
+world.yaml:534: warning seed.state_mix_skewed seed.room: expected every state present and none above 70% of rows, found "available" has 17 of 24 rows. Counts for room.status: {"available":17,"occupied":6,"out_of_service":1}.
+cancel_elena_december_stay easy solution 1.000 noop 0.000 decoys [0.000, 0.000] prefix - mutants 2/8 probed (not probed: target_field, extra_action, extra_create, extra_delete, undone_write, perturb) checks 3/3 flipped
+cancel_tomas_tomorrow_stay medium solution 1.000 noop 0.000 decoys [0.000, 0.000, 0.000] prefix - mutants 2/8 probed (not probed: target_field, extra_action, extra_create, extra_delete, undone_write, perturb) checks 4/4 flipped
+suite_turnover_today hard solution 1.000 noop 0.000 decoys [0.400, 0.400, 0.000] prefix 0.400 mutants 0/8 probed (not probed: target_field, other_row, extra_action, extra_create, extra_delete, undone_write, retarget, perturb) checks 4/4 flipped
+total: checks 11/11 flipped, mutants 4/24 probed, 3 tasks

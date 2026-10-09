@@ -1,0 +1,654 @@
+format: 1
+meta:
+  name: world
+  description: "A bakery ordering desk: a product catalogue with daily stock, customers, and pickup orders. An order is placed for one product with a pickup time, decrements stock, and moves through preparing, ready and picked_up. Cancelling a placed order restores its stock. Status changes happen only through actions, so the stock and pickup rules cannot be bypassed."
+  resembles: Square Online / Toast-style bakery ordering API
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T08:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  product:
+    description: A baked good on sale, with its unit price in USD cents and the stock available for pickup.
+    idPrefix: prd
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      category:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - bread
+          - pastry
+          - cake
+          - cookie
+      price:
+        type: money
+        description: Unit price in USD cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      stock:
+        type: int
+        description: Units available for pickup today. Decremented by place_order, restored by cancel_order, never negative.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+  customer:
+    description: A person who places pickup orders.
+    idPrefix: cus
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 160
+        format: email
+      phone:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 30
+  order:
+    description: One pickup order of a quantity of one product for one customer, with a pickup time. Status moves only through actions and the state machine.
+    idPrefix: ord
+    fields:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: customer
+        onDelete: restrict
+      product_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: product
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 1
+      total:
+        type: money
+        description: quantity times the product unit price at placement.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      pickup_at:
+        type: datetime
+        description: Customer pickup instant, in the future when placed.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      status:
+        type: state
+        description: Moved only by actions. placed to preparing to ready to picked_up, or placed to cancelled. picked_up and cancelled are final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - placed
+          - preparing
+          - ready
+          - picked_up
+          - cancelled
+        initial: placed
+        transitions:
+          placed:
+            - preparing
+            - cancelled
+          preparing:
+            - ready
+          ready:
+            - picked_up
+          picked_up: []
+          cancelled: []
+      cancelled_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_products:
+    op: list
+    entity: product
+    filters:
+      - category
+    search:
+      - name
+    sort:
+      - name
+      - price
+    pageSize: 25
+    method: GET
+    path: /products
+    description: List products, filter by category, search by name, sort by name or price.
+  get_product:
+    op: get
+    entity: product
+    method: GET
+    path: /products/{id}
+    description: Fetch one product with its stock.
+  create_product:
+    op: create
+    entity: product
+    method: POST
+    path: /products
+    description: Add a product to the catalogue with its opening stock.
+  update_product:
+    op: update
+    entity: product
+    method: PATCH
+    path: /products/{id}
+    description: Change a product price, description or stock.
+  list_customers:
+    op: list
+    entity: customer
+    filters: []
+    search:
+      - name
+      - email
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /customers
+    description: List customers, search by name and email.
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /customers/{id}
+    description: Fetch one customer.
+  create_customer:
+    op: create
+    entity: customer
+    method: POST
+    path: /customers
+    description: Register a customer.
+  list_orders:
+    op: list
+    entity: order
+    filters:
+      - status
+      - customer_id
+      - product_id
+    search: []
+    sort:
+      - pickup_at
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /orders
+    description: List orders, filter by status, customer and product, sort by pickup_at or created_at.
+  get_order:
+    op: get
+    entity: order
+    method: GET
+    path: /orders/{id}
+    description: Fetch one order.
+actions:
+  place_order:
+    method: POST
+    path: /orders
+    description: Place a pickup order of one product for one customer. Refuses a pickup time that is not in the future (400 pickup_in_past) and a quantity above product stock (409 insufficient_stock). Decrements product stock and records total as quantity times the unit price.
+    input:
+      customer_id:
+        type: ref
+        description: The customer placing the order.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      product_id:
+        type: ref
+        description: The product to order.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: product
+        onDelete: restrict
+      quantity:
+        type: int
+        description: Number of units.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      pickup_at:
+        type: datetime
+        description: Customer pickup instant, must be in the future.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const b = ctx.body; const customer = ctx.db.get('customer', b.customer_id); if (customer === null) ctx.fail(404, 'not_found', 'customer ' + b.customer_id + ' not found'); const product = ctx.db.get('product', b.product_id); if (product === null) ctx.fail(404, 'not_found', 'product ' + b.product_id + ' not found'); if (ctx.time.minutesBetween(ctx.now(), b.pickup_at) <= 0) ctx.fail(400, 'pickup_in_past', 'pickup_at ' + b.pickup_at + ' is not in the future'); if (b.quantity > product.stock) ctx.fail(409, 'insufficient_stock', 'product ' + product.name + ' has ' + product.stock + ' in stock, ' + b.quantity + ' requested'); ctx.db.update('product', product.id, { stock: product.stock - b.quantity }); const created = ctx.db.create('order', { customer_id: customer.id, product_id: product.id, quantity: b.quantity, total: b.quantity * product.price, pickup_at: b.pickup_at, cancelled_at: null }); return { status: 201, body: created }; }"
+  start_preparing:
+    method: POST
+    path: /orders/{id}/start
+    description: Start preparing a placed order. Moves placed to preparing.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const o = ctx.db.get('order', id); if (o === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found'); if (o.status !== 'placed') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + o.status + '. Only placed orders can start preparing.'); const updated = ctx.db.update('order', id, { status: 'preparing' }); return { status: 200, body: updated }; }"
+  mark_ready:
+    method: POST
+    path: /orders/{id}/ready
+    description: Mark a preparing order as ready for pickup. Moves preparing to ready.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const o = ctx.db.get('order', id); if (o === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found'); if (o.status !== 'preparing') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + o.status + '. Only preparing orders can be marked ready.'); const updated = ctx.db.update('order', id, { status: 'ready' }); return { status: 200, body: updated }; }"
+  mark_picked_up:
+    method: POST
+    path: /orders/{id}/pickup
+    description: Record that the customer collected a ready order. Moves ready to picked_up; refused otherwise.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const o = ctx.db.get('order', id); if (o === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found'); if (o.status !== 'ready') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + o.status + '. Only ready orders can be picked up.'); const updated = ctx.db.update('order', id, { status: 'picked_up' }); return { status: 200, body: updated }; }"
+  cancel_order:
+    method: POST
+    path: /orders/{id}/cancel
+    description: Cancel a placed order and restore its quantity to product stock. Refused once preparing has started.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const o = ctx.db.get('order', id); if (o === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found'); if (o.status !== 'placed') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + o.status + '. Only placed orders can be cancelled.'); const p = ctx.db.get('product', o.product_id); ctx.db.update('product', p.id, { stock: p.stock + o.quantity }); const updated = ctx.db.update('order', id, { status: 'cancelled', cancelled_at: ctx.now() }); return { status: 200, body: updated }; }"
+jobs: {}
+fixtures: {}
+seed:
+  product: |-
+    (ctx) => {
+      const BASE = '2026-10-09T08:00:00.000Z';
+      const products = [
+        ['Sourdough Loaves', 'Country sourdough loaf, about 800 g, baked each morning.', 'bread', 650, 4],
+        ['Sourdough Boule', 'Round sourdough boule, about 1 kg, with a crisp crust.', 'bread', 580, 12],
+        ['Rye Batard', 'Dark rye batard with caraway and a dense crumb.', 'bread', 520, 6],
+        ['Brioche Bun', 'Buttery enriched bun, hand rolled.', 'bread', 340, 15],
+        ['Butter Croissant', 'Laminated croissant with a honeycomb crumb.', 'pastry', 380, 20],
+        ['Almond Croissant', 'Croissant filled with almond frangipane and sliced almonds.', 'pastry', 450, 8],
+        ['Pain au Chocolat', 'Two sticks of dark chocolate in laminated dough.', 'pastry', 360, 10],
+        ['Cinnamon Scroll', 'Soft spiral with cinnamon sugar and a cream cheese glaze.', 'pastry', 390, 9],
+        ['Lemon Drizzle Cake', 'Sponge with lemon syrup, sold by the slice.', 'cake', 1450, 3],
+        ['Chocolate Fudge Cake', 'Dense chocolate cake with fudge frosting.', 'cake', 1650, 2],
+        ['Oatmeal Cookie', 'Chewy oat cookie with raisins.', 'cookie', 220, 24],
+        ['Dark Chocolate Chip Cookie', 'Brown butter cookie with dark chocolate chunks.', 'cookie', 260, 18]
+      ];
+      return products.map(([name, description, category, price, stock], i) => {
+        const t = ctx.time.minus(BASE, (40 + i) + 'd');
+        return { name, description, category, price, stock, created_at: t, updated_at: t };
+      });
+    }
+  customer: |-
+    (ctx) => {
+      const BASE = '2026-10-09T08:00:00.000Z';
+      const fixed = [['Hana Sato', 'hana.sato@example.com', '+1-555-0101'], ['Liam Carter', 'liam.carter@example.com', '+1-555-0102'], ['Noor Haddad', 'noor.haddad@example.com', null]];
+      const firsts = ['Ana', 'Ben', 'Chloe', 'Dev', 'Elif', 'Felix', 'Grace', 'Hugo', 'Ines', 'Jun', 'Kofi', 'Lena', 'Mateo', 'Nadia', 'Omar', 'Pia', 'Quinn', 'Rosa', 'Sami', 'Tove', 'Umar', 'Vera', 'Wen', 'Yusuf', 'Zara'];
+      const lasts = ['Abbott', 'Bauer', 'Costa', 'Demir', 'Ellis', 'Fontaine', 'Gupta', 'Hart', 'Ishii', 'Jansen', 'Kim', 'Lopez', 'Morin', 'Nakamura', 'Osei', 'Petrov', 'Ruiz', 'Silva', 'Turner', 'Varga', 'Wolf', 'Yilmaz', 'Zhou', 'Brandt', 'Field'];
+      const rows = [];
+      for (let i = 0; i < 28; i++) {
+        let name; let email; let phone;
+        if (i < 3) { name = fixed[i][0]; email = fixed[i][1]; phone = fixed[i][2]; }
+        else {
+          const f = firsts[(i * 5) % firsts.length];
+          const l = lasts[(i * 11) % lasts.length];
+          name = f + ' ' + l;
+          email = (f + '.' + l + i).toLowerCase() + '@example.com';
+          phone = i % 4 === 0 ? null : '+1-555-' + String(2000 + ((i * 137) % 7000));
+        }
+        const t = ctx.time.minus(BASE, ctx.int(20, 200) + 'd');
+        rows.push({ name, email, phone, created_at: t, updated_at: t });
+      }
+      return rows;
+    }
+  order: |-
+    (ctx) => {
+      const BASE = '2026-10-09T08:00:00.000Z';
+      const DAY = '2026-10-09T00:00:00.000Z';
+      const prods = ctx.rows('product');
+      const custs = ctx.rows('customer');
+      const P = (name) => prods.find((p) => p.name === name);
+      const ago = (d) => ctx.time.minus(BASE, d);
+      const ahead = (d) => ctx.time.plus(DAY, d + 'd10h');
+      const anyProd = () => prods[ctx.int(0, prods.length - 1)];
+      const others = custs.slice(3);
+      let k = 0;
+      const other = () => others[((k++) * 7) % others.length];
+      const rows = [];
+      const add = (c, p, qty, status, pickup, created, updated, cancelledAt) => {
+        rows.push({ customer_id: c.id, product_id: p.id, quantity: qty, total: qty * p.price, pickup_at: pickup, status: status, cancelled_at: cancelledAt, created_at: created, updated_at: updated });
+      };
+      add(custs[0], P('Almond Croissant'), 2, 'placed', ahead(2), ago('4d'), ago('4d'), null);
+      add(custs[1], P('Cinnamon Scroll'), 1, 'ready', ahead(1), ago('3d'), ago('2h'), null);
+      for (let i = 0; i < 8; i++) { const t = ago(ctx.int(2, 10) + 'd'); add(other(), anyProd(), ctx.int(1, 3), 'placed', ahead(ctx.int(1, 5)), t, t, null); }
+      for (let i = 0; i < 6; i++) { add(other(), anyProd(), ctx.int(1, 3), 'preparing', ahead(ctx.int(1, 5)), ago(ctx.int(3, 6) + 'd'), ago(ctx.int(1, 20) + 'h'), null); }
+      for (let i = 0; i < 5; i++) { add(other(), anyProd(), ctx.int(1, 3), 'ready', ahead(ctx.int(1, 5)), ago(ctx.int(4, 8) + 'd'), ago(ctx.int(1, 20) + 'h'), null); }
+      for (let i = 0; i < 6; i++) { const pk = ctx.time.minus(DAY, ctx.int(1, 6) + 'd'); add(other(), anyProd(), ctx.int(1, 3), 'picked_up', pk, ctx.time.minus(pk, ctx.int(1, 3) + 'd'), ctx.time.plus(pk, '10h'), null); }
+      for (let i = 0; i < 3; i++) { const cAt = ago(ctx.int(1, 40) + 'h'); add(other(), anyProd(), ctx.int(1, 3), 'cancelled', ahead(ctx.int(1, 5)), ago(ctx.int(3, 10) + 'd'), cAt, cAt); }
+      return rows;
+    }
+tests:
+  t_place_order_stock_limit:
+    description: Create a product with 3 in stock, order 5 (refused), then order 2 (accepted) and check the total and the new stock of 1.
+    script: |-
+      (ctx) => {
+       const p = ctx.api('POST', '/products', { name: 'Plan Test Rye', category: 'bread', price: 450, stock: 3 });
+       ctx.assert(p.status === 201, 'create product: ' + JSON.stringify(p.body));
+       const c = ctx.api('POST', '/customers', { name: 'Plan Test Buyer One', email: 'plan.test.buyer.one@example.test' });
+       ctx.assert(c.status === 201, 'create customer: ' + JSON.stringify(c.body));
+       const over = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 5, pickup_at: '2030-01-15T10:00:00.000Z' });
+       ctx.assert(over.status === 409 && over.body.error.code === 'insufficient_stock', 'over stock refused: ' + JSON.stringify(over));
+       const ok = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 2, pickup_at: '2030-01-15T10:00:00.000Z' });
+       ctx.assert(ok.status === 201 && ok.body.status === 'placed', 'place order: ' + JSON.stringify(ok.body));
+       ctx.assert(ok.body.total === 900, 'total is quantity times price, got ' + ok.body.total);
+       const after = ctx.api('GET', '/products/' + p.body.id);
+       ctx.assert(after.body.stock === 1, 'stock decremented to 1, got ' + after.body.stock);
+      }
+  t_cancel_restores_stock:
+    description: Place 3 of 4, cancel, check stock is back to 4, cancel again (refused), then place 1, start preparing and try to cancel (refused).
+    script: |-
+      (ctx) => {
+       const p = ctx.api('POST', '/products', { name: 'Plan Test Focaccia', category: 'bread', price: 600, stock: 4 });
+       ctx.assert(p.status === 201, 'create product: ' + JSON.stringify(p.body));
+       const c = ctx.api('POST', '/customers', { name: 'Plan Test Buyer Two', email: 'plan.test.buyer.two@example.test' });
+       ctx.assert(c.status === 201, 'create customer: ' + JSON.stringify(c.body));
+       const o = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 3, pickup_at: '2030-01-15T10:00:00.000Z' });
+       ctx.assert(o.status === 201, 'place: ' + JSON.stringify(o.body));
+       const cancel = ctx.api('POST', '/orders/' + o.body.id + '/cancel', {});
+       ctx.assert(cancel.status === 200 && cancel.body.status === 'cancelled' && cancel.body.cancelled_at !== null, 'cancel: ' + JSON.stringify(cancel.body));
+       ctx.assert(ctx.api('GET', '/products/' + p.body.id).body.stock === 4, 'stock restored to 4');
+       const again = ctx.api('POST', '/orders/' + o.body.id + '/cancel', {});
+       ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second cancel: ' + JSON.stringify(again));
+       const o2 = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 1, pickup_at: '2030-01-15T10:00:00.000Z' });
+       ctx.assert(o2.status === 201, 'place again: ' + JSON.stringify(o2.body));
+       ctx.assert(ctx.api('POST', '/orders/' + o2.body.id + '/start', {}).status === 200, 'start preparing');
+       const late = ctx.api('POST', '/orders/' + o2.body.id + '/cancel', {});
+       ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'cancel after preparing: ' + JSON.stringify(late));
+      }
+  t_pickup_requires_ready:
+    description: Place an order, try to pick it up while placed (refused), start preparing, try pickup (refused), mark ready, then pick up.
+    script: |-
+      (ctx) => {
+       const p = ctx.api('POST', '/products', { name: 'Plan Test Scone', category: 'pastry', price: 320, stock: 2 });
+       ctx.assert(p.status === 201, 'create product: ' + JSON.stringify(p.body));
+       const c = ctx.api('POST', '/customers', { name: 'Plan Test Buyer Three', email: 'plan.test.buyer.three@example.test' });
+       ctx.assert(c.status === 201, 'create customer: ' + JSON.stringify(c.body));
+       const o = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 1, pickup_at: '2030-01-15T10:00:00.000Z' });
+       ctx.assert(o.status === 201, 'place: ' + JSON.stringify(o.body));
+       const early = ctx.api('POST', '/orders/' + o.body.id + '/pickup', {});
+       ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'pickup while placed: ' + JSON.stringify(early));
+       ctx.assert(ctx.api('POST', '/orders/' + o.body.id + '/start', {}).status === 200, 'start');
+       const mid = ctx.api('POST', '/orders/' + o.body.id + '/pickup', {});
+       ctx.assert(mid.status === 409 && mid.body.error.code === 'invalid_state', 'pickup while preparing: ' + JSON.stringify(mid));
+       ctx.assert(ctx.api('POST', '/orders/' + o.body.id + '/ready', {}).status === 200, 'mark ready');
+       const done = ctx.api('POST', '/orders/' + o.body.id + '/pickup', {});
+       ctx.assert(done.status === 200 && done.body.status === 'picked_up', 'pickup: ' + JSON.stringify(done.body));
+      }
+  t_place_refuses_past_pickup:
+    description: Try to place an order with a pickup time in 2020; expect 400 pickup_in_past, stock unchanged and no order for the customer.
+    script: |-
+      (ctx) => {
+       const p = ctx.api('POST', '/products', { name: 'Plan Test Muffin', category: 'pastry', price: 280, stock: 2 });
+       ctx.assert(p.status === 201, 'create product: ' + JSON.stringify(p.body));
+       const c = ctx.api('POST', '/customers', { name: 'Plan Test Buyer Four', email: 'plan.test.buyer.four@example.test' });
+       ctx.assert(c.status === 201, 'create customer: ' + JSON.stringify(c.body));
+       const past = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 1, pickup_at: '2020-01-01T10:00:00.000Z' });
+       ctx.assert(past.status === 400 && past.body.error.code === 'pickup_in_past', 'past pickup refused: ' + JSON.stringify(past));
+       ctx.assert(ctx.api('GET', '/products/' + p.body.id).body.stock === 2, 'stock unchanged');
+       const listed = ctx.api('GET', '/orders?customer_id=' + c.body.id);
+       ctx.assert(listed.status === 200 && listed.body.data.length === 0, 'no order written');
+      }
+  t_order_read_paths:
+    description: Place an order, find it by customer and status, confirm a picked_up filter excludes it, and fetch an unknown id.
+    script: |-
+      (ctx) => {
+       const p = ctx.api('POST', '/products', { name: 'Plan Test Brioche', category: 'bread', price: 350, stock: 5 });
+       ctx.assert(p.status === 201, 'create product: ' + JSON.stringify(p.body));
+       const c = ctx.api('POST', '/customers', { name: 'Plan Test Buyer Five', email: 'plan.test.buyer.five@example.test' });
+       ctx.assert(c.status === 201, 'create customer: ' + JSON.stringify(c.body));
+       const o = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 1, pickup_at: '2030-01-15T10:00:00.000Z' });
+       ctx.assert(o.status === 201, 'place: ' + JSON.stringify(o.body));
+       const placed = ctx.api('GET', '/orders?customer_id=' + c.body.id + '&status=placed');
+       ctx.assert(placed.status === 200 && placed.body.data.some((x) => x.id === o.body.id), 'found by customer and status');
+       const picked = ctx.api('GET', '/orders?customer_id=' + c.body.id + '&status=picked_up');
+       ctx.assert(picked.status === 200 && picked.body.data.length === 0, 'picked_up filter excludes it');
+       const missing = ctx.api('GET', '/orders/ord_9999');
+       ctx.assert(missing.status === 404 && missing.body.error.code === 'row.not_found', 'unknown order: ' + JSON.stringify(missing));
+      }
+tasks:
+  cancel_placed_order:
+    difficulty: easy
+    instruction: A customer, Hana Sato, phones to cancel her placed pastry order. Cancel that order and change nothing else.
+    grader: |-
+      (ctx) => {
+        const hana = ctx.seed.list('customer', { where: { name: 'Hana Sato' } })[0];
+        if (!hana) return 0;
+        const target = ctx.seed.list('order', { where: { customer_id: hana.id, status: 'placed' } })[0];
+        if (!target) return 0;
+        if (ctx.changes().length === 0) return 0;
+        ctx.guardChanges('only Hana Sato placed order is cancelled and its quantity restored to stock', [
+          { entity: 'order', id: target.id, kind: 'updated', fields: ['status', 'cancelled_at'] },
+          { entity: 'product', id: target.product_id, kind: 'updated', fields: ['stock'] },
+        ]);
+        const end = ctx.db.get('order', target.id);
+        const seedProd = ctx.seed.get('product', target.product_id);
+        const endProd = ctx.db.get('product', target.product_id);
+        ctx.goal(0.6, 'order cancelled', end !== null && end.status === 'cancelled' && end.cancelled_at !== null);
+        ctx.goal(0.4, 'stock restored by the quantity', seedProd !== null && endProd !== null && endProd.stock === seedProd.stock + target.quantity);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const hana = ctx.api('GET', '/customers?q=Hana').body.data.find((x) => x.name === 'Hana Sato');
+        ctx.assert(hana, 'customer Hana Sato not found');
+        const placed = ctx.api('GET', '/orders?status=placed').body.data.filter((o) => o.customer_id === hana.id);
+        ctx.assert(placed.length === 1, 'expected one placed order for Hana Sato, found ' + placed.length);
+        const prod = ctx.api('GET', '/products/' + placed[0].product_id).body;
+        ctx.assert(prod.category === 'pastry', 'the placed order is not a pastry order');
+        const r = ctx.api('POST', '/orders/' + placed[0].id + '/cancel', {});
+        ctx.assert(r.status === 200, 'cancel failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: cancels the right order, then adds its quantity back to product stock by hand, so the stock is restored twice
+        script: |-
+          (ctx) => {
+            const hana = ctx.api('GET', '/customers?q=Hana').body.data.find((x) => x.name === 'Hana Sato');
+            const o = ctx.api('GET', '/orders?customer_id=' + hana.id + '&status=placed').body.data[0];
+            ctx.api('POST', '/orders/' + o.id + '/cancel', {});
+            const p = ctx.api('GET', '/products/' + o.product_id).body;
+            ctx.api('PATCH', '/products/' + o.product_id, { stock: p.stock + o.quantity });
+          }
+    alternatives: []
+    allows:
+      - entity: order
+        kind: updated
+        fields:
+          - status
+          - cancelled_at
+        where:
+          customer_id: cus_0001
+          status: placed
+      - entity: product
+        kind: updated
+        fields:
+          - stock
+        where:
+          name: Almond Croissant
+  pick_up_ready_order:
+    difficulty: medium
+    instruction: Liam Carter arrives to collect his ready order. Mark that order as picked up and leave every other order unchanged.
+    grader: |-
+      (ctx) => {
+        const liam = ctx.seed.list('customer', { where: { name: 'Liam Carter' } })[0];
+        if (!liam) return 0;
+        const target = ctx.seed.list('order', { where: { customer_id: liam.id, status: 'ready' } })[0];
+        if (!target) return 0;
+        if (ctx.changes().length === 0) return 0;
+        ctx.guardChanges('only Liam Carter ready order is marked picked up', [
+          { entity: 'order', id: target.id, kind: 'updated', fields: ['status'] },
+        ]);
+        const end = ctx.db.get('order', target.id);
+        ctx.goal(1, 'order picked up', end !== null && end.status === 'picked_up');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const liam = ctx.api('GET', '/customers?q=Liam').body.data.find((x) => x.name === 'Liam Carter');
+        ctx.assert(liam, 'customer Liam Carter not found');
+        const ready = ctx.api('GET', '/orders?status=ready').body.data.filter((o) => o.customer_id === liam.id);
+        ctx.assert(ready.length === 1, 'expected one ready order for Liam Carter, found ' + ready.length);
+        const r = ctx.api('POST', '/orders/' + ready[0].id + '/pickup', {});
+        ctx.assert(r.status === 200 && r.body.status === 'picked_up', 'pickup failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: marks the oldest ready order in the list as picked up, which belongs to another customer, not Liam Carter
+        script: |-
+          (ctx) => {
+            const first = ctx.api('GET', '/orders?status=ready&sort=created_at').body.data[0];
+            ctx.api('POST', '/orders/' + first.id + '/pickup', {});
+          }
+    alternatives: []
+    allows:
+      - entity: order
+        kind: updated
+        fields:
+          - status
+        where:
+          customer_id: cus_0002
+          status: ready
+  place_and_start_sourdough:
+    difficulty: hard
+    instruction: Customer Noor Haddad wants 2 Sourdough Loaves for pickup on 2030-01-15 at 10:00. Place that order if the bakery has the stock, then start preparing it.
+    grader: |-
+      (ctx) => {
+        const noor = ctx.seed.list('customer', { where: { name: 'Noor Haddad' } })[0];
+        const loaves = ctx.seed.list('product', { where: { name: 'Sourdough Loaves' } })[0];
+        if (!noor || !loaves) return 0;
+        if (ctx.changes().length === 0) return 0;
+        const made = ctx.changes().filter((c) => c.entity === 'order' && c.kind === 'created');
+        if (made.length !== 1) return 0;
+        const id = made[0].id;
+        ctx.guardChanges('one new Loaves order for Noor Haddad and the Loaves stock decremented', [
+          { entity: 'order', id: id, kind: 'created', fields: ['customer_id', 'product_id', 'quantity', 'total', 'pickup_at', 'status', 'cancelled_at'] },
+          { entity: 'order', id: id, kind: 'updated', fields: ['status'] },
+          { entity: 'product', id: loaves.id, kind: 'updated', fields: ['stock'] },
+        ]);
+        const o = ctx.db.get('order', id);
+        const endP = ctx.db.get('product', loaves.id);
+        const right = o !== null && o.customer_id === noor.id && o.product_id === loaves.id && o.quantity === 2 && o.total === 2 * loaves.price && ctx.time.minutesBetween(o.pickup_at, '2030-01-15T10:00:00.000Z') === 0;
+        ctx.goal(0.4, 'order for 2 Loaves to Noor at the pickup time, total right', right);
+        ctx.goal(0.2, 'Loaves stock down by 2', endP !== null && endP.stock === loaves.stock - 2);
+        ctx.goal(0.4, 'order is preparing', o !== null && o.status === 'preparing');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const noor = ctx.api('GET', '/customers?q=Noor').body.data.find((x) => x.name === 'Noor Haddad');
+        ctx.assert(noor, 'customer Noor Haddad not found');
+        const bread = ctx.api('GET', '/products?category=bread').body.data;
+        const loaves = bread.find((x) => x.name === 'Sourdough Loaves');
+        ctx.assert(loaves, 'Sourdough Loaves not found among bread products');
+        ctx.assert(loaves.stock >= 2, 'not enough stock: ' + loaves.stock);
+        const placed = ctx.api('POST', '/orders', { customer_id: noor.id, product_id: loaves.id, quantity: 2, pickup_at: '2030-01-15T10:00:00.000Z' });
+        ctx.assert(placed.status === 201, 'place failed: ' + JSON.stringify(placed.body));
+        const started = ctx.api('POST', '/orders/' + placed.body.id + '/start', {});
+        ctx.assert(started.status === 200 && started.body.status === 'preparing', 'start failed: ' + JSON.stringify(started.body));
+      }
+    decoys:
+      - why: places the order on the similar Sourdough Boule product, which has more stock, and starts it
+        script: |-
+          (ctx) => {
+            const noor = ctx.api('GET', '/customers?q=Noor').body.data.find((x) => x.name === 'Noor Haddad');
+            const boule = ctx.api('GET', '/products?q=Boule').body.data.find((x) => x.name === 'Sourdough Boule');
+            const o = ctx.api('POST', '/orders', { customer_id: noor.id, product_id: boule.id, quantity: 2, pickup_at: '2030-01-15T10:00:00.000Z' });
+            ctx.api('POST', '/orders/' + o.body.id + '/start', {});
+          }
+      - why: places the correct Sourdough Loaves order but never starts preparing it
+        script: |-
+          (ctx) => {
+            const noor = ctx.api('GET', '/customers?q=Noor').body.data.find((x) => x.name === 'Noor Haddad');
+            const loaves = ctx.api('GET', '/products?category=bread').body.data.find((x) => x.name === 'Sourdough Loaves');
+            ctx.api('POST', '/orders', { customer_id: noor.id, product_id: loaves.id, quantity: 2, pickup_at: '2030-01-15T10:00:00.000Z' });
+          }
+    alternatives: []
+    allows:
+      - entity: order
+        kind: created
+        fields:
+          - customer_id
+          - product_id
+          - quantity
+          - total
+          - pickup_at
+          - status
+          - cancelled_at
+        where:
+          status: preparing
+          quantity: 2
+      - entity: order
+        kind: updated
+        fields:
+          - status
+      - entity: product
+        kind: updated
+        fields:
+          - stock
+        where:
+          name: Sourdough Loaves

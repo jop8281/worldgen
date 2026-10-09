@@ -22,7 +22,7 @@ import type { Input, InputDigest } from '../src/worldgen/input.ts';
 import { claudeCliModel, CallStalled, ModelError, StepShareExpired, type Model, type ProposeRequest } from '../src/worldgen/llm.ts';
 import { planCoverage, planSchemaFor } from '../src/worldgen/plan.ts';
 import { renderReport } from '../src/worldgen/report.ts';
-import { partialDir, pickExample, runWorldGen, scopeIssues, stagePrompt, systemPrompt, type RunResult } from '../src/worldgen/run.ts';
+import { partialDir, pickExample, runWorldGen, scopeIssues, stagePrompt, stepBrief, systemPrompt, testOperations, type RunResult } from '../src/worldgen/run.ts';
 import { PLAN_BRIEF, STAGES } from '../src/worldgen/stages.ts';
 import { CUSTOMERS, EDITS, ESCALATE_TEST, PLAN, RESOLVE_TEST, TARGET } from './helpers/scripted-world.ts';
 import { minimalWorld } from './helpers/world.ts';
@@ -515,8 +515,7 @@ describe('runWorldGen create: the plan step', () => {
     assert.deepEqual(plan?.tool.inputSchema, z.toJSONSchema(planSchemaFor('description'), { io: 'input' }));
     assert.equal(plan?.system.includes(formatReference().trimEnd()), true);
     assert.equal(plan?.system.includes(renderWorldYaml(minimalWorld()).trimEnd()), true);
-    assert.equal(plan?.system.endsWith(PLAN_BRIEF), true);
-    assert.equal(plan?.prompt.startsWith('## Input (description)\n\nA helpdesk where overdue tickets escalate'), true);
+    assert.equal(plan?.prompt.startsWith(`## This step: plan\n\n${PLAN_BRIEF}\n\n## Input (description)\n\nA helpdesk where overdue tickets escalate`), true);
   });
 
   it('feeds plan schema errors back and accepts the corrected plan', async () => {
@@ -610,35 +609,82 @@ describe('runWorldGen create: an infeasible request is refused at plan (A-104)',
 
   it('asks the plan step to decide feasibility before anything else', async () => {
     const { calls } = await run([{ input: CODEC }]);
-    assert.match(calls[0]?.system ?? '', /stateful records/);
-    assert.match(calls[0]?.system ?? '', /feasibleIf/);
+    assert.match(calls[0]?.prompt ?? '', /stateful records/);
+    assert.match(calls[0]?.prompt ?? '', /feasibleIf/);
   });
 });
 
 describe('runWorldGen create: stage tools and scope', () => {
-  it('gives each stage the edit schema for exactly the sections it owns', async () => {
+  // A-409: the cache prefix runs tools, then system, so one edit tool and one system prompt let the four stages share a cached prefix.
+  it('gives every stage one edit tool over every stage\'s sections, and names each stage\'s own sections in its prompt', async () => {
     const { calls } = await run(HAPPY);
-    assert.deepEqual(calls[1]?.tool.inputSchema, editJsonSchema(['entities', 'routes']));
-    assert.deepEqual(calls[2]?.tool.inputSchema, editJsonSchema(['actions', 'jobs']));
-    assert.deepEqual(calls[3]?.tool.inputSchema, editJsonSchema(['seed']));
-    assert.deepEqual(calls[4]?.tool.inputSchema, editJsonSchema(['tasks']));
-    assert.equal(calls[1]?.system.endsWith(STAGES.model.brief), true);
-    assert.equal(calls[4]?.system.endsWith(STAGES.tasks.brief), true);
-    assert.equal(calls[1]?.prompt.includes('It may write only entities, routes.'), true);
+    for (const c of calls.slice(1)) {
+      assert.deepEqual(c.tool, {
+        name: 'edit_world', description: "Propose one WorldEdit for this stage. Write only the sections this step's prompt names: any other is refused.",
+        inputSchema: editJsonSchema(['entities', 'routes', 'actions', 'jobs', 'seed', 'tasks']),
+      });
+    }
+    assert.equal(calls[1]?.prompt.startsWith(`## This step: model\n\n${STAGES.model.brief}\n\n`), true);
+    assert.equal(calls[4]?.prompt.startsWith(`## This step: tasks\n\n${STAGES.tasks.brief}\n\n`), true);
+    assert.deepEqual(['It may write only entities, routes.', 'It may write only tasks.'].map((line, i) => calls[i === 0 ? 1 : 4]?.prompt.includes(line)), [true, true]);
   });
 
-  it('rejects edits to meta, to sections another stage owns, and to fixtures as edit.out_of_scope', async () => {
+  it('sends every step of a run one system prompt with no step in it, and opens each prompt with its step (A-409)', async () => {
+    const { calls } = await run(HAPPY);
+    assert.deepEqual([...new Set(calls.map((c) => c.system))], [systemPrompt(minimalWorld())]);
+    assert.equal(calls[0]?.system.includes('## This step:'), false);
+    assert.deepEqual(calls.map((c) => c.prompt.split('\n')[0]), ['## This step: plan', '## This step: model', '## This step: workflow', '## This step: seed', '## This step: tasks']);
+    assert.notDeepEqual(calls[0]?.tool, calls[1]?.tool);
+  });
+
+  it('opens the workflow call with the path rule read from the example world the run picked (A-409)', async () => {
+    const loaded = await loadWorld(join(import.meta.dirname, '../../prod/worlds/helpdesk'));
+    const report = checkWorld(loaded.ok ? loaded.value : null);
+    assert.equal(report.ok, true);
+    if (!report.ok) return;
+    const { calls } = await run(HAPPY, { exampleWorld: report.world });
+    assert.equal(calls[2]?.prompt.includes('Example from the example world: routes.create_ticket declares POST /tickets, so no action may use POST /tickets.'), true);
+    assert.equal(calls[2]?.system.includes('Example from the example world:'), false);
+  });
+
+  it('rejects edits to meta and to fixtures as edit.out_of_scope', async () => {
     const intrusive = { note: 'too much', meta: { description: 'mine' }, upsert: { entities: TARGET.entities, routes: TARGET.routes, tasks: TARGET.tasks } };
     const fixtures = { note: 'tables', upsert: { fixtures: { legacy_ticket: [{ subject: 'Old' }] } } };
     const { result, events, calls, filesDir } = await run([{ input: PLAN }, { input: intrusive }, { input: fixtures }, new ModelError('stop here')]);
     const outcomes = events.flatMap((e) => (e.t === 'attempt' && e.outcome.kind === 'invalid_output' ? [brief(e.outcome.issues)] : []));
     assert.deepEqual(outcomes, [
-      [['edit.out_of_scope', ['meta']], ['edit.out_of_scope', ['tasks']]],
+      [['edit.out_of_scope', ['meta']]],
       [['edit.out_of_scope', ['fixtures']]],
     ]);
-    assert.equal(calls[2]?.prompt.includes('  hint: This stage does not own tasks.'), true);
+    assert.equal(calls[2]?.prompt.includes('  hint: This stage does not own meta.'), true);
     assert.deepEqual(result.kind === 'stopped' ? result.reason : null, { kind: 'model_error', message: 'stop here' });
     assert.equal(existsSync(join(filesDir, 'world.yaml')), false);
+  });
+
+  // A-409: the one edit tool lets a stage name another stage's section; only the owner's write lands, as each stage's own schema once allowed.
+  it('drops the sections another stage owns from a stage edit, and the owner writes them in its turn (A-409)', async () => {
+    const stray = { ...TARGET.tasks.resolve_password_ticket!, instruction: 'STRAY-TASK-FROM-THE-MODEL-STAGE' };
+    const eager = { note: 'entities, routes and a task', upsert: { entities: TARGET.entities, routes: TARGET.routes, tasks: { stray_task: stray } } };
+    const { result, events, calls, filesDir } = await run([{ input: PLAN }, { input: eager }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }]);
+    assert.deepEqual(attempts(events).map(([step, , outcome]) => [step, outcome]), [
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'accepted'],
+    ]);
+    assert.deepEqual(calls.slice(2).map((c) => c.prompt.includes('STRAY-TASK-FROM-THE-MODEL-STAGE')), [false, false, false]);
+    assert.equal(result.kind, 'done');
+    const saved = parseYaml(readFileSync(join(filesDir, 'world.yaml'), 'utf8')) as World;
+    assert.deepEqual(Object.keys(saved.tasks).sort(), Object.keys(TARGET.tasks).sort());
+    assert.equal(readFileSync(join(filesDir, 'world.yaml'), 'utf8').includes('stray_task'), false);
+  });
+
+  it('tells a stage retried for other issues which of its sections were left out, so it stops resending them (A-409)', async () => {
+    const stray = { ...TARGET.tasks.resolve_password_ticket!, instruction: 'STRAY-TASK-FROM-THE-MODEL-STAGE' };
+    const badAndEager = { ...BAD_ENTITY, upsert: { ...BAD_ENTITY.upsert, tasks: { stray_task: stray }, seed: {} } };
+    const { result, events, calls } = await run([{ input: PLAN }, { input: badAndEager }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks }]);
+    assert.deepEqual(attempts(events).map(([step, , outcome]) => [step, outcome]).slice(0, 3), [['plan', 'accepted'], ['model', 'rejected'], ['model', 'accepted']]);
+    assert.equal(calls[2]?.prompt.includes('Left out of the answer, because another stage writes them:\n\n- ignored: tasks (owned by the tasks stage)'), true);
+    assert.equal(calls[2]?.prompt.includes('ignored: seed'), false);
+    assert.equal(calls[3]?.prompt.includes('ignored:'), false);
+    assert.equal(result.kind, 'done');
   });
 
   /** A first workflow answer whose handler refuses every resolve, so the frozen test fails and the next answer is a repair. */
@@ -1075,6 +1121,70 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
       'workflow', 'plan', [['test.failed', ['tests', 'unknown_ticket_404', 'script']]],
     ]);
     assert.equal(calls[4]?.prompt.includes('row.not_found'), true);
+  });
+
+  it('maps each frozen test to the planned operations it exercises: declared action routes and literal ctx.api paths (A-406)', () => {
+    const plan = {
+      ...PLAN, revision: 1, changes: [],
+      routes: [...PLAN.routes, { id: 'resolve_ticket', method: 'post', path: '/tickets/{id}/resolve', purpose: 'resolve' }],
+      acceptanceTests: [
+        ...PLAN.acceptanceTests,
+        { id: 'declared', intent: 'i', actions: ['resolve_ticket'], description: 'd', script: '(ctx) => {}' },
+        { id: 'annotated', intent: 'i', actions: ['resolve_ticket (POST /tickets/{id}/resolve)'], description: 'd', script: '(ctx) => {}' },
+        { id: 'literal', intent: 'i', actions: ['escalate_ticket'], description: 'd', script: "(ctx) => { ctx.api('GET', '/tickets/tkt_0001'); ctx.api('GET', '/customers?q=Acme'); }" },
+        { id: 'built', intent: 'i', actions: ['escalate_ticket'], description: 'd', script: "(ctx) => { const id = 'tkt_0001'; ctx.api('GET', '/tickets/' + id); }" },
+      ],
+    };
+    const mine = new Set(['declared', 'annotated', 'literal', 'built']);
+    assert.deepEqual([...testOperations(planSchemaFor('description').parse(plan))].filter(([id]) => mine.has(id)), [
+      ['declared', ['POST /tickets/{}/resolve']], ['annotated', ['POST /tickets/{}/resolve']], ['literal', ['GET /customers', 'GET /tickets/{}']], ['built', []],
+    ]);
+  });
+
+  // stress-8 petstore-store (A-406): one workflow answer failed a frozen test, the next a check the input fixes, and back.
+  const specOff = { ...EDITS.workflow, note: 'the actions with the escalate reason optional', upsert: { ...EDITS.workflow.upsert, actions: { ...TARGET.actions, escalate_ticket: { ...TARGET.actions.escalate_ticket!, description: 'Make an unresolved ticket urgent (reason optional).' } } } };
+  // A stand-in for petstore's spec check, on the operation the frozen test unknown_ticket_404 exercises (GET /tickets/tkt_9999).
+  const reasonOptional = issue('openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason'], { op: 'GET /tickets/{ticket_id}', field: 'reason' }, 'reason is optional');
+  /** As the conformance check refuses petstore's optional petId: a world whose escalate reason is optional fails the source spec. */
+  const specCheck = (world: World): CheckReport =>
+    world.actions.escalate_ticket?.description?.includes('(reason optional)') === true ? { ok: false, reached: 'lints', issues: [reasonOptional], warnings: [] } : checkWorld(world);
+
+  // J191 (e3's follow-up on #179): the plan is shown only the failing tests of the operation the input check names.
+  const teapot = { id: 'customers_teapot', intent: 'Customers answer 418.', actions: ['resolve_ticket'], description: 'customers are a teapot',
+    script: "(ctx) => { const r = ctx.api('GET', '/customers'); ctx.assert(r.status === 418, 'customers: ' + r.status); }" };
+
+  it('hands the plan only the failing frozen tests of the traded operation, never one of another operation (J191)', async () => {
+    const withTeapot = { ...planWith('not_found', 1), acceptanceTests: [...planWith('not_found', 1).acceptanceTests, teapot] };
+    const { result, events } = await run([
+      { input: withTeapot }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { check: specCheck });
+    const failedTests = events.flatMap((e) => (e.t === 'attempt' && e.step === 'workflow' && e.outcome.kind === 'rejected' ? e.outcome.issues.filter((i) => i.code === 'test.failed').map((i) => i.path[1]) : []));
+    assert.deepEqual(failedTests, ['unknown_ticket_404', 'customers_teapot']);
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? back.because.map((i) => [i.code, i.path]) : [], [
+      ['openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason']], ['test.failed', ['tests', 'unknown_ticket_404', 'script']],
+    ]);
+    assert.equal(result.kind, 'done');
+  });
+
+  it('backtracks to plan when workflow trades a frozen test against a check the input fixes, and tells the plan both (A-406)', async () => {
+    const { result, events, calls } = await run([
+      { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { check: specCheck });
+    assert.equal(result.kind, 'done');
+    assert.deepEqual(attempts(events).map(([step, , outcome]) => [step, outcome]), [
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'rejected'], ['workflow', 'rejected'], ['workflow', 'rejected'],
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'accepted'],
+    ]);
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => [i.code, i.path])] : [], [
+      'workflow', 'plan', [['openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason']], ['test.failed', ['tests', 'unknown_ticket_404', 'script']]],
+    ]);
+    assert.deepEqual(['reason is optional', 'ctx.assert failed'].map((s) => calls[5]?.prompt.includes(s)), [true, true]);
+    // The workflow rerun is shown its own last rejection, the spec check, not the old plan's test failure.
+    assert.deepEqual(['reason is optional', 'ctx.assert failed'].map((s) => calls[7]?.prompt.includes(s)), [true, false]);
   });
 });
 
@@ -1643,7 +1753,7 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
   it('the workflow-stage prompt lists planned actions and the paths routes already own', () => {
     const prompt = stagePrompt('workflow', plan, TARGET, null);
     assert.deepEqual(listed(prompt, 'Required keys'), ['- actions.resolve_ticket (exists)', '- actions.escalate_ticket (exists)', '- jobs.escalate_overdue (exists)']);
-    assert.equal(systemPrompt('workflow', TARGET).includes('never edit, remove or replace a test'), true);
+    assert.equal(stepBrief('workflow', TARGET).includes('never edit, remove or replace a test'), true);
     assert.equal(prompt.includes('- POST /tickets (routes.create_ticket)'), true);
     assert.equal(prompt.includes('- PATCH /tickets/{id} (routes.update_ticket)'), true);
   });
@@ -1653,7 +1763,7 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
     const report = checkWorld(loaded.ok ? loaded.value : null);
     assert.equal(report.ok, true);
     if (!report.ok) return;
-    const system = systemPrompt('workflow', report.world);
+    const system = stepBrief('workflow', report.world);
     assert.equal(system.includes("an action's method and path, with every {param} segment counted as the same, must differ from every route's, or the engine raises route.duplicate_path"), true);
     assert.equal(system.includes('Example from the example world: routes.create_ticket declares POST /tickets, so no action may use POST /tickets. actions.assign_ticket uses POST /tickets/{id}/assign instead.'), true);
   });
@@ -2129,6 +2239,26 @@ describe('runWorldGen: a seed shortfall found at tasks goes back to seed with it
     assert.equal(result.kind, 'done');
   });
 
+  // stress-8 helpdesk-sla (A-406): the plan pressed distractors on an entity the task only looks up, which no reference can meet.
+  it('sends a distractor claim on an entity the reference never changes back to the plan at the first tasks rejection (A-406)', async () => {
+    const lookup = { ...PLAN, tasks: PLAN.tasks.map((t) => (t.id === 'escalate_acme' ? { ...t, pressure: { distractors: 'customer' } } : t)) };
+    const { result, events, calls } = await run([
+      { input: lookup }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+      { input: { ...PLAN, revision: 2 } }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ]);
+    assert.deepEqual(steps(events), [
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'rejected'],
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'accepted'],
+    ]);
+    const back = events.filter((e) => e.t === 'backtracked');
+    assert.deepEqual(back.map((e) => (e.t === 'backtracked' ? [e.from, e.to, e.because.map((i) => [i.code, i.path, i.found])] : [])), [
+      ['tasks', 'plan', [['task.pressure_unmet', ['plan', 'tasks', 2, 'pressure', 'distractors'],
+        'the reference changes no customer row, so no customer row can be a distractor: a distractor is a near-duplicate of a row the task changes']]],
+    ]);
+    assert.equal(calls[5]?.prompt.includes('the reference changes no customer row'), true);
+    assert.equal(result.kind, 'done');
+  });
+
   // stress-5 stripe-customers: a create's seed step had no task yet, so its report failed and the seed needs never ran there.
   it('rejects a create seed that misses a planned need at the seed step and retries it there with the issue (YOS-253)', async () => {
     const paged = { ...PLAN, tasks: PLAN.tasks.map((t) => (t.id === 'resolve_password_ticket' ? { ...t, pressure: { paging: 'ticket' } } : t)) };
@@ -2181,7 +2311,7 @@ describe('runWorldGen create: an OpenAPI operation a workflow action builds is p
   /** Replies as the live model did (YOS-244): a plan without the action's route, then a plain route for any operation the judge says is uncovered. */
   const liveLike = (req: ProposeRequest): Reply => {
     if (req.tool.name === 'submit_plan') return { input: req.prompt.includes(`input operation ${RESOLVE}`) ? { ...PLAN, routes: [...PLAN.routes, ACTION_ROUTE] } : PLAN };
-    const stage = /for the (\w+) stage/.exec(req.tool.description)?.[1];
+    const stage = /^## This step: (\w+)/.exec(req.prompt)?.[1];
     if (stage === 'model') {
       if (!req.prompt.includes(`input operation ${RESOLVE}`)) return { input: EDITS.model };
       return { input: { note: 'cover the resolve operation with a route', upsert: { entities: TARGET.entities, routes: { ...TARGET.routes, resolve_route: { op: 'update', entity: 'ticket', method: 'POST', path: '/tickets/{id}/resolve' } } } } };

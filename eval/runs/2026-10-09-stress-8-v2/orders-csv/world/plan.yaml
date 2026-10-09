@@ -1,0 +1,284 @@
+revision: 1
+software: Shopify-style order desk (orders and customers API)
+summary: An order desk with customers and orders. Orders move through pending, paid, shipped, delivered, and can be cancelled before shipping or refunded after payment. The imported CSV fixtures (18 customers, 72 orders) are kept exactly.
+clock:
+  start: 2026-04-08T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: customer
+    purpose: A buyer, imported from customers.csv (18 rows). Holds name, unique email, country and plan.
+    keyFields:
+      - id
+      - email
+  - name: order
+    purpose: A purchase by a customer, imported from orders.csv (72 rows). Holds status, total in USD cents, item_count, placed_at, shipped_at and an optional delivery note.
+    keyFields:
+      - id
+      - customer_id
+      - status
+      - placed_at
+workflows:
+  - name: order_fulfilment
+    entity: order
+    states:
+      - pending
+      - paid
+      - shipped
+      - delivered
+      - cancelled
+      - refunded
+    rules:
+      - rule: Only a pending order can be paid; any other state is refused with 409 invalid_state.
+        by:
+          - pay_order
+        test: pay_order_only_from_pending
+      - rule: Only a paid order can be shipped; shipping sets shipped_at to the current time and other states are refused with 409 invalid_state.
+        by:
+          - ship_order
+        test: ship_requires_paid_and_sets_shipped_at
+      - rule: Only a shipped order can be marked delivered.
+        by:
+          - deliver_order
+        test: deliver_only_from_shipped
+      - rule: Only a pending or paid order can be cancelled; once shipped it cannot be cancelled, and cancelled is final.
+        by:
+          - cancel_order
+        test: cancel_only_before_shipping
+      - rule: Only a paid, shipped or delivered order can be refunded; refunded is final and a second refund is refused.
+        by:
+          - refund_order
+        test: refund_only_after_payment
+      - rule: A new order always starts pending; a create that sets another status is refused.
+        schema: The state field has initial pending, so the engine refuses any other initial state with state.initial.
+      - rule: A customer email is unique.
+        schema: The email field is declared unique, so a duplicate create is refused with field.unique.
+    actions:
+      - pay_order
+      - ship_order
+      - deliver_order
+      - cancel_order
+      - refund_order
+jobs: []
+acceptanceTests:
+  - id: pay_order_only_from_pending
+    intent: pay_order moves a pending order to paid and refuses a second payment
+    actions:
+      - pay_order
+    description: Create a customer and an order, pay it, then pay again and expect 409 invalid_state.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Plan Tester Pay', email: 'pay.tester@plan-test.example.org', country: 'GB', plan: 'pro' });
+        ctx.assert(c.status === 201, 'customer create ' + c.status + JSON.stringify(c.body));
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 2500, currency: 'USD', item_count: 2, placed_at: '2026-04-08T08:00:00.000Z' });
+        ctx.assert(o.status === 201 && o.body.status === 'pending', 'order starts pending: ' + JSON.stringify(o.body));
+        const p = ctx.api('POST', '/orders/' + o.body.id + '/pay', {});
+        ctx.assert(p.status === 200 && p.body.status === 'paid', 'pay: ' + JSON.stringify(p.body));
+        const again = ctx.api('POST', '/orders/' + o.body.id + '/pay', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second pay: ' + JSON.stringify(again.body));
+        const missing = ctx.api('POST', '/orders/ord_999999/pay', {});
+        ctx.assert(missing.status === 404, 'missing order: ' + missing.status);
+      }
+  - id: ship_requires_paid_and_sets_shipped_at
+    intent: ship_order works only on paid orders and stamps shipped_at
+    actions:
+      - pay_order
+      - ship_order
+    description: Shipping a pending order is refused; after payment shipping succeeds and sets shipped_at to the call time.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Plan Tester Ship', email: 'ship.tester@plan-test.example.org', country: 'US', plan: 'free' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 1800, currency: 'USD', item_count: 1, placed_at: '2026-04-08T08:00:00.000Z' });
+        ctx.assert(o.status === 201, 'order create ' + o.status);
+        const early = ctx.api('POST', '/orders/' + o.body.id + '/ship', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'ship pending: ' + JSON.stringify(early.body));
+        ctx.assert(ctx.api('POST', '/orders/' + o.body.id + '/pay', {}).status === 200, 'pay');
+        const at = ctx.now();
+        const s = ctx.api('POST', '/orders/' + o.body.id + '/ship', {});
+        ctx.assert(s.status === 200 && s.body.status === 'shipped' && s.body.shipped_at === at, 'ship: ' + JSON.stringify(s.body));
+      }
+  - id: deliver_only_from_shipped
+    intent: deliver_order works only on shipped orders
+    actions:
+      - pay_order
+      - ship_order
+      - deliver_order
+    description: Delivering a paid order is refused; after shipping it succeeds.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Plan Tester Deliver', email: 'deliver.tester@plan-test.example.org', country: 'DE', plan: 'basic' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 900, currency: 'USD', item_count: 3, placed_at: '2026-04-08T08:00:00.000Z' });
+        ctx.assert(ctx.api('POST', '/orders/' + o.body.id + '/pay', {}).status === 200, 'pay');
+        const early = ctx.api('POST', '/orders/' + o.body.id + '/deliver', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'deliver paid: ' + JSON.stringify(early.body));
+        ctx.assert(ctx.api('POST', '/orders/' + o.body.id + '/ship', {}).status === 200, 'ship');
+        const d = ctx.api('POST', '/orders/' + o.body.id + '/deliver', {});
+        ctx.assert(d.status === 200 && d.body.status === 'delivered', 'deliver: ' + JSON.stringify(d.body));
+      }
+  - id: cancel_only_before_shipping
+    intent: cancel_order works on pending and paid orders and is refused once shipped
+    actions:
+      - cancel_order
+      - pay_order
+      - ship_order
+    description: Cancel a pending order; a cancelled order cannot be cancelled again; a shipped order cannot be cancelled.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Plan Tester Cancel', email: 'cancel.tester@plan-test.example.org', country: 'FR', plan: 'pro' });
+        const mk = () => ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 1200, currency: 'USD', item_count: 1, placed_at: '2026-04-08T08:00:00.000Z' }).body.id;
+        const a = mk();
+        const r = ctx.api('POST', '/orders/' + a + '/cancel', {});
+        ctx.assert(r.status === 200 && r.body.status === 'cancelled', 'cancel pending: ' + JSON.stringify(r.body));
+        const twice = ctx.api('POST', '/orders/' + a + '/cancel', {});
+        ctx.assert(twice.status === 409 && twice.body.error.code === 'invalid_state', 'cancel twice: ' + JSON.stringify(twice.body));
+        const b = mk();
+        ctx.api('POST', '/orders/' + b + '/pay', {});
+        ctx.api('POST', '/orders/' + b + '/ship', {});
+        const late = ctx.api('POST', '/orders/' + b + '/cancel', {});
+        ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'cancel shipped: ' + JSON.stringify(late.body));
+        const paid = mk();
+        ctx.api('POST', '/orders/' + paid + '/pay', {});
+        const pc = ctx.api('POST', '/orders/' + paid + '/cancel', {});
+        ctx.assert(pc.status === 200 && pc.body.status === 'cancelled', 'cancel paid: ' + JSON.stringify(pc.body));
+      }
+  - id: refund_only_after_payment
+    intent: refund_order works on paid, shipped and delivered orders, never on pending or refunded ones
+    actions:
+      - refund_order
+      - pay_order
+      - ship_order
+      - deliver_order
+    description: Refuse refunding a pending order; refund a delivered order; refuse a second refund.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Plan Tester Refund', email: 'refund.tester@plan-test.example.org', country: 'GB', plan: 'pro' });
+        const mk = () => ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 4000, currency: 'USD', item_count: 4, placed_at: '2026-04-08T08:00:00.000Z' }).body.id;
+        const a = mk();
+        const early = ctx.api('POST', '/orders/' + a + '/refund', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'refund pending: ' + JSON.stringify(early.body));
+        ctx.api('POST', '/orders/' + a + '/pay', {});
+        ctx.api('POST', '/orders/' + a + '/ship', {});
+        ctx.api('POST', '/orders/' + a + '/deliver', {});
+        const r = ctx.api('POST', '/orders/' + a + '/refund', {});
+        ctx.assert(r.status === 200 && r.body.status === 'refunded', 'refund delivered: ' + JSON.stringify(r.body));
+        const again = ctx.api('POST', '/orders/' + a + '/refund', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'refund twice: ' + JSON.stringify(again.body));
+        const b = mk();
+        ctx.api('POST', '/orders/' + b + '/pay', {});
+        const pr = ctx.api('POST', '/orders/' + b + '/refund', {});
+        ctx.assert(pr.status === 200 && pr.body.status === 'refunded', 'refund paid: ' + JSON.stringify(pr.body));
+      }
+routes:
+  - id: list_orders
+    method: GET
+    path: /orders
+    purpose: List orders, filter by status, customer_id and currency, sort by placed_at or total_cents
+  - id: get_order
+    method: GET
+    path: /orders/{id}
+    purpose: Read one order
+  - id: create_order
+    method: POST
+    path: /orders
+    purpose: Create an order in the pending state
+  - id: update_order
+    method: PATCH
+    path: /orders/{id}
+    purpose: Edit non-workflow order fields such as the note
+  - id: list_customers
+    method: GET
+    path: /customers
+    purpose: List customers, filter by country and plan, search by name and email
+  - id: get_customer
+    method: GET
+    path: /customers/{id}
+    purpose: Read one customer
+  - id: create_customer
+    method: POST
+    path: /customers
+    purpose: Create a customer
+  - id: update_customer
+    method: PATCH
+    path: /customers/{id}
+    purpose: Edit a customer
+seed:
+  rowsPerEntity:
+    customer: 18
+    order: 72
+  mix: 'Exactly the imported CSV rows: 18 customers and 72 orders across all six statuses with their original values. No generated rows, since both entities have fixtures.'
+  stateMix:
+    order:
+      pending: 17
+      paid: 17
+      shipped: 17
+      delivered: 17
+      cancelled: 16
+      refunded: 16
+tasks:
+  - id: ship_latest_paid_order
+    difficulty: easy
+    intent: Ship the most recently placed paid order of the customer Ada Lovelace.
+    actions:
+      - ship_order
+    decoyIdea: Ships her oldest paid order, or ships a paid order of another customer with a similar name.
+  - id: refund_delivered_orders_for_country
+    difficulty: medium
+    kind: irreversible
+    intent: Refund every delivered order over 5000 cents that belongs to a customer in GB. Leave all other orders untouched.
+    actions:
+      - refund_order
+    decoyIdea: Refunds all delivered orders regardless of country or amount, or refunds shipped orders as well.
+    pressure:
+      states:
+        - order.delivered
+      distractors: order
+  - id: fulfil_pending_orders_of_pro_customers
+    difficulty: hard
+    kind: two_actors
+    intent: For every pending order placed by a customer on the pro plan, record payment and then ship it. Cancel nothing and change no other order.
+    actions:
+      - pay_order
+      - ship_order
+    decoyIdea: Pays the pending orders but never ships them, reads only the first page of orders, or ships orders of non-pro customers.
+    pressure:
+      paging: order
+      states:
+        - order.pending
+      distractors: customer
+open_questions:
+  - question: Can an order be cancelled after it has shipped?
+    default_answer: No. Cancel is allowed only from pending or paid; after that use refund.
+  - question: Should a refund be allowed on a pending order?
+    default_answer: No. Refund needs a paid, shipped or delivered order; a pending order is cancelled instead.
+  - question: Is shipped_at set by the client or by the system?
+    default_answer: By the system when ship_order runs.
+  - question: Do refunds change the total or only the status?
+    default_answer: Only the status; refunds are full.
+assumptions:
+  - decision: clock.start is 2026-04-08T09:00:00Z with tick 0s
+    why: The latest imported event is shipped_at 2026-04-07T14:00:00Z, so the start is after all history. Time moves only when explicitly advanced.
+  - decision: Order status is a state field with transitions pending->paid|cancelled, paid->shipped|cancelled|refunded, shipped->delivered|refunded, delivered->refunded; cancelled and refunded are final
+    why: This is the standard order lifecycle implied by the CSV status enum.
+  - decision: Status and shipped_at are readonly on standard routes and change only through actions
+    why: Keeps the workflow rules from being bypassed by a plain PATCH.
+  - decision: Money is USD cents (total_cents), and currency is fixed to USD
+    why: The CSV has one currency value.
+  - decision: stateMix is an approximately even split across the six statuses
+    why: The exact per-status counts come from the fixture, which is kept unchanged; the mix is a rough share within tolerance (shipped_at is set on 44% of rows).
+  - decision: ship_order sets shipped_at to the engine time
+    why: The CSV has shipped_at only for shipped orders.
+  - decision: Refunds are full refunds that change only the status
+    why: The CSV has no refund amount field.
+  - decision: Acceptance tests create their own customers and orders with emails under plan-test.example.org
+    why: The tests run before the seed exists and must not collide with seed values.
+outOfScope:
+  - what: Payment processing, payment gateways and card data
+    why: The world only records state; pay_order just marks an order paid.
+  - what: Line items, inventory, shipping carriers and tracking
+    why: The CSV only has an item_count and shipped_at.
+  - what: Partial refunds, multiple currencies and taxes
+    why: The CSV has no fields for them.
+  - what: Deleting customers or orders
+    why: Order history must stay intact.
+changes: []

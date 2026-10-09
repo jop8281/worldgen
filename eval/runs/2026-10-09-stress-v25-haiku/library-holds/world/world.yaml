@@ -1,0 +1,758 @@
+format: 1
+meta:
+  name: world
+  description: A public library circulation API. Branches hold book copies of titles. Members borrow copies as checkouts with a due date. A holds queue per title serves waiting members in order when a copy comes back. Overdue checkouts accrue fines that block new loans until paid. The world has four workflows (copy, loan, hold queue, fine settlement), six actions, two jobs, list and get routes for every entity, and a seed with one list page of copies and a few scenarios the tasks need.
+  resembles: Library circulation system (Koha-style branches, copies, holds and fines)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  branch:
+    description: A library branch that holds copies and is the home branch of members.
+    idPrefix: brn
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      code:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 20
+      city:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+  title:
+    description: A bibliographic title. Copies are physical instances of a title.
+    idPrefix: ttl
+    fields:
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      author:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+  book_copy:
+    description: "One physical copy at a branch. Its status is the copy lifecycle: available, checked_out, on_hold or withdrawn."
+    idPrefix: cpy
+    fields:
+      barcode:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 40
+      title_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: title
+        onDelete: restrict
+      branch_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: branch
+        onDelete: restrict
+      status:
+        type: state
+        description: Copy lifecycle. Only actions and jobs move it.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - available
+          - checked_out
+          - on_hold
+          - withdrawn
+        initial: available
+        transitions:
+          available:
+            - checked_out
+            - withdrawn
+          checked_out:
+            - available
+            - on_hold
+          on_hold:
+            - checked_out
+            - available
+          withdrawn: []
+  member:
+    description: A library patron who borrows copies and places holds.
+    idPrefix: mem
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 200
+        format: email
+      home_branch_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: branch
+        onDelete: restrict
+      active:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  checkout:
+    description: A loan of one copy to one member with a due date. Created only by checkout_copy and closed by return_copy.
+    idPrefix: chk
+    fields:
+      member_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: member
+        onDelete: restrict
+      copy_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: book_copy
+        onDelete: restrict
+      checked_out_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: now
+      due_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      returned_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      status:
+        type: state
+        description: Loan lifecycle. A returned loan stays returned.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - active
+          - returned
+        initial: active
+        transitions:
+          active:
+            - returned
+          returned: []
+  hold:
+    description: A member's place in the queue for a title. Becomes ready when a copy comes back, names that copy and expires after a window.
+    idPrefix: hld
+    fields:
+      title_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: title
+        onDelete: restrict
+      member_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: member
+        onDelete: restrict
+      copy_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: book_copy
+        onDelete: restrict
+      queued_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: now
+      ready_until:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      status:
+        type: state
+        description: Queue lifecycle. A ready hold is fulfilled by checkout, or cancelled by cancel_hold or expiry.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - waiting
+          - ready
+          - fulfilled
+          - cancelled
+        initial: waiting
+        transitions:
+          waiting:
+            - ready
+            - cancelled
+          ready:
+            - fulfilled
+            - cancelled
+          fulfilled: []
+          cancelled: []
+  fine:
+    description: Money a member owes for one overdue checkout. One fine per checkout, amount grows daily until paid.
+    idPrefix: fin
+    fields:
+      member_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: member
+        onDelete: restrict
+      checkout_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: true
+        readonly: true
+        entity: checkout
+        onDelete: restrict
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      status:
+        type: state
+        description: Fine lifecycle. A paid fine cannot be paid again.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - open
+          - paid
+        initial: open
+        transitions:
+          open:
+            - paid
+          paid: []
+      paid_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_branches:
+    op: list
+    entity: branch
+    filters: []
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /branches
+    description: List branches, first page of 25.
+  create_branch:
+    op: create
+    entity: branch
+    method: POST
+    path: /branches
+    description: Create a branch with name, code and city.
+  list_titles:
+    op: list
+    entity: title
+    filters: []
+    search:
+      - title
+      - author
+    sort:
+      - title
+    pageSize: 25
+    method: GET
+    path: /titles
+    description: List titles, searchable by title and author, sortable by title.
+  create_title:
+    op: create
+    entity: title
+    method: POST
+    path: /titles
+    description: Create a title.
+  get_title:
+    op: get
+    entity: title
+    method: GET
+    path: /titles/{id}
+    description: Get one title.
+  list_copies:
+    op: list
+    entity: book_copy
+    filters:
+      - status
+      - branch_id
+      - title_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /copies
+    description: List copies, filterable by status, branch_id and title_id.
+  create_copy:
+    op: create
+    entity: book_copy
+    method: POST
+    path: /copies
+    description: Add a copy of a title at a branch. Starts available.
+  get_copy:
+    op: get
+    entity: book_copy
+    method: GET
+    path: /copies/{id}
+    description: Get one copy.
+  list_members:
+    op: list
+    entity: member
+    filters:
+      - home_branch_id
+      - active
+    search:
+      - name
+      - email
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /members
+    description: List members, filterable by home_branch_id and active, searchable by name and email.
+  create_member:
+    op: create
+    entity: member
+    method: POST
+    path: /members
+    description: Register a member.
+  get_member:
+    op: get
+    entity: member
+    method: GET
+    path: /members/{id}
+    description: Get one member.
+  list_checkouts:
+    op: list
+    entity: checkout
+    filters:
+      - member_id
+      - copy_id
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /checkouts
+    description: List loans, filterable by member_id, copy_id and status.
+  get_checkout:
+    op: get
+    entity: checkout
+    method: GET
+    path: /checkouts/{id}
+    description: Get one loan.
+  list_holds:
+    op: list
+    entity: hold
+    filters:
+      - title_id
+      - member_id
+      - status
+    search: []
+    sort:
+      - queued_at
+    pageSize: 25
+    method: GET
+    path: /holds
+    description: List holds, filterable by title_id, member_id and status, sortable by queued_at.
+  get_hold:
+    op: get
+    entity: hold
+    method: GET
+    path: /holds/{id}
+    description: Get one hold.
+  list_fines:
+    op: list
+    entity: fine
+    filters:
+      - member_id
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /fines
+    description: List fines, filterable by member_id and status.
+  get_fine:
+    op: get
+    entity: fine
+    method: GET
+    path: /fines/{id}
+    description: Get one fine.
+actions:
+  checkout_copy:
+    method: POST
+    path: /copies/{id}/checkout
+    description: Lend a copy to a member. Refused with fines_owed while the member has an open fine, copy_unavailable when the copy is out or withdrawn, and copy_reserved when it is held for another member. A ready hold for this member on this copy is fulfilled.
+    input:
+      member_id:
+        type: ref
+        description: The borrowing member.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const now = ctx.now();
+        const copy = ctx.db.get('book_copy', ctx.params.id);
+        if (copy === null) ctx.fail(404, 'not_found', 'copy ' + ctx.params.id + ' not found');
+        const member = ctx.db.get('member', ctx.body.member_id);
+        if (member === null) ctx.fail(404, 'not_found', 'member ' + ctx.body.member_id + ' not found');
+        const owed = ctx.db.list('fine', { where: { member_id: member.id, status: 'open' } });
+        if (owed.length > 0) ctx.fail(409, 'fines_owed', 'member ' + member.id + ' has ' + owed.length + ' open fine(s). Pay them before borrowing.');
+        let hold = null;
+        if (copy.status === 'on_hold') {
+          for (const h of ctx.db.list('hold', { where: { copy_id: copy.id, status: 'ready' } })) {
+            if (h.member_id === member.id) hold = h;
+          }
+          if (hold === null) ctx.fail(409, 'copy_reserved', 'copy ' + copy.id + ' is on hold for another member');
+        } else if (copy.status !== 'available') {
+          ctx.fail(409, 'copy_unavailable', 'copy ' + copy.id + ' is ' + copy.status + ' and cannot be lent');
+        }
+        if (hold !== null) ctx.db.update('hold', hold.id, { status: 'fulfilled' });
+        ctx.db.update('book_copy', copy.id, { status: 'checked_out' });
+        const loan = ctx.db.create('checkout', { member_id: member.id, copy_id: copy.id, checked_out_at: now, due_at: ctx.time.plus(now, '14d'), returned_at: null, status: 'active' });
+        return { status: 201, body: loan };
+      }
+  return_copy:
+    method: POST
+    path: /checkouts/{id}/return
+    description: Check in an active loan. The copy goes on hold for the earliest waiting hold on its title (ties by id), which becomes ready for 3 days. With no waiting hold the copy becomes available.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const now = ctx.now();
+        const loan = ctx.db.get('checkout', ctx.params.id);
+        if (loan === null) ctx.fail(404, 'not_found', 'checkout ' + ctx.params.id + ' not found');
+        if (loan.status !== 'active') ctx.fail(409, 'invalid_state', 'checkout ' + loan.id + ' is already ' + loan.status + '.');
+        const copy = ctx.db.get('book_copy', loan.copy_id);
+        if (copy === null) ctx.fail(404, 'not_found', 'copy ' + loan.copy_id + ' not found');
+        const updated = ctx.db.update('checkout', loan.id, { status: 'returned', returned_at: now });
+        let waiting = null;
+        for (const h of ctx.db.list('hold', { where: { title_id: copy.title_id, status: 'waiting' } })) {
+          if (waiting === null || h.queued_at < waiting.queued_at || (h.queued_at === waiting.queued_at && h.id < waiting.id)) waiting = h;
+        }
+        if (waiting !== null) {
+          ctx.db.update('hold', waiting.id, { status: 'ready', copy_id: copy.id, ready_until: ctx.time.plus(now, '3d') });
+          ctx.db.update('book_copy', copy.id, { status: 'on_hold' });
+        } else {
+          ctx.db.update('book_copy', copy.id, { status: 'available' });
+        }
+        return { status: 200, body: updated };
+      }
+  withdraw_copy:
+    method: POST
+    path: /copies/{id}/withdraw
+    description: Withdraw an available copy from circulation. Any other status is refused with copy_unavailable. Withdrawn is final.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const copy = ctx.db.get('book_copy', ctx.params.id);
+        if (copy === null) ctx.fail(404, 'not_found', 'copy ' + ctx.params.id + ' not found');
+        if (copy.status !== 'available') ctx.fail(409, 'copy_unavailable', 'copy ' + copy.id + ' is ' + copy.status + '. Only an available copy can be withdrawn.');
+        return { status: 200, body: ctx.db.update('book_copy', copy.id, { status: 'withdrawn' }) };
+      }
+  place_hold:
+    method: POST
+    path: /titles/{id}/holds
+    description: Queue a member for a title. Refused with duplicate_hold when the member already has a waiting or ready hold for that title.
+    input:
+      member_id:
+        type: ref
+        description: The member joining the queue.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const now = ctx.now();
+        const title = ctx.db.get('title', ctx.params.id);
+        if (title === null) ctx.fail(404, 'not_found', 'title ' + ctx.params.id + ' not found');
+        const member = ctx.db.get('member', ctx.body.member_id);
+        if (member === null) ctx.fail(404, 'not_found', 'member ' + ctx.body.member_id + ' not found');
+        const mine = ctx.db.list('hold', { where: { title_id: title.id, member_id: member.id } });
+        if (mine.some((h) => h.status === 'waiting' || h.status === 'ready')) ctx.fail(409, 'duplicate_hold', 'member ' + member.id + ' already has a waiting or ready hold on title ' + title.id);
+        const hold = ctx.db.create('hold', { title_id: title.id, member_id: member.id, copy_id: null, queued_at: now, ready_until: null, status: 'waiting' });
+        return { status: 201, body: hold };
+      }
+  cancel_hold:
+    method: POST
+    path: /holds/{id}/cancel
+    description: Cancel a waiting or ready hold. A ready hold frees its copy to available; no other member is offered it.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const h = ctx.db.get('hold', ctx.params.id);
+        if (h === null) ctx.fail(404, 'not_found', 'hold ' + ctx.params.id + ' not found');
+        if (h.status !== 'waiting' && h.status !== 'ready') ctx.fail(409, 'invalid_state', 'hold ' + h.id + ' is ' + h.status + '. Only waiting or ready holds can be cancelled.');
+        if (h.status === 'ready' && h.copy_id !== null) {
+          const copy = ctx.db.get('book_copy', h.copy_id);
+          if (copy !== null && copy.status === 'on_hold') ctx.db.update('book_copy', copy.id, { status: 'available' });
+        }
+        return { status: 200, body: ctx.db.update('hold', h.id, { status: 'cancelled' }) };
+      }
+  pay_fine:
+    method: POST
+    path: /fines/{id}/pay
+    description: Settle an open fine in full. A paid fine cannot be paid again.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const f = ctx.db.get('fine', ctx.params.id);
+        if (f === null) ctx.fail(404, 'not_found', 'fine ' + ctx.params.id + ' not found');
+        if (f.status !== 'open') ctx.fail(409, 'invalid_state', 'fine ' + f.id + ' is already ' + f.status + '.');
+        return { status: 200, body: ctx.db.update('fine', f.id, { status: 'paid', paid_at: ctx.now() }) };
+      }
+jobs:
+  expire_ready_holds:
+    description: Every hour. A ready hold whose ready_until has passed is cancelled and its copy becomes available.
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const h of ctx.db.list('hold', { where: { status: 'ready' } })) {
+          if (h.ready_until === null || ctx.time.minutesBetween(h.ready_until, now) <= 0) continue;
+          ctx.db.update('hold', h.id, { status: 'cancelled' });
+          if (h.copy_id !== null) {
+            const copy = ctx.db.get('book_copy', h.copy_id);
+            if (copy !== null && copy.status === 'on_hold') ctx.db.update('book_copy', copy.id, { status: 'available' });
+          }
+        }
+      }
+  accrue_overdue_fines:
+    description: Every day. For each active checkout past its due_at, create its open fine if none exists, then set the open fine amount to 25 minor units times the full days overdue. Paid fines are left alone.
+    every: 1d
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const c of ctx.db.list('checkout', { where: { status: 'active' } })) {
+          const late = ctx.time.minutesBetween(c.due_at, now);
+          if (late <= 0) continue;
+          const days = Math.floor(late / 1440);
+          if (days < 1) continue;
+          const amount = 25 * days;
+          const fine = ctx.db.list('fine', { where: { checkout_id: c.id } })[0];
+          if (!fine) {
+            ctx.db.create('fine', { member_id: c.member_id, checkout_id: c.id, amount: amount, status: 'open', paid_at: null });
+          } else if (fine.status === 'open') {
+            ctx.db.update('fine', fine.id, { amount: amount });
+          }
+        }
+      }
+fixtures: {}
+seed:
+  branch: "(ctx) => { const t = '2024-02-05T09:00:00.000Z'; const rows = [{ name: 'Harbor Branch', code: 'HBR', city: 'Port Alder' }, { name: 'Ridge Branch', code: 'RDG', city: 'Hillcrest' }, { name: 'Mill Branch', code: 'MLL', city: 'Millbrook' }, { name: 'Central Branch', code: 'CTR', city: 'Civic Center' }]; return rows.map((r) => ({ ...r, created_at: t, updated_at: t })); }"
+  title: "(ctx) => { const BASE = '2026-10-09T09:00:00.000Z'; const list = [['The Overstory', 'Richard Powers'], ['Piranesi', 'Susanna Clarke'], ['Circe', 'Madeline Miller'], ['Klara and the Sun', 'Kazuo Ishiguro'], ['Lessons in Chemistry', 'Bonnie Garmus'], ['Demon Copperhead', 'Barbara Kingsolver'], ['Project Hail Mary', 'Andy Weir'], ['The Thursday Murder Club', 'Richard Osman'], ['Small Things Like These', 'Claire Keegan'], ['The Midnight Library', 'Matt Haig'], ['Station Eleven', 'Emily St John Mandel'], ['Braiding Sweetgrass', 'Robin Wall Kimmerer'], ['A Gentleman in Moscow', 'Amor Towles'], ['The Covenant of Water', 'Abraham Verghese'], ['Bewilderment', 'Richard Powers'], ['Cloud Cuckoo Land', 'Anthony Doerr'], ['Crying in H Mart', 'Michelle Zauner'], ['The Vanishing Half', 'Brit Bennett'], ['Tomorrow and Tomorrow and Tomorrow', 'Gabrielle Zevin'], ['The Remains of the Day', 'Kazuo Ishiguro']]; return list.map(([title, author], i) => { const created = ctx.time.minus(BASE, (400 - i * 7) + 'd'); return { title, author, created_at: created, updated_at: created }; }); }"
+  member: "(ctx) => { const BASE = '2026-10-09T09:00:00.000Z'; const branches = ctx.rows('branch'); const people = [['Maya Chen', 'maya.chen', 0], ['Lena Park', 'lena.park', 1], ['Ben Ortiz', 'ben.ortiz', 2], ['Sam Ruiz', 'sam.ruiz', 0], ['Priya Natarajan', 'priya.natarajan', 3], ['Tomas Ferreira', 'tomas.ferreira', 2], ['Hannah Lindqvist', 'hannah.lindqvist', 1], ['Devon Carter', 'devon.carter', 0], ['Aiko Tanaka', 'aiko.tanaka', 2], ['Marcus Webb', 'marcus.webb', 3], ['Olu Adeyemi', 'olu.adeyemi', 1], ['Grace Kowalski', 'grace.kowalski', 0], ['Ivan Petrov', 'ivan.petrov', 2], ['Rosa Delgado', 'rosa.delgado', 3], ['Eli Brandt', 'eli.brandt', 1], ['Nadia Haddad', 'nadia.haddad', 0], ['Owen Murphy', 'owen.murphy', 2], ['Chloe Dubois', 'chloe.dubois', 3], ['Samir Qureshi', 'samir.qureshi', 1], ['Mei Lin', 'mei.lin', 0], ['Jonah Pike', 'jonah.pike', 2], ['Fatima Noor', 'fatima.noor', 3], ['Theo Sato', 'theo.sato', 1], ['Ruth Abara', 'ruth.abara', 0]]; return people.map(([name, local, b], i) => { const created = ctx.time.minus(BASE, (300 - i * 5) + 'd'); return { name, email: local + '@library.example', home_branch_id: branches[b].id, active: true, created_at: created, updated_at: created }; }); }"
+  book_copy: "(ctx) => { const BASE = '2026-10-09T09:00:00.000Z'; const ago = (d) => ctx.time.minus(BASE, d + 'd'); const titles = ctx.rows('title'); const branches = ctx.rows('branch'); const others = ['on_hold', 'checked_out', 'available', 'available', 'withdrawn', 'checked_out', 'available', 'available', 'checked_out', 'available', 'available', 'checked_out', 'withdrawn', 'available', 'available', 'checked_out', 'available', 'available', 'checked_out', 'available', 'withdrawn', 'available', 'available', 'checked_out', 'available', 'checked_out', 'checked_out']; const copies = [{ t: 0, b: 0, status: 'available' }, { t: 0, b: 1, status: 'on_hold' }, { t: 0, b: 2, status: 'checked_out' }]; for (let i = 3; i < 30; i++) copies.push({ t: 1 + ((i - 3) % 19), b: i % 4, status: others[i - 3] }); return copies.map((c, i) => { const created = ago(240 - i * 3); const updated = c.status === 'on_hold' ? ago(2) : c.status === 'checked_out' ? ago(6) : c.status === 'withdrawn' ? ago(100) : created; return { barcode: 'LIB-' + String(i + 1).padStart(4, '0'), title_id: titles[c.t].id, branch_id: branches[c.b].id, status: c.status, created_at: created, updated_at: updated }; }); }"
+  checkout: "(ctx) => { const BASE = '2026-10-09T09:00:00.000Z'; const ago = (d) => ctx.time.minus(BASE, d + 'd'); const members = ctx.rows('member'); const copies = ctx.rows('book_copy'); const lent = copies.filter((c) => c.status === 'checked_out'); const rows = []; lent.forEach((c, j) => { const m = j === 0 ? 2 : 4 + ((j * 3) % 20); const out = j === 0 ? 4 : 1 + ((j * 5) % 12); const at = ago(out); rows.push({ member_id: members[m].id, copy_id: c.id, checked_out_at: at, due_at: ctx.time.plus(at, '14d'), returned_at: null, status: 'active', created_at: at, updated_at: at }); }); const returned = [[1, 0, 60, 30], [4, 6, 40, 17], [5, 7, 45, 20], [6, 9, 30, 10], [7, 10, 25, 8], [8, 12, 20, 12], [9, 13, 33, 5], [10, 15, 50, 35], [11, 16, 22, 15], [12, 17, 58, 43]]; for (const [m, c, out, back] of returned) { const at = ago(out); rows.push({ member_id: members[m].id, copy_id: copies[c].id, checked_out_at: at, due_at: ctx.time.plus(at, '14d'), returned_at: ago(back), status: 'returned', created_at: at, updated_at: ago(back) }); } return rows; }"
+  fine: "(ctx) => { const BASE = '2026-10-09T09:00:00.000Z'; const ago = (d) => ctx.time.minus(BASE, d + 'd'); const returned = ctx.rows('checkout').filter((c) => c.status === 'returned').sort((a, b) => (a.id < b.id ? -1 : 1)); const spec = [[0, 16, null], [1, 9, null], [2, 11, 15], [3, 6, null], [4, 3, 5], [6, 14, null], [7, 1, 20], [9, 1, null]]; return spec.map(([i, days, paid]) => { const c = returned[i]; const created = ctx.time.plus(c.due_at, '1d'); const paidAt = paid === null ? null : ago(paid); return { member_id: c.member_id, checkout_id: c.id, amount: 25 * days, status: paid === null ? 'open' : 'paid', paid_at: paidAt, created_at: created, updated_at: paid === null ? created : paidAt }; }); }"
+  hold: "(ctx) => { const BASE = '2026-10-09T09:00:00.000Z'; const ago = (d) => ctx.time.minus(BASE, d + 'd'); const fut = (d) => ctx.time.plus(BASE, d + 'd'); const T = ctx.rows('title'); const M = ctx.rows('member'); const C = ctx.rows('book_copy'); const h = (t, m, c, q, status, u, ready) => ({ title_id: T[t].id, member_id: M[m].id, copy_id: c === null ? null : C[c].id, queued_at: q, ready_until: ready, status, created_at: q, updated_at: u }); return [h(0, 1, 1, ago(12), 'ready', ago(2), fut(1)), h(0, 3, null, ago(11), 'waiting', ago(11), null), h(0, 4, null, ago(4), 'waiting', ago(4), null), h(0, 7, null, ago(60), 'cancelled', ago(50), null), h(0, 8, 0, ago(90), 'fulfilled', ago(80), null), h(1, 9, 3, ago(15), 'ready', ago(1), fut(2)), h(1, 5, null, ago(2), 'waiting', ago(2), null), h(2, 6, 4, ago(40), 'fulfilled', ago(25), null), h(3, 10, null, ago(30), 'cancelled', ago(20), null), h(4, 17, null, ago(6), 'waiting', ago(6), null)]; }"
+tests:
+  acc_checkout_lends_copy:
+    description: Create branch, title, copy and member through the API, check the copy out, and confirm an active loan with a future due date and a checked_out copy.
+    script: (ctx) => { const b = ctx.api('POST','/branches',{name:'QA Harbor 1',code:'QA-B1',city:'Testville'}); ctx.assert(b.status===201,'branch create returned '+b.status); const t = ctx.api('POST','/titles',{title:'QA Lend Title',author:'QA Author'}); ctx.assert(t.status===201,'title create returned '+t.status); const c = ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-LEND-1'}); ctx.assert(c.status===201 && c.body.status==='available','new copy is available, got '+JSON.stringify(c.body)); const m = ctx.api('POST','/members',{name:'QA Lend Member',email:'qa.lend@library.example',home_branch_id:b.body.id}); ctx.assert(m.status===201,'member create returned '+m.status); const r = ctx.api('POST','/copies/'+c.body.id+'/checkout',{member_id:m.body.id}); ctx.assert(r.status===201,'checkout returned '+r.status+' '+JSON.stringify(r.body)); ctx.assert(r.body.status==='active' && r.body.member_id===m.body.id && r.body.copy_id===c.body.id,'checkout is active for this member and copy, got '+JSON.stringify(r.body)); ctx.assert(r.body.due_at > ctx.now(),'due date is after now, got '+r.body.due_at); const after = ctx.api('GET','/copies/'+c.body.id); ctx.assert(after.status===200 && after.body.status==='checked_out','copy is checked_out, got '+after.body.status); }
+  acc_refuses_lent_copy:
+    description: Check a copy out to one member, then try to check it out to another and expect copy_unavailable while the first loan stays active.
+    script: (ctx) => { const b=ctx.api('POST','/branches',{name:'QA Ridge 2',code:'QA-B2',city:'Testville'}); const t=ctx.api('POST','/titles',{title:'QA Lend Title 2',author:'QA Author'}); const c=ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-2'}); const a=ctx.api('POST','/members',{name:'QA Member 2A',email:'qa.2a@library.example',home_branch_id:b.body.id}); const z=ctx.api('POST','/members',{name:'QA Member 2B',email:'qa.2b@library.example',home_branch_id:b.body.id}); ctx.assert(b.status===201&&t.status===201&&c.status===201&&a.status===201&&z.status===201,'setup rows created'); const first=ctx.api('POST','/copies/'+c.body.id+'/checkout',{member_id:a.body.id}); ctx.assert(first.status===201,'first checkout returned '+first.status); const second=ctx.api('POST','/copies/'+c.body.id+'/checkout',{member_id:z.body.id}); ctx.assert(second.status===409 && second.body.error.code==='copy_unavailable','second checkout refused with copy_unavailable, got '+second.status+' '+JSON.stringify(second.body)); const still=ctx.api('GET','/checkouts/'+first.body.id); ctx.assert(still.status===200 && still.body.member_id===a.body.id && still.body.status==='active','the first loan is untouched, got '+JSON.stringify(still.body)); }
+  acc_return_serves_first_hold:
+    description: Member A borrows a copy; B then C place holds; A returns the copy. B's hold becomes ready on that copy, C is refused with copy_reserved, and B collects it and the hold is fulfilled.
+    script: (ctx) => { const b=ctx.api('POST','/branches',{name:'QA Mill 3',code:'QA-B3',city:'Testville'}); const t=ctx.api('POST','/titles',{title:'QA Queue Title',author:'QA Author'}); const c=ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-3'}); const a=ctx.api('POST','/members',{name:'QA Member 3A',email:'qa.3a@library.example',home_branch_id:b.body.id}); const q=ctx.api('POST','/members',{name:'QA Member 3B',email:'qa.3b@library.example',home_branch_id:b.body.id}); const w=ctx.api('POST','/members',{name:'QA Member 3C',email:'qa.3c@library.example',home_branch_id:b.body.id}); ctx.assert(b.status===201&&t.status===201&&c.status===201&&a.status===201&&q.status===201&&w.status===201,'setup rows created'); const out=ctx.api('POST','/copies/'+c.body.id+'/checkout',{member_id:a.body.id}); ctx.assert(out.status===201,'A checks out, got '+out.status); const hb=ctx.api('POST','/titles/'+t.body.id+'/holds',{member_id:q.body.id}); ctx.assert(hb.status===201&&hb.body.status==='waiting','B holds and waits, got '+JSON.stringify(hb.body)); const hc=ctx.api('POST','/titles/'+t.body.id+'/holds',{member_id:w.body.id}); ctx.assert(hc.status===201&&hc.body.status==='waiting','C holds and waits, got '+hc.status); const back=ctx.api('POST','/checkouts/'+out.body.id+'/return',{}); ctx.assert(back.status===200&&back.body.status==='returned','return returned '+back.status+' '+JSON.stringify(back.body)); const copy=ctx.api('GET','/copies/'+c.body.id).body; ctx.assert(copy.status==='on_hold','copy is on_hold after return, got '+copy.status); const bReady=ctx.api('GET','/holds/'+hb.body.id).body; ctx.assert(bReady.status==='ready' && bReady.copy_id===c.body.id,'first hold B is ready on the copy, got '+JSON.stringify(bReady)); const cWait=ctx.api('GET','/holds/'+hc.body.id).body; ctx.assert(cWait.status==='waiting','second hold C still waits, got '+cWait.status); const early=ctx.api('POST','/copies/'+c.body.id+'/checkout',{member_id:w.body.id}); ctx.assert(early.status===409 && early.body.error.code==='copy_reserved','C refused with copy_reserved, got '+early.status+' '+JSON.stringify(early.body)); const got=ctx.api('POST','/copies/'+c.body.id+'/checkout',{member_id:q.body.id}); ctx.assert(got.status===201,'B collects, got '+got.status+' '+JSON.stringify(got.body)); const done=ctx.api('GET','/holds/'+hb.body.id).body; ctx.assert(done.status==='fulfilled','B hold fulfilled, got '+done.status); ctx.assert(ctx.api('GET','/copies/'+c.body.id).body.status==='checked_out','copy is checked_out again'); }
+  acc_one_hold_per_member:
+    description: Place a hold, place a second hold on the same title by the same member and expect duplicate_hold; cancel the first and see it cancelled.
+    script: (ctx) => { const b=ctx.api('POST','/branches',{name:'QA Central 4',code:'QA-B4',city:'Testville'}); const t=ctx.api('POST','/titles',{title:'QA Hold Title',author:'QA Author'}); const m=ctx.api('POST','/members',{name:'QA Member 4',email:'qa.4@library.example',home_branch_id:b.body.id}); ctx.assert(b.status===201&&t.status===201&&m.status===201,'setup rows created'); const first=ctx.api('POST','/titles/'+t.body.id+'/holds',{member_id:m.body.id}); ctx.assert(first.status===201&&first.body.status==='waiting','first hold waiting, got '+JSON.stringify(first.body)); const again=ctx.api('POST','/titles/'+t.body.id+'/holds',{member_id:m.body.id}); ctx.assert(again.status===409 && again.body.error.code==='duplicate_hold','second hold refused with duplicate_hold, got '+again.status+' '+JSON.stringify(again.body)); const cancel=ctx.api('POST','/holds/'+first.body.id+'/cancel',{}); ctx.assert(cancel.status===200 && cancel.body.status==='cancelled','cancel returned '+cancel.status+' '+JSON.stringify(cancel.body)); }
+  acc_overdue_accrues_fine:
+    description: Check a copy out, advance the clock 15 days past its 14-day due date, and expect one open fine with a positive amount for that member; the loan is still active.
+    script: (ctx) => { const b=ctx.api('POST','/branches',{name:'QA Harbor 5',code:'QA-B5',city:'Testville'}); const t=ctx.api('POST','/titles',{title:'QA Overdue Title',author:'QA Author'}); const c=ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-5'}); const m=ctx.api('POST','/members',{name:'QA Member 5',email:'qa.5@library.example',home_branch_id:b.body.id}); ctx.assert(b.status===201&&t.status===201&&c.status===201&&m.status===201,'setup rows created'); const out=ctx.api('POST','/copies/'+c.body.id+'/checkout',{member_id:m.body.id}); ctx.assert(out.status===201,'checkout returned '+out.status); ctx.advance('15d'); const fines=ctx.api('GET','/fines?member_id='+m.body.id).body.data; ctx.assert(fines.length===1,'one fine for this member, got '+fines.length); ctx.assert(fines[0].status==='open' && fines[0].amount>0 && fines[0].checkout_id===out.body.id,'open fine on this loan, got '+JSON.stringify(fines[0])); const loan=ctx.api('GET','/checkouts/'+out.body.id).body; ctx.assert(loan.status==='active','loan is still active, got '+loan.status); }
+  acc_fines_block_checkout:
+    description: Borrow one copy, go 15 days past due, try to borrow a second copy and expect fines_owed; pay the fine, then the second checkout succeeds.
+    script: (ctx) => { const b=ctx.api('POST','/branches',{name:'QA Harbor 6',code:'QA-B6',city:'Testville'}); const t=ctx.api('POST','/titles',{title:'QA Fine Title',author:'QA Author'}); const c1=ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-6A'}); const c2=ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-6B'}); const m=ctx.api('POST','/members',{name:'QA Member 6',email:'qa.6@library.example',home_branch_id:b.body.id}); ctx.assert(b.status===201&&t.status===201&&c1.status===201&&c2.status===201&&m.status===201,'setup rows created'); ctx.assert(ctx.api('POST','/copies/'+c1.body.id+'/checkout',{member_id:m.body.id}).status===201,'first loan made'); ctx.advance('15d'); const blocked=ctx.api('POST','/copies/'+c2.body.id+'/checkout',{member_id:m.body.id}); ctx.assert(blocked.status===409 && blocked.body.error.code==='fines_owed','loan refused with fines_owed, got '+blocked.status+' '+JSON.stringify(blocked.body)); const open=ctx.api('GET','/fines?member_id='+m.body.id+'&status=open').body.data; ctx.assert(open.length===1,'one open fine, got '+open.length); const paid=ctx.api('POST','/fines/'+open[0].id+'/pay',{}); ctx.assert(paid.status===200 && paid.body.status==='paid','pay returned '+paid.status+' '+JSON.stringify(paid.body)); const ok=ctx.api('POST','/copies/'+c2.body.id+'/checkout',{member_id:m.body.id}); ctx.assert(ok.status===201,'loan allowed after payment, got '+ok.status+' '+JSON.stringify(ok.body)); }
+  acc_ready_hold_expires:
+    description: Return a copy with a waiting hold so the hold becomes ready, advance 4 days, and expect the hold cancelled and the copy available.
+    script: (ctx) => { const b=ctx.api('POST','/branches',{name:'QA Mill 7',code:'QA-B7',city:'Testville'}); const t=ctx.api('POST','/titles',{title:'QA Expire Title',author:'QA Author'}); const c=ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-7'}); const a=ctx.api('POST','/members',{name:'QA Member 7A',email:'qa.7a@library.example',home_branch_id:b.body.id}); const q=ctx.api('POST','/members',{name:'QA Member 7B',email:'qa.7b@library.example',home_branch_id:b.body.id}); ctx.assert(b.status===201&&t.status===201&&c.status===201&&a.status===201&&q.status===201,'setup rows created'); const out=ctx.api('POST','/copies/'+c.body.id+'/checkout',{member_id:a.body.id}); ctx.assert(out.status===201,'A checks out'); const h=ctx.api('POST','/titles/'+t.body.id+'/holds',{member_id:q.body.id}); ctx.assert(h.status===201,'B holds'); ctx.assert(ctx.api('POST','/checkouts/'+out.body.id+'/return',{}).status===200,'A returns'); ctx.assert(ctx.api('GET','/holds/'+h.body.id).body.status==='ready','B hold is ready'); ctx.advance('4d'); const expired=ctx.api('GET','/holds/'+h.body.id).body; ctx.assert(expired.status==='cancelled','hold expired to cancelled, got '+expired.status); ctx.assert(ctx.api('GET','/copies/'+c.body.id).body.status==='available','copy is available again'); }
+  acc_withdraw_only_available:
+    description: Refuse withdrawal of a checked-out copy with copy_unavailable, withdraw an available copy, and refuse to lend it.
+    script: (ctx) => { const b=ctx.api('POST','/branches',{name:'QA Central 8',code:'QA-B8',city:'Testville'}); const t=ctx.api('POST','/titles',{title:'QA Withdraw Title',author:'QA Author'}); const c1=ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-8A'}); const c2=ctx.api('POST','/copies',{title_id:t.body.id,branch_id:b.body.id,barcode:'QA-CP-8B'}); const m=ctx.api('POST','/members',{name:'QA Member 8',email:'qa.8@library.example',home_branch_id:b.body.id}); ctx.assert(b.status===201&&t.status===201&&c1.status===201&&c2.status===201&&m.status===201,'setup rows created'); ctx.assert(ctx.api('POST','/copies/'+c1.body.id+'/checkout',{member_id:m.body.id}).status===201,'copy 1 lent'); const wrong=ctx.api('POST','/copies/'+c1.body.id+'/withdraw',{}); ctx.assert(wrong.status===409 && wrong.body.error.code==='copy_unavailable','withdraw of a lent copy refused, got '+wrong.status+' '+JSON.stringify(wrong.body)); const ok=ctx.api('POST','/copies/'+c2.body.id+'/withdraw',{}); ctx.assert(ok.status===200 && ok.body.status==='withdrawn','withdraw returned '+ok.status+' '+JSON.stringify(ok.body)); const lend=ctx.api('POST','/copies/'+c2.body.id+'/checkout',{member_id:m.body.id}); ctx.assert(lend.status===409 && lend.body.error.code==='copy_unavailable','withdrawn copy not lent, got '+lend.status); }
+tasks:
+  checkout_available_copy:
+    difficulty: easy
+    instruction: Lend the copy of The Overstory that is available at the Harbor branch to the member Maya Chen. Change nothing else.
+    grader: "(ctx) => { const title = ctx.seed.list('title', { where: { title: 'The Overstory' } })[0]; const harbor = ctx.seed.list('branch', { where: { code: 'HBR' } })[0]; const maya = ctx.seed.list('member', { where: { name: 'Maya Chen' } })[0]; if (!title || !harbor || !maya) return 0; const copy = ctx.seed.list('book_copy', { where: { title_id: title.id, branch_id: harbor.id, status: 'available' } })[0]; if (!copy) return 0; const loans = ctx.db.list('checkout', { where: { member_id: maya.id, copy_id: copy.id } }).filter((c) => ctx.seed.get('checkout', c.id) === null); ctx.guardChanges('only the copy and the new loan changed', [{ entity: 'book_copy', id: copy.id, kind: 'updated', fields: ['status'] }, ...loans.map((c) => ({ entity: 'checkout', id: c.id, kind: 'created', fields: ['member_id', 'copy_id', 'checked_out_at', 'due_at', 'returned_at', 'status'] }))]); const end = ctx.db.get('book_copy', copy.id); ctx.goal(0.5, 'a new active loan of the copy to Maya Chen', loans.some((c) => c.status === 'active')); ctx.goal(0.5, 'the copy is checked out', end.status === 'checked_out'); return ctx.score(); }"
+    solution: "(ctx) => { const title = ctx.api('GET', '/titles').body.data.find((t) => t.title === 'The Overstory'); ctx.assert(title, 'title The Overstory not found'); const harbor = ctx.api('GET', '/branches').body.data.find((b) => b.code === 'HBR'); ctx.assert(harbor, 'Harbor branch not found'); const copy = ctx.api('GET', '/copies?title_id=' + title.id + '&branch_id=' + harbor.id + '&status=available').body.data[0]; ctx.assert(copy, 'no available copy of The Overstory at Harbor'); const maya = ctx.api('GET', '/members').body.data.find((m) => m.name === 'Maya Chen'); ctx.assert(maya, 'member Maya Chen not found'); const r = ctx.api('POST', '/copies/' + copy.id + '/checkout', { member_id: maya.id }); ctx.assert(r.status === 201, 'checkout failed: ' + JSON.stringify(r.body)); }"
+    decoys: []
+    alternatives: []
+    allows:
+      - entity: book_copy
+        kind: updated
+        fields:
+          - status
+        where:
+          barcode: LIB-0001
+      - entity: checkout
+        kind: created
+        fields: []
+        where:
+          status: active
+  return_and_serve_hold:
+    difficulty: medium
+    instruction: Ben Ortiz is bringing back his loan of The Overstory. Check that loan in. The returned copy must go to the patron who has waited longest for that title, not the newest one. Change nothing else.
+    grader: "(ctx) => { const title = ctx.seed.list('title', { where: { title: 'The Overstory' } })[0]; const copy = ctx.seed.list('book_copy', { where: { barcode: 'LIB-0003' } })[0]; if (!title || !copy) return 0; const loan = ctx.seed.list('checkout', { where: { copy_id: copy.id, status: 'active' } })[0]; if (!loan) return 0; const waiting = ctx.seed.list('hold', { where: { title_id: title.id, status: 'waiting' } }).sort((a, b) => (a.queued_at < b.queued_at ? -1 : a.queued_at > b.queued_at ? 1 : a.id < b.id ? -1 : 1)); if (waiting.length < 2) return 0; const longest = waiting[0]; ctx.guardChanges('only the loan, the copy and the longest-waiting hold changed', [{ entity: 'checkout', id: loan.id, kind: 'updated', fields: ['status', 'returned_at'] }, { entity: 'book_copy', id: copy.id, kind: 'updated', fields: ['status'] }, { entity: 'hold', id: longest.id, kind: 'updated', fields: ['status', 'copy_id', 'ready_until'] }]); const endLoan = ctx.db.get('checkout', loan.id); const endCopy = ctx.db.get('book_copy', copy.id); const endHold = ctx.db.get('hold', longest.id); ctx.goal(0.5, 'the loan is checked in', endLoan.status === 'returned' && endLoan.returned_at !== null); ctx.goal(0.5, 'the copy is on hold for the longest-waiting patron', endHold.status === 'ready' && endHold.copy_id === copy.id && endCopy.status === 'on_hold'); return ctx.score(); }"
+    solution: "(ctx) => { const title = ctx.api('GET', '/titles').body.data.find((t) => t.title === 'The Overstory'); ctx.assert(title, 'title The Overstory not found'); const out = ctx.api('GET', '/copies?title_id=' + title.id + '&status=checked_out').body.data; ctx.assert(out.length === 1, 'expected one checked-out copy, found ' + out.length); const ben = ctx.api('GET', '/members').body.data.find((m) => m.name === 'Ben Ortiz'); ctx.assert(ben, 'member Ben Ortiz not found'); const loan = ctx.api('GET', '/checkouts?copy_id=' + out[0].id + '&status=active').body.data.find((l) => l.member_id === ben.id); ctx.assert(loan, 'no active loan of this copy to Ben Ortiz'); const queue = ctx.api('GET', '/holds?title_id=' + title.id + '&status=waiting&sort=queued_at').body.data; ctx.assert(queue.length > 0, 'no waiting holds on The Overstory'); const r = ctx.api('POST', '/checkouts/' + loan.id + '/return', {}); ctx.assert(r.status === 200, 'return failed: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: checks the loan in, then cancels the hold it just made ready, so the copy goes back to the shelf and the longest-waiting patron gets nothing
+        script: (ctx) => { const title = ctx.api('GET', '/titles').body.data.find((t) => t.title === 'The Overstory'); const copy = ctx.api('GET', '/copies?title_id=' + title.id + '&status=checked_out').body.data[0]; const ben = ctx.api('GET', '/members').body.data.find((m) => m.name === 'Ben Ortiz'); const loan = ctx.api('GET', '/checkouts?copy_id=' + copy.id + '&status=active').body.data.find((l) => l.member_id === ben.id); ctx.assert(ctx.api('POST', '/checkouts/' + loan.id + '/return', {}).status === 200, 'return failed'); const served = ctx.api('GET', '/holds?title_id=' + title.id + '&status=ready').body.data.find((h) => h.copy_id === copy.id); ctx.api('POST', '/holds/' + served.id + '/cancel', {}); }
+      - why: cancels the longest-waiting hold and leaves Ben's loan active, so the copy is never checked in
+        script: (ctx) => { const title = ctx.api('GET', '/titles').body.data.find((t) => t.title === 'The Overstory'); const queue = ctx.api('GET', '/holds?title_id=' + title.id + '&status=waiting&sort=queued_at').body.data; ctx.api('POST', '/holds/' + queue[0].id + '/cancel', {}); }
+    alternatives: []
+    allows:
+      - entity: checkout
+        kind: updated
+        fields:
+          - status
+          - returned_at
+        where:
+          status: active
+      - entity: book_copy
+        kind: updated
+        fields:
+          - status
+        where:
+          barcode: LIB-0003
+      - entity: hold
+        kind: updated
+        fields:
+          - status
+          - copy_id
+          - ready_until
+        where:
+          status: waiting
+  settle_and_collect_hold:
+    difficulty: hard
+    instruction: Lena Park wants the copy of The Overstory that is being held for her. Settle her open fine first, then check that held copy out to her. Do not lend the copy that is sitting available on the shelf to anyone.
+    grader: "(ctx) => { const lena = ctx.seed.list('member', { where: { name: 'Lena Park' } })[0]; const title = ctx.seed.list('title', { where: { title: 'The Overstory' } })[0]; if (!lena || !title) return 0; const fine = ctx.seed.list('fine', { where: { member_id: lena.id, status: 'open' } })[0]; const hold = ctx.seed.list('hold', { where: { member_id: lena.id, status: 'ready' } }).find((h) => h.title_id === title.id); if (!fine || !hold || hold.copy_id === null) return 0; const copy = ctx.seed.get('book_copy', hold.copy_id); if (!copy) return 0; const loans = ctx.db.list('checkout', { where: { member_id: lena.id, copy_id: copy.id } }).filter((c) => ctx.seed.get('checkout', c.id) === null); ctx.guardChanges('only the fine, the held copy, its hold and the new loan changed', [{ entity: 'fine', id: fine.id, kind: 'updated', fields: ['status', 'paid_at'] }, { entity: 'hold', id: hold.id, kind: 'updated', fields: ['status'] }, { entity: 'book_copy', id: copy.id, kind: 'updated', fields: ['status'] }, ...loans.map((c) => ({ entity: 'checkout', id: c.id, kind: 'created', fields: ['member_id', 'copy_id', 'checked_out_at', 'due_at', 'returned_at', 'status'] }))]); const endFine = ctx.db.get('fine', fine.id); const endHold = ctx.db.get('hold', hold.id); const endCopy = ctx.db.get('book_copy', copy.id); ctx.goal(0.4, 'the open fine is paid', endFine.status === 'paid'); ctx.goal(0.6, 'the copy held for Lena is out to her and her hold is fulfilled', endHold.status === 'fulfilled' && endCopy.status === 'checked_out' && loans.some((c) => c.status === 'active')); return ctx.score(); }"
+    solution: "(ctx) => { const lena = ctx.api('GET', '/members').body.data.find((m) => m.name === 'Lena Park'); ctx.assert(lena, 'member Lena Park not found'); const title = ctx.api('GET', '/titles').body.data.find((t) => t.title === 'The Overstory'); ctx.assert(title, 'title The Overstory not found'); const open = ctx.api('GET', '/fines?member_id=' + lena.id + '&status=open').body.data; ctx.assert(open.length === 1, 'expected one open fine, found ' + open.length); const paid = ctx.api('POST', '/fines/' + open[0].id + '/pay', {}); ctx.assert(paid.status === 200, 'pay failed: ' + JSON.stringify(paid.body)); const copies = ctx.api('GET', '/copies?title_id=' + title.id).body.data; const hold = ctx.api('GET', '/holds?member_id=' + lena.id + '&status=ready').body.data.find((h) => h.title_id === title.id); ctx.assert(hold && hold.copy_id, 'no ready hold for Lena on The Overstory'); const copy = copies.find((c) => c.id === hold.copy_id); ctx.assert(copy, 'held copy not listed under the title'); const r = ctx.api('POST', '/copies/' + copy.id + '/checkout', { member_id: lena.id }); ctx.assert(r.status === 201, 'checkout failed: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: settles the fine and stops there, so the held copy is never collected and the hold stays ready
+        script: (ctx) => { const lena = ctx.api('GET', '/members').body.data.find((m) => m.name === 'Lena Park'); const open = ctx.api('GET', '/fines?member_id=' + lena.id + '&status=open').body.data; ctx.api('POST', '/fines/' + open[0].id + '/pay', {}); }
+      - why: settles the fine, then checks out the copy sitting available on the shelf instead of the one held for her
+        script: "(ctx) => { const lena = ctx.api('GET', '/members').body.data.find((m) => m.name === 'Lena Park'); const title = ctx.api('GET', '/titles').body.data.find((t) => t.title === 'The Overstory'); const open = ctx.api('GET', '/fines?member_id=' + lena.id + '&status=open').body.data; ctx.api('POST', '/fines/' + open[0].id + '/pay', {}); const avail = ctx.api('GET', '/copies?title_id=' + title.id + '&status=available').body.data[0]; ctx.api('POST', '/copies/' + avail.id + '/checkout', { member_id: lena.id }); }"
+    alternatives: []
+    allows:
+      - entity: fine
+        kind: updated
+        fields:
+          - status
+          - paid_at
+        where:
+          status: open
+      - entity: hold
+        kind: updated
+        fields:
+          - status
+        where:
+          status: ready
+      - entity: book_copy
+        kind: updated
+        fields:
+          - status
+        where:
+          barcode: LIB-0002
+      - entity: checkout
+        kind: created
+        fields: []
+        where:
+          status: active

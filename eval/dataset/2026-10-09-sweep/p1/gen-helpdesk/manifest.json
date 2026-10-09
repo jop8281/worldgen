@@ -1,0 +1,51 @@
+{
+  "manifest_version": 2,
+  "schema_version": 2,
+  "provider": "anthropic",
+  "model": "claude-haiku-5-5",
+  "prompt_versions": [
+    "solver-prompt-1"
+  ],
+  "config_versions": [
+    "cfg-07e2771c91cb"
+  ],
+  "engine_commits": [
+    "23520120c53ee78b5bdf00530dd982d18aba070c"
+  ],
+  "run_ids": [
+    "p1-gen-helpdesk"
+  ],
+  "selection": null,
+  "worlds": [
+    {
+      "world_id": "gen_helpdesk3",
+      "world_version": "30454539cbcc3d7424e7b62f7591ff261ce12872a5ad84893255fb3c520b2747",
+      "artifact": {
+        "path": "private/worlds/30454539cbcc3d7424e7b62f7591ff261ce12872a5ad84893255fb3c520b2747/world.yaml",
+        "sha256": "30454539cbcc3d7424e7b62f7591ff261ce12872a5ad84893255fb3c520b2747"
+      }
+    }
+  ],
+  "counts": {
+    "episodes": 4,
+    "by_verdict": {
+      "success": 4,
+      "partial": 0,
+      "failure": 0,
+      "infra": 0
+    },
+    "by_stop_reason": {
+      "done": 4
+    },
+    "by_failure_cause": {}
+  },
+  "files": {
+    "dataset": {
+      "path": "dataset.jsonl",
+      "records": 4,
+      "bytes": 49128,
+      "sha256": "67b929e539798e79ae38b57d0b228de36470a720db719b4b9bb8d17c7d2ea05c"
+    }
+  },
+  "grading_note": "The engine score certifies the final world state only. It does not independently certify that the final reply is factually correct."
+}

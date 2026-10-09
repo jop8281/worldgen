@@ -1,0 +1,491 @@
+{
+  "counts": {
+    "expected": 29,
+    "observed": 21,
+    "valid": 21,
+    "invalid": 0,
+    "missing": 8,
+    "duplicate": 0,
+    "unexpected": 0
+  },
+  "outcomes": {
+    "success": 12,
+    "expected refusal": 1,
+    "product failure": 8,
+    "infra failure": 0,
+    "not run": 8
+  },
+  "cases": [
+    {
+      "id": "helpdesk-sla",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "helpdesk-sla/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 619652,
+        "costUsd": 0.25324061000000003,
+        "attempts": 8
+      }
+    },
+    {
+      "id": "bakery-vague",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "bakery-vague/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 437121,
+        "costUsd": 0.16465952,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "video-codec-impossible",
+      "status": "valid",
+      "outcome": "expected refusal",
+      "passed": true,
+      "sources": [
+        "video-codec-impossible/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 7628,
+        "costUsd": 0.011713900000000001,
+        "attempts": 1
+      }
+    },
+    {
+      "id": "library-holds",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "library-holds/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 643488,
+        "costUsd": 0.19996598,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "billing-dunning",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "billing-dunning/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 499507,
+        "costUsd": 0.18967942,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "todo-projects",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "todo-projects/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 482863,
+        "costUsd": 0.10217183,
+        "attempts": 13
+      }
+    },
+    {
+      "id": "clinic-appointments",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "clinic-appointments/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 593735,
+        "costUsd": 0.12124984999999999,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "stripe-refunds",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "stripe-refunds/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 497470,
+        "costUsd": 0.17991105999999998,
+        "attempts": 8
+      }
+    },
+    {
+      "id": "petstore-store",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "petstore-store/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 471640,
+        "costUsd": 0.08688431,
+        "attempts": 8
+      }
+    },
+    {
+      "id": "orders-csv",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "orders-csv/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 483514,
+        "costUsd": 0.09890504,
+        "attempts": 7
+      }
+    },
+    {
+      "id": "linear-backlog-csv",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "linear-backlog-csv/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 390972,
+        "costUsd": 0.37486873,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "helpdesk-add-refunds",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "helpdesk-add-refunds/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 805474,
+        "costUsd": 0.7331556,
+        "attempts": 13
+      }
+    },
+    {
+      "id": "stripe-partial-refunds",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "stripe-partial-refunds/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 576612,
+        "costUsd": 0.2352192,
+        "attempts": 8
+      }
+    },
+    {
+      "id": "retail-tau2-known",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "retail-tau2-known/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 705046,
+        "costUsd": 0.30548126,
+        "attempts": 7
+      }
+    },
+    {
+      "id": "linear-description",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "linear-description/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 659281,
+        "costUsd": 0.21410854,
+        "attempts": 9
+      }
+    },
+    {
+      "id": "insurance-claims",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "insurance-claims/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 493857,
+        "costUsd": 0.18673003000000002,
+        "attempts": 7
+      }
+    },
+    {
+      "id": "bookmarks",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "bookmarks/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 522607,
+        "costUsd": 0.22889473999999999,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "rental-fleet",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "rental-fleet/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 637428,
+        "costUsd": 0.54287474,
+        "attempts": 7
+      }
+    },
+    {
+      "id": "warehouse-inventory",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "warehouse-inventory/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 588030,
+        "costUsd": 0.4207394,
+        "attempts": 9
+      }
+    },
+    {
+      "id": "hotel-booking",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "hotel-booking/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 713120,
+        "costUsd": 0.44500154999999997,
+        "attempts": 8
+      }
+    },
+    {
+      "id": "repair-desk",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "repair-desk/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 354381,
+        "costUsd": 0.11098801,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "course-enrollments-csv",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "shipments-csv",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "stripe-customers",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "stripe-charges",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "petstore-full",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "petstore-add-refunds",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "forecast-impossible",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "live-market-feed-impossible",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    }
+  ],
+  "unexpected": [],
+  "passed": 13,
+  "passRate": 0.4482758620689655,
+  "allPassed": false,
+  "completeSuite": false,
+  "metrics": {
+    "ms": {
+      "measured": 21,
+      "expected": 29,
+      "coverage": 0.7241379310344828,
+      "measuredTotal": 11183426,
+      "total": null,
+      "p50": 522607,
+      "p95": 713120
+    },
+    "costUsd": {
+      "measured": 21,
+      "expected": 29,
+      "coverage": 0.7241379310344828,
+      "measuredTotal": 5.206443320000001,
+      "total": null,
+      "p50": 0.19996598,
+      "p95": 0.54287474
+    },
+    "attempts": {
+      "measured": 21,
+      "expected": 29,
+      "coverage": 0.7241379310344828,
+      "measuredTotal": 155,
+      "total": null,
+      "p50": 7,
+      "p95": 13
+    }
+  },
+  "percentileMethod": "nearest-rank: sorted measured case totals at ceil(p × n), one-based; no interpolation; null for no samples",
+  "interpretation": "Descriptive evidence only; no improvement claim. Rates use all expected cases; measured totals and percentiles cover only measured expected cases."
+}

@@ -1,0 +1,103 @@
+{
+  "runId": "v25-hard-cloud-billing",
+  "models": [
+    "claude-haiku-5-5"
+  ],
+  "episodesPerCell": 3,
+  "budgetUsd": 2,
+  "episodeBudgetUsd": 0.5,
+  "spentUsd": 0.041103,
+  "stop": {
+    "kind": "complete"
+  },
+  "tasks": [
+    {
+      "world": "gen-cloud-billing",
+      "task": "clean_up_long_overdue_enterprise",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    }
+  ],
+  "cells": [
+    {
+      "world": "gen-cloud-billing",
+      "task": "clean_up_long_overdue_enterprise",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.041103,
+      "usdPerPass": 0.013701,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    }
+  ],
+  "episodes": [
+    {
+      "world": "gen-cloud-billing",
+      "task": "clean_up_long_overdue_enterprise",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 1,
+      "runId": "v25-hard-cloud-billing.1",
+      "episodeId": "v25-hard-cloud-billing.1__clean_up_long_overdue_enterprise__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.01808905,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.018089
+    },
+    {
+      "world": "gen-cloud-billing",
+      "task": "clean_up_long_overdue_enterprise",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 2,
+      "runId": "v25-hard-cloud-billing.2",
+      "episodeId": "v25-hard-cloud-billing.2__clean_up_long_overdue_enterprise__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0138713,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.013871
+    },
+    {
+      "world": "gen-cloud-billing",
+      "task": "clean_up_long_overdue_enterprise",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 3,
+      "runId": "v25-hard-cloud-billing.3",
+      "episodeId": "v25-hard-cloud-billing.3__clean_up_long_overdue_enterprise__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0091427,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.009143
+    }
+  ]
+}

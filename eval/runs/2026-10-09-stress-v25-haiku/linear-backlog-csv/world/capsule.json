@@ -1,0 +1,64 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T165429Z_03c75729",
+  "mode": "create",
+  "input": {
+    "kind": "csv",
+    "digest": "f8906d3d4640cfde1f56f166a56d11bcacf88ad8bfc08be1a57eaa30a2a51b39",
+    "source": {
+      "kind": "csv",
+      "paths": [
+        "eval/inputs/linear-backlog.csv"
+      ]
+    }
+  },
+  "worldId": "wid_b5633de8ad72b2ded7983563e52f6f39a180eb6b1def1ec2f7758150395652d2",
+  "model": "claude-haiku-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 123101,
+      "costUsd": 0.015841340000000002
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 31279,
+      "costUsd": 0.00777194
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 28438,
+      "costUsd": 0.0521708
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 24244,
+      "costUsd": 0.06415055
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 28363,
+      "costUsd": 0.0556428
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 155116,
+      "costUsd": 0.1792913
+    }
+  ],
+  "ms": 390972,
+  "costUsd": 0.37486873
+}

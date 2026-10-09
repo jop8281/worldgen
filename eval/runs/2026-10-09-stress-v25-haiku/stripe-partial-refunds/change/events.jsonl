@@ -1,0 +1,11 @@
+{"at":"2026-10-09T17:10:13.141Z","runId":"run_20261009T171013Z_cdb84095","t":"run_started","mode":"iterate","input":"change_request","model":"claude-haiku-5-5","budgetUsd":3,"transport":"claude-cli"}
+{"at":"2026-10-09T17:10:13.254Z","runId":"run_20261009T171013Z_cdb84095","t":"step_started","step":"plan","reason":"changed"}
+{"at":"2026-10-09T17:10:31.024Z","runId":"run_20261009T171013Z_cdb84095","t":"attempt","step":"plan","n":1,"ms":17746,"usage":{"inputTokens":2,"outputTokens":4004,"cacheReadTokens":3842,"cacheWriteTokens":75581,"cacheWrite1hTokens":75581},"costUsd":0.01715682,"outcome":{"kind":"accepted","warnings":0},"dump":"runs/run_20261009T171013Z_cdb84095/001-plan-1.json"}
+{"at":"2026-10-09T17:10:31.024Z","runId":"run_20261009T171013Z_cdb84095","t":"step_finished","step":"plan","attempts":1,"ms":17770,"costUsd":0.01715682}
+{"at":"2026-10-09T17:10:31.131Z","runId":"run_20261009T171013Z_cdb84095","t":"step_skipped","step":"model","why":"no planned change reaches entities, routes, fixtures"}
+{"at":"2026-10-09T17:10:31.131Z","runId":"run_20261009T171013Z_cdb84095","t":"step_started","step":"workflow","reason":"changed"}
+{"at":"2026-10-09T17:10:37.726Z","runId":"run_20261009T171013Z_cdb84095","t":"attempt","step":"workflow","n":1,"ms":6489,"usage":{"inputTokens":4,"outputTokens":529,"cacheReadTokens":185004,"cacheWriteTokens":26139,"cacheWrite1hTokens":26139},"costUsd":0.0367137,"outcome":{"kind":"accepted","warnings":1},"dump":"runs/run_20261009T171013Z_cdb84095/002-workflow-1.json"}
+{"at":"2026-10-09T17:10:37.727Z","runId":"run_20261009T171013Z_cdb84095","t":"step_finished","step":"workflow","attempts":1,"ms":6596,"costUsd":0.0367137}
+{"at":"2026-10-09T17:10:37.821Z","runId":"run_20261009T171013Z_cdb84095","t":"step_skipped","step":"seed","why":"no planned change reaches seed, entities, fixtures"}
+{"at":"2026-10-09T17:10:37.918Z","runId":"run_20261009T171013Z_cdb84095","t":"step_skipped","step":"tasks","why":"no planned change reaches tasks, entities, routes, actions, jobs, seed"}
+{"at":"2026-10-09T17:10:37.918Z","runId":"run_20261009T171013Z_cdb84095","t":"run_finished","ms":24777,"costUsd":0.053870520000000005,"worldWritten":true,"result":{"kind":"done","worldDir":"/Users/yossieliaz/wt/stress-v25-9c/eval/runs/2026-10-09-stress-v25-haiku/stripe-partial-refunds/world"}}

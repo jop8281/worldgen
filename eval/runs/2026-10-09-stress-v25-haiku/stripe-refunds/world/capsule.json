@@ -1,0 +1,79 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T164357Z_1d0b6bb5",
+  "mode": "create",
+  "input": {
+    "kind": "openapi",
+    "digest": "80d4cf998b0465e11b90f9f560a7445f1d3d82c7b29334b314cb474423b839ba",
+    "source": {
+      "kind": "openapi",
+      "path": "eval/inputs/stripe.openapi.yaml",
+      "only": [
+        "/v1/refunds"
+      ]
+    }
+  },
+  "worldId": "wid_58a30a29a512c22f5ece586349bc84cc99ef6770a515036658cdda0f723d0cbd",
+  "model": "claude-haiku-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 165398,
+      "costUsd": 0.08516686
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "rejected",
+      "ms": 27207,
+      "costUsd": 0.007392940000000001
+    },
+    {
+      "step": "plan",
+      "n": 3,
+      "outcome": "accepted",
+      "ms": 37938,
+      "costUsd": 0.00904414
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 23551,
+      "costUsd": 0.017980330000000003
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 28483,
+      "costUsd": 0.00710736
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 32007,
+      "costUsd": 0.021010710000000002
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 122723,
+      "costUsd": 0.019737659999999997
+    },
+    {
+      "step": "tasks",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 59838,
+      "costUsd": 0.012471059999999999
+    }
+  ],
+  "ms": 497470,
+  "costUsd": 0.17991105999999998
+}

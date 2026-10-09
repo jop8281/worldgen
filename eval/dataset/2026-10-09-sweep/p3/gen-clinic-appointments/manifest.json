@@ -1,0 +1,56 @@
+{
+  "manifest_version": 2,
+  "schema_version": 2,
+  "provider": "anthropic",
+  "model": "claude-haiku-5-5",
+  "prompt_versions": [
+    "solver-prompt-1"
+  ],
+  "config_versions": [
+    "cfg-07e2771c91cb"
+  ],
+  "engine_commits": [
+    "23520120c53ee78b5bdf00530dd982d18aba070c"
+  ],
+  "run_ids": [
+    "p3-gen-clinic-appointments"
+  ],
+  "selection": null,
+  "worlds": [
+    {
+      "world_id": "world",
+      "world_version": "38db124623c31bc2ed0008daec8f076f26dcc18b588807519166a3fbe02bc3fb",
+      "artifact": {
+        "path": "private/worlds/38db124623c31bc2ed0008daec8f076f26dcc18b588807519166a3fbe02bc3fb/world.yaml",
+        "sha256": "38db124623c31bc2ed0008daec8f076f26dcc18b588807519166a3fbe02bc3fb"
+      }
+    }
+  ],
+  "counts": {
+    "episodes": 4,
+    "by_verdict": {
+      "success": 1,
+      "partial": 2,
+      "failure": 1,
+      "infra": 0
+    },
+    "by_stop_reason": {
+      "done": 3,
+      "turn_limit": 1
+    },
+    "by_failure_cause": {
+      "guard broken": 1,
+      "scored 0.823529411764706": 1,
+      "turn_limit": 1
+    }
+  },
+  "files": {
+    "dataset": {
+      "path": "dataset.jsonl",
+      "records": 4,
+      "bytes": 107766,
+      "sha256": "612a847408fe3d47abcde9ad9e0773223f411454542ccf925f13478c41151d8b"
+    }
+  },
+  "grading_note": "The engine score certifies the final world state only. It does not independently certify that the final reply is factually correct."
+}

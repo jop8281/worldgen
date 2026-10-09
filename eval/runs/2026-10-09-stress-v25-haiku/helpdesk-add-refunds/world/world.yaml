@@ -1,0 +1,763 @@
+format: 1
+meta:
+  name: world
+  description: A helpdesk where customers open tickets about their orders, agents reply, and tickets move between open, pending and resolved. Agents assign tickets, reply, resolve and reopen them. A stale pending ticket resolves itself after 7 days without an update. The world holds customers, agents, orders, tickets and comments (the replies on a ticket), with list and get routes and create routes so tests can build their own rows.
+  resembles: Zendesk-style helpdesk ticketing API
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-01T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  customer:
+    description: A person who opens tickets. Email is unique.
+    idPrefix: cus
+    fields:
+      first_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      last_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+  agent:
+    description: A support agent who is assigned tickets and writes replies. Role is agent or lead.
+    idPrefix: agt
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      role:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - agent
+          - lead
+  order:
+    description: A purchase by a customer that a ticket can be about.
+    idPrefix: ord
+    fields:
+      number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        pattern: ^#W[0-9]{7}$
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      item_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      total:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+  ticket:
+    description: A support case with a status state field (open, pending, resolved), an optional order, and an optional assignee agent.
+    idPrefix: tkt
+    fields:
+      subject:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      description:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      order_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: order
+        onDelete: restrict
+      assignee_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: agent
+        onDelete: restrict
+      priority:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - low
+          - normal
+          - high
+          - urgent
+        default: normal
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - open
+          - pending
+          - resolved
+        initial: open
+        transitions:
+          open:
+            - pending
+            - resolved
+          pending:
+            - open
+            - resolved
+          resolved:
+            - open
+  comment:
+    description: One reply on a ticket, written by an agent or by the customer.
+    idPrefix: cmt
+    fields:
+      ticket_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: ticket
+        onDelete: restrict
+      author_kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - agent
+          - customer
+      agent_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: agent
+        onDelete: restrict
+      body:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  refund:
+    description: Money an agent returns to the customer for an order linked to a ticket. Status is pending, issued or rejected. Refunds above 50000 minor units (USD) stay pending until a lead approves them. The row records the decision only; no money moves.
+    idPrefix: rfd
+    fields:
+      ticket_id:
+        type: ref
+        description: The ticket the refund belongs to.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: ticket
+        onDelete: restrict
+      order_id:
+        type: ref
+        description: The order refunded. Must be the order the ticket names.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: order
+        onDelete: restrict
+      agent_id:
+        type: ref
+        description: The agent who requested the refund.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: agent
+        onDelete: restrict
+      approver_id:
+        type: ref
+        description: The lead who approved or rejected a pending refund. null until decided, or when the refund was issued at once.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: agent
+        onDelete: nullify
+      amount:
+        type: money
+        description: Refund amount in minor units, USD.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 1
+      status:
+        type: state
+        description: pending until issued at once (50000 or less) or decided by a lead. issued and rejected are final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - pending
+          - issued
+          - rejected
+        initial: pending
+        transitions:
+          pending:
+            - issued
+            - rejected
+          issued: []
+          rejected: []
+routes:
+  create_customer:
+    op: create
+    entity: customer
+    method: POST
+    path: /customers
+    description: Create a customer.
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - email
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /customers
+    description: List customers, filter by email.
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /customers/{id}
+    description: Get one customer.
+  create_agent:
+    op: create
+    entity: agent
+    method: POST
+    path: /agents
+    description: Create an agent.
+  list_agents:
+    op: list
+    entity: agent
+    filters:
+      - role
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /agents
+    description: List agents, filter by role.
+  get_agent:
+    op: get
+    entity: agent
+    method: GET
+    path: /agents/{id}
+    description: Get one agent.
+  create_order:
+    op: create
+    entity: order
+    method: POST
+    path: /orders
+    description: Create an order for a customer.
+  list_orders:
+    op: list
+    entity: order
+    filters:
+      - customer_id
+      - number
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /orders
+    description: List orders, filter by customer_id and number.
+  get_order:
+    op: get
+    entity: order
+    method: GET
+    path: /orders/{id}
+    description: Get one order.
+  create_ticket:
+    op: create
+    entity: ticket
+    method: POST
+    path: /tickets
+    description: Open a ticket. Status starts open.
+  list_tickets:
+    op: list
+    entity: ticket
+    filters:
+      - status
+      - customer_id
+      - assignee_id
+      - priority
+      - order_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /tickets
+    description: List tickets, filter by status, customer_id, assignee_id, priority and order_id, sorted by created_at.
+  get_ticket:
+    op: get
+    entity: ticket
+    method: GET
+    path: /tickets/{id}
+    description: Get one ticket.
+  list_comments:
+    op: list
+    entity: comment
+    filters:
+      - ticket_id
+      - author_kind
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /comments
+    description: List the comments of a ticket, filter by ticket_id and author_kind.
+  list_refunds:
+    op: list
+    entity: refund
+    filters:
+      - ticket_id
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /refunds
+    description: List refunds, filter by ticket_id and status.
+  get_refund:
+    op: get
+    entity: refund
+    method: GET
+    path: /refunds/{id}
+    description: Get one refund.
+actions:
+  assign_ticket:
+    method: POST
+    path: /tickets/{id}/assign
+    description: Assign a ticket to an agent. The agent must exist, or the call answers 422 ref.unresolved. A resolved ticket answers 409 invalid_state.
+    input:
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket ' + ctx.params.id + ' not found');
+       if (t.status === 'resolved') ctx.fail(409, 'invalid_state', 'ticket ' + t.id + ' is resolved and cannot be assigned');
+       const a = ctx.db.get('agent', ctx.body.agent_id);
+       if (a === null) ctx.fail(422, 'ref.unresolved', 'agent ' + ctx.body.agent_id + ' not found');
+       return { status: 200, body: ctx.db.update('ticket', t.id, { assignee_id: a.id }) };
+      }
+  reply_to_ticket:
+    method: POST
+    path: /tickets/{id}/reply
+    description: An agent replies on a ticket. Stores an agent comment. An open ticket moves to pending. A resolved ticket answers 409 invalid_state.
+    input:
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      message:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket ' + ctx.params.id + ' not found');
+       if (t.status === 'resolved') ctx.fail(409, 'invalid_state', 'ticket ' + t.id + ' is resolved and takes no replies');
+       const a = ctx.db.get('agent', ctx.body.agent_id);
+       if (a === null) ctx.fail(422, 'ref.unresolved', 'agent ' + ctx.body.agent_id + ' not found');
+       ctx.db.create('comment', { ticket_id: t.id, author_kind: 'agent', agent_id: a.id, body: ctx.body.message });
+       if (t.status === 'open') ctx.db.update('ticket', t.id, { status: 'pending' });
+       return { status: 200, body: ctx.db.get('ticket', t.id) };
+      }
+  customer_reply:
+    method: POST
+    path: /tickets/{id}/customer_reply
+    description: The customer replies on a ticket. Stores a customer comment. A pending ticket moves back to open. A resolved ticket answers 409 invalid_state.
+    input:
+      message:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket ' + ctx.params.id + ' not found');
+       if (t.status === 'resolved') ctx.fail(409, 'invalid_state', 'ticket ' + t.id + ' is resolved and takes no replies');
+       ctx.db.create('comment', { ticket_id: t.id, author_kind: 'customer', agent_id: null, body: ctx.body.message });
+       if (t.status === 'pending') ctx.db.update('ticket', t.id, { status: 'open' });
+       return { status: 200, body: ctx.db.get('ticket', t.id) };
+      }
+  resolve_ticket:
+    method: POST
+    path: /tickets/{id}/resolve
+    description: Resolve a ticket. Only its assigned agent may resolve it. An unassigned ticket answers 409 unassigned, a non-assignee answers 409 not_assignee, a resolved ticket answers 409 invalid_state, and a ticket with a pending refund answers 409 refund_pending.
+    input:
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const t = ctx.db.get('ticket', ctx.params.id); if (t === null) ctx.fail(404, 'not_found', 'ticket ' + ctx.params.id + ' not found'); if (t.status === 'resolved') ctx.fail(409, 'invalid_state', 'ticket ' + t.id + ' is already resolved'); if (t.assignee_id === null || t.assignee_id === undefined) ctx.fail(409, 'unassigned', 'ticket ' + t.id + ' has no assignee and cannot be resolved'); if (t.assignee_id !== ctx.body.agent_id) ctx.fail(409, 'not_assignee', 'only the assigned agent can resolve ticket ' + t.id); if (ctx.db.list('refund', { where: { ticket_id: t.id, status: 'pending' } }).length > 0) ctx.fail(409, 'refund_pending', 'ticket ' + t.id + ' has a pending refund and cannot be resolved until it is decided'); return { status: 200, body: ctx.db.update('ticket', t.id, { status: 'resolved' }) }; }"
+  reopen_ticket:
+    method: POST
+    path: /tickets/{id}/reopen
+    description: Reopen a resolved ticket, setting it to open. Any other status answers 409 invalid_state.
+    input: {}
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket ' + ctx.params.id + ' not found');
+       if (t.status !== 'resolved') ctx.fail(409, 'invalid_state', 'ticket ' + t.id + ' is ' + t.status + ' and only a resolved ticket can be reopened');
+       return { status: 200, body: ctx.db.update('ticket', t.id, { status: 'open' }) };
+      }
+  create_refund:
+    method: POST
+    path: /tickets/{id}/refunds
+    description: "An agent refunds the order linked to the ticket. Body: order_id, amount (minor units, USD), agent_id. Amounts of 50000 or less are issued at once. Larger amounts stay pending until a lead approves them. An order that is not the ticket's order answers 422 order_not_on_ticket."
+    input:
+      order_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 1
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const t = ctx.db.get('ticket', ctx.params.id); if (t === null) ctx.fail(404, 'not_found', 'ticket ' + ctx.params.id + ' not found'); if (t.order_id === null || t.order_id !== ctx.body.order_id) ctx.fail(422, 'order_not_on_ticket', 'order ' + ctx.body.order_id + ' is not the order of ticket ' + t.id); const a = ctx.db.get('agent', ctx.body.agent_id); if (a === null) ctx.fail(422, 'ref.unresolved', 'agent ' + ctx.body.agent_id + ' not found'); const r = ctx.db.create('refund', { ticket_id: t.id, order_id: t.order_id, agent_id: a.id, approver_id: null, amount: ctx.body.amount, status: 'pending' }); const out = ctx.body.amount > 50000 ? r : ctx.db.update('refund', r.id, { status: 'issued' }); return { status: 201, body: out }; }"
+  approve_refund:
+    method: POST
+    path: /refunds/{id}/approve
+    description: "A lead approves a pending refund, which becomes issued. Body: supervisor_id. An agent whose role is not lead answers 409 not_supervisor. A refund that is not pending answers 409 invalid_state."
+    input:
+      supervisor_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const r = ctx.db.get('refund', ctx.params.id); if (r === null) ctx.fail(404, 'not_found', 'refund ' + ctx.params.id + ' not found'); const s = ctx.db.get('agent', ctx.body.supervisor_id); if (s === null) ctx.fail(422, 'ref.unresolved', 'agent ' + ctx.body.supervisor_id + ' not found'); if (s.role !== 'lead') ctx.fail(409, 'not_supervisor', 'agent ' + s.id + ' is not a lead and cannot approve refunds'); if (r.status !== 'pending') ctx.fail(409, 'invalid_state', 'refund ' + r.id + ' is ' + r.status + ' and only a pending refund can be approved'); return { status: 200, body: ctx.db.update('refund', r.id, { status: 'issued', approver_id: s.id }) }; }"
+  reject_refund:
+    method: POST
+    path: /refunds/{id}/reject
+    description: "A lead rejects a pending refund, which becomes rejected and no longer blocks its ticket. Body: supervisor_id. An agent whose role is not lead answers 409 not_supervisor. A refund that is not pending answers 409 invalid_state."
+    input:
+      supervisor_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const r = ctx.db.get('refund', ctx.params.id); if (r === null) ctx.fail(404, 'not_found', 'refund ' + ctx.params.id + ' not found'); const s = ctx.db.get('agent', ctx.body.supervisor_id); if (s === null) ctx.fail(422, 'ref.unresolved', 'agent ' + ctx.body.supervisor_id + ' not found'); if (s.role !== 'lead') ctx.fail(409, 'not_supervisor', 'agent ' + s.id + ' is not a lead and cannot reject refunds'); if (r.status !== 'pending') ctx.fail(409, 'invalid_state', 'refund ' + r.id + ' is ' + r.status + ' and only a pending refund can be rejected'); return { status: 200, body: ctx.db.update('refund', r.id, { status: 'rejected', approver_id: s.id }) }; }"
+jobs:
+  close_stale_pending:
+    description: Resolves every pending ticket whose last update is at least 7 days before now, except tickets that have a pending refund.
+    every: 1d
+    run: "(ctx) => { const cutoff = ctx.time.minus(ctx.now(), '7d'); const pending = ctx.db.list('ticket', { where: { status: 'pending' } }); for (const t of pending) { if (t.updated_at > cutoff) continue; if (ctx.db.list('refund', { where: { ticket_id: t.id, status: 'pending' } }).length > 0) continue; ctx.db.update('ticket', t.id, { status: 'resolved' }); } }"
+fixtures: {}
+seed:
+  customer: |-
+    (ctx) => {
+     return [
+     { first_name: 'Sofia', last_name: 'Li', email: 'sofia.li4822@example.com' },
+     { first_name: 'Noah', last_name: 'Patel', email: 'noah.patel7711@example.com' },
+     { first_name: 'Mia', last_name: 'Garcia', email: 'mia.garcia6034@example.com' },
+     { first_name: 'Priya', last_name: 'Nair', email: 'priya.nair1936@example.com' },
+     { first_name: 'Daiki', last_name: 'Sanchez', email: 'daiki.sanchez1479@example.com' },
+     { first_name: 'Yara', last_name: 'Cohen', email: 'yara.cohen3158@example.com' },
+     { first_name: 'Aarav', last_name: 'Anderson', email: 'aarav.anderson2958@example.com' },
+     { first_name: 'Lena', last_name: 'Fischer', email: 'lena.fischer5521@example.com' },
+     { first_name: 'Omar', last_name: 'Haddad', email: 'omar.haddad8047@example.com' },
+     { first_name: 'Tomas', last_name: 'Novak', email: 'tomas.novak6672@example.com' },
+     { first_name: 'Ruth', last_name: 'Okafor', email: 'ruth.okafor2210@example.com' },
+     { first_name: 'Hana', last_name: 'Kim', email: 'hana.kim4410@example.com' },
+     ];
+    }
+  agent: |-
+    (ctx) => {
+     return [
+     { name: 'Ava Brooks', email: 'ava.brooks@example.com', role: 'lead' },
+     { name: 'Ben Carter', email: 'ben.carter@example.com', role: 'agent' },
+     { name: 'Chloe Diaz', email: 'chloe.diaz@example.com', role: 'agent' },
+     { name: 'Dev Evans', email: 'dev.evans@example.com', role: 'agent' },
+     ];
+    }
+  order: |-
+    (ctx) => {
+     const cus = (email) => ctx.rows('customer').find((c) => c.email === email).id;
+     const rows = [
+     ['#W1000001', 'sofia.li4822@example.com', 'Cotton T-Shirt', 4850],
+     ['#W1000002', 'sofia.li4822@example.com', 'Desk Lamp', 5800],
+     ['#W1000003', 'noah.patel7711@example.com', 'Running Shoes', 9800],
+     ['#W1000004', 'noah.patel7711@example.com', 'Insulated Water Bottle', 3499],
+     ['#W1000005', 'mia.garcia6034@example.com', 'Running Shoes', 9950],
+     ['#W1000006', 'priya.nair1936@example.com', 'Desk Lamp', 6400],
+     ['#W1000007', 'priya.nair1936@example.com', 'Wireless Keyboard', 7450],
+     ['#W1000008', 'daiki.sanchez1479@example.com', 'Cotton T-Shirt', 4925],
+     ['#W1000009', 'yara.cohen3158@example.com', 'Canvas Backpack', 6200],
+     ['#W1000010', 'aarav.anderson2958@example.com', 'Insulated Water Bottle', 2999],
+     ['#W1000011', 'lena.fischer5521@example.com', 'Desk Lamp', 5500],
+     ['#W1000012', 'omar.haddad8047@example.com', 'Running Shoes', 10100],
+     ['#W1000013', 'tomas.novak6672@example.com', 'Coffee Grinder', 8900],
+     ['#W1000014', 'ruth.okafor2210@example.com', 'Cotton T-Shirt', 5100],
+     ['#W1000015', 'hana.kim4410@example.com', 'Ceramic Lamp Shade', 2450],
+     ['#W1000016', 'sofia.li4822@example.com', 'Canvas Backpack', 6200],
+     ];
+     return rows.map(([number, email, item_name, total]) => ({ number, customer_id: cus(email), item_name, total }));
+    }
+  ticket: |-
+    (ctx) => {
+     const cus = (email) => ctx.rows('customer').find((c) => c.email === email).id;
+     const ord = (number) => number === null ? null : ctx.rows('order').find((o) => o.number === number).id;
+     const agt = (name) => name === null ? null : ctx.rows('agent').find((a) => a.name === name).id;
+     const rows = [
+     ['Order arrived damaged', 'The blue T-shirt arrived with a torn seam and a stain on the front. I would like a replacement.', 'sofia.li4822@example.com', '#W1000001', 'open', null, 'high'],
+     ['Delivery date question', 'Can you confirm when the second order I placed will reach me? The tracking page does not show a date.', 'sofia.li4822@example.com', null, 'open', null, 'low'],
+     ['Late delivery', 'My parcel was due on Monday and the tracking has not moved since Friday.', 'noah.patel7711@example.com', '#W1000003', 'pending', 'Chloe Diaz', 'high'],
+     ['Late delivery', 'The courier scan stopped at the regional hub. Please check where the box is.', 'mia.garcia6034@example.com', '#W1000005', 'pending', 'Ben Carter', 'normal'],
+     ['Wrong size delivered', 'I ordered a medium but received a large. I would like to exchange it.', 'daiki.sanchez1479@example.com', '#W1000008', 'resolved', 'Dev Evans', 'normal'],
+     ['Password reset not working', 'The reset link expires before I can open it on my phone.', 'yara.cohen3158@example.com', null, 'resolved', 'Ava Brooks', 'low'],
+     ['Item missing from box', 'One of the two water bottles was not in the box.', 'aarav.anderson2958@example.com', '#W1000010', 'open', null, 'high'],
+     ['Change delivery address', 'I moved last week. Can the order go to my new address?', 'lena.fischer5521@example.com', '#W1000011', 'pending', 'Dev Evans', 'normal'],
+     ['Discount code rejected', 'The code SPRING15 says it is expired but the banner said it was valid.', 'omar.haddad8047@example.com', '#W1000012', 'open', null, 'low'],
+     ['Gift card balance question', 'The balance on my gift card is lower than I expected after my last order.', 'tomas.novak6672@example.com', '#W1000013', 'resolved', 'Ben Carter', 'normal'],
+     ['Account email change', 'I want to change the email on my account to a new address.', 'ruth.okafor2210@example.com', null, 'open', null, 'low'],
+     ['Ceramic lamp shade cracked', 'The shade cracked on arrival. Photos are attached to my first message.', 'hana.kim4410@example.com', '#W1000015', 'pending', 'Chloe Diaz', 'high'],
+     ['Order cancelled by mistake', 'I placed the order twice and need the first one cancelled urgently.', 'sofia.li4822@example.com', '#W1000016', 'resolved', 'Ava Brooks', 'urgent'],
+     ['Invoice copy needed', 'Please send a copy of the invoice for my records.', 'noah.patel7711@example.com', '#W1000004', 'open', null, 'low'],
+     ['Shoe size exchange', 'Running shoes are too small. I would like size 10 in place of size 9.', 'mia.garcia6034@example.com', '#W1000005', 'resolved', 'Chloe Diaz', 'normal'],
+     ['Refund timing', 'The refund for the cancelled desk lamp has not appeared yet.', 'priya.nair1936@example.com', '#W1000007', 'pending', 'Ben Carter', 'normal'],
+     ['Gift wrap request', 'Can the next order be gift wrapped? It is a present.', 'daiki.sanchez1479@example.com', null, 'open', null, 'low'],
+     ['App login loop', 'The app sends me back to the sign-in screen after each attempt.', 'yara.cohen3158@example.com', null, 'pending', 'Dev Evans', 'normal'],
+     ['Bottle leaked in transit', 'The insulated bottle leaked inside the parcel and soaked the box.', 'aarav.anderson2958@example.com', '#W1000010', 'pending', 'Ben Carter', 'high'],
+     ['Price mismatch at checkout', 'The desk lamp was listed at one price and charged at a higher one.', 'lena.fischer5521@example.com', '#W1000011', 'resolved', 'Ava Brooks', 'normal'],
+     ['Replacement delivery window', 'Can the replacement shoes be sent on a weekday? I am away on weekends.', 'omar.haddad8047@example.com', '#W1000012', 'resolved', 'Dev Evans', 'low'],
+     ['Warranty question', 'How long is the warranty on the coffee grinder?', 'tomas.novak6672@example.com', null, 'open', 'Chloe Diaz', 'normal'],
+     ['Wrong color received', 'I ordered the white T-shirt and received a red one.', 'ruth.okafor2210@example.com', '#W1000014', 'resolved', 'Chloe Diaz', 'normal'],
+     ['Tracking link broken', 'The tracking link in my email returns a not found page.', 'hana.kim4410@example.com', null, 'pending', 'Ava Brooks', 'low'],
+     ['Second charge on card', 'My card shows two charges for the same order.', 'noah.patel7711@example.com', '#W1000004', 'open', null, 'high'],
+     ['Subscription renewal', 'I want to stop the renewal of my bottle subscription.', 'sofia.li4822@example.com', null, 'resolved', 'Ben Carter', 'low'],
+     ['Refund not received', 'I returned the keyboard two weeks ago and the refund has not reached my card.', 'priya.nair1936@example.com', '#W1000006', 'open', null, 'high'],
+     ['Duplicate order placed', 'I was charged twice for the keyboard order. Please check the second one.', 'priya.nair1936@example.com', '#W1000007', 'pending', 'Dev Evans', 'normal'],
+     ];
+     return rows.map(([subject, description, email, number, status, agent, priority]) => ({ subject, description, customer_id: cus(email), order_id: ord(number), assignee_id: agt(agent), status, priority }));
+    }
+  comment: |-
+    (ctx) => {
+     const tickets = ctx.rows('ticket');
+     const customerBodies = ['Any update on this?', 'Thanks, that helps.', 'It still has not arrived.', 'Can you check again please?', 'I will wait for your reply.', 'Please let me know the next step.'];
+     const agentBodies = ['Thanks for your patience. We are looking into it now.', 'I have checked the order and will update you shortly.', 'Could you send a photo of the item?', 'We have raised this with the carrier.', 'Thank you. Your case is with us.', 'We have made a note on your account.'];
+     const out = [];
+     tickets.forEach((t, i) => {
+     out.push({ ticket_id: t.id, author_kind: 'customer', agent_id: null, body: customerBodies[i % customerBodies.length] });
+     if (t.assignee_id) out.push({ ticket_id: t.id, author_kind: 'agent', agent_id: t.assignee_id, body: agentBodies[i % agentBodies.length] });
+     });
+     return out.slice(0, 40);
+    }
+tests:
+  open_then_reply:
+    description: Open a ticket, reply as an agent, check the status is pending and the comment list holds one agent comment.
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Quinn',last_name:'Reply',email:'quinn.reply@example.test'}); ctx.assert(cus.status===201,'customer create failed: '+JSON.stringify(cus.body)); const ag = ctx.api('POST','/agents',{name:'Quinn Agent',email:'quinn.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed: '+JSON.stringify(ag.body)); const t = ctx.api('POST','/tickets',{subject:'QA reply check',description:'Where is my order?',customer_id:cus.body.id,priority:'normal'}); ctx.assert(t.status===201 && t.body.status==='open','ticket should open: '+JSON.stringify(t.body)); const r = ctx.api('POST','/tickets/'+t.body.id+'/reply',{agent_id:ag.body.id,message:'We are checking with the carrier.'}); ctx.assert(r.status===200 && r.body.status==='pending','reply should move open to pending: '+JSON.stringify(r.body)); const c = ctx.api('GET','/comments?ticket_id='+t.body.id); ctx.assert(c.status===200 && c.body.data.length===1 && c.body.data[0].author_kind==='agent','expected one agent comment: '+JSON.stringify(c.body)); }"
+  resolved_ticket_refuses_replies:
+    description: Assign and resolve a ticket, then try an agent reply and a customer reply. Both answer 409 with code invalid_state.
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Rhea',last_name:'Closed',email:'rhea.closed@example.test'}); ctx.assert(cus.status===201,'customer create failed'); const ag = ctx.api('POST','/agents',{name:'Rhea Agent',email:'rhea.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed'); const t = ctx.api('POST','/tickets',{subject:'QA closed check',description:'Closed case',customer_id:cus.body.id}); ctx.assert(t.status===201,'ticket create failed'); const a = ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:ag.body.id}); ctx.assert(a.status===200,'assign failed: '+JSON.stringify(a.body)); const res = ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:ag.body.id}); ctx.assert(res.status===200 && res.body.status==='resolved','resolve failed: '+JSON.stringify(res.body)); const r1 = ctx.api('POST','/tickets/'+t.body.id+'/reply',{agent_id:ag.body.id,message:'Too late'}); ctx.assert(r1.status===409 && r1.body.error.code==='invalid_state','agent reply to resolved should answer 409 invalid_state, got '+r1.status); const r2 = ctx.api('POST','/tickets/'+t.body.id+'/customer_reply',{message:'Still broken'}); ctx.assert(r2.status===409 && r2.body.error.code==='invalid_state','customer reply to resolved should answer 409 invalid_state, got '+r2.status); }"
+  resolve_needs_assignee:
+    description: Resolve an unassigned ticket (409 unassigned), resolve as a non-assignee (409 not_assignee), assign to an unknown agent (422 ref.unresolved), then resolve as the assignee (200).
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Rowan',last_name:'Assign',email:'rowan.assign@example.test'}); ctx.assert(cus.status===201,'customer create failed'); const a = ctx.api('POST','/agents',{name:'Rowan A',email:'rowan.a@example.test',role:'agent'}); const b = ctx.api('POST','/agents',{name:'Rowan B',email:'rowan.b@example.test',role:'agent'}); ctx.assert(a.status===201 && b.status===201,'agent create failed'); const t = ctx.api('POST','/tickets',{subject:'QA assign check',description:'Needs an owner',customer_id:cus.body.id}); ctx.assert(t.status===201,'ticket create failed'); const r0 = ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:a.body.id}); ctx.assert(r0.status===409 && r0.body.error.code==='unassigned','unassigned ticket should answer 409 unassigned, got '+r0.status); ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:a.body.id}).status===200,'assign to A failed'); const r1 = ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:b.body.id}); ctx.assert(r1.status===409 && r1.body.error.code==='not_assignee','non-assignee should answer 409 not_assignee, got '+r1.status); const r2 = ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:'agt_9999'}); ctx.assert(r2.status===422 && r2.body.error.code==='ref.unresolved','unknown agent should answer 422 ref.unresolved, got '+r2.status); const r3 = ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:a.body.id}); ctx.assert(r3.status===200 && r3.body.status==='resolved','assignee resolve failed: '+JSON.stringify(r3.body)); }"
+  stale_pending_auto_resolves:
+    description: Reply to a ticket so it is pending, advance the clock 8 days, and check the ticket is resolved.
+    script: (ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Stale',last_name:'Queue',email:'stale.queue@example.test'}); ctx.assert(cus.status===201,'customer create failed'); const ag = ctx.api('POST','/agents',{name:'Stale Agent',email:'stale.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed'); const t = ctx.api('POST','/tickets',{subject:'QA stale check',description:'Waiting on customer',customer_id:cus.body.id}); ctx.assert(t.status===201,'ticket create failed'); const r = ctx.api('POST','/tickets/'+t.body.id+'/reply',{agent_id:ag.body.id,message:'Please confirm.'}); ctx.assert(r.status===200 && r.body.status==='pending','reply should set pending'); ctx.advance('8d'); const after = ctx.api('GET','/tickets/'+t.body.id); ctx.assert(after.status===200 && after.body.status==='resolved','stale pending ticket should be resolved, got '+after.body.status); }
+  reopen_resolved_ticket:
+    description: Assign and resolve a ticket, reopen it to open, then reopen again and get 409 invalid_state.
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Reena',last_name:'Open',email:'reena.open@example.test'}); ctx.assert(cus.status===201,'customer create failed'); const ag = ctx.api('POST','/agents',{name:'Reena Agent',email:'reena.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed'); const t = ctx.api('POST','/tickets',{subject:'QA reopen check',description:'Came back',customer_id:cus.body.id}); ctx.assert(t.status===201,'ticket create failed'); ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:ag.body.id}).status===200,'assign failed'); ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:ag.body.id}).status===200,'resolve failed'); const r = ctx.api('POST','/tickets/'+t.body.id+'/reopen',{}); ctx.assert(r.status===200 && r.body.status==='open','reopen should set open: '+JSON.stringify(r.body)); const again = ctx.api('POST','/tickets/'+t.body.id+'/reopen',{}); ctx.assert(again.status===409 && again.body.error.code==='invalid_state','reopening an open ticket should answer 409 invalid_state, got '+again.status); }"
+  customer_reply_reopens_pending:
+    description: Reply as an agent so the ticket is pending, then send a customer reply, and check the status is open and a customer comment exists.
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Cara',last_name:'Return',email:'cara.return@example.test'}); ctx.assert(cus.status===201,'customer create failed'); const ag = ctx.api('POST','/agents',{name:'Cara Agent',email:'cara.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed'); const t = ctx.api('POST','/tickets',{subject:'QA customer reply',description:'Any update?',customer_id:cus.body.id}); ctx.assert(t.status===201,'ticket create failed'); ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/reply',{agent_id:ag.body.id,message:'Checking.'}).status===200,'agent reply failed'); const r = ctx.api('POST','/tickets/'+t.body.id+'/customer_reply',{message:'Any news?'}); ctx.assert(r.status===200 && r.body.status==='open','customer reply should move pending to open: '+JSON.stringify(r.body)); const c = ctx.api('GET','/comments?ticket_id='+t.body.id); ctx.assert(c.status===200 && c.body.data.some((x)=>x.author_kind==='customer'),'expected a customer comment'); }"
+  filtered_list_separates_states:
+    description: Open two tickets for one customer, move one to pending, then check the status filter and the customer filter return the right rows.
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Ivy',last_name:'Filter',email:'ivy.filter@example.test'}); ctx.assert(cus.status===201,'customer create failed'); const ag = ctx.api('POST','/agents',{name:'Ivy Agent',email:'ivy.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed'); const a = ctx.api('POST','/tickets',{subject:'QA filter A',description:'First',customer_id:cus.body.id}); const b = ctx.api('POST','/tickets',{subject:'QA filter B',description:'Second',customer_id:cus.body.id}); ctx.assert(a.status===201 && b.status===201,'ticket create failed'); ctx.assert(ctx.api('POST','/tickets/'+a.body.id+'/reply',{agent_id:ag.body.id,message:'Looking'}).status===200,'reply failed'); const pending = ctx.api('GET','/tickets?customer_id='+cus.body.id+'&status=pending'); ctx.assert(pending.status===200 && pending.body.data.length===1 && pending.body.data[0].id===a.body.id,'pending filter should return only ticket A: '+JSON.stringify(pending.body)); const all = ctx.api('GET','/tickets?customer_id='+cus.body.id); ctx.assert(all.status===200 && all.body.data.length===2,'customer filter should return both tickets'); }"
+  refund_order_must_match_ticket:
+    description: "Create a customer, an agent, two orders and a ticket linked to the first order. Refund the second order on the ticket: 422 order_not_on_ticket, and the refund list for the ticket is empty."
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Ada',last_name:'Refund',email:'ada.refund@example.test'}); ctx.assert(cus.status===201,'customer create failed: '+JSON.stringify(cus.body)); const ag = ctx.api('POST','/agents',{name:'Ada Agent',email:'ada.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed: '+JSON.stringify(ag.body)); const ord = ctx.api('POST','/orders',{customer_id:cus.body.id,number:'#W9000001',item_name:'Desk lamp',total:4000}); ctx.assert(ord.status===201,'order create failed: '+JSON.stringify(ord.body)); const other = ctx.api('POST','/orders',{customer_id:cus.body.id,number:'#W9000002',item_name:'Chair',total:9000}); ctx.assert(other.status===201,'second order create failed: '+JSON.stringify(other.body)); const t = ctx.api('POST','/tickets',{subject:'QA refund link check',description:'Lamp is faulty',customer_id:cus.body.id,order_id:ord.body.id,priority:'normal'}); ctx.assert(t.status===201,'ticket create failed: '+JSON.stringify(t.body)); const bad = ctx.api('POST','/tickets/'+t.body.id+'/refunds',{order_id:other.body.id,amount:4000,agent_id:ag.body.id}); ctx.assert(bad.status===422 && bad.body.error.code==='order_not_on_ticket','refund on an order the ticket does not name should answer 422 order_not_on_ticket, got '+bad.status+' '+JSON.stringify(bad.body)); const list = ctx.api('GET','/refunds?ticket_id='+t.body.id); ctx.assert(list.status===200 && list.body.data.length===0,'refused refund must not be stored: '+JSON.stringify(list.body)); }"
+  refund_small_issues_directly:
+    description: "Refund 4000 minor units on the ticket's order: the refund answers issued, is stored issued, and the ticket still resolves."
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Bea',last_name:'Small',email:'bea.small@example.test'}); ctx.assert(cus.status===201,'customer create failed: '+JSON.stringify(cus.body)); const ag = ctx.api('POST','/agents',{name:'Bea Agent',email:'bea.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed: '+JSON.stringify(ag.body)); const ord = ctx.api('POST','/orders',{customer_id:cus.body.id,number:'#W9000003',item_name:'Kettle',total:4000}); ctx.assert(ord.status===201,'order create failed: '+JSON.stringify(ord.body)); const t = ctx.api('POST','/tickets',{subject:'QA small refund',description:'Kettle leaks',customer_id:cus.body.id,order_id:ord.body.id,priority:'normal'}); ctx.assert(t.status===201,'ticket create failed: '+JSON.stringify(t.body)); ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:ag.body.id}).status===200,'assign failed'); const r = ctx.api('POST','/tickets/'+t.body.id+'/refunds',{order_id:ord.body.id,amount:4000,agent_id:ag.body.id}); ctx.assert(r.status<300 && r.body.status==='issued','a refund of 4000 minor units should be issued at once: '+JSON.stringify(r.body)); const got = ctx.api('GET','/refunds/'+r.body.id); ctx.assert(got.status===200 && got.body.ticket_id===t.body.id && got.body.status==='issued','refund row should be stored as issued: '+JSON.stringify(got.body)); const res = ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:ag.body.id}); ctx.assert(res.status===200 && res.body.status==='resolved','an issued refund must not block resolve: '+JSON.stringify(res.body)); }"
+  refund_over_500_needs_lead:
+    description: "Refund 60000 minor units ($600.00): pending on creation. A lead approves it: issued, with the lead as approver."
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Cy',last_name:'Over',email:'cy.over@example.test'}); ctx.assert(cus.status===201,'customer create failed: '+JSON.stringify(cus.body)); const ag = ctx.api('POST','/agents',{name:'Cy Agent',email:'cy.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed: '+JSON.stringify(ag.body)); const ld = ctx.api('POST','/agents',{name:'Cy Lead',email:'cy.lead@example.test',role:'lead'}); ctx.assert(ld.status===201,'lead create failed: '+JSON.stringify(ld.body)); const ord = ctx.api('POST','/orders',{customer_id:cus.body.id,number:'#W9000004',item_name:'Sofa',total:80000}); ctx.assert(ord.status===201,'order create failed: '+JSON.stringify(ord.body)); const t = ctx.api('POST','/tickets',{subject:'QA large refund',description:'Sofa arrived broken',customer_id:cus.body.id,order_id:ord.body.id,priority:'high'}); ctx.assert(t.status===201,'ticket create failed: '+JSON.stringify(t.body)); const r = ctx.api('POST','/tickets/'+t.body.id+'/refunds',{order_id:ord.body.id,amount:60000,agent_id:ag.body.id}); ctx.assert(r.status<300 && r.body.status==='pending','a refund above 50000 minor units should be pending: '+JSON.stringify(r.body)); const ap = ctx.api('POST','/refunds/'+r.body.id+'/approve',{supervisor_id:ld.body.id}); ctx.assert(ap.status===200 && ap.body.status==='issued' && ap.body.approver_id===ld.body.id,'lead approval should issue the refund: '+JSON.stringify(ap.body)); }"
+  refund_decisions_need_lead:
+    description: "On a pending refund: an agent's approval answers 409 not_supervisor, a lead's approval issues it, and a reject after that answers 409 invalid_state."
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Dee',last_name:'Decide',email:'dee.decide@example.test'}); ctx.assert(cus.status===201,'customer create failed: '+JSON.stringify(cus.body)); const ag = ctx.api('POST','/agents',{name:'Dee Agent',email:'dee.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed: '+JSON.stringify(ag.body)); const ld = ctx.api('POST','/agents',{name:'Dee Lead',email:'dee.lead@example.test',role:'lead'}); ctx.assert(ld.status===201,'lead create failed: '+JSON.stringify(ld.body)); const ord = ctx.api('POST','/orders',{customer_id:cus.body.id,number:'#W9000005',item_name:'Bike',total:70000}); ctx.assert(ord.status===201,'order create failed: '+JSON.stringify(ord.body)); const t = ctx.api('POST','/tickets',{subject:'QA decision check',description:'Bike frame cracked',customer_id:cus.body.id,order_id:ord.body.id,priority:'normal'}); ctx.assert(t.status===201,'ticket create failed: '+JSON.stringify(t.body)); const r = ctx.api('POST','/tickets/'+t.body.id+'/refunds',{order_id:ord.body.id,amount:60000,agent_id:ag.body.id}); ctx.assert(r.status<300 && r.body.status==='pending','refund should be pending: '+JSON.stringify(r.body)); const byAgent = ctx.api('POST','/refunds/'+r.body.id+'/approve',{supervisor_id:ag.body.id}); ctx.assert(byAgent.status===409 && byAgent.body.error.code==='not_supervisor','an agent approval should answer 409 not_supervisor, got '+byAgent.status+' '+JSON.stringify(byAgent.body)); const ok = ctx.api('POST','/refunds/'+r.body.id+'/approve',{supervisor_id:ld.body.id}); ctx.assert(ok.status===200 && ok.body.status==='issued','lead approval should issue the refund: '+JSON.stringify(ok.body)); const again = ctx.api('POST','/refunds/'+r.body.id+'/reject',{supervisor_id:ld.body.id}); ctx.assert(again.status===409 && again.body.error.code==='invalid_state','rejecting a decided refund should answer 409 invalid_state, got '+again.status+' '+JSON.stringify(again.body)); }"
+  resolve_blocked_by_pending_refund:
+    description: "Assign a ticket, create a pending refund on it, then resolve as the assignee: 409 refund_pending, and the ticket is not resolved."
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Eli',last_name:'Block',email:'eli.block@example.test'}); ctx.assert(cus.status===201,'customer create failed: '+JSON.stringify(cus.body)); const ag = ctx.api('POST','/agents',{name:'Eli Agent',email:'eli.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed: '+JSON.stringify(ag.body)); const ord = ctx.api('POST','/orders',{customer_id:cus.body.id,number:'#W9000006',item_name:'Sofa',total:80000}); ctx.assert(ord.status===201,'order create failed: '+JSON.stringify(ord.body)); const t = ctx.api('POST','/tickets',{subject:'QA pending refund block',description:'Sofa arrived broken',customer_id:cus.body.id,order_id:ord.body.id,priority:'high'}); ctx.assert(t.status===201,'ticket create failed: '+JSON.stringify(t.body)); ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:ag.body.id}).status===200,'assign failed'); const r = ctx.api('POST','/tickets/'+t.body.id+'/refunds',{order_id:ord.body.id,amount:60000,agent_id:ag.body.id}); ctx.assert(r.status<300 && r.body.status==='pending','refund should be pending: '+JSON.stringify(r.body)); const res = ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:ag.body.id}); ctx.assert(res.status===409 && res.body.error.code==='refund_pending','resolve with a pending refund should answer 409 refund_pending, got '+res.status+' '+JSON.stringify(res.body)); const got = ctx.api('GET','/tickets/'+t.body.id); ctx.assert(got.status===200 && got.body.status!=='resolved','the refused resolve must leave the ticket unresolved: '+JSON.stringify(got.body)); }"
+  refund_reject_releases_ticket:
+    description: With a pending refund the ticket cannot resolve. An agent's reject answers 409 not_supervisor. A lead's reject answers rejected, and then the ticket resolves.
+    script: "(ctx) => { const cus = ctx.api('POST','/customers',{first_name:'Fay',last_name:'Reject',email:'fay.reject@example.test'}); ctx.assert(cus.status===201,'customer create failed: '+JSON.stringify(cus.body)); const ag = ctx.api('POST','/agents',{name:'Fay Agent',email:'fay.agent@example.test',role:'agent'}); ctx.assert(ag.status===201,'agent create failed: '+JSON.stringify(ag.body)); const ld = ctx.api('POST','/agents',{name:'Fay Lead',email:'fay.lead@example.test',role:'lead'}); ctx.assert(ld.status===201,'lead create failed: '+JSON.stringify(ld.body)); const ord = ctx.api('POST','/orders',{customer_id:cus.body.id,number:'#W9000007',item_name:'Sofa',total:80000}); ctx.assert(ord.status===201,'order create failed: '+JSON.stringify(ord.body)); const t = ctx.api('POST','/tickets',{subject:'QA reject release',description:'Sofa refund disputed',customer_id:cus.body.id,order_id:ord.body.id,priority:'high'}); ctx.assert(t.status===201,'ticket create failed: '+JSON.stringify(t.body)); ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:ag.body.id}).status===200,'assign failed'); const r = ctx.api('POST','/tickets/'+t.body.id+'/refunds',{order_id:ord.body.id,amount:60000,agent_id:ag.body.id}); ctx.assert(r.status<300 && r.body.status==='pending','refund should be pending: '+JSON.stringify(r.body)); const blocked = ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:ag.body.id}); ctx.assert(blocked.status===409 && blocked.body.error.code==='refund_pending','resolve should be blocked by the pending refund, got '+blocked.status); const byAgent = ctx.api('POST','/refunds/'+r.body.id+'/reject',{supervisor_id:ag.body.id}); ctx.assert(byAgent.status===409 && byAgent.body.error.code==='not_supervisor','an agent rejection should answer 409 not_supervisor, got '+byAgent.status+' '+JSON.stringify(byAgent.body)); const rej = ctx.api('POST','/refunds/'+r.body.id+'/reject',{supervisor_id:ld.body.id}); ctx.assert(rej.status===200 && rej.body.status==='rejected','lead rejection should reject the refund: '+JSON.stringify(rej.body)); const res = ctx.api('POST','/tickets/'+t.body.id+'/resolve',{agent_id:ag.body.id}); ctx.assert(res.status===200 && res.body.status==='resolved','a rejected refund must no longer block resolve: '+JSON.stringify(res.body)); }"
+tasks:
+  reply_to_damaged_order:
+    difficulty: easy
+    instruction: Sofia Li (sofia.li4822@example.com) has an open ticket titled 'Order arrived damaged' about her damaged order. Reply on that ticket as the agent Ava Brooks, telling her a replacement is on its way.
+    grader: "(ctx) => { const cus = ctx.seed.list('customer', { where: { email: 'sofia.li4822@example.com' } })[0]; const t = cus ? ctx.seed.list('ticket', { where: { customer_id: cus.id, subject: 'Order arrived damaged' } })[0] : undefined; if (!t) return 0; const ava = ctx.seed.list('agent', { where: { name: 'Ava Brooks' } })[0]; const mine = ctx.changes().filter((c) => c.entity === 'comment' && c.kind === 'created' && ctx.db.get('comment', c.id).ticket_id === t.id); ctx.guardChanges('only the damaged-order ticket and comments added to it change', [{ entity: 'ticket', id: t.id, kind: 'updated', fields: ['status'] }].concat(mine.map((c) => ({ entity: 'comment', id: c.id, kind: 'created', fields: c.fields })))); const end = ctx.db.get('ticket', t.id); const replies = ctx.db.list('comment', { where: { ticket_id: t.id, author_kind: 'agent', agent_id: ava.id } }).filter((c) => c.body.toLowerCase().indexOf('replacement') >= 0); ctx.goal(0.5, 'an agent reply by Ava Brooks says a replacement is on its way', replies.length > 0); ctx.goal(0.5, 'the ticket is pending', end.status === 'pending'); return ctx.score(); }"
+    solution: "(ctx) => { const sofia = ctx.api('GET', '/customers?email=sofia.li4822@example.com').body.data[0]; ctx.assert(sofia !== undefined, 'customer not found'); const ava = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Ava Brooks'); ctx.assert(ava !== undefined, 'agent not found'); const open = ctx.api('GET', '/tickets?customer_id=' + sofia.id + '&status=open').body.data; const t = open.find((x) => x.subject === 'Order arrived damaged'); ctx.assert(t !== undefined, 'damaged-order ticket not found'); const r = ctx.api('POST', '/tickets/' + t.id + '/reply', { agent_id: ava.id, message: 'A replacement is on its way to you.' }); ctx.assert(r.status === 200 && r.body.status === 'pending', 'reply failed: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: replies as Ben Carter instead of Ava Brooks, so the reply carries the wrong agent
+        script: "(ctx) => { const sofia = ctx.api('GET', '/customers?email=sofia.li4822@example.com').body.data[0]; const ben = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Ben Carter'); const t = ctx.api('GET', '/tickets?customer_id=' + sofia.id + '&status=open').body.data.find((x) => x.subject === 'Order arrived damaged'); ctx.api('POST', '/tickets/' + t.id + '/reply', { agent_id: ben.id, message: 'A replacement is on its way to you.' }); }"
+    alternatives: []
+    allows:
+      - entity: ticket
+        kind: updated
+        fields:
+          - status
+        where:
+          subject: Order arrived damaged
+      - entity: comment
+        kind: created
+        fields: []
+        where:
+          author_kind: agent
+  resolve_assigned_late_delivery:
+    difficulty: medium
+    instruction: Noah Patel (noah.patel7711@example.com) has a pending ticket titled 'Late delivery'. Resolve it as Chloe Diaz, the agent it is assigned to. Only the assigned agent can resolve a ticket.
+    grader: "(ctx) => { const noah = ctx.seed.list('customer', { where: { email: 'noah.patel7711@example.com' } })[0]; const t = noah ? ctx.seed.list('ticket', { where: { customer_id: noah.id, subject: 'Late delivery' } })[0] : undefined; if (!t) return 0; const chloe = ctx.seed.list('agent', { where: { name: 'Chloe Diaz' } })[0]; ctx.guardChanges('only the target ticket status changes', [{ entity: 'ticket', id: t.id, kind: 'updated', fields: ['status'] }]); const end = ctx.db.get('ticket', t.id); ctx.goal(0.6, 'the ticket is resolved', end.status === 'resolved'); ctx.goal(0.4, 'it was resolved while still assigned to Chloe Diaz', end.status === 'resolved' && end.assignee_id === chloe.id); return ctx.score(); }"
+    solution: "(ctx) => { const noah = ctx.api('GET', '/customers?email=noah.patel7711@example.com').body.data[0]; ctx.assert(noah !== undefined, 'customer not found'); const chloe = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Chloe Diaz'); ctx.assert(chloe !== undefined, 'agent not found'); const pending = ctx.api('GET', '/tickets?status=pending').body.data; const t = pending.find((x) => x.customer_id === noah.id && x.subject === 'Late delivery'); ctx.assert(t !== undefined, 'ticket not found'); const r = ctx.api('POST', '/tickets/' + t.id + '/resolve', { agent_id: chloe.id }); ctx.assert(r.status === 200 && r.body.status === 'resolved', 'resolve failed: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: replies as Ava Brooks, the lead who is not the assignee, then tries to resolve; the resolve is refused but the extra reply is a write the instruction does not ask for
+        script: "(ctx) => { const noah = ctx.api('GET', '/customers?email=noah.patel7711@example.com').body.data[0]; const ava = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Ava Brooks'); const t = ctx.api('GET', '/tickets?status=pending').body.data.find((x) => x.customer_id === noah.id && x.subject === 'Late delivery'); ctx.api('POST', '/tickets/' + t.id + '/reply', { agent_id: ava.id, message: 'We are looking into it now.' }); ctx.api('POST', '/tickets/' + t.id + '/resolve', { agent_id: ava.id }); }"
+      - why: reassigns the ticket to Ava Brooks and resolves it as Ava, changing the assignee, which the instruction does not ask for
+        script: "(ctx) => { const noah = ctx.api('GET', '/customers?email=noah.patel7711@example.com').body.data[0]; const ava = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Ava Brooks'); const t = ctx.api('GET', '/tickets?status=pending').body.data.find((x) => x.customer_id === noah.id && x.subject === 'Late delivery'); ctx.api('POST', '/tickets/' + t.id + '/assign', { agent_id: ava.id }); ctx.api('POST', '/tickets/' + t.id + '/resolve', { agent_id: ava.id }); }"
+    alternatives: []
+    allows:
+      - entity: ticket
+        kind: updated
+        fields:
+          - status
+        where:
+          subject: Late delivery
+          priority: high
+  assign_reply_resolve_refund:
+    difficulty: hard
+    instruction: "Priya Nair (priya.nair1936@example.com) has an open ticket titled 'Refund not received' that nobody is working on yet. Assign it to Dev Evans, reply on it as Dev Evans saying the refund was issued, then resolve it as Dev Evans. The three calls must run in that order: assign, then reply, then resolve."
+    grader: "(ctx) => { const priya = ctx.seed.list('customer', { where: { email: 'priya.nair1936@example.com' } })[0]; const t = priya ? ctx.seed.list('ticket', { where: { customer_id: priya.id, subject: 'Refund not received' } })[0] : undefined; if (!t) return 0; const dev = ctx.seed.list('agent', { where: { name: 'Dev Evans' } })[0]; const mine = ctx.changes().filter((c) => c.entity === 'comment' && c.kind === 'created' && ctx.db.get('comment', c.id).ticket_id === t.id); ctx.guardChanges('only the target ticket and comments added to it change', [{ entity: 'ticket', id: t.id, kind: 'updated', fields: ['assignee_id', 'status'] }].concat(mine.map((c) => ({ entity: 'comment', id: c.id, kind: 'created', fields: c.fields })))); const end = ctx.db.get('ticket', t.id); const replies = ctx.db.list('comment', { where: { ticket_id: t.id, author_kind: 'agent', agent_id: dev.id } }).filter((c) => c.body.toLowerCase().indexOf('refund') >= 0 && c.body.toLowerCase().indexOf('issued') >= 0); const tr = ctx.trace(); const at = (method, suffix) => { const hit = tr.find((c) => c.method === method && c.path === '/tickets/' + t.id + suffix && c.status < 300); return hit ? hit.seq : -1; }; const a = at('POST', '/assign'); const rp = at('POST', '/reply'); const z = at('POST', '/resolve'); ctx.goal(0.2, 'the ticket is assigned to Dev Evans', end.assignee_id === dev.id); ctx.goal(0.25, 'Dev Evans replies that the refund was issued', replies.length > 0); ctx.goal(0.4, 'the ticket is resolved', end.status === 'resolved'); ctx.goal(0.15, 'assign, reply and resolve ran in that order', a >= 0 && rp > a && z > rp); return ctx.score(); }"
+    solution: "(ctx) => { const esc = (s) => s.split('%').join('%25').split('=').join('%3D').split('+').join('%2B').split('/').join('%2F'); const priya = ctx.api('GET', '/customers?email=priya.nair1936@example.com').body.data[0]; ctx.assert(priya !== undefined, 'customer not found'); const dev = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Dev Evans'); ctx.assert(dev !== undefined, 'agent not found'); let rows = []; let cur = null; do { const q = cur === null ? '/tickets?limit=25' : '/tickets?limit=25&cursor=' + esc(cur); const page = ctx.api('GET', q).body; ctx.assert(Array.isArray(page.data), 'list failed'); rows = rows.concat(page.data); cur = page.next_cursor === undefined ? null : page.next_cursor; } while (cur !== null); const t = rows.find((x) => x.customer_id === priya.id && x.subject === 'Refund not received' && x.status === 'open'); ctx.assert(t !== undefined, 'ticket not found on any page'); ctx.api('GET', '/tickets?assignee_id=' + dev.id); const a = ctx.api('POST', '/tickets/' + t.id + '/assign', { agent_id: dev.id }); ctx.assert(a.status === 200, 'assign failed: ' + JSON.stringify(a.body)); const r = ctx.api('POST', '/tickets/' + t.id + '/reply', { agent_id: dev.id, message: 'Good news: the refund was issued to your original payment method.' }); ctx.assert(r.status === 200, 'reply failed: ' + JSON.stringify(r.body)); const z = ctx.api('POST', '/tickets/' + t.id + '/resolve', { agent_id: dev.id }); ctx.assert(z.status === 200 && z.body.status === 'resolved', 'resolve failed: ' + JSON.stringify(z.body)); }"
+    decoys:
+      - why: replies and resolves without assigning first, so resolve answers 409 unassigned and the ticket is never closed
+        script: "(ctx) => { const priya = ctx.api('GET', '/customers?email=priya.nair1936@example.com').body.data[0]; const dev = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Dev Evans'); const t = ctx.api('GET', '/tickets?customer_id=' + priya.id + '&status=open').body.data.find((x) => x.subject === 'Refund not received'); ctx.api('POST', '/tickets/' + t.id + '/reply', { agent_id: dev.id, message: 'Good news: the refund was issued to your original payment method.' }); ctx.api('POST', '/tickets/' + t.id + '/resolve', { agent_id: dev.id }); }"
+      - why: reads only the first page, finds Priya's Refund timing ticket there and works that ticket instead of the open Refund not received ticket on page 2
+        script: "(ctx) => { const priya = ctx.api('GET', '/customers?email=priya.nair1936@example.com').body.data[0]; const dev = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Dev Evans'); const page = ctx.api('GET', '/tickets?limit=25').body.data; const t = page.find((x) => x.customer_id === priya.id && x.subject.indexOf('Refund') >= 0); ctx.assert(t !== undefined, 'no refund ticket on page 1'); ctx.api('POST', '/tickets/' + t.id + '/assign', { agent_id: dev.id }); ctx.api('POST', '/tickets/' + t.id + '/reply', { agent_id: dev.id, message: 'Good news: the refund was issued to your original payment method.' }); ctx.api('POST', '/tickets/' + t.id + '/resolve', { agent_id: dev.id }); }"
+    alternatives: []
+    allows:
+      - entity: ticket
+        kind: updated
+        fields:
+          - assignee_id
+          - status
+        where:
+          subject: Refund not received
+      - entity: comment
+        kind: created
+        fields: []
+        where:
+          author_kind: agent

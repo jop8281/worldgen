@@ -1,0 +1,1712 @@
+format: 1
+meta:
+  name: world
+  description: Users save bookmarks into a nested folder tree and label them with per-user tags. Bookmarks move through unread, read, archived and trashed, and trash is purged after 30 days. Collections are private, shared with viewer/editor members, or public with an optional expiry. Actions enforce ownership, permission and folder-cycle rules and write an activity log. Two jobs purge old trash and expire public links.
+  resembles: Pocket/Raindrop.io-style multi-user bookmark manager with folders, tags and shareable collections
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  user:
+    description: A person who owns bookmarks, folders, tags and collections.
+    idPrefix: usr
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 160
+        format: email
+  folder:
+    description: Node in a user's nested folder tree; parent_id is null for a root folder.
+    idPrefix: fld
+    fields:
+      owner_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: user
+        onDelete: restrict
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 120
+      parent_id:
+        type: ref
+        description: Parent folder, null for a root folder. Changed only by move_folder.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: folder
+        onDelete: restrict
+  bookmark:
+    description: A saved URL owned by one user, optionally in one folder, with a read-state. Status, owner, folder and trash time change only through actions.
+    idPrefix: bkm
+    fields:
+      owner_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: user
+        onDelete: restrict
+      folder_id:
+        type: ref
+        description: Folder the bookmark is filed in, null when unfiled. Changed only by move_bookmark.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: folder
+        onDelete: restrict
+      url:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 2000
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 300
+      notes:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - unread
+          - read
+          - archived
+          - trashed
+        initial: unread
+        transitions:
+          unread:
+            - read
+            - archived
+            - trashed
+          read:
+            - archived
+            - trashed
+          archived:
+            - trashed
+          trashed:
+            - unread
+      trashed_at:
+        type: datetime
+        description: Set when trashed, cleared on restore. Trash is purged 30 days after this time.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+  tag:
+    description: A per-user label.
+    idPrefix: tag
+    fields:
+      owner_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+  bookmark_tag:
+    description: Link of a bookmark to one of its owner's tags. Created by the tag_bookmark action.
+    idPrefix: btg
+    fields:
+      bookmark_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: bookmark
+        onDelete: cascade
+      tag_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: tag
+        onDelete: cascade
+  collection:
+    description: A group of bookmarks with visibility private, shared or public (optional expiry). Visibility changes only through actions and the expire_public_links job.
+    idPrefix: col
+    fields:
+      owner_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: user
+        onDelete: restrict
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 120
+      visibility:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - private
+          - shared
+          - public
+        initial: private
+        transitions:
+          private:
+            - shared
+            - public
+          shared:
+            - private
+            - public
+          public:
+            - private
+            - shared
+      public_expires_at:
+        type: datetime
+        description: When a public collection reverts to shared or private; null means no expiry.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+  collection_member:
+    description: A user granted viewer or editor access to a collection.
+    idPrefix: cmb
+    fields:
+      collection_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: collection
+        onDelete: cascade
+      user_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: user
+        onDelete: restrict
+      role:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        values:
+          - viewer
+          - editor
+  collection_item:
+    description: A bookmark placed in a collection by a user.
+    idPrefix: cit
+    fields:
+      collection_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: collection
+        onDelete: cascade
+      bookmark_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: bookmark
+        onDelete: cascade
+      added_by:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: user
+        onDelete: restrict
+  activity:
+    description: Log of actions and job runs; actor_id is null for jobs. Written by actions and jobs only.
+    idPrefix: act
+    fields:
+      actor_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: user
+        onDelete: nullify
+      action:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 60
+      bookmark_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: bookmark
+        onDelete: nullify
+      collection_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: collection
+        onDelete: nullify
+      folder_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: folder
+        onDelete: nullify
+routes:
+  list_users:
+    op: list
+    entity: user
+    filters: []
+    search:
+      - name
+      - email
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /users
+    description: List users, search by name or email.
+  get_user:
+    op: get
+    entity: user
+    method: GET
+    path: /users/{id}
+    description: Get a user.
+  create_user:
+    op: create
+    entity: user
+    method: POST
+    path: /users
+    description: Register a user.
+  list_folders:
+    op: list
+    entity: folder
+    filters:
+      - owner_id
+      - parent_id
+    search:
+      - name
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /folders
+    description: List folders, filter by owner_id and parent_id.
+  get_folder:
+    op: get
+    entity: folder
+    method: GET
+    path: /folders/{id}
+    description: Get a folder.
+  list_bookmarks:
+    op: list
+    entity: bookmark
+    filters:
+      - owner_id
+      - folder_id
+      - status
+    search:
+      - title
+      - url
+    sort:
+      - title
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /bookmarks
+    description: List bookmarks, filter by owner_id, folder_id and status.
+  get_bookmark:
+    op: get
+    entity: bookmark
+    method: GET
+    path: /bookmarks/{id}
+    description: Get a bookmark.
+  update_bookmark:
+    op: update
+    entity: bookmark
+    method: PATCH
+    path: /bookmarks/{id}
+    description: Edit title and notes only.
+  list_tags:
+    op: list
+    entity: tag
+    filters:
+      - owner_id
+    search:
+      - name
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /tags
+    description: List tags, filter by owner_id.
+  get_tag:
+    op: get
+    entity: tag
+    method: GET
+    path: /tags/{id}
+    description: Get a tag.
+  create_tag:
+    op: create
+    entity: tag
+    method: POST
+    path: /tags
+    description: Create a per-user tag.
+  list_bookmark_tags:
+    op: list
+    entity: bookmark_tag
+    filters:
+      - bookmark_id
+      - tag_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /bookmark_tags
+    description: List bookmark-tag links, filter by bookmark_id and tag_id.
+  list_collections:
+    op: list
+    entity: collection
+    filters:
+      - owner_id
+      - visibility
+    search:
+      - name
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /collections
+    description: List collections, filter by owner_id and visibility.
+  get_collection:
+    op: get
+    entity: collection
+    method: GET
+    path: /collections/{id}
+    description: Get a collection.
+  list_collection_members:
+    op: list
+    entity: collection_member
+    filters:
+      - role
+      - user_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /collections/{collection_id}/members
+    description: List members of a collection.
+  list_collection_items:
+    op: list
+    entity: collection_item
+    filters:
+      - bookmark_id
+      - added_by
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /collections/{collection_id}/items
+    description: List items of a collection.
+  list_activity:
+    op: list
+    entity: activity
+    filters:
+      - actor_id
+      - action
+      - bookmark_id
+      - collection_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /activity
+    description: List activity, filter by actor_id, action, bookmark_id and collection_id.
+actions:
+  create_bookmark:
+    method: POST
+    path: /bookmarks
+    description: Save a bookmark for the actor, optionally into one of the actor's folders.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      url:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 2000
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 300
+      notes:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      folder_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: folder
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        const actor = ctx.db.get('user', b.actor_id);
+        if (actor === null) ctx.fail(404, 'not_found', 'user ' + b.actor_id + ' not found');
+        const fid = b.folder_id === undefined ? null : b.folder_id;
+        if (fid !== null) {
+          const f = ctx.db.get('folder', fid);
+          if (f === null) ctx.fail(404, 'not_found', 'folder ' + fid + ' not found');
+          if (f.owner_id !== actor.id) ctx.fail(409, 'not_owner', 'folder ' + fid + ' belongs to another user');
+        }
+        const row = ctx.db.create('bookmark', { owner_id: actor.id, folder_id: fid, url: b.url, title: b.title, notes: b.notes === undefined ? null : b.notes, trashed_at: null });
+        ctx.db.create('activity', { actor_id: actor.id, action: 'create_bookmark', bookmark_id: row.id });
+        return { status: 201, body: row };
+      }
+  mark_read:
+    method: POST
+    path: /bookmarks/{id}/read
+    description: Mark an unread bookmark as read.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const bm = ctx.db.get('bookmark', ctx.params.id);
+        if (bm === null) ctx.fail(404, 'not_found', 'bookmark ' + ctx.params.id + ' not found');
+        if (bm.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'bookmark ' + bm.id + ' belongs to another user');
+        if (bm.status !== 'unread') ctx.fail(409, 'invalid_state', 'bookmark is ' + bm.status + '. Only unread bookmarks can be marked read.');
+        const u = ctx.db.update('bookmark', bm.id, { status: 'read' });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'mark_read', bookmark_id: bm.id });
+        return { status: 200, body: u };
+      }
+  archive_bookmark:
+    method: POST
+    path: /bookmarks/{id}/archive
+    description: Archive an unread or read bookmark.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const bm = ctx.db.get('bookmark', ctx.params.id);
+        if (bm === null) ctx.fail(404, 'not_found', 'bookmark ' + ctx.params.id + ' not found');
+        if (bm.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'bookmark ' + bm.id + ' belongs to another user');
+        if (bm.status !== 'unread' && bm.status !== 'read') ctx.fail(409, 'invalid_state', 'bookmark is ' + bm.status + '. Only unread or read bookmarks can be archived.');
+        const u = ctx.db.update('bookmark', bm.id, { status: 'archived' });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'archive_bookmark', bookmark_id: bm.id });
+        return { status: 200, body: u };
+      }
+  trash_bookmark:
+    method: POST
+    path: /bookmarks/{id}/trash
+    description: Move a bookmark to the trash; it is purged after 30 days.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const bm = ctx.db.get('bookmark', ctx.params.id);
+        if (bm === null) ctx.fail(404, 'not_found', 'bookmark ' + ctx.params.id + ' not found');
+        if (bm.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'bookmark ' + bm.id + ' belongs to another user');
+        if (bm.status === 'trashed') ctx.fail(409, 'invalid_state', 'bookmark is already trashed');
+        const u = ctx.db.update('bookmark', bm.id, { status: 'trashed', trashed_at: ctx.now() });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'trash_bookmark', bookmark_id: bm.id });
+        return { status: 200, body: u };
+      }
+  restore_bookmark:
+    method: POST
+    path: /bookmarks/{id}/restore
+    description: Restore a trashed bookmark to unread.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const bm = ctx.db.get('bookmark', ctx.params.id);
+        if (bm === null) ctx.fail(404, 'not_found', 'bookmark ' + ctx.params.id + ' not found');
+        if (bm.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'bookmark ' + bm.id + ' belongs to another user');
+        if (bm.status !== 'trashed') ctx.fail(409, 'invalid_state', 'bookmark is ' + bm.status + '. Only trashed bookmarks can be restored.');
+        const u = ctx.db.update('bookmark', bm.id, { status: 'unread', trashed_at: null });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'restore_bookmark', bookmark_id: bm.id });
+        return { status: 200, body: u };
+      }
+  move_bookmark:
+    method: POST
+    path: /bookmarks/{id}/move
+    description: Move a bookmark into one of the actor's folders, or unfile it with a null folder_id.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      folder_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: folder
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const bm = ctx.db.get('bookmark', ctx.params.id);
+        if (bm === null) ctx.fail(404, 'not_found', 'bookmark ' + ctx.params.id + ' not found');
+        if (bm.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'bookmark ' + bm.id + ' belongs to another user');
+        const fid = ctx.body.folder_id === undefined ? null : ctx.body.folder_id;
+        if (fid !== null) {
+          const f = ctx.db.get('folder', fid);
+          if (f === null) ctx.fail(404, 'not_found', 'folder ' + fid + ' not found');
+          if (f.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'folder ' + fid + ' belongs to another user');
+        }
+        const u = ctx.db.update('bookmark', bm.id, { folder_id: fid });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'move_bookmark', bookmark_id: bm.id, folder_id: fid });
+        return { status: 200, body: u };
+      }
+  tag_bookmark:
+    method: POST
+    path: /bookmarks/{id}/tag
+    description: Attach one of the owner's tags to a bookmark, once.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      tag_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: tag
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const bm = ctx.db.get('bookmark', ctx.params.id);
+        if (bm === null) ctx.fail(404, 'not_found', 'bookmark ' + ctx.params.id + ' not found');
+        if (bm.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'bookmark ' + bm.id + ' belongs to another user');
+        const tag = ctx.db.get('tag', ctx.body.tag_id);
+        if (tag === null) ctx.fail(404, 'not_found', 'tag ' + ctx.body.tag_id + ' not found');
+        if (tag.owner_id !== bm.owner_id) ctx.fail(409, 'tag_not_owned', 'tag ' + tag.id + ' does not belong to the bookmark owner');
+        if (ctx.db.list('bookmark_tag', { where: { bookmark_id: bm.id, tag_id: tag.id } }).length > 0) ctx.fail(409, 'already_tagged', 'bookmark already has tag ' + tag.id);
+        const link = ctx.db.create('bookmark_tag', { bookmark_id: bm.id, tag_id: tag.id });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'tag_bookmark', bookmark_id: bm.id });
+        return { status: 201, body: link };
+      }
+  create_folder:
+    method: POST
+    path: /folders
+    description: Create a folder for the actor, optionally under one of the actor's folders.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      parent_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: folder
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        if (ctx.db.get('user', b.actor_id) === null) ctx.fail(404, 'not_found', 'user ' + b.actor_id + ' not found');
+        const pid = b.parent_id === undefined ? null : b.parent_id;
+        if (pid !== null) {
+          const p = ctx.db.get('folder', pid);
+          if (p === null) ctx.fail(404, 'not_found', 'folder ' + pid + ' not found');
+          if (p.owner_id !== b.actor_id) ctx.fail(409, 'not_owner', 'folder ' + pid + ' belongs to another user');
+        }
+        const row = ctx.db.create('folder', { owner_id: b.actor_id, name: b.name, parent_id: pid });
+        ctx.db.create('activity', { actor_id: b.actor_id, action: 'create_folder', folder_id: row.id });
+        return { status: 201, body: row };
+      }
+  move_folder:
+    method: POST
+    path: /folders/{id}/move
+    description: Re-parent a folder; refuses moves under itself or its descendants.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      parent_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: folder
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const f = ctx.db.get('folder', ctx.params.id);
+        if (f === null) ctx.fail(404, 'not_found', 'folder ' + ctx.params.id + ' not found');
+        if (f.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'folder ' + f.id + ' belongs to another user');
+        const pid = ctx.body.parent_id === undefined ? null : ctx.body.parent_id;
+        if (pid !== null) {
+          const p = ctx.db.get('folder', pid);
+          if (p === null) ctx.fail(404, 'not_found', 'folder ' + pid + ' not found');
+          if (p.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'folder ' + pid + ' belongs to another user');
+          let cur = p;
+          let guard = 0;
+          while (cur !== null && guard < 1000) {
+            if (cur.id === f.id) ctx.fail(409, 'folder_cycle', 'folder ' + f.id + ' cannot be moved under itself or its descendant ' + pid);
+            cur = cur.parent_id === null ? null : ctx.db.get('folder', cur.parent_id);
+            guard++;
+          }
+        }
+        const u = ctx.db.update('folder', f.id, { parent_id: pid });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'move_folder', folder_id: f.id });
+        return { status: 200, body: u };
+      }
+  create_collection:
+    method: POST
+    path: /collections
+    description: Create a private collection owned by the actor.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+    handler: |-
+      (ctx) => {
+        if (ctx.db.get('user', ctx.body.actor_id) === null) ctx.fail(404, 'not_found', 'user ' + ctx.body.actor_id + ' not found');
+        const row = ctx.db.create('collection', { owner_id: ctx.body.actor_id, name: ctx.body.name, public_expires_at: null });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'create_collection', collection_id: row.id });
+        return { status: 201, body: row };
+      }
+  add_collection_member:
+    method: POST
+    path: /collections/{id}/add_member
+    description: Owner grants a viewer or editor role; a private collection becomes shared.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      user_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      role:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - viewer
+          - editor
+    handler: |-
+      (ctx) => {
+        const c = ctx.db.get('collection', ctx.params.id);
+        if (c === null) ctx.fail(404, 'not_found', 'collection ' + ctx.params.id + ' not found');
+        if (c.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'only the owner can add members');
+        if (ctx.db.get('user', ctx.body.user_id) === null) ctx.fail(404, 'not_found', 'user ' + ctx.body.user_id + ' not found');
+        if (ctx.db.list('collection_member', { where: { collection_id: c.id, user_id: ctx.body.user_id } }).length > 0) ctx.fail(409, 'already_member', 'user is already a member');
+        const m = ctx.db.create('collection_member', { collection_id: c.id, user_id: ctx.body.user_id, role: ctx.body.role });
+        if (c.visibility === 'private') ctx.db.update('collection', c.id, { visibility: 'shared' });
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'add_collection_member', collection_id: c.id });
+        return { status: 201, body: m };
+      }
+  add_collection_item:
+    method: POST
+    path: /collections/{id}/add_item
+    description: Owner or editor adds one of their own bookmarks to a collection.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      bookmark_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: bookmark
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const c = ctx.db.get('collection', ctx.params.id);
+        if (c === null) ctx.fail(404, 'not_found', 'collection ' + ctx.params.id + ' not found');
+        const bm = ctx.db.get('bookmark', ctx.body.bookmark_id);
+        if (bm === null) ctx.fail(404, 'not_found', 'bookmark ' + ctx.body.bookmark_id + ' not found');
+        const actor = ctx.body.actor_id;
+        let allowed = c.owner_id === actor;
+        if (!allowed) {
+          allowed = ctx.db.list('collection_member', { where: { collection_id: c.id, user_id: actor } }).some((m) => m.role === 'editor');
+        }
+        if (!allowed) ctx.fail(409, 'permission_denied', 'only the owner or an editor can add items');
+        if (bm.owner_id !== actor) ctx.fail(409, 'not_owner', 'bookmark ' + bm.id + ' belongs to another user');
+        if (ctx.db.list('collection_item', { where: { collection_id: c.id, bookmark_id: bm.id } }).length > 0) ctx.fail(409, 'already_in_collection', 'bookmark is already in the collection');
+        const it = ctx.db.create('collection_item', { collection_id: c.id, bookmark_id: bm.id, added_by: actor });
+        ctx.db.create('activity', { actor_id: actor, action: 'add_collection_item', bookmark_id: bm.id, collection_id: c.id });
+        return { status: 201, body: it };
+      }
+  make_public:
+    method: POST
+    path: /collections/{id}/make_public
+    description: Owner makes a collection public, optionally expiring after expires_in_hours.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      expires_in_hours:
+        type: int
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        min: 1
+    handler: |-
+      (ctx) => {
+        const c = ctx.db.get('collection', ctx.params.id);
+        if (c === null) ctx.fail(404, 'not_found', 'collection ' + ctx.params.id + ' not found');
+        if (c.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'only the owner can change visibility');
+        const h = ctx.body.expires_in_hours;
+        const exp = (h === undefined || h === null) ? null : ctx.time.plus(ctx.now(), h + 'h');
+        const patch = { public_expires_at: exp };
+        if (c.visibility !== 'public') patch.visibility = 'public';
+        const u = ctx.db.update('collection', c.id, patch);
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'make_public', collection_id: c.id });
+        return { status: 200, body: u };
+      }
+  make_private:
+    method: POST
+    path: /collections/{id}/make_private
+    description: Owner makes a collection private, removing all members and the expiry.
+    input:
+      actor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const c = ctx.db.get('collection', ctx.params.id);
+        if (c === null) ctx.fail(404, 'not_found', 'collection ' + ctx.params.id + ' not found');
+        if (c.owner_id !== ctx.body.actor_id) ctx.fail(409, 'not_owner', 'only the owner can change visibility');
+        for (const m of ctx.db.list('collection_member', { where: { collection_id: c.id } })) ctx.db.delete('collection_member', m.id);
+        const patch = { public_expires_at: null };
+        if (c.visibility !== 'private') patch.visibility = 'private';
+        const u = ctx.db.update('collection', c.id, patch);
+        ctx.db.create('activity', { actor_id: ctx.body.actor_id, action: 'make_private', collection_id: c.id });
+        return { status: 200, body: u };
+      }
+jobs:
+  purge_trash:
+    description: "Daily: delete bookmarks trashed 30 or more days ago, cascading collection items and detaching activity."
+    every: 1d
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const b of ctx.db.list('bookmark', { where: { status: 'trashed' } })) {
+          if (b.trashed_at === null) continue;
+          if (ctx.time.minutesBetween(b.trashed_at, now) >= 43200) ctx.db.delete('bookmark', b.id);
+        }
+      }
+  expire_public_links:
+    description: "Hourly: expired public collections revert to shared if they have members, else private."
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const c of ctx.db.list('collection', { where: { visibility: 'public' } })) {
+          if (c.public_expires_at === null) continue;
+          if (ctx.time.minutesBetween(c.public_expires_at, now) < 0) continue;
+          const members = ctx.db.list('collection_member', { where: { collection_id: c.id } });
+          ctx.db.update('collection', c.id, { visibility: members.length > 0 ? 'shared' : 'private', public_expires_at: null });
+        }
+      }
+fixtures: {}
+seed:
+  user: |-
+    (ctx) => {
+      const now = ctx.now();
+      const names = [['Dana Whitaker','dana.whitaker@example.com'],['Leo Marsh','leo.marsh@example.com'],['Ira Quinn','ira.quinn@example.com'],['Sam Ortiz','sam.ortiz@example.com'],['Maya Chen','maya.chen@example.com'],['Tom Reyes','tom.reyes@example.com']];
+      return names.map((n, i) => { const t = ctx.time.minus(now, (200 - i) + 'd'); return { name: n[0], email: n[1], created_at: t, updated_at: t }; });
+    }
+  folder: |-
+    (ctx) => {
+      const now = ctx.now();
+      const U = ctx.rows('user');
+      const pid = (n) => 'fld_' + String(n).padStart(4, '0');
+      const specs = [[0,'Reading',null],[0,'Dev',null],[0,'Rust',2],[1,'Databases',null],[1,'Misc',null],[2,'Notes',null],[3,'Home',null],[3,'Recipes',null],[3,'Work',null],[3,'Travel',7],[3,'Recipe Ideas',10],[4,'Recipes',null],[4,'Baking',12],[4,'Team',null],[5,'Recipes',null],[5,'Tools',null]];
+      return specs.map((s, i) => { const t = ctx.time.minus(now, (150 - i) + 'd'); return { owner_id: U[s[0]].id, name: s[1], parent_id: s[2] === null ? null : pid(s[2]), created_at: t, updated_at: t }; });
+    }
+  bookmark: |-
+    (ctx) => {
+      const now = ctx.now();
+      const U = ctx.rows('user');
+      const fid = (n) => n === null ? null : 'fld_' + String(n).padStart(4, '0');
+      const specs = [];
+      const add = (o, f, t, s) => specs.push({ o, f, t, s });
+      add(0, 3, 'Rust Ownership Explained', 'unread');
+      add(0, 3, 'Rust Ownership Explained', 'read');
+      add(5, 16, 'Rust Ownership Explained', 'unread');
+      add(2, 6, 'Rust Ownership Explained', 'read');
+      add(1, 4, 'SQLite Internals', 'unread');
+      add(2, 6, 'SQLite Internals', 'unread');
+      add(4, 14, 'SQLite Internals', 'read');
+      add(3, 8, 'Sourdough Starter Guide', 'archived');
+      add(3, 8, 'Weeknight Curry', 'archived');
+      add(3, 8, 'Pasta Basics', 'read');
+      add(3, 8, 'Knife Skills', 'unread');
+      add(3, 9, 'Quarterly Planning', 'archived');
+      add(3, 11, 'Dessert Ideas', 'archived');
+      add(4, 12, 'Focaccia Handbook', 'archived');
+      add(4, 12, 'Weeknight Curry', 'archived');
+      add(5, 15, 'Slow Cooker Basics', 'archived');
+      const base = ['Kubernetes Networking','CSS Grid Patterns','Home Espresso Setup','Zettelkasten Method','Postgres Indexing','Typography Basics','Trail Running Tips','Git Internals','Sleep Research','Async JavaScript','Mechanical Keyboards','Budget Travel Japan','Urban Gardening','Linux Perf Tools'];
+      const suf = ['Guide','Notes','Deep Dive'];
+      const sts = [];
+      for (let k = 0; k < 16; k++) sts.push('unread');
+      for (let k = 0; k < 10; k++) sts.push('read');
+      for (let k = 0; k < 6; k++) sts.push('archived');
+      for (let k = 0; k < 9; k++) sts.push('trashed');
+      const others = [0,1,2,4,5];
+      const ofold = { 0: 1, 1: 5, 2: 6, 4: 14, 5: 16 };
+      const sfold = [null, 7, 9, 10, null, 9];
+      for (let i = 0; i < 41; i++) {
+        const o = i % 2 === 0 ? 3 : others[Math.floor(i / 2) % 5];
+        const f = o === 3 ? sfold[Math.floor(i / 2) % 6] : (i % 3 === 0 ? null : ofold[o]);
+        add(o, f, base[i % 14] + ' ' + suf[Math.floor(i / 14)], sts[(i * 7) % 41]);
+      }
+      add(3, 8, 'Braising Techniques', 'archived');
+      add(3, 8, 'Stock From Scratch', 'archived');
+      add(3, 8, 'Fermentation Basics', 'read');
+      return specs.map((s, k) => {
+        const created = ctx.time.minus(now, (90 - k) + 'd');
+        const row = { owner_id: U[s.o].id, folder_id: fid(s.f), url: 'https://example.com/' + (s.o + 1) + '/' + (k + 1), title: s.t, notes: k % 4 === 0 ? 'Saved for later' : null, status: s.s, trashed_at: null, created_at: created, updated_at: ctx.time.plus(created, (k % 4 + 1) + 'd') };
+        if (s.s === 'trashed') { const tr = ctx.time.minus(now, (1 + (k * 7) % 25) + 'd'); row.trashed_at = tr; row.updated_at = tr; }
+        return row;
+      });
+    }
+  tag: |-
+    (ctx) => {
+      const now = ctx.now();
+      const U = ctx.rows('user');
+      const names = [['research','rust'],['databases','todo'],['research','later'],['cooking','travel'],['recipes','later'],['tools','reading']];
+      const out = [];
+      U.forEach((u, i) => names[i].forEach((n, j) => { const t = ctx.time.minus(now, (140 - i * 2 - j) + 'd'); out.push({ owner_id: u.id, name: n, created_at: t, updated_at: t }); }));
+      return out;
+    }
+  bookmark_tag: |-
+    (ctx) => {
+      const B = ctx.rows('bookmark');
+      const T = ctx.rows('tag');
+      const out = [];
+      for (let j = 0; j < 40; j++) {
+        const b = B[j];
+        const mine = T.filter((t) => t.owner_id === b.owner_id);
+        out.push({ bookmark_id: b.id, tag_id: mine[j % 2].id, created_at: ctx.time.plus(b.created_at, '1h'), updated_at: ctx.time.plus(b.created_at, '1h') });
+      }
+      return out;
+    }
+  collection: |-
+    (ctx) => {
+      const now = ctx.now();
+      const U = ctx.rows('user');
+      const specs = [[4,'Team Reading','shared',null],[0,'Rust Resources','private',null],[3,'Sam Recipes Box','public',null],[1,'Database Papers','shared',null],[3,'Travel Ideas','private',null],[5,'Public Tools','public',ctx.time.plus(now, '3d')],[2,'Weekend Reads','shared',null],[0,'Team Reading','private',null]];
+      return specs.map((s, i) => { const t = ctx.time.minus(now, (100 - i) + 'd'); return { owner_id: U[s[0]].id, name: s[1], visibility: s[2], public_expires_at: s[3], created_at: t, updated_at: t }; });
+    }
+  collection_member: |-
+    (ctx) => {
+      const now = ctx.now();
+      const U = ctx.rows('user');
+      const C = ctx.rows('collection');
+      const specs = [[0,1,'editor'],[0,2,'viewer'],[0,0,'viewer'],[3,0,'editor'],[3,4,'viewer'],[6,5,'editor'],[6,3,'viewer'],[6,1,'viewer'],[5,2,'viewer'],[2,1,'viewer']];
+      return specs.map((s, i) => { const t = ctx.time.minus(now, (60 - i) + 'd'); return { collection_id: C[s[0]].id, user_id: U[s[1]].id, role: s[2], created_at: t, updated_at: t }; });
+    }
+  collection_item: |-
+    (ctx) => {
+      const now = ctx.now();
+      const U = ctx.rows('user');
+      const C = ctx.rows('collection');
+      const B = ctx.rows('bookmark');
+      const specs = [[0,[4,1],5],[1,[0],3],[2,[3],4],[3,[1,0],3],[4,[3],2],[5,[5],2],[6,[2,5],1]];
+      const out = [];
+      specs.forEach((s) => {
+        const ids = s[1].map((x) => U[x].id);
+        const pool = B.filter((b) => ids.includes(b.owner_id) && b.status !== 'trashed' && b.title !== 'SQLite Internals').slice(0, s[2]);
+        pool.forEach((b, k) => { const t = ctx.time.minus(now, (30 - k) + 'd'); out.push({ collection_id: C[s[0]].id, bookmark_id: b.id, added_by: b.owner_id, created_at: t, updated_at: t }); });
+      });
+      return out;
+    }
+  activity: |-
+    (ctx) => {
+      const B = ctx.rows('bookmark');
+      const out = [];
+      for (let j = 0; j < 40; j++) {
+        const b = B[j];
+        out.push({ actor_id: b.owner_id, action: 'create_bookmark', bookmark_id: b.id, collection_id: null, folder_id: null, created_at: b.created_at, updated_at: b.created_at });
+      }
+      return out;
+    }
+tests:
+  t_bookmark_lifecycle:
+    description: Create a bookmark, read, archive, trash, restore, and check invalid transitions answer 409 invalid_state.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/users', { name: 'Lifecycle User', email: 'lifecycle.user@test.invalid' });
+        ctx.assert(u.status === 201, 'user: ' + JSON.stringify(u.body));
+        const uid = u.body.id;
+        const b = ctx.api('POST', '/bookmarks', { actor_id: uid, url: 'https://example.com/life', title: 'Lifecycle' });
+        ctx.assert(b.status === 201 && b.body.status === 'unread' && b.body.owner_id === uid, 'create: ' + JSON.stringify(b.body));
+        const id = b.body.id;
+        const act = (v) => ctx.api('POST', '/bookmarks/' + id + '/' + v, { actor_id: uid });
+        const r = act('read');
+        ctx.assert(r.status === 200 && r.body.status === 'read', 'read: ' + JSON.stringify(r.body));
+        const rr = act('read');
+        ctx.assert(rr.status === 409 && rr.body.error.code === 'invalid_state', 'read twice: ' + JSON.stringify(rr.body));
+        const a = act('archive');
+        ctx.assert(a.status === 200 && a.body.status === 'archived', 'archive: ' + JSON.stringify(a.body));
+        const t = act('trash');
+        ctx.assert(t.status === 200 && t.body.status === 'trashed' && t.body.trashed_at !== null, 'trash: ' + JSON.stringify(t.body));
+        const a2 = act('archive');
+        ctx.assert(a2.status === 409 && a2.body.error.code === 'invalid_state', 'archive trashed: ' + JSON.stringify(a2.body));
+        const rs = act('restore');
+        ctx.assert(rs.status === 200 && rs.body.status === 'unread' && rs.body.trashed_at === null, 'restore: ' + JSON.stringify(rs.body));
+        const rs2 = act('restore');
+        ctx.assert(rs2.status === 409 && rs2.body.error.code === 'invalid_state', 'restore unread: ' + JSON.stringify(rs2.body));
+        const g = ctx.api('GET', '/bookmarks/' + id);
+        ctx.assert(g.status === 200 && g.body.status === 'unread', 'final: ' + JSON.stringify(g.body));
+      }
+  t_ownership:
+    description: A second user cannot trash, move or file bookmarks into someone else's folder; failures change nothing.
+    script: |-
+      (ctx) => {
+        const u1 = ctx.api('POST', '/users', { name: 'Owner One', email: 'owner.one@test.invalid' }).body.id;
+        const u2 = ctx.api('POST', '/users', { name: 'Owner Two', email: 'owner.two@test.invalid' }).body.id;
+        const f1 = ctx.api('POST', '/folders', { actor_id: u1, name: 'Owned' });
+        ctx.assert(f1.status === 201, 'folder: ' + JSON.stringify(f1.body));
+        const f2 = ctx.api('POST', '/folders', { actor_id: u2, name: 'Theirs' });
+        ctx.assert(f2.status === 201, 'folder2: ' + JSON.stringify(f2.body));
+        const b = ctx.api('POST', '/bookmarks', { actor_id: u1, url: 'https://example.com/own', title: 'Own' });
+        ctx.assert(b.status === 201, 'create: ' + JSON.stringify(b.body));
+        const id = b.body.id;
+        const t = ctx.api('POST', '/bookmarks/' + id + '/trash', { actor_id: u2 });
+        ctx.assert(t.status === 409 && t.body.error.code === 'not_owner', 'foreign trash: ' + JSON.stringify(t.body));
+        const m = ctx.api('POST', '/bookmarks/' + id + '/move', { actor_id: u2, folder_id: null });
+        ctx.assert(m.status === 409 && m.body.error.code === 'not_owner', 'foreign move: ' + JSON.stringify(m.body));
+        const c = ctx.api('POST', '/bookmarks', { actor_id: u2, url: 'https://example.com/x', title: 'X', folder_id: f1.body.id });
+        ctx.assert(c.status === 409 && c.body.error.code === 'not_owner', 'foreign folder create: ' + JSON.stringify(c.body));
+        const m2 = ctx.api('POST', '/bookmarks/' + id + '/move', { actor_id: u1, folder_id: f2.body.id });
+        ctx.assert(m2.status === 409 && m2.body.error.code === 'not_owner', 'into foreign folder: ' + JSON.stringify(m2.body));
+        const ok = ctx.api('POST', '/bookmarks/' + id + '/move', { actor_id: u1, folder_id: f1.body.id });
+        ctx.assert(ok.status === 200 && ok.body.folder_id === f1.body.id, 'own move: ' + JSON.stringify(ok.body));
+        const g = ctx.api('GET', '/bookmarks/' + id).body;
+        ctx.assert(g.status === 'unread' && g.folder_id === f1.body.id, 'unchanged otherwise: ' + JSON.stringify(g));
+      }
+  t_tag_ownership:
+    description: Tagging with another user's tag is refused; own tag works once.
+    script: |-
+      (ctx) => {
+        const u1 = ctx.api('POST', '/users', { name: 'Tagger One', email: 'tagger.one@test.invalid' }).body.id;
+        const u2 = ctx.api('POST', '/users', { name: 'Tagger Two', email: 'tagger.two@test.invalid' }).body.id;
+        const t1 = ctx.api('POST', '/tags', { owner_id: u1, name: 'research' });
+        ctx.assert(t1.status === 201, 'tag1: ' + JSON.stringify(t1.body));
+        const t2 = ctx.api('POST', '/tags', { owner_id: u2, name: 'research' });
+        ctx.assert(t2.status === 201, 'tag2: ' + JSON.stringify(t2.body));
+        const b = ctx.api('POST', '/bookmarks', { actor_id: u1, url: 'https://example.com/tag', title: 'Tag me' });
+        ctx.assert(b.status === 201, 'create: ' + JSON.stringify(b.body));
+        const id = b.body.id;
+        const bad = ctx.api('POST', '/bookmarks/' + id + '/tag', { actor_id: u1, tag_id: t2.body.id });
+        ctx.assert(bad.status === 409 && bad.body.error.code === 'tag_not_owned', 'foreign tag: ' + JSON.stringify(bad.body));
+        const ok = ctx.api('POST', '/bookmarks/' + id + '/tag', { actor_id: u1, tag_id: t1.body.id });
+        ctx.assert(ok.status === 201, 'own tag: ' + JSON.stringify(ok.body));
+        const dup = ctx.api('POST', '/bookmarks/' + id + '/tag', { actor_id: u1, tag_id: t1.body.id });
+        ctx.assert(dup.status === 409 && dup.body.error.code === 'already_tagged', 'dup: ' + JSON.stringify(dup.body));
+        const other = ctx.api('POST', '/bookmarks/' + id + '/tag', { actor_id: u2, tag_id: t2.body.id });
+        ctx.assert(other.status === 409 && other.body.error.code === 'not_owner', 'non-owner tagging: ' + JSON.stringify(other.body));
+        const l = ctx.api('GET', '/bookmark_tags?bookmark_id=' + id);
+        ctx.assert(l.status === 200 && l.body.data.length === 1 && l.body.data[0].tag_id === t1.body.id, 'links: ' + JSON.stringify(l.body));
+      }
+  t_folder_cycle:
+    description: Build a chain of folders; moving an ancestor under a descendant or itself is 409 folder_cycle; legal moves work.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/users', { name: 'Folder User', email: 'folder.user@test.invalid' }).body.id;
+        const o = ctx.api('POST', '/users', { name: 'Folder Other', email: 'folder.other@test.invalid' }).body.id;
+        const f1 = ctx.api('POST', '/folders', { actor_id: u, name: 'A' });
+        ctx.assert(f1.status === 201 && f1.body.parent_id === null, 'f1: ' + JSON.stringify(f1.body));
+        const f2 = ctx.api('POST', '/folders', { actor_id: u, name: 'B', parent_id: f1.body.id });
+        ctx.assert(f2.status === 201 && f2.body.parent_id === f1.body.id, 'f2: ' + JSON.stringify(f2.body));
+        const f3 = ctx.api('POST', '/folders', { actor_id: u, name: 'C', parent_id: f2.body.id });
+        ctx.assert(f3.status === 201, 'f3: ' + JSON.stringify(f3.body));
+        const mv = (id, actor, parent) => ctx.api('POST', '/folders/' + id + '/move', { actor_id: actor, parent_id: parent });
+        const c1 = mv(f1.body.id, u, f3.body.id);
+        ctx.assert(c1.status === 409 && c1.body.error.code === 'folder_cycle', 'descendant: ' + JSON.stringify(c1.body));
+        const c2 = mv(f1.body.id, u, f1.body.id);
+        ctx.assert(c2.status === 409 && c2.body.error.code === 'folder_cycle', 'self: ' + JSON.stringify(c2.body));
+        const c3 = mv(f1.body.id, o, null);
+        ctx.assert(c3.status === 409 && c3.body.error.code === 'not_owner', 'foreign actor: ' + JSON.stringify(c3.body));
+        const ok1 = mv(f3.body.id, u, null);
+        ctx.assert(ok1.status === 200 && ok1.body.parent_id === null, 'to root: ' + JSON.stringify(ok1.body));
+        const ok2 = mv(f1.body.id, u, f3.body.id);
+        ctx.assert(ok2.status === 200 && ok2.body.parent_id === f3.body.id, 'now legal: ' + JSON.stringify(ok2.body));
+      }
+  t_collection_permissions:
+    description: Owner adds an editor and a viewer; viewer/outsider cannot add items; editor can add own bookmarks only; duplicates refused.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/users', { name: 'Perm ' + n, email: 'perm.' + n + '@test.invalid' }).body.id;
+        const o = mk('owner'); const e = mk('editor'); const v = mk('viewer'); const x = mk('outsider');
+        const bk = (uid, t) => ctx.api('POST', '/bookmarks', { actor_id: uid, url: 'https://example.com/' + t, title: t }).body.id;
+        const bo = bk(o, 'bo'); const be = bk(e, 'be'); const bv = bk(v, 'bv'); const bx = bk(x, 'bx');
+        const c = ctx.api('POST', '/collections', { actor_id: o, name: 'Team' });
+        ctx.assert(c.status === 201 && c.body.visibility === 'private', 'collection: ' + JSON.stringify(c.body));
+        const cid = c.body.id;
+        const addM = (actor, uid, role) => ctx.api('POST', '/collections/' + cid + '/add_member', { actor_id: actor, user_id: uid, role });
+        const na = addM(e, e, 'editor');
+        ctx.assert(na.status === 409 && na.body.error.code === 'not_owner', 'non-owner add member: ' + JSON.stringify(na.body));
+        const m1 = addM(o, e, 'editor');
+        ctx.assert(m1.status === 201, 'editor: ' + JSON.stringify(m1.body));
+        const m2 = addM(o, v, 'viewer');
+        ctx.assert(m2.status === 201, 'viewer: ' + JSON.stringify(m2.body));
+        const dm = addM(o, v, 'viewer');
+        ctx.assert(dm.status === 409 && dm.body.error.code === 'already_member', 'dup member: ' + JSON.stringify(dm.body));
+        ctx.assert(ctx.api('GET', '/collections/' + cid).body.visibility === 'shared', 'becomes shared');
+        const addI = (actor, bid) => ctx.api('POST', '/collections/' + cid + '/add_item', { actor_id: actor, bookmark_id: bid });
+        const iv = addI(v, bv);
+        ctx.assert(iv.status === 409 && iv.body.error.code === 'permission_denied', 'viewer: ' + JSON.stringify(iv.body));
+        const ix = addI(x, bx);
+        ctx.assert(ix.status === 409 && ix.body.error.code === 'permission_denied', 'outsider: ' + JSON.stringify(ix.body));
+        const ie = addI(e, be);
+        ctx.assert(ie.status === 201, 'editor adds own: ' + JSON.stringify(ie.body));
+        const ib = addI(e, bo);
+        ctx.assert(ib.status === 409 && ib.body.error.code === 'not_owner', 'editor adds foreign bookmark: ' + JSON.stringify(ib.body));
+        const idp = addI(e, be);
+        ctx.assert(idp.status === 409 && idp.body.error.code === 'already_in_collection', 'dup item: ' + JSON.stringify(idp.body));
+        const io = addI(o, bo);
+        ctx.assert(io.status === 201, 'owner adds: ' + JSON.stringify(io.body));
+        ctx.assert(ctx.api('GET', '/collections/' + cid + '/members').body.data.length === 2, 'two members');
+        ctx.assert(ctx.api('GET', '/collections/' + cid + '/items').body.data.length === 2, 'two items');
+      }
+  t_visibility_toggle:
+    description: Outsider cannot change visibility; owner makes it public with expiry then private, which drops members and the expiry.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/users', { name: 'Vis ' + n, email: 'vis.' + n + '@test.invalid' }).body.id;
+        const o = mk('owner'); const m = mk('member'); const x = mk('outsider');
+        const c = ctx.api('POST', '/collections', { actor_id: o, name: 'Toggle' });
+        ctx.assert(c.status === 201 && c.body.visibility === 'private', 'collection: ' + JSON.stringify(c.body));
+        const cid = c.body.id;
+        ctx.assert(ctx.api('POST', '/collections/' + cid + '/add_member', { actor_id: o, user_id: m, role: 'viewer' }).status === 201, 'member');
+        const bad = ctx.api('POST', '/collections/' + cid + '/make_public', { actor_id: x, expires_in_hours: 5 });
+        ctx.assert(bad.status === 409 && bad.body.error.code === 'not_owner', 'outsider public: ' + JSON.stringify(bad.body));
+        const p = ctx.api('POST', '/collections/' + cid + '/make_public', { actor_id: o, expires_in_hours: 5 });
+        ctx.assert(p.status === 200 && p.body.visibility === 'public' && p.body.public_expires_at !== null, 'public: ' + JSON.stringify(p.body));
+        const px = ctx.api('POST', '/collections/' + cid + '/make_private', { actor_id: x });
+        ctx.assert(px.status === 409 && px.body.error.code === 'not_owner', 'outsider private: ' + JSON.stringify(px.body));
+        const q = ctx.api('POST', '/collections/' + cid + '/make_private', { actor_id: o });
+        ctx.assert(q.status === 200 && q.body.visibility === 'private' && q.body.public_expires_at === null, 'private: ' + JSON.stringify(q.body));
+        ctx.assert(ctx.api('GET', '/collections/' + cid + '/members').body.data.length === 0, 'members removed');
+        const p2 = ctx.api('POST', '/collections/' + cid + '/make_public', { actor_id: o });
+        ctx.assert(p2.status === 200 && p2.body.visibility === 'public' && p2.body.public_expires_at === null, 'public without expiry: ' + JSON.stringify(p2.body));
+      }
+  t_public_expiry:
+    description: Set public with expiry, advance the clock, and check the expire_public_links job outcome.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/users', { name: 'Exp ' + n, email: 'exp.' + n + '@test.invalid' }).body.id;
+        const o = mk('owner'); const e = mk('editor'); const x = mk('outsider');
+        const col = (n) => ctx.api('POST', '/collections', { actor_id: o, name: n }).body.id;
+        const c1 = col('Plain'); const c2 = col('WithMember'); const c3 = col('Forever');
+        ctx.assert(ctx.api('POST', '/collections/' + c2 + '/add_member', { actor_id: o, user_id: e, role: 'viewer' }).status === 201, 'member');
+        const pub = (id, actor, h) => ctx.api('POST', '/collections/' + id + '/make_public', h === undefined ? { actor_id: actor } : { actor_id: actor, expires_in_hours: h });
+        const bad = pub(c1, x, 2);
+        ctx.assert(bad.status === 409 && bad.body.error.code === 'not_owner', 'non-owner public: ' + JSON.stringify(bad.body));
+        const p1 = pub(c1, o, 2);
+        ctx.assert(p1.status === 200 && p1.body.visibility === 'public' && p1.body.public_expires_at !== null, 'public: ' + JSON.stringify(p1.body));
+        ctx.assert(pub(c2, o, 3).status === 200, 'public with member');
+        const p3 = pub(c3, o);
+        ctx.assert(p3.status === 200 && p3.body.visibility === 'public' && p3.body.public_expires_at === null, 'no expiry: ' + JSON.stringify(p3.body));
+        const r1 = ctx.advance('1h');
+        ctx.assert(r1.jobsFailed.length === 0, 'jobs ok');
+        ctx.assert(ctx.api('GET', '/collections/' + c1).body.visibility === 'public', 'still public at 1h');
+        ctx.assert(ctx.api('GET', '/collections/' + c2).body.visibility === 'public', 'c2 public at 1h');
+        ctx.advance('2h');
+        const a = ctx.api('GET', '/collections/' + c1).body;
+        ctx.assert(a.visibility === 'private' && a.public_expires_at === null, 'expired to private: ' + JSON.stringify(a));
+        const b = ctx.api('GET', '/collections/' + c2).body;
+        ctx.assert(b.visibility === 'shared' && b.public_expires_at === null, 'expired to shared: ' + JSON.stringify(b));
+        ctx.advance('5d');
+        ctx.assert(ctx.api('GET', '/collections/' + c3).body.visibility === 'public', 'no-expiry stays public');
+      }
+  t_purge_trash:
+    description: Trash a bookmark, advance 29 days (kept), then 2 more (deleted); other bookmarks stay.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/users', { name: 'Purge User', email: 'purge.user@test.invalid' }).body.id;
+        const bk = (t) => ctx.api('POST', '/bookmarks', { actor_id: u, url: 'https://example.com/' + t, title: t }).body.id;
+        const b1 = bk('purge1'); const b2 = bk('purge2'); const b3 = bk('purge3');
+        const c = ctx.api('POST', '/collections', { actor_id: u, name: 'Purge coll' }).body.id;
+        ctx.assert(ctx.api('POST', '/collections/' + c + '/add_item', { actor_id: u, bookmark_id: b1 }).status === 201, 'add item');
+        ctx.assert(ctx.api('POST', '/bookmarks/' + b1 + '/trash', { actor_id: u }).status === 200, 'trash b1');
+        ctx.assert(ctx.api('POST', '/bookmarks/' + b3 + '/archive', { actor_id: u }).status === 200, 'archive b3');
+        ctx.advance('29d');
+        ctx.assert(ctx.api('GET', '/bookmarks/' + b1).status === 200, 'kept at 29 days');
+        const r = ctx.advance('2d');
+        ctx.assert(r.jobsFailed.length === 0, 'jobs ok: ' + JSON.stringify(r.jobsFailed));
+        const g = ctx.api('GET', '/bookmarks/' + b1);
+        ctx.assert(g.status === 404 && g.body.error.code === 'row.not_found', 'purged: ' + JSON.stringify(g));
+        ctx.assert(ctx.api('GET', '/bookmarks/' + b2).status === 200, 'unread kept');
+        ctx.assert(ctx.api('GET', '/bookmarks/' + b3).body.status === 'archived', 'archived kept');
+        ctx.assert(ctx.api('GET', '/collections/' + c + '/items').body.data.length === 0, 'collection item removed');
+        ctx.assert(ctx.api('GET', '/activity?bookmark_id=' + b1).body.data.length === 0, 'activity detached');
+      }
+  t_activity_log:
+    description: Create, read and trash a bookmark and check the activity rows; a refused trash adds none.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/users', { name: 'Log User', email: 'log.user@test.invalid' }).body.id;
+        const o = ctx.api('POST', '/users', { name: 'Log Other', email: 'log.other@test.invalid' }).body.id;
+        const b = ctx.api('POST', '/bookmarks', { actor_id: u, url: 'https://example.com/log', title: 'Log' }).body.id;
+        ctx.assert(ctx.api('POST', '/bookmarks/' + b + '/read', { actor_id: u }).status === 200, 'read');
+        const bad = ctx.api('POST', '/bookmarks/' + b + '/trash', { actor_id: o });
+        ctx.assert(bad.status === 409, 'refused trash');
+        ctx.assert(ctx.api('POST', '/bookmarks/' + b + '/trash', { actor_id: u }).status === 200, 'trash');
+        const l = ctx.api('GET', '/activity?bookmark_id=' + b);
+        ctx.assert(l.status === 200, 'list');
+        const acts = l.body.data.map((a) => a.action);
+        ctx.assert(JSON.stringify(acts) === JSON.stringify(['create_bookmark', 'mark_read', 'trash_bookmark']), 'actions: ' + JSON.stringify(acts));
+        ctx.assert(l.body.data.every((a) => a.actor_id === u), 'actor recorded');
+      }
+tasks:
+  archive_dana_rust_bookmark:
+    difficulty: easy
+    instruction: Dana Whitaker has an unread bookmark titled 'Rust Ownership Explained'. Archive that bookmark, acting as Dana. Other people and Dana's other bookmarks may share the same title; leave them and everything else unchanged.
+    grader: |-
+      (ctx) => {
+        const dana = ctx.seed.list('user', { where: { name: 'Dana Whitaker' } })[0];
+        if (!dana) return 0;
+        const target = ctx.seed.list('bookmark', { where: { owner_id: dana.id, title: 'Rust Ownership Explained', status: 'unread' } })[0];
+        if (!target) return 0;
+        const logs = ctx.db.list('activity').filter((a) => ctx.seed.get('activity', a.id) === null && a.action === 'archive_bookmark' && a.bookmark_id === target.id);
+        ctx.guardChanges('only the target bookmark is archived', [
+          { entity: 'bookmark', id: target.id, kind: 'updated', fields: ['status'] },
+          ...logs.map((a) => ({ entity: 'activity', id: a.id, kind: 'created', fields: ['actor_id', 'action', 'bookmark_id', 'collection_id', 'folder_id'] })),
+        ]);
+        const end = ctx.db.get('bookmark', target.id);
+        ctx.goal(1, 'target archived', !!end && end.status === 'archived');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const dana = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Dana Whitaker');
+        ctx.assert(dana, 'Dana Whitaker not found');
+        const list = ctx.api('GET', '/bookmarks?owner_id=' + dana.id).body.data;
+        const target = list.find((b) => b.title === 'Rust Ownership Explained' && b.status === 'unread');
+        ctx.assert(target, 'no unread Rust Ownership Explained bookmark for Dana');
+        const r = ctx.api('POST', '/bookmarks/' + target.id + '/archive', { actor_id: dana.id });
+        ctx.assert(r.status === 200, 'archive failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: archives Dana's already-read bookmark with the same title instead of the unread one
+        script: |-
+          (ctx) => {
+            const dana = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Dana Whitaker');
+            const list = ctx.api('GET', '/bookmarks?owner_id=' + dana.id).body.data;
+            const wrong = list.find((b) => b.title === 'Rust Ownership Explained' && b.status === 'read');
+            ctx.api('POST', '/bookmarks/' + wrong.id + '/archive', { actor_id: dana.id });
+          }
+      - why: archives the unread bookmark with the same title that belongs to another user (Tom Reyes)
+        script: |-
+          (ctx) => {
+            const tom = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Tom Reyes');
+            const list = ctx.api('GET', '/bookmarks?owner_id=' + tom.id).body.data;
+            const wrong = list.find((b) => b.title === 'Rust Ownership Explained' && b.status === 'unread');
+            ctx.api('POST', '/bookmarks/' + wrong.id + '/archive', { actor_id: tom.id });
+          }
+    alternatives: []
+    allows:
+      - entity: bookmark
+        kind: updated
+        fields:
+          - status
+        where:
+          owner_id: usr_0001
+          title: Rust Ownership Explained
+          status: unread
+      - entity: activity
+        kind: created
+        fields: []
+        where:
+          action: archive_bookmark
+          actor_id: usr_0001
+  add_leo_bookmark_to_team_reading:
+    difficulty: medium
+    instruction: Leo Marsh wants his bookmark 'SQLite Internals' in the shared collection called 'Team Reading' (the one where he is an editor; another collection has the same name). Acting as Leo, add that bookmark to the collection, then mark the bookmark as read. Several people have a bookmark with this title; use only Leo's, and change nothing else.
+    grader: |-
+      (ctx) => {
+        const leo = ctx.seed.list('user', { where: { name: 'Leo Marsh' } })[0];
+        if (!leo) return 0;
+        const col = ctx.seed.list('collection', { where: { name: 'Team Reading', visibility: 'shared' } })[0];
+        if (!col) return 0;
+        const bm = ctx.seed.list('bookmark', { where: { owner_id: leo.id, title: 'SQLite Internals', status: 'unread' } })[0];
+        if (!bm) return 0;
+        const items = ctx.db.list('collection_item').filter((i) => ctx.seed.get('collection_item', i.id) === null && i.collection_id === col.id && i.bookmark_id === bm.id);
+        const logs = ctx.db.list('activity').filter((a) => ctx.seed.get('activity', a.id) === null && a.bookmark_id === bm.id && (a.action === 'add_collection_item' || a.action === 'mark_read'));
+        ctx.guardChanges('only Leo bookmark is added to Team Reading and marked read', [
+          { entity: 'bookmark', id: bm.id, kind: 'updated', fields: ['status'] },
+          ...items.map((i) => ({ entity: 'collection_item', id: i.id, kind: 'created', fields: ['collection_id', 'bookmark_id', 'added_by'] })),
+          ...logs.map((a) => ({ entity: 'activity', id: a.id, kind: 'created', fields: ['actor_id', 'action', 'bookmark_id', 'collection_id', 'folder_id'] })),
+        ]);
+        const inColl = ctx.db.list('collection_item', { where: { collection_id: col.id, bookmark_id: bm.id } });
+        ctx.goal(0.5, 'bookmark added to Team Reading by Leo', inColl.length === 1 && inColl[0].added_by === leo.id);
+        const end = ctx.db.get('bookmark', bm.id);
+        ctx.goal(0.5, 'bookmark marked read', !!end && end.status === 'read');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const leo = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Leo Marsh');
+        ctx.assert(leo, 'Leo Marsh not found');
+        const cols = ctx.api('GET', '/collections?visibility=shared').body.data.filter((c) => c.name === 'Team Reading');
+        let col = null;
+        for (const c of cols) {
+          const ms = ctx.api('GET', '/collections/' + c.id + '/members?user_id=' + leo.id).body.data;
+          if (ms.some((m) => m.role === 'editor')) col = c;
+        }
+        ctx.assert(col, 'no shared Team Reading collection where Leo is an editor');
+        const bm = ctx.api('GET', '/bookmarks?owner_id=' + leo.id).body.data.find((b) => b.title === 'SQLite Internals');
+        ctx.assert(bm, 'Leo SQLite Internals bookmark not found');
+        const add = ctx.api('POST', '/collections/' + col.id + '/add_item', { actor_id: leo.id, bookmark_id: bm.id });
+        ctx.assert(add.status === 201, 'add_item failed: ' + JSON.stringify(add.body));
+        const rd = ctx.api('POST', '/bookmarks/' + bm.id + '/read', { actor_id: leo.id });
+        ctx.assert(rd.status === 200, 'read failed: ' + JSON.stringify(rd.body));
+      }
+    decoys:
+      - why: adds Leo's bookmark to the collection but forgets to mark it as read
+        script: |-
+          (ctx) => {
+            const leo = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Leo Marsh');
+            const cols = ctx.api('GET', '/collections?visibility=shared').body.data.filter((c) => c.name === 'Team Reading');
+            let col = null;
+            for (const c of cols) {
+              const ms = ctx.api('GET', '/collections/' + c.id + '/members?user_id=' + leo.id).body.data;
+              if (ms.some((m) => m.role === 'editor')) col = c;
+            }
+            const bm = ctx.api('GET', '/bookmarks?owner_id=' + leo.id).body.data.find((b) => b.title === 'SQLite Internals');
+            ctx.api('POST', '/collections/' + col.id + '/add_item', { actor_id: leo.id, bookmark_id: bm.id });
+          }
+      - why: marks Leo's bookmark as read but never adds it to the collection
+        script: |-
+          (ctx) => {
+            const leo = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Leo Marsh');
+            const bm = ctx.api('GET', '/bookmarks?owner_id=' + leo.id).body.data.find((b) => b.title === 'SQLite Internals');
+            ctx.api('POST', '/bookmarks/' + bm.id + '/read', { actor_id: leo.id });
+          }
+      - why: acts as the collection owner Maya and adds her own same-titled bookmark instead of Leo's
+        script: |-
+          (ctx) => {
+            const users = ctx.api('GET', '/users').body.data;
+            const maya = users.find((u) => u.name === 'Maya Chen');
+            const cols = ctx.api('GET', '/collections?visibility=shared').body.data.filter((c) => c.name === 'Team Reading' && c.owner_id === maya.id);
+            const bm = ctx.api('GET', '/bookmarks?owner_id=' + maya.id).body.data.find((b) => b.title === 'SQLite Internals');
+            ctx.api('POST', '/collections/' + cols[0].id + '/add_item', { actor_id: maya.id, bookmark_id: bm.id });
+          }
+    alternatives:
+      - why: marks the bookmark as read first and then adds it to the collection, the reverse order
+        script: |-
+          (ctx) => {
+            const leo = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Leo Marsh');
+            const cols = ctx.api('GET', '/collections?visibility=shared').body.data.filter((c) => c.name === 'Team Reading');
+            let col = null;
+            for (const c of cols) {
+              const ms = ctx.api('GET', '/collections/' + c.id + '/members?user_id=' + leo.id).body.data;
+              if (ms.some((m) => m.role === 'editor')) col = c;
+            }
+            ctx.assert(col, 'collection not found');
+            const bm = ctx.api('GET', '/bookmarks?owner_id=' + leo.id).body.data.find((b) => b.title === 'SQLite Internals');
+            ctx.assert(bm, 'bookmark not found');
+            const rd = ctx.api('POST', '/bookmarks/' + bm.id + '/read', { actor_id: leo.id });
+            ctx.assert(rd.status === 200, 'read failed');
+            const add = ctx.api('POST', '/collections/' + col.id + '/add_item', { actor_id: leo.id, bookmark_id: bm.id });
+            ctx.assert(add.status === 201, 'add failed');
+          }
+    allows:
+      - entity: collection_item
+        kind: created
+        fields: []
+        where:
+          collection_id: col_0001
+          bookmark_id: bkm_0005
+      - entity: bookmark
+        kind: updated
+        fields:
+          - status
+        where:
+          owner_id: usr_0002
+          title: SQLite Internals
+          status: unread
+      - entity: activity
+        kind: created
+        fields: []
+        where:
+          action: add_collection_item
+          actor_id: usr_0002
+      - entity: activity
+        kind: created
+        fields: []
+        where:
+          action: mark_read
+          actor_id: usr_0002
+  reorganize_recipes_and_trash_archived:
+    difficulty: hard
+    instruction: "Acting as Sam Ortiz: move his folder 'Recipes' under his folder 'Home', then trash every archived bookmark of his that is filed in 'Recipes'. Sam has many bookmarks, so check all of them. Other users also have folders called 'Recipes'. Leave Sam's bookmarks that are not archived, bookmarks in other folders, and all other users' data unchanged."
+    grader: |-
+      (ctx) => {
+        const sam = ctx.seed.list('user', { where: { name: 'Sam Ortiz' } })[0];
+        if (!sam) return 0;
+        const rec = ctx.seed.list('folder', { where: { owner_id: sam.id, name: 'Recipes' } })[0];
+        const home = ctx.seed.list('folder', { where: { owner_id: sam.id, name: 'Home' } })[0];
+        if (!rec || !home) return 0;
+        const targets = ctx.seed.list('bookmark', { where: { owner_id: sam.id, folder_id: rec.id, status: 'archived' } });
+        if (targets.length === 0) return 0;
+        const ids = new Set(targets.map((t) => t.id));
+        const logs = ctx.db.list('activity').filter((a) => ctx.seed.get('activity', a.id) === null && ((a.action === 'move_folder' && a.folder_id === rec.id) || (a.action === 'trash_bookmark' && ids.has(a.bookmark_id))));
+        ctx.guardChanges('only Recipes is moved and its archived bookmarks trashed', [
+          { entity: 'folder', id: rec.id, kind: 'updated', fields: ['parent_id'] },
+          ...targets.map((t) => ({ entity: 'bookmark', id: t.id, kind: 'updated', fields: ['status', 'trashed_at'] })),
+          ...logs.map((a) => ({ entity: 'activity', id: a.id, kind: 'created', fields: ['actor_id', 'action', 'bookmark_id', 'collection_id', 'folder_id'] })),
+        ]);
+        const moved = ctx.db.get('folder', rec.id);
+        ctx.goal(0.25, 'Recipes is under Home', !!moved && moved.parent_id === home.id);
+        const w = 0.75 / targets.length;
+        for (const t of targets) {
+          const e = ctx.db.get('bookmark', t.id);
+          ctx.goal(w, 'trashed ' + t.id, !!e && e.status === 'trashed' && e.trashed_at !== null && e.folder_id === rec.id);
+        }
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const sam = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Sam Ortiz');
+        ctx.assert(sam, 'Sam Ortiz not found');
+        const folders = ctx.api('GET', '/folders?owner_id=' + sam.id).body.data;
+        const rec = folders.find((f) => f.name === 'Recipes');
+        const home = folders.find((f) => f.name === 'Home');
+        ctx.assert(rec && home, 'Sam folders Recipes/Home not found');
+        const mv = ctx.api('POST', '/folders/' + rec.id + '/move', { actor_id: sam.id, parent_id: home.id });
+        ctx.assert(mv.status === 200, 'move_folder failed: ' + JSON.stringify(mv.body));
+        const targets = [];
+        let cursor = null;
+        do {
+          const r = ctx.api('GET', '/bookmarks?limit=25' + (cursor === null ? '' : '&cursor=' + encodeURIComponent(cursor)));
+          ctx.assert(r.status === 200, 'list failed: ' + JSON.stringify(r.body));
+          for (const b of r.body.data) {
+            if (b.owner_id === sam.id && b.folder_id === rec.id && b.status === 'archived') targets.push(b);
+          }
+          cursor = r.body.next_cursor;
+        } while (cursor !== null && cursor !== undefined);
+        ctx.assert(targets.length > 0, 'no archived bookmarks in Recipes');
+        for (const t of targets) {
+          const tr = ctx.api('POST', '/bookmarks/' + t.id + '/trash', { actor_id: sam.id });
+          ctx.assert(tr.status === 200, 'trash failed for ' + t.id + ': ' + JSON.stringify(tr.body));
+        }
+      }
+    decoys:
+      - why: moves the folder correctly but reads only the first page of bookmarks, so it misses archived Recipes bookmarks on later pages
+        script: |-
+          (ctx) => {
+            const sam = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Sam Ortiz');
+            const folders = ctx.api('GET', '/folders?owner_id=' + sam.id).body.data;
+            const rec = folders.find((f) => f.name === 'Recipes');
+            const home = folders.find((f) => f.name === 'Home');
+            ctx.api('POST', '/folders/' + rec.id + '/move', { actor_id: sam.id, parent_id: home.id });
+            const page = ctx.api('GET', '/bookmarks?limit=25').body.data;
+            for (const b of page) {
+              if (b.owner_id === sam.id && b.folder_id === rec.id && b.status === 'archived') ctx.api('POST', '/bookmarks/' + b.id + '/trash', { actor_id: sam.id });
+            }
+          }
+      - why: trashes the right bookmarks across all pages but moves Recipes under Sam's Work folder instead of Home
+        script: |-
+          (ctx) => {
+            const sam = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Sam Ortiz');
+            const folders = ctx.api('GET', '/folders?owner_id=' + sam.id).body.data;
+            const rec = folders.find((f) => f.name === 'Recipes');
+            const work = folders.find((f) => f.name === 'Work');
+            ctx.api('POST', '/folders/' + rec.id + '/move', { actor_id: sam.id, parent_id: work.id });
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/bookmarks?limit=25' + (cursor === null ? '' : '&cursor=' + encodeURIComponent(cursor)));
+              for (const b of r.body.data) {
+                if (b.owner_id === sam.id && b.folder_id === rec.id && b.status === 'archived') ctx.api('POST', '/bookmarks/' + b.id + '/trash', { actor_id: sam.id });
+              }
+              cursor = r.body.next_cursor;
+            } while (cursor !== null && cursor !== undefined);
+          }
+      - why: trashes every archived bookmark of Sam in any folder, not only those in Recipes
+        script: |-
+          (ctx) => {
+            const sam = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Sam Ortiz');
+            const folders = ctx.api('GET', '/folders?owner_id=' + sam.id).body.data;
+            const rec = folders.find((f) => f.name === 'Recipes');
+            const home = folders.find((f) => f.name === 'Home');
+            ctx.api('POST', '/folders/' + rec.id + '/move', { actor_id: sam.id, parent_id: home.id });
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/bookmarks?limit=25' + (cursor === null ? '' : '&cursor=' + encodeURIComponent(cursor)));
+              for (const b of r.body.data) {
+                if (b.owner_id === sam.id && b.status === 'archived') ctx.api('POST', '/bookmarks/' + b.id + '/trash', { actor_id: sam.id });
+              }
+              cursor = r.body.next_cursor;
+            } while (cursor !== null && cursor !== undefined);
+          }
+      - why: trashes the read bookmarks in Recipes as well as the archived ones
+        script: |-
+          (ctx) => {
+            const sam = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Sam Ortiz');
+            const folders = ctx.api('GET', '/folders?owner_id=' + sam.id).body.data;
+            const rec = folders.find((f) => f.name === 'Recipes');
+            const home = folders.find((f) => f.name === 'Home');
+            ctx.api('POST', '/folders/' + rec.id + '/move', { actor_id: sam.id, parent_id: home.id });
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/bookmarks?limit=25' + (cursor === null ? '' : '&cursor=' + encodeURIComponent(cursor)));
+              for (const b of r.body.data) {
+                if (b.owner_id === sam.id && b.folder_id === rec.id && (b.status === 'archived' || b.status === 'read')) ctx.api('POST', '/bookmarks/' + b.id + '/trash', { actor_id: sam.id });
+              }
+              cursor = r.body.next_cursor;
+            } while (cursor !== null && cursor !== undefined);
+          }
+    alternatives:
+      - why: trashes the archived bookmarks first and moves the folder last, the reverse order with the same end state
+        script: |-
+          (ctx) => {
+            const sam = ctx.api('GET', '/users').body.data.find((u) => u.name === 'Sam Ortiz');
+            ctx.assert(sam, 'Sam not found');
+            const folders = ctx.api('GET', '/folders?owner_id=' + sam.id).body.data;
+            const rec = folders.find((f) => f.name === 'Recipes');
+            const home = folders.find((f) => f.name === 'Home');
+            ctx.assert(rec && home, 'folders not found');
+            const targets = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/bookmarks?limit=25' + (cursor === null ? '' : '&cursor=' + encodeURIComponent(cursor)));
+              for (const b of r.body.data) {
+                if (b.owner_id === sam.id && b.folder_id === rec.id && b.status === 'archived') targets.push(b);
+              }
+              cursor = r.body.next_cursor;
+            } while (cursor !== null && cursor !== undefined);
+            for (const t of targets) {
+              const tr = ctx.api('POST', '/bookmarks/' + t.id + '/trash', { actor_id: sam.id });
+              ctx.assert(tr.status === 200, 'trash failed');
+            }
+            const mv = ctx.api('POST', '/folders/' + rec.id + '/move', { actor_id: sam.id, parent_id: home.id });
+            ctx.assert(mv.status === 200, 'move failed');
+          }
+    allows:
+      - entity: folder
+        kind: updated
+        fields:
+          - parent_id
+        where:
+          owner_id: usr_0004
+          name: Recipes
+      - entity: bookmark
+        kind: updated
+        fields:
+          - status
+          - trashed_at
+        where:
+          owner_id: usr_0004
+          folder_id: fld_0008
+          status: archived
+      - entity: activity
+        kind: created
+        fields: []
+        where:
+          action: move_folder
+          actor_id: usr_0004
+      - entity: activity
+        kind: created
+        fields: []
+        where:
+          action: trash_bookmark
+          actor_id: usr_0004

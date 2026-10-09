@@ -1,0 +1,4 @@
+{
+  "gen-hotel-booking/cancel_distant_reservation": "Not a bug: the solver declined the near-miss and did the task (cancelled res_0112, Eleanor Whitfield's only reservation, with fee 0), so the full score is right.",
+  "gen-petstore/deliver_cat_juniper": "Not a bug: the intended near-miss, skipping the category check and taking the first Juniper, happened to pick the cat (pet_0019 is in Cats, cat_0002), so delivering its order ord_0005 is the task done right."
+}

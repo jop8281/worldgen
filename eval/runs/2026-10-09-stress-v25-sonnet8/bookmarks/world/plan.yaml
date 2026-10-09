@@ -1,0 +1,553 @@
+revision: 1
+software: Raindrop.io / Pocket-style multi-user bookmark manager with folders, tags and shareable collections
+summary: Users save bookmarks into a nested folder tree, label them with per-user tags, and move them through unread, read, archived and trashed. Trash is purged after 30 days. Collections are private, shared (viewer or editor members) or public with an optional expiry. Actions enforce ownership, permission and folder-cycle rules and write an activity log. Two daily jobs purge old trash and expire public links.
+clock:
+  start: 2026-10-09T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: user
+    purpose: Account that owns bookmarks, folders, tags and collections.
+    keyFields:
+      - name
+      - email
+  - name: folder
+    purpose: Node in a user's nested folder tree; parent_id is null for a root folder.
+    keyFields:
+      - owner_id
+      - name
+      - parent_id
+  - name: tag
+    purpose: Per-user label.
+    keyFields:
+      - owner_id
+      - name
+  - name: bookmark
+    purpose: Saved URL with a status state machine, optional folder and trashed_at.
+    keyFields:
+      - owner_id
+      - url
+      - title
+      - folder_id
+      - status
+      - trashed_at
+  - name: bookmark_tag
+    purpose: Join row linking a bookmark to a tag.
+    keyFields:
+      - bookmark_id
+      - tag_id
+  - name: collection
+    purpose: Group of bookmarks with visibility state private, shared or public and an optional public expiry.
+    keyFields:
+      - owner_id
+      - name
+      - visibility
+      - public_expires_at
+  - name: collection_member
+    purpose: Membership of a user in a shared collection as viewer or editor.
+    keyFields:
+      - collection_id
+      - user_id
+      - role
+  - name: collection_item
+    purpose: Bookmark placed in a collection by a user.
+    keyFields:
+      - collection_id
+      - bookmark_id
+      - added_by
+  - name: activity
+    purpose: Activity log row written by every action and job.
+    keyFields:
+      - actor_id
+      - action
+      - subject_type
+      - subject_id
+workflows:
+  - name: bookmark_lifecycle
+    entity: bookmark
+    states:
+      - unread
+      - read
+      - archived
+      - trashed
+    rules:
+      - rule: Bookmark status starts unread and follows declared transitions; a trashed bookmark can only return to unread.
+        schema: The bookmark status state machine enforces the initial state and allowed transitions.
+      - rule: Only the owner may change, trash, move or tag a bookmark; others get 409 forbidden.
+        by:
+          - trash_bookmark
+        test: t_owner_only
+      - rule: A trashed bookmark can only be restored (to unread, clearing trashed_at); other status actions on it answer 409 invalid_state, and restoring a non-trashed bookmark answers 409 invalid_state.
+        by:
+          - restore_bookmark
+        test: t_restore_rules
+      - rule: Trashed bookmarks 30 days or more past trashed_at are purged by a daily job; younger ones stay.
+        by:
+          - purge_trash
+        test: t_purge
+      - rule: Every action writes an activity row with actor, action name, subject type and subject id.
+        by:
+          - archive_bookmark
+        test: t_activity
+      - rule: A tag can be attached only by its owner to a bookmark of the same owner, once per pair.
+        by:
+          - tag_bookmark
+        test: t_tag
+    actions:
+      - create_bookmark
+      - mark_read
+      - archive_bookmark
+      - trash_bookmark
+      - restore_bookmark
+      - move_bookmark
+      - tag_bookmark
+  - name: folder_tree
+    entity: folder
+    states: []
+    rules:
+      - rule: A folder cannot be moved into itself or any of its descendants (409 cycle_detected), and only the owner may move it into a folder they own.
+        by:
+          - move_folder
+        test: t_cycle
+    lifecycle:
+      representation: descriptive
+      reason: Folders have no states; the workflow is tree structure and ownership.
+    actions:
+      - create_folder
+      - move_folder
+  - name: collection_sharing
+    entity: collection
+    states:
+      - private
+      - shared
+      - public
+    rules:
+      - rule: Only the collection owner or an editor member may add bookmarks, and only the actor's own bookmarks; viewers and non-members get 409 forbidden.
+        by:
+          - add_to_collection
+        test: t_permission
+      - rule: A public collection with an expiry at or before now is set back to private by a daily job; its expiry is cleared.
+        by:
+          - expire_public_links
+        test: t_expire
+    actions:
+      - create_collection
+      - set_collection_visibility
+      - share_collection
+      - add_to_collection
+jobs:
+  - name: purge_trash
+    every: 1d
+    rule: Delete bookmarks with status trashed whose trashed_at is 30 days or more before now, along with their tag links and collection items, and log activity.
+  - name: expire_public_links
+    every: 1d
+    rule: Set public collections whose public_expires_at is at or before now to private, clear public_expires_at, and log activity.
+acceptanceTests:
+  - id: t_owner_only
+    intent: Only the owner can trash a bookmark.
+    actions:
+      - create_bookmark
+      - trash_bookmark
+    description: A non-owner trash attempt is refused with 409 forbidden and changes nothing; the owner's succeeds and stamps trashed_at.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/users', { name: n, email: n.toLowerCase() + '@owner.test.invalid' }).body.id;
+        const a = mk('OwnerA'); const b = mk('OwnerB');
+        const bm = ctx.api('POST', '/bookmarks', { actor_id: a, url: 'https://example.com/owner-test', title: 'Owner test' });
+        ctx.assert(bm.status === 201, 'create ' + JSON.stringify(bm.body));
+        const bad = ctx.api('POST', '/bookmarks/' + bm.body.id + '/trash', { actor_id: b });
+        ctx.assert(bad.status === 409 && bad.body.error.code === 'forbidden', 'non-owner ' + JSON.stringify(bad.body));
+        ctx.assert(ctx.api('GET', '/bookmarks/' + bm.body.id).body.status === 'unread', 'still unread');
+        const ok = ctx.api('POST', '/bookmarks/' + bm.body.id + '/trash', { actor_id: a });
+        ctx.assert(ok.status === 200 && ok.body.status === 'trashed' && ok.body.trashed_at, 'owner trash ' + JSON.stringify(ok.body));
+      }
+  - id: t_restore_rules
+    intent: Trashed bookmarks can only be restored.
+    actions:
+      - create_bookmark
+      - trash_bookmark
+      - restore_bookmark
+      - archive_bookmark
+    description: Archive on a trashed bookmark and restore on a live one answer 409 invalid_state; restore returns unread and clears trashed_at.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/users', { name: 'RestoreU', email: 'restore@restore.test.invalid' }).body.id;
+        const bm = ctx.api('POST', '/bookmarks', { actor_id: u, url: 'https://example.com/restore', title: 'Restore test' }).body;
+        const early = ctx.api('POST', '/bookmarks/' + bm.id + '/restore', { actor_id: u });
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'restore live ' + JSON.stringify(early.body));
+        ctx.assert(ctx.api('POST', '/bookmarks/' + bm.id + '/trash', { actor_id: u }).status === 200, 'trash');
+        const arch = ctx.api('POST', '/bookmarks/' + bm.id + '/archive', { actor_id: u });
+        ctx.assert(arch.status === 409 && arch.body.error.code === 'invalid_state', 'archive trashed ' + JSON.stringify(arch.body));
+        const r = ctx.api('POST', '/bookmarks/' + bm.id + '/restore', { actor_id: u });
+        ctx.assert(r.status === 200 && r.body.status === 'unread' && r.body.trashed_at === null, 'restore ' + JSON.stringify(r.body));
+      }
+  - id: t_purge
+    intent: Daily job purges trash older than 30 days only.
+    actions:
+      - create_bookmark
+      - trash_bookmark
+    description: After 29 days the trashed bookmark remains; after 31 it is gone (404 row.not_found); an untrashed bookmark stays.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/users', { name: 'PurgeU', email: 'purge@purge.test.invalid' }).body.id;
+        const keep = ctx.api('POST', '/bookmarks', { actor_id: u, url: 'https://example.com/keep', title: 'Keep' }).body;
+        const gone = ctx.api('POST', '/bookmarks', { actor_id: u, url: 'https://example.com/gone', title: 'Gone' }).body;
+        ctx.assert(ctx.api('POST', '/bookmarks/' + gone.id + '/trash', { actor_id: u }).status === 200, 'trash');
+        const r1 = ctx.advance('29d');
+        ctx.assert(r1.jobsFailed.length === 0, 'job failed');
+        ctx.assert(ctx.api('GET', '/bookmarks/' + gone.id).status === 200, 'still present at 29d');
+        const r2 = ctx.advance('2d');
+        ctx.assert(r2.jobsFired.includes('purge_trash') || r1.jobsFired.includes('purge_trash'), 'job fired');
+        const g = ctx.api('GET', '/bookmarks/' + gone.id);
+        ctx.assert(g.status === 404 && g.body.error.code === 'row.not_found', 'purged ' + JSON.stringify(g.body));
+        ctx.assert(ctx.api('GET', '/bookmarks/' + keep.id).status === 200, 'untrashed stays');
+      }
+  - id: t_activity
+    intent: Actions write an activity log row.
+    actions:
+      - create_bookmark
+      - archive_bookmark
+    description: Archiving a bookmark creates an activity row for the actor naming the action and the bookmark.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/users', { name: 'ActivityU', email: 'activity@activity.test.invalid' }).body.id;
+        const bm = ctx.api('POST', '/bookmarks', { actor_id: u, url: 'https://example.com/act', title: 'Activity test' }).body;
+        const ar = ctx.api('POST', '/bookmarks/' + bm.id + '/archive', { actor_id: u });
+        ctx.assert(ar.status === 200 && ar.body.status === 'archived', 'archive ' + JSON.stringify(ar.body));
+        const log = ctx.api('GET', '/activity?subject_id=' + bm.id).body.data;
+        const hit = log.find((x) => x.action === 'archive_bookmark');
+        ctx.assert(hit && hit.actor_id === u && hit.subject_type === 'bookmark', 'activity row ' + JSON.stringify(log));
+      }
+  - id: t_tag
+    intent: Tags are per-user.
+    actions:
+      - create_bookmark
+      - tag_bookmark
+    description: A user can tag their bookmark with their tag once; another user's tag is refused with 409 forbidden and a duplicate with 409 duplicate_tag.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/users', { name: n, email: n.toLowerCase() + '@tag.test.invalid' }).body.id;
+        const a = mk('TagA'); const b = mk('TagB');
+        const ta = ctx.api('POST', '/tags', { owner_id: a, name: 'tag-a-only' }).body;
+        const tb = ctx.api('POST', '/tags', { owner_id: b, name: 'tag-b-only' }).body;
+        const bm = ctx.api('POST', '/bookmarks', { actor_id: a, url: 'https://example.com/tag', title: 'Tag test' }).body;
+        const ok = ctx.api('POST', '/bookmarks/' + bm.id + '/tags', { actor_id: a, tag_id: ta.id });
+        ctx.assert(ok.status === 201 || ok.status === 200, 'tag ' + JSON.stringify(ok.body));
+        const other = ctx.api('POST', '/bookmarks/' + bm.id + '/tags', { actor_id: a, tag_id: tb.id });
+        ctx.assert(other.status === 409 && other.body.error.code === 'forbidden', 'foreign tag ' + JSON.stringify(other.body));
+        const dup = ctx.api('POST', '/bookmarks/' + bm.id + '/tags', { actor_id: a, tag_id: ta.id });
+        ctx.assert(dup.status === 409 && dup.body.error.code === 'duplicate_tag', 'duplicate ' + JSON.stringify(dup.body));
+        ctx.assert(ctx.api('GET', '/bookmark_tags?bookmark_id=' + bm.id).body.data.length === 1, 'one link');
+      }
+  - id: t_read_move
+    intent: A bookmark can be marked read and moved into a folder by its owner.
+    actions:
+      - create_bookmark
+      - create_folder
+      - mark_read
+      - move_bookmark
+    description: Owner marks a bookmark read and moves it into a folder; a non-owner move is refused with 409 forbidden and the folder is unchanged.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/users', { name: n, email: n.toLowerCase() + '@readmove.test.invalid' }).body.id;
+        const a = mk('RmA'); const b = mk('RmB');
+        const f = ctx.api('POST', '/folders', { actor_id: a, name: 'RmFolder' });
+        ctx.assert(f.status === 201, 'folder ' + JSON.stringify(f.body));
+        const bm = ctx.api('POST', '/bookmarks', { actor_id: a, url: 'https://example.com/readmove', title: 'Read move' }).body;
+        const rd = ctx.api('POST', '/bookmarks/' + bm.id + '/read', { actor_id: a });
+        ctx.assert(rd.status === 200 && rd.body.status === 'read', 'read ' + JSON.stringify(rd.body));
+        const bad = ctx.api('POST', '/bookmarks/' + bm.id + '/move', { actor_id: b, folder_id: f.body.id });
+        ctx.assert(bad.status === 409 && bad.body.error.code === 'forbidden', 'non-owner move ' + JSON.stringify(bad.body));
+        ctx.assert(ctx.api('GET', '/bookmarks/' + bm.id).body.folder_id === null, 'folder unchanged');
+        const mv = ctx.api('POST', '/bookmarks/' + bm.id + '/move', { actor_id: a, folder_id: f.body.id });
+        ctx.assert(mv.status === 200 && mv.body.folder_id === f.body.id, 'move ' + JSON.stringify(mv.body));
+      }
+  - id: t_cycle
+    intent: Folder moves cannot create cycles.
+    actions:
+      - create_folder
+      - move_folder
+    description: Moving a folder into itself or a descendant answers 409 cycle_detected; moving to root or a sibling works; another user's folder is refused.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/users', { name: n, email: n.toLowerCase() + '@cycle.test.invalid' }).body.id;
+        const u = mk('CycleU'); const o = mk('CycleO');
+        const a = ctx.api('POST', '/folders', { actor_id: u, name: 'A' });
+        ctx.assert(a.status === 201, 'create A ' + JSON.stringify(a.body));
+        const b = ctx.api('POST', '/folders', { actor_id: u, name: 'B', parent_id: a.body.id }).body;
+        const c = ctx.api('POST', '/folders', { actor_id: u, name: 'C', parent_id: b.id }).body;
+        const self = ctx.api('POST', '/folders/' + a.body.id + '/move', { actor_id: u, parent_id: a.body.id });
+        ctx.assert(self.status === 409 && self.body.error.code === 'cycle_detected', 'self ' + JSON.stringify(self.body));
+        const deep = ctx.api('POST', '/folders/' + a.body.id + '/move', { actor_id: u, parent_id: c.id });
+        ctx.assert(deep.status === 409 && deep.body.error.code === 'cycle_detected', 'descendant ' + JSON.stringify(deep.body));
+        const root = ctx.api('POST', '/folders/' + c.id + '/move', { actor_id: u, parent_id: null });
+        ctx.assert(root.status === 200 && root.body.parent_id === null, 'to root ' + JSON.stringify(root.body));
+        const of = ctx.api('POST', '/folders', { actor_id: o, name: 'Other' }).body;
+        const foreign = ctx.api('POST', '/folders/' + b.id + '/move', { actor_id: u, parent_id: of.id });
+        ctx.assert(foreign.status === 409 && foreign.body.error.code === 'forbidden', 'foreign ' + JSON.stringify(foreign.body));
+      }
+  - id: t_permission
+    intent: Only owner or editor can add bookmarks to a collection.
+    actions:
+      - create_bookmark
+      - create_collection
+      - set_collection_visibility
+      - share_collection
+      - add_to_collection
+    description: Viewers and outsiders are refused with 409 forbidden; editor and owner succeed; sharing makes a private collection shared.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/users', { name: n, email: n.toLowerCase() + '@perm.test.invalid' }).body.id;
+        const o = mk('PermOwner'); const v = mk('PermViewer'); const e = mk('PermEditor'); const x = mk('PermOutsider');
+        const bk = (u, n) => ctx.api('POST', '/bookmarks', { actor_id: u, url: 'https://example.com/perm-' + n, title: 'Perm ' + n }).body;
+        const col = ctx.api('POST', '/collections', { actor_id: o, name: 'Perm collection' });
+        ctx.assert(col.status === 201 && col.body.visibility === 'private', 'create ' + JSON.stringify(col.body));
+        const s1 = ctx.api('POST', '/collections/' + col.body.id + '/members', { actor_id: o, user_id: v, role: 'viewer' });
+        ctx.assert(s1.status === 201 || s1.status === 200, 'share viewer ' + JSON.stringify(s1.body));
+        ctx.assert(ctx.api('POST', '/collections/' + col.body.id + '/members', { actor_id: o, user_id: e, role: 'editor' }).status < 300, 'share editor');
+        ctx.assert(ctx.api('GET', '/collections/' + col.body.id).body.visibility === 'shared', 'now shared');
+        const add = (u, b) => ctx.api('POST', '/collections/' + col.body.id + '/items', { actor_id: u, bookmark_id: b.id });
+        const rv = add(v, bk(v, 'v'));
+        ctx.assert(rv.status === 409 && rv.body.error.code === 'forbidden', 'viewer ' + JSON.stringify(rv.body));
+        const rx = add(x, bk(x, 'x'));
+        ctx.assert(rx.status === 409 && rx.body.error.code === 'forbidden', 'outsider ' + JSON.stringify(rx.body));
+        const re = add(e, bk(e, 'e'));
+        ctx.assert(re.status === 201, 'editor ' + JSON.stringify(re.body));
+        const ro = add(o, bk(o, 'o'));
+        ctx.assert(ro.status === 201, 'owner ' + JSON.stringify(ro.body));
+        ctx.assert(ctx.api('GET', '/collections/' + col.body.id + '/items').body.data.length === 2, 'two items');
+      }
+  - id: t_expire
+    intent: Public links expire.
+    actions:
+      - create_collection
+      - set_collection_visibility
+    description: A public collection with an expiry becomes private with cleared expiry after the daily job passes it; one without expiry stays public; a past expiry is refused.
+    script: |-
+      (ctx) => {
+        const u = ctx.api('POST', '/users', { name: 'ExpireU', email: 'expire@expire.test.invalid' }).body.id;
+        const now = ctx.now();
+        const later = (Number(now.slice(0, 4)) + 1) + now.slice(4);
+        const c1 = ctx.api('POST', '/collections', { actor_id: u, name: 'Expiring' }).body;
+        const c2 = ctx.api('POST', '/collections', { actor_id: u, name: 'Forever' }).body;
+        const p1 = ctx.api('POST', '/collections/' + c1.id + '/visibility', { actor_id: u, visibility: 'public', public_expires_at: later });
+        ctx.assert(p1.status === 200 && p1.body.visibility === 'public', 'public ' + JSON.stringify(p1.body));
+        ctx.assert(ctx.api('POST', '/collections/' + c2.id + '/visibility', { actor_id: u, visibility: 'public' }).status === 200, 'public no expiry');
+        const past = ctx.api('POST', '/collections/' + c2.id + '/visibility', { actor_id: u, visibility: 'public', public_expires_at: '2000-01-01T00:00:00.000Z' });
+        ctx.assert(past.status === 400 || past.status === 422 || past.status === 409, 'past expiry refused ' + JSON.stringify(past.body));
+        const r = ctx.advance('400d');
+        ctx.assert(r.jobsFired.includes('expire_public_links') && r.jobsFailed.length === 0, 'job ' + JSON.stringify(r));
+        const g1 = ctx.api('GET', '/collections/' + c1.id).body;
+        ctx.assert(g1.visibility === 'private' && g1.public_expires_at === null, 'expired ' + JSON.stringify(g1));
+        ctx.assert(ctx.api('GET', '/collections/' + c2.id).body.visibility === 'public', 'no-expiry stays public');
+      }
+routes:
+  - id: list_users
+    method: GET
+    path: /users
+    purpose: List users.
+  - id: get_user
+    method: GET
+    path: /users/{id}
+    purpose: Fetch a user.
+  - id: create_user
+    method: POST
+    path: /users
+    purpose: Register a user.
+  - id: list_folders
+    method: GET
+    path: /folders
+    purpose: List folders, filter by owner_id and parent_id.
+  - id: get_folder
+    method: GET
+    path: /folders/{id}
+    purpose: Fetch a folder.
+  - id: list_tags
+    method: GET
+    path: /tags
+    purpose: List tags, filter by owner_id.
+  - id: create_tag
+    method: POST
+    path: /tags
+    purpose: Create a tag for an owner.
+  - id: list_bookmarks
+    method: GET
+    path: /bookmarks
+    purpose: List bookmarks, filter by owner_id, folder_id, status; search title and url.
+  - id: get_bookmark
+    method: GET
+    path: /bookmarks/{id}
+    purpose: Fetch a bookmark.
+  - id: list_bookmark_tags
+    method: GET
+    path: /bookmark_tags
+    purpose: List bookmark-tag links, filter by bookmark_id and tag_id.
+  - id: list_collections
+    method: GET
+    path: /collections
+    purpose: List collections, filter by owner_id and visibility.
+  - id: get_collection
+    method: GET
+    path: /collections/{id}
+    purpose: Fetch a collection.
+  - id: list_collection_members
+    method: GET
+    path: /collections/{collection_id}/members
+    purpose: List members of a collection.
+  - id: list_collection_items
+    method: GET
+    path: /collections/{collection_id}/items
+    purpose: List items of a collection.
+  - id: list_activity
+    method: GET
+    path: /activity
+    purpose: List activity log, filter by actor_id, action, subject_id.
+  - id: create_bookmark
+    method: POST
+    path: /bookmarks
+    purpose: 'Action: save a bookmark.'
+  - id: mark_read
+    method: POST
+    path: /bookmarks/{id}/read
+    purpose: 'Action: mark read.'
+  - id: archive_bookmark
+    method: POST
+    path: /bookmarks/{id}/archive
+    purpose: 'Action: archive.'
+  - id: trash_bookmark
+    method: POST
+    path: /bookmarks/{id}/trash
+    purpose: 'Action: move to trash.'
+  - id: restore_bookmark
+    method: POST
+    path: /bookmarks/{id}/restore
+    purpose: 'Action: restore from trash to unread.'
+  - id: move_bookmark
+    method: POST
+    path: /bookmarks/{id}/move
+    purpose: 'Action: move to a folder.'
+  - id: tag_bookmark
+    method: POST
+    path: /bookmarks/{id}/tags
+    purpose: 'Action: attach a tag.'
+  - id: create_folder
+    method: POST
+    path: /folders
+    purpose: 'Action: create folder.'
+  - id: move_folder
+    method: POST
+    path: /folders/{id}/move
+    purpose: 'Action: reparent folder, refusing cycles.'
+  - id: create_collection
+    method: POST
+    path: /collections
+    purpose: 'Action: create a private collection.'
+  - id: set_collection_visibility
+    method: POST
+    path: /collections/{id}/visibility
+    purpose: 'Action: set visibility and expiry.'
+  - id: share_collection
+    method: POST
+    path: /collections/{id}/members
+    purpose: 'Action: add or update a member.'
+  - id: add_to_collection
+    method: POST
+    path: /collections/{id}/items
+    purpose: 'Action: add a bookmark to a collection.'
+seed:
+  rowsPerEntity:
+    user: 6
+    folder: 14
+    tag: 12
+    bookmark: 60
+    bookmark_tag: 40
+    collection: 8
+    collection_member: 8
+    collection_item: 24
+    activity: 40
+  mix: Bookmarks spread over 6 users, nested folders up to 3 deep, all four statuses, trashed rows with trashed_at 1 to 28 days before the clock start. Collections spread over private, shared and public; some public ones carry an expiry in the future. One owner has a shared collection with an editor and a viewer, and another user owns several bookmarks in one folder for the hard task.
+  stateMix:
+    bookmark:
+      unread: 35
+      read: 30
+      archived: 20
+      trashed: 15
+    collection:
+      private: 40
+      shared: 35
+      public: 25
+tasks:
+  - id: archive_reading_item
+    difficulty: easy
+    kind: permissions
+    intent: As user Ana Rossi, archive her bookmark titled 'Designing Data-Intensive Applications notes'. Change nothing else.
+    actions:
+      - archive_bookmark
+    decoyIdea: Archives a similarly titled bookmark owned by another user or a near-duplicate title of Ana's.
+    pressure:
+      distractors: bookmark
+  - id: restore_wrong_trash
+    difficulty: medium
+    kind: irreversible
+    intent: Ben Okoye trashed bookmarks 'Rust async book' and 'Rust async book (old)' by mistake; the first was trashed 27 days ago and will be purged soon. Restore only the one titled exactly 'Rust async book' and leave the other trashed.
+    actions:
+      - restore_bookmark
+    decoyIdea: Restores the near-duplicate '(old)' bookmark or both, or restores the wrong user's bookmark with the same title.
+    pressure:
+      states:
+        - bookmark.trashed
+      distractors: bookmark
+  - id: share_and_fill_collection
+    difficulty: hard
+    kind: two_actors
+    intent: Ana Rossi owns the private collection 'Team Reading'. Share it with Ben Okoye as an editor, then, acting as Ben, add every one of Ben's unread bookmarks in his folder 'Rust' to that collection. Ben has more bookmarks than fit on one page, so check all pages. Do not add bookmarks that are not unread or not in that folder.
+    actions:
+      - share_collection
+      - add_to_collection
+    decoyIdea: Adds Ben's bookmarks without sharing first (refused), shares as viewer, only adds the first page, or adds read/archived ones from the folder.
+    pressure:
+      paging: bookmark
+      states:
+        - bookmark.unread
+        - bookmark.read
+        - collection.private
+      distractors: bookmark
+open_questions:
+  - question: How is the acting user identified?
+    default_answer: Each action takes actor_id explicitly.
+  - question: Should purging be a hard delete?
+    default_answer: Yes, the bookmark and its links are deleted.
+  - question: Can viewers add bookmarks?
+    default_answer: No; only owner and editors, and only their own bookmarks.
+assumptions:
+  - decision: Every action takes actor_id (a user ref) as input; there is no authentication.
+    why: The API has no sessions, so ownership and permission rules need an explicit actor.
+  - decision: Ownership and permission violations answer 409 with code forbidden; invalid state answers 409 invalid_state; folder cycles answer 409 cycle_detected.
+    why: ctx.fail allows only 400, 404, 409 and 422.
+  - decision: Clock starts 2026-10-09T09:00:00Z with tick 0s; seeded history lies before it, trash ages and expiries are seeded relative to it, and future expiry dates lie after it.
+    why: Time moves only by explicit advance so jobs and tests are deterministic.
+  - decision: Both jobs run every 1d; purge_trash deletes trashed bookmarks 30 days or more past trashed_at, and expire_public_links sets public collections with an expiry at or before now back to private and clears the expiry.
+    why: A daily cadence matches 30-day and expiry granularity.
+  - decision: Purging deletes the bookmark and its tag links and collection items, and writes an activity row.
+    why: Trash purge is a hard deletion.
+  - decision: Collection visibility is a state field with transitions among private, shared and public in all directions.
+    why: Visibility is a lifecycle the actions move through.
+  - decision: Editors and owners may add only their own bookmarks to a collection; viewers and non-members may not add.
+    why: Keeps permission rules simple and testable.
+  - decision: A tag may be attached only to a bookmark owned by the tag's owner.
+    why: Tags are per-user.
+  - decision: Folders have no state machine.
+    why: Folder workflow is only about tree structure.
+  - decision: Users are created through the standard create route, not a workflow action.
+    why: No rules attach to it.
+outOfScope:
+  - what: Authentication, passwords and sessions
+    why: Actor is passed explicitly.
+  - what: Browser extension, page scraping, link health checks and full-text page content
+    why: Computation, not records.
+  - what: Import/export of bookmark files
+    why: Not part of the stateful core.
+  - what: Public-link anonymous reads
+    why: No auth model; public is a visibility state only.
+changes: []

@@ -5,6 +5,7 @@
  * file and must stay uncalled.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import {
   BoatError,
@@ -388,6 +389,81 @@ describe('boatBackend.up', () => {
     assert.deepEqual(calls[0], ['create', { type: 'small', ttlSeconds: 1800 }]);
     assert.deepEqual(calls[2], ['exec', 'sb_1', 'mkdir -p /tmp/worldgen /tmp/worldgen/code /tmp/worldgen/code/src /tmp/worldgen/world', {}]);
     assert.deepEqual(calls[3], ['writeFile', 'sb_1', '/tmp/worldgen/code/src/a.ts', 'base64', 'aGk=']);
+  });
+
+  it('uploads a file over the write cap in parts of at most 4 MiB base64, joined on the VM and checked by sha256', async () => {
+    const big = new Uint8Array(15_309_243).map((_, i) => (i * 31) % 251);
+    const written = new Map<string, Buffer>();
+    const { client, calls } = fakeBoat({
+      exec: (command) => {
+        if (!command.startsWith('sh -c')) return done(0);
+        const parts = [...command.matchAll(/(\/tmp\/worldgen\/repo\.tgz\.part\d{4})/g)].map((m) => m[1] ?? '');
+        const joined = Buffer.concat(parts.map((p) => written.get(p) ?? Buffer.alloc(0)));
+        return done(0, `${createHash('sha256').update(joined).digest('hex')}  /tmp/worldgen/repo.tgz\n`);
+      },
+    });
+    const write = client.writeFile.bind(client);
+    client.writeFile = async (id, f) => {
+      written.set(f.path, Buffer.from(f.content, 'base64'));
+      return write(id, f);
+    };
+    await boatBackend({ client }).up([{ path: 'repo.tgz', data: big }], { name: 'boat-ci' });
+    const writes = calls.filter((c) => c[0] === 'writeFile');
+    assert.deepEqual(writes.map((c) => c[2]), ['/tmp/worldgen/repo.tgz.part0000', '/tmp/worldgen/repo.tgz.part0001', '/tmp/worldgen/repo.tgz.part0002', '/tmp/worldgen/repo.tgz.part0003', '/tmp/worldgen/repo.tgz.part0004']);
+    for (const c of writes) assert.ok(String(c[4]).length <= 4 * 1024 * 1024 && Buffer.from(String(c[4]), 'base64').byteLength <= 5 * 1024 * 1024);
+    assert.deepEqual(Buffer.concat(writes.map((c) => Buffer.from(String(c[4]), 'base64'))), Buffer.from(big));
+    assert.equal(calls.filter((c) => c[0] === 'stop').length, 0);
+  });
+
+  it('stops the VM when the joined parts do not hash to the uploaded bytes', async () => {
+    const { client, calls } = fakeBoat({ exec: (command) => done(0, command.startsWith('sh -c') ? '00ff  /tmp/worldgen/repo.tgz\n' : '') });
+    await assert.rejects(boatBackend({ client }).up([{ path: 'repo.tgz', data: new Uint8Array(4 * 1024 * 1024) }], { name: 'boat-ci' }), /joining 2 parts of repo.tgz in boat sandbox sb_1 failed \(exit 0, sha256 00ff, expected [0-9a-f]{64}\)/);
+    assert.deepEqual(calls.slice(-2).map((c) => c[0]), ['stop', 'waitStopped']);
+  });
+
+  it('retries a write and a stop that boat.dev answers 502, up to 3 tries with backoff (J190)', async () => {
+    const { client, calls } = fakeBoat();
+    const slept: number[] = [];
+    const sleep = async (ms: number): Promise<void> => void slept.push(ms);
+    let writes = 0;
+    const write = client.writeFile.bind(client);
+    client.writeFile = async (id, f) => {
+      if (++writes <= 2) throw new BoatError('boat.dev writeFile failed: HTTP 502', 502);
+      return write(id, f);
+    };
+    let stops = 0;
+    const stop = client.stop.bind(client);
+    client.stop = async (id) => {
+      if (++stops === 1) throw new BoatError('boat.dev stop failed: HTTP 502', 502);
+      return stop(id);
+    };
+    const b = boatBackend({ client, sleep });
+    await b.up([{ path: 'a', data: bytes('x') }], { name: 'demo-1' });
+    await b.down('sb_1');
+    assert.equal(writes, 3);
+    assert.equal(stops, 2);
+    assert.deepEqual(slept, [2000, 4000, 2000]);
+    assert.deepEqual(calls.filter((c) => c[0] === 'stop' || c[0] === 'waitStopped').map((c) => c[0]), ['stop', 'waitStopped']);
+  });
+
+  it('gives up after 3 tries of a 502 write and stops the VM, and never retries other failures (J190)', async () => {
+    const { client, calls } = fakeBoat();
+    let writes = 0;
+    client.writeFile = async () => {
+      writes++;
+      throw new BoatError('boat.dev writeFile failed: HTTP 502', 502);
+    };
+    await assert.rejects(boatBackend({ client, sleep: async () => {} }).up([{ path: 'a', data: bytes('x') }], { name: 'demo-1' }), /HTTP 502/);
+    assert.equal(writes, 3);
+    assert.deepEqual(calls.slice(-2).map((c) => c[0]), ['stop', 'waitStopped']);
+    let other = 0;
+    const { client: c2 } = fakeBoat();
+    c2.writeFile = async () => {
+      other++;
+      throw new BoatError('boat.dev writeFile failed: HTTP 400', 400);
+    };
+    await assert.rejects(boatBackend({ client: c2, sleep: async () => {} }).up([{ path: 'a', data: bytes('x') }], { name: 'demo-1' }), /HTTP 400/);
+    assert.equal(other, 1);
   });
 
   it('maps sizes to boat types and refuses a size boat does not sell', async () => {
