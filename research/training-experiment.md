@@ -48,3 +48,4 @@ This is fixed before the run:
 - **Using the teacher's outputs as training data** must be checked against the model provider's terms before the run. That is the user's decision.
 - **The engine grades the final state only, not the final reply** (the `grading_note`). A success label can therefore reward a correct end state reached with a wrong explanation.
 - **The budget above needs the user's approval.** No paid run is part of this note.
+- **v2.5 runs none of it** (A-414): no training run and no GPU host, by the user's decision on 2026-10-09. This note stays the design.
