@@ -1,0 +1,518 @@
+format: 1
+meta:
+  name: gen_stripe_customers
+  description: A Stripe-style customers API. Agents list customers with Stripe cursor paging (limit, starting_after, ending_before, newest first, has_more) and an email filter, create customers from a free-form set of optional fields, retrieve and update them with POST /v1/customers/{id}, and delete them, which returns Stripe's DeletedCustomer body. Errors use Stripe's invalid_request_error shape. Charges and refunds are not mirrored because the spec subset keeps only /v1/customers. Tasks test paging, precise targeting among near-duplicate rows, and collateral-free updates and deletes.
+  resembles: "Stripe API (2024-06-20) customers resource: list, create, retrieve, update and delete customers"
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-07T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: stripe
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        type: invalid_request_error
+        code: $code
+        message: $message
+entities:
+  customer:
+    description: A Stripe customer object. Every profile field is optional and nullable, as in Stripe. Delete removes the row. object and livemode are fixed fields that mirror the Stripe response.
+    idPrefix: cus
+    fields:
+      name:
+        type: string
+        description: The customer's full name or business name.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 512
+      email:
+        type: string
+        description: The customer's email address. The list filters on it by exact match.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 512
+      description:
+        type: string
+        description: Arbitrary text attached to the customer.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 1000
+      phone:
+        type: string
+        description: The customer's phone number.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 20
+      invoice_prefix:
+        type: string
+        description: Prefix for the customer's invoice numbers.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 12
+      balance:
+        type: int
+        description: Current balance in minor units. Positive means the customer owes money, negative means credit.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: 0
+      currency:
+        type: string
+        description: Three-letter ISO code of the customer's currency. Set only by the seed.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        maxLength: 3
+      delinquent:
+        type: bool
+        description: Whether the customer has a payment that failed and is past due.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+      tax_exempt:
+        type: enum
+        description: The customer's tax exemption status.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - exempt
+          - none
+          - reverse
+        default: none
+      created:
+        type: unix_time
+        description: Creation time in Unix seconds.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: now
+      object:
+        type: enum
+        description: Always customer.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        values:
+          - customer
+        default: customer
+      livemode:
+        type: bool
+        description: False in this test-mode world.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      status:
+        type: state
+        description: Customer lifecycle. A customer is active from creation. Delete removes the row, so deleted is never stored.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - active
+          - deleted
+        initial: active
+        transitions:
+          active:
+            - deleted
+          deleted: []
+routes:
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - email
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /v1/customers
+    description: List customers newest first, with Stripe paging (limit, starting_after, ending_before, has_more) and an exact email filter.
+actions:
+  create_customer:
+    method: POST
+    path: /v1/customers
+    description: Create a customer. Every field is optional.
+    input:
+      name:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 512
+      email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 512
+      description:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 1000
+      phone:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 20
+      invoice_prefix:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 12
+      balance:
+        type: int
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      tax_exempt:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - exempt
+          - none
+          - reverse
+    handler: |-
+      (ctx) => {
+        const b = ctx.body || {};
+        const pick = (k) => (b[k] === undefined ? null : b[k]);
+        const data = {
+          name: pick('name'), email: pick('email'), description: pick('description'), phone: pick('phone'), invoice_prefix: pick('invoice_prefix'),
+          balance: b.balance === undefined || b.balance === null ? 0 : b.balance,
+          tax_exempt: b.tax_exempt === undefined || b.tax_exempt === null ? 'none' : b.tax_exempt,
+          object: 'customer', livemode: false,
+        };
+        const row = ctx.db.create('customer', data);
+        return { status: 200, body: row };
+      }
+  update_customer:
+    method: POST
+    path: /v1/customers/{id}
+    description: Partially update a customer. Only the fields sent change.
+    input:
+      name:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 512
+      email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 512
+      description:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 1000
+      phone:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 20
+      invoice_prefix:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 12
+      balance:
+        type: int
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      tax_exempt:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - exempt
+          - none
+          - reverse
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const c = ctx.db.get('customer', id);
+        if (c === null) ctx.fail(404, 'resource_missing', 'No such customer: ' + id, { param: 'customer' });
+        const b = ctx.body || {};
+        const patch = {};
+        for (const k of ['name', 'email', 'description', 'phone', 'invoice_prefix']) {
+          if (b[k] !== undefined) patch[k] = b[k];
+        }
+        if (b.balance !== undefined && b.balance !== null) patch.balance = b.balance;
+        if (b.tax_exempt !== undefined && b.tax_exempt !== null) {
+          if (!['exempt', 'none', 'reverse'].includes(b.tax_exempt)) ctx.fail(400, 'parameter_invalid_enum', 'Invalid tax_exempt: ' + b.tax_exempt, { param: 'tax_exempt' });
+          patch.tax_exempt = b.tax_exempt;
+        }
+        const row = Object.keys(patch).length === 0 ? c : ctx.db.update('customer', id, patch);
+        return { status: 200, body: row };
+      }
+  delete_customer:
+    method: DELETE
+    path: /v1/customers/{id}
+    description: Delete a customer and answer the DeletedCustomer body.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const c = ctx.db.get('customer', id);
+        if (c === null) ctx.fail(404, 'resource_missing', 'No such customer: ' + id, { param: 'customer' });
+        ctx.db.delete('customer', id);
+        return { status: 200, body: { deleted: true, id, object: 'customer' } };
+      }
+  get_customer:
+    method: GET
+    path: /v1/customers/{id}
+    description: Retrieve a customer. Unknown or deleted ids answer 404 resource_missing.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const c = ctx.db.get('customer', id);
+        if (c === null) ctx.fail(404, 'resource_missing', 'No such customer: ' + id, { param: 'customer' });
+        return { status: 200, body: c };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  customer: |-
+    (ctx) => {
+      const BASE = '2025-04-08T09:00:00.000Z';
+      const BASE_UNIX = 1744102800;
+      const firsts = ['Bluefin', 'Cedar', 'Harbor', 'Summit', 'Brightline', 'Ironwood', 'Silverleaf', 'Redwood', 'Lakeside', 'Granite', 'Copperfield', 'Maple', 'Pioneer', 'Evergreen', 'Riverside', 'Oakridge', 'Starling', 'Kestrel', 'Meridian', 'Juniper', 'Sterling', 'Falcon', 'Atlas', 'Orchid', 'Beacon', 'Coastal', 'Highland', 'Willow', 'Tidewater', 'Quarry'];
+      const seconds = ['Freight', 'Health', 'Foods', 'Analytics', 'Robotics', 'Retail', 'Energy', 'Labs', 'Logistics', 'Media', 'Travel', 'Pharma', 'Studios', 'Systems', 'Outfitters', 'Insurance', 'Motors', 'Telecom', 'Dental', 'Supply'];
+      const descs = ['Annual plan, invoiced yearly', 'Referred by a reseller partner', 'Pays by bank transfer', 'Trial converted in March', 'Enterprise pilot account', 'Requires PO numbers on invoices', 'Monthly plan, card on file', 'Migrated from legacy billing', 'Seasonal usage, spikes in Q4', 'Reseller sub-account'];
+      const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+      const special = {
+        5: { name: 'Northwind Traders', email: 'ap@northwindtraders.example.com', description: 'Wholesale distributor, net-30 terms', tax_exempt: 'none' },
+        6: { name: 'Northwind Trading', email: 'ap@northwindtrading.example.com', description: 'Regional trading company', tax_exempt: 'none' },
+        8: { name: 'Acme Corp', email: 'ap@acmecorp.example.com', description: 'Signed up via website', tax_exempt: 'none', phone: null },
+        41: { name: 'Acme Corp', email: 'ap@acmecorp.example.com', description: 'Second signup, full profile', tax_exempt: 'none', phone: '+14155550177', balance: 2500, delinquent: false },
+        12: { description: 'Registered nonprofit, youth education', tax_exempt: 'none' },
+        20: { description: 'Registered nonprofit, food bank', tax_exempt: 'exempt' },
+        28: { description: 'Registered nonprofit, animal shelter', tax_exempt: 'reverse' },
+        33: { description: 'Registered nonprofit, community arts', tax_exempt: 'none' },
+        38: { description: 'Registered nonprofit, library association', tax_exempt: 'none' },
+        47: { description: 'Registered nonprofit, hospice care', tax_exempt: 'exempt' },
+        55: { description: 'Registered nonprofit, river conservation', tax_exempt: 'none' },
+        25: { description: 'Former nonprofit, now commercial', tax_exempt: 'none' },
+        44: { description: 'Nonprofit status pending review', tax_exempt: 'none' },
+      };
+      const rows = [];
+      for (let i = 0; i < 60; i++) {
+        const sp = special[i] || {};
+        const name = sp.name !== undefined ? sp.name : firsts[i % firsts.length] + ' ' + seconds[(i * 7 + 3) % seconds.length];
+        const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+        let r = ctx.int(0, 99);
+        const email = sp.email !== undefined ? sp.email : (r < 15 ? null : ['billing', 'accounts', 'finance', 'hello'][i % 4] + i + '@' + slug + '.example.com');
+        r = ctx.int(0, 99);
+        const phone = sp.phone !== undefined ? sp.phone : (r < 20 ? null : '+1415555' + String(1000 + ctx.int(0, 8999)));
+        r = ctx.int(0, 99);
+        const tax = sp.tax_exempt !== undefined ? sp.tax_exempt : (r < 55 ? 'none' : r < 80 ? 'exempt' : 'reverse');
+        r = ctx.int(0, 99);
+        const balance = sp.balance !== undefined ? sp.balance : (r < 60 ? 0 : r < 85 ? ctx.int(1, 400) * 100 : -ctx.int(1, 100) * 100);
+        r = ctx.int(0, 99);
+        const delinquent = sp.delinquent !== undefined ? sp.delinquent : r < 15;
+        r = ctx.int(0, 99);
+        const description = sp.description !== undefined ? sp.description : (r < 25 ? null : ctx.pick(descs));
+        let prefix = '';
+        for (let k = 0; k < 8; k++) prefix += letters[ctx.int(0, letters.length - 1)];
+        const at = ctx.time.plus(BASE, (i * 9) + 'd' + ctx.int(0, 20) + 'h');
+        const created = BASE_UNIX + ctx.time.minutesBetween(BASE, at) * 60;
+        rows.push({
+          name, email, description, phone, invoice_prefix: prefix, balance, currency: 'usd', delinquent,
+          tax_exempt: tax, created, object: 'customer', livemode: false, created_at: at, updated_at: at,
+        });
+      }
+      return rows;
+    }
+tests:
+  update_customer_partial:
+    description: Update changes email, description and tax_exempt, keeps name and created, refuses an invalid tax_exempt with 400 and an unknown id with 404.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/v1/customers', { name: 'Plan Test Update', email: 'update.before@example.test', description: 'before', tax_exempt: 'none' }).body;
+        ctx.assert(c && c.id, 'setup customer created');
+        const r = ctx.api('POST', '/v1/customers/' + c.id, { email: 'update.after@example.test', description: 'after', tax_exempt: 'exempt' });
+        ctx.assert(r.status === 200, 'update returned ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(r.body.id === c.id && r.body.email === 'update.after@example.test' && r.body.description === 'after' && r.body.tax_exempt === 'exempt', 'sent fields changed, got ' + JSON.stringify(r.body));
+        ctx.assert(r.body.name === 'Plan Test Update' && r.body.created === c.created && r.body.object === 'customer', 'unsent fields and created are unchanged, got ' + JSON.stringify(r.body));
+        const g = ctx.api('GET', '/v1/customers/' + c.id).body;
+        ctx.assert(g.email === 'update.after@example.test' && g.tax_exempt === 'exempt', 'the update persisted, got ' + JSON.stringify(g));
+        const bad = ctx.api('POST', '/v1/customers/' + c.id, { tax_exempt: 'bogus' });
+        ctx.assert(bad.status === 400, 'invalid tax_exempt returns 400, got ' + bad.status);
+        const same = ctx.api('GET', '/v1/customers/' + c.id).body;
+        ctx.assert(same.tax_exempt === 'exempt', 'the refused update changed nothing, got ' + same.tax_exempt);
+        const missing = ctx.api('POST', '/v1/customers/cus_9999999', { name: 'Nobody' });
+        ctx.assert(missing.status === 404, 'update of an unknown id returns 404, got ' + missing.status);
+        ctx.assert(missing.body.error && missing.body.error.type === 'invalid_request_error', 'Stripe error body, got ' + JSON.stringify(missing.body));
+      }
+  delete_customer_removes_row:
+    description: "DELETE answers {deleted: true, id, object: customer}. Afterwards GET, update and the email-filtered list no longer find it, and a second DELETE answers 404. Other customers are untouched."
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/v1/customers', { name: 'Plan Test Delete', email: 'delete.plan@example.test' }).body;
+        const b = ctx.api('POST', '/v1/customers', { name: 'Plan Test Keep', email: 'keep.plan@example.test' }).body;
+        ctx.assert(a && a.id && b && b.id, 'setup customers created');
+        const d = ctx.api('DELETE', '/v1/customers/' + a.id);
+        ctx.assert(d.status === 200, 'delete returned ' + d.status + ' ' + JSON.stringify(d.body));
+        ctx.assert(d.body.deleted === true && d.body.id === a.id && d.body.object === 'customer', 'DeletedCustomer body, got ' + JSON.stringify(d.body));
+        const g = ctx.api('GET', '/v1/customers/' + a.id);
+        ctx.assert(g.status === 404, 'retrieve after delete returns 404, got ' + g.status);
+        const u = ctx.api('POST', '/v1/customers/' + a.id, { name: 'Zombie' });
+        ctx.assert(u.status === 404, 'update after delete returns 404, got ' + u.status);
+        const again = ctx.api('DELETE', '/v1/customers/' + a.id);
+        ctx.assert(again.status === 404, 'second delete returns 404, got ' + again.status);
+        ctx.assert(again.body.error && again.body.error.type === 'invalid_request_error' && again.body.error.code === 'resource_missing', 'Stripe error body with code resource_missing, got ' + JSON.stringify(again.body));
+        const l = ctx.api('GET', '/v1/customers?email=delete.plan@example.test');
+        ctx.assert(l.status === 200 && l.body.data.length === 0, 'the list no longer returns the deleted customer, got ' + JSON.stringify(l.body));
+        const k = ctx.api('GET', '/v1/customers/' + b.id);
+        ctx.assert(k.status === 200 && k.body.name === 'Plan Test Keep', 'the other customer is untouched, got ' + JSON.stringify(k));
+        const none = ctx.api('DELETE', '/v1/customers/cus_9999999');
+        ctx.assert(none.status === 404, 'delete of an unknown id returns 404, got ' + none.status);
+      }
+  list_customers_stripe_paging:
+    description: Three customers created in order come back newest first. limit=2 gives the last two and has_more true. starting_after moves to the older one. ending_before moves back. The email filter returns one match. Passing both cursors is a 400.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/v1/customers', { name: 'Plan List A', email: 'list.a@example.test' }).body;
+        const b = ctx.api('POST', '/v1/customers', { name: 'Plan List B', email: 'list.b@example.test' }).body;
+        const c = ctx.api('POST', '/v1/customers', { name: 'Plan List C', email: 'list.c@example.test' }).body;
+        ctx.assert(a && b && c && a.id && b.id && c.id, 'setup customers created');
+        const p1 = ctx.api('GET', '/v1/customers?limit=2');
+        ctx.assert(p1.status === 200 && Array.isArray(p1.body.data), 'list returns a data array, got ' + JSON.stringify(p1));
+        ctx.assert(p1.body.data.length === 2 && p1.body.data[0].id === c.id && p1.body.data[1].id === b.id, 'newest first: C then B, got ' + JSON.stringify(p1.body.data.map((x) => x.id)));
+        ctx.assert(p1.body.has_more === true, 'has_more is true while older customers remain, got ' + p1.body.has_more);
+        const p2 = ctx.api('GET', '/v1/customers?limit=1&starting_after=' + b.id);
+        ctx.assert(p2.status === 200 && p2.body.data.length === 1 && p2.body.data[0].id === a.id, 'starting_after B gives A, got ' + JSON.stringify(p2.body));
+        const back = ctx.api('GET', '/v1/customers?limit=1&ending_before=' + a.id);
+        ctx.assert(back.status === 200 && back.body.data.length === 1 && back.body.data[0].id === b.id, 'ending_before A gives B, got ' + JSON.stringify(back.body));
+        const f = ctx.api('GET', '/v1/customers?email=list.b@example.test');
+        ctx.assert(f.status === 200 && f.body.data.length === 1 && f.body.data[0].id === b.id && f.body.has_more === false, 'email filter returns exactly B, got ' + JSON.stringify(f.body));
+        const both = ctx.api('GET', '/v1/customers?starting_after=' + b.id + '&ending_before=' + c.id);
+        ctx.assert(both.status === 400, 'both cursors are refused with 400, got ' + both.status);
+        const none = ctx.api('GET', '/v1/customers?email=nobody.plan@example.test');
+        ctx.assert(none.status === 200 && none.body.data.length === 0 && none.body.has_more === false, 'an email with no match returns an empty page, got ' + JSON.stringify(none.body));
+      }
+  create_and_retrieve_customer:
+    description: "POST /v1/customers returns 200 with a cus_ id, object customer, livemode false, a numeric created, the sent fields, delinquent false and currency null. GET returns the same customer. An empty create applies the defaults. GET of an unknown id answers 404 with code resource_missing and message 'No such customer: <id>'."
+    script: |-
+      (ctx) => {
+        const r = ctx.api('POST', '/v1/customers', { name: 'Plan Test Create', email: 'create.plan@example.test', description: 'created by acceptance test', phone: '+14155550100', tax_exempt: 'reverse', balance: 500, invoice_prefix: 'PLAN' });
+        ctx.assert(r.status === 200, 'create returned ' + r.status + ' ' + JSON.stringify(r.body));
+        const c = r.body;
+        ctx.assert(typeof c.id === 'string' && c.id.indexOf('cus_') === 0, 'id has the cus_ prefix, got ' + c.id);
+        ctx.assert(c.object === 'customer' && c.livemode === false, 'object customer and livemode false, got ' + c.object + ' ' + c.livemode);
+        ctx.assert(typeof c.created === 'number' && c.created > 0, 'created is a unix time number, got ' + c.created);
+        ctx.assert(c.name === 'Plan Test Create' && c.email === 'create.plan@example.test' && c.phone === '+14155550100', 'sent fields stored, got ' + JSON.stringify(c));
+        ctx.assert(c.tax_exempt === 'reverse' && c.balance === 500 && c.invoice_prefix === 'PLAN' && c.description === 'created by acceptance test', 'other sent fields stored, got ' + JSON.stringify(c));
+        ctx.assert(c.delinquent === false, 'a new customer has delinquent false, got ' + JSON.stringify(c.delinquent));
+        ctx.assert(c.currency === null, 'a new customer has currency null, got ' + JSON.stringify(c.currency));
+        const g = ctx.api('GET', '/v1/customers/' + c.id);
+        ctx.assert(g.status === 200 && JSON.stringify(g.body) === JSON.stringify(c), 'retrieve returns the created customer, got ' + JSON.stringify(g));
+        const e = ctx.api('POST', '/v1/customers', {});
+        ctx.assert(e.status === 200, 'empty create returned ' + e.status + ' ' + JSON.stringify(e.body));
+        ctx.assert(e.body.name === null && e.body.email === null && e.body.balance === 0 && e.body.tax_exempt === 'none' && e.body.object === 'customer', 'empty create defaults, got ' + JSON.stringify(e.body));
+        ctx.assert(e.body.delinquent === false && e.body.currency === null, 'empty create has delinquent false and currency null, got ' + JSON.stringify(e.body));
+        ctx.assert(e.body.id !== c.id, 'a new row gets a new id');
+        const missing = ctx.api('GET', '/v1/customers/cus_9999999');
+        ctx.assert(missing.status === 404, 'unknown customer returns 404, got ' + missing.status);
+        ctx.assert(missing.body.error && missing.body.error.type === 'invalid_request_error', 'Stripe error body with type invalid_request_error, got ' + JSON.stringify(missing.body));
+        ctx.assert(missing.body.error.code === 'resource_missing', 'code resource_missing, got ' + JSON.stringify(missing.body));
+        ctx.assert(missing.body.error.message === 'No such customer: cus_9999999', 'message names the id, got ' + JSON.stringify(missing.body));
+      }
+  get_customer_resource_missing:
+    description: "GET of an existing customer returns 200. GET, update and delete of an unknown id and of a deleted id all answer 404 with code resource_missing and message 'No such customer: <id>' (param customer when the error template carries it)."
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/v1/customers', { name: 'Plan Test Retrieve', email: 'retrieve.plan@example.test' }).body;
+        ctx.assert(c && c.id, 'setup customer created');
+        const ok = ctx.api('GET', '/v1/customers/' + c.id);
+        ctx.assert(ok.status === 200 && ok.body.id === c.id && ok.body.delinquent === false, 'retrieve of an existing customer, got ' + JSON.stringify(ok));
+        const check = (label, res, id) => {
+          ctx.assert(res.status === 404, label + ' returns 404, got ' + res.status + ' ' + JSON.stringify(res.body));
+          const err = res.body && res.body.error;
+          ctx.assert(err && err.type === 'invalid_request_error', label + ' has type invalid_request_error, got ' + JSON.stringify(res.body));
+          ctx.assert(err.code === 'resource_missing', label + ' has code resource_missing, got ' + JSON.stringify(res.body));
+          ctx.assert(err.message === 'No such customer: ' + id, label + ' message is No such customer: ' + id + ', got ' + JSON.stringify(res.body));
+          ctx.assert(err.param === undefined || err.param === 'customer', label + ' param is customer when present, got ' + JSON.stringify(err.param));
+        };
+        check('retrieve of an unknown id', ctx.api('GET', '/v1/customers/cus_9999999'), 'cus_9999999');
+        check('update of an unknown id', ctx.api('POST', '/v1/customers/cus_9999999', { name: 'Nobody' }), 'cus_9999999');
+        check('delete of an unknown id', ctx.api('DELETE', '/v1/customers/cus_9999999'), 'cus_9999999');
+        const d = ctx.api('DELETE', '/v1/customers/' + c.id);
+        ctx.assert(d.status === 200 && d.body.deleted === true, 'delete succeeded, got ' + JSON.stringify(d));
+        check('retrieve of a deleted id', ctx.api('GET', '/v1/customers/' + c.id), c.id);
+        check('update of a deleted id', ctx.api('POST', '/v1/customers/' + c.id, { name: 'Zombie' }), c.id);
+        check('second delete', ctx.api('DELETE', '/v1/customers/' + c.id), c.id);
+      }
+tasks:
+  update_northwind_contact:
+    difficulty: easy
+    instruction: "Update the customer named 'Northwind Traders' so its email is billing@northwindtraders.example and its phone is +14155550142. Be careful: a similarly named customer exists. Change nothing else."
+    decoys: []
+    alternatives: []
+  delete_older_duplicate_acme:
+    difficulty: medium
+    instruction: Two customers named 'Acme Corp' exist with the same email because of a double signup. Delete the older record (by creation time) and keep the newer one exactly as it is. Do not touch any other customer.
+    decoys: []
+    alternatives: []
+  mark_registered_nonprofits_exempt:
+    difficulty: hard
+    instruction: Every customer whose description starts with 'Registered nonprofit' must have tax_exempt set to exempt. Customers with similar-looking descriptions that do not start with that phrase must stay unchanged. Change nothing else.
+    decoys: []
+    alternatives: []

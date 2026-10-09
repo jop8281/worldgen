@@ -19,6 +19,7 @@
     "costs": "bun src/cli/costs.ts",
     "dataset": "bun src/cli/dataset.ts",
     "episode": "bun src/cli/episode.ts",
+    "evidence": "bun src/cli/evidence.ts",
     "studio": "bun src/cli/studio.ts",
     "scenario": "bun src/cli/scenario.ts",
     "studio-watch": "bun src/cli/studio-watch.ts",

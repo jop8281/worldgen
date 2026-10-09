@@ -1,0 +1,706 @@
+format: 1
+meta:
+  name: world
+  description: A single-shop bakery back office. Customers place pickup orders (including pre-orders for a future pickup time). Staff confirm orders, mark them ready and hand them over. The kitchen runs production batches that consume ingredients, per each product's recipe, and add finished stock. Ingredient stock is tracked against reorder levels, and jobs expire uncollected orders and flag low stock.
+  resembles: "Square-for-Restaurants / Toast-style bakery management app: pre-orders and pickup, product catalog, recipes and ingredient stock, and daily production batches"
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-01-05T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  customer:
+    description: A person who orders from the bakery, with contact details and a loyalty tier.
+    idPrefix: cus
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      phone:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        format: phone
+      loyalty_tier:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - none
+          - regular
+          - gold
+        default: none
+  product:
+    description: A sellable bakery item with a USD price and finished stock on hand. stock_on_hand changes only through batches and orders.
+    idPrefix: prd
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      category:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - bread
+          - pastry
+          - cake
+          - cookie
+          - drink
+      price:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      stock_on_hand:
+        type: int
+        description: Finished units available. Reduced when an order is confirmed, raised by completed batches and cancellations.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      par_level:
+        type: int
+        description: Target finished stock to bake up to each day.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+      active:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+      contains_allergens:
+        type: string
+        description: Informational allergen list such as 'wheat, milk, egg'. Not enforced by workflows.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 200
+  ingredient:
+    description: A raw material such as flour or butter, with stock and a reorder level.
+    idPrefix: ing
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 120
+      unit:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - g
+          - kg
+          - ml
+          - l
+          - each
+      stock_qty:
+        type: number
+        description: Quantity on hand in the ingredient's unit. Changes through restock_ingredient and complete_batch.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      reorder_level:
+        type: number
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+      low_stock:
+        type: bool
+        description: True when stock_qty is at or below reorder_level.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+  recipe_line:
+    description: One ingredient quantity needed to produce one unit of a product.
+    idPrefix: rcl
+    fields:
+      product_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: product
+        onDelete: cascade
+      ingredient_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: ingredient
+        onDelete: restrict
+      qty_per_unit:
+        type: number
+        description: Ingredient quantity, in the ingredient's unit, used per unit of product.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+  bakery_order:
+    description: A pickup order from a customer with a status lifecycle and a total computed from its lines. Pre-orders have a future pickup_at.
+    idPrefix: ord
+    fields:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - placed
+          - confirmed
+          - ready
+          - picked_up
+          - cancelled
+        initial: placed
+        transitions:
+          placed:
+            - confirmed
+            - cancelled
+          confirmed:
+            - ready
+            - cancelled
+          ready:
+            - picked_up
+            - cancelled
+          picked_up: []
+          cancelled: []
+      pickup_at:
+        type: datetime
+        description: When the customer will collect the order.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      total:
+        type: money
+        description: Sum of quantity times unit_price over the order lines.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+      placed_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: now
+      ready_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  order_line:
+    description: A product and quantity on an order, with the unit price captured at order time.
+    idPrefix: orl
+    fields:
+      order_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: bakery_order
+        onDelete: cascade
+      product_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: product
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      unit_price:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+  production_batch:
+    description: A planned or completed bake of a quantity of one product. Completing it consumes recipe ingredients and adds product stock.
+    idPrefix: bat
+    fields:
+      product_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: product
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - planned
+          - completed
+          - cancelled
+        initial: planned
+        transitions:
+          planned:
+            - completed
+            - cancelled
+          completed: []
+          cancelled: []
+      scheduled_for:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      completed_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      baker_name:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 120
+routes:
+  list_products:
+    op: list
+    entity: product
+    filters:
+      - category
+      - active
+    search:
+      - name
+    sort:
+      - price
+      - stock_on_hand
+      - name
+    pageSize: 25
+    method: GET
+    path: /products
+  get_product:
+    op: get
+    entity: product
+    method: GET
+    path: /products/{id}
+  create_product:
+    op: create
+    entity: product
+    method: POST
+    path: /products
+  update_product:
+    op: update
+    entity: product
+    method: PATCH
+    path: /products/{id}
+  list_ingredients:
+    op: list
+    entity: ingredient
+    filters:
+      - low_stock
+      - unit
+    search:
+      - name
+    sort:
+      - name
+      - stock_qty
+    pageSize: 25
+    method: GET
+    path: /ingredients
+  get_ingredient:
+    op: get
+    entity: ingredient
+    method: GET
+    path: /ingredients/{id}
+  list_recipe_lines:
+    op: list
+    entity: recipe_line
+    filters:
+      - ingredient_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /products/{product_id}/recipe
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - loyalty_tier
+    search:
+      - name
+      - email
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /customers
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /customers/{id}
+  create_customer:
+    op: create
+    entity: customer
+    method: POST
+    path: /customers
+  update_customer:
+    op: update
+    entity: customer
+    method: PATCH
+    path: /customers/{id}
+  list_orders:
+    op: list
+    entity: bakery_order
+    filters:
+      - status
+      - customer_id
+    search: []
+    sort:
+      - pickup_at
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /orders
+  get_order:
+    op: get
+    entity: bakery_order
+    method: GET
+    path: /orders/{id}
+  list_order_lines:
+    op: list
+    entity: order_line
+    filters:
+      - product_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /orders/{order_id}/lines
+  list_batches:
+    op: list
+    entity: production_batch
+    filters:
+      - status
+      - product_id
+    search: []
+    sort:
+      - scheduled_for
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /batches
+  get_batch:
+    op: get
+    entity: production_batch
+    method: GET
+    path: /batches/{id}
+  create_batch:
+    op: create
+    entity: production_batch
+    method: POST
+    path: /batches
+actions:
+  create_ingredient:
+    method: POST
+    path: /ingredients
+    description: Register a raw ingredient with an opening stock and reorder level. low_stock is computed. Stock changes afterwards only through restock_ingredient and complete_batch.
+    input:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      unit:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - g
+          - kg
+          - ml
+          - l
+          - each
+      stock_qty:
+        type: number
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      reorder_level:
+        type: number
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+    handler: "(ctx) => { const b = ctx.body; const name = String(b.name).trim(); if (name === '') ctx.fail(400, 'input.invalid', 'name must not be blank'); if (ctx.db.list('ingredient', { where: { name } }).length > 0) ctx.fail(409, 'duplicate_name', 'ingredient ' + name + ' already exists'); const qty = b.stock_qty === undefined || b.stock_qty === null ? 0 : b.stock_qty; const level = b.reorder_level === undefined || b.reorder_level === null ? 0 : b.reorder_level; if (qty < 0 || level < 0) ctx.fail(422, 'invalid_quantity', 'stock_qty and reorder_level cannot be negative'); const row = ctx.db.create('ingredient', { name, unit: b.unit, stock_qty: qty, reorder_level: level, low_stock: qty <= level }); return { status: 201, body: row }; }"
+  add_recipe_line:
+    method: POST
+    path: /products/{id}/recipe
+    description: Add one ingredient quantity needed per unit of the product. An ingredient can appear once per product.
+    input:
+      ingredient_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: ingredient
+        onDelete: restrict
+      qty_per_unit:
+        type: number
+        description: Quantity in the ingredient's unit used per unit of product. Must be greater than 0.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const id = ctx.params.id; const product = ctx.db.get('product', id); if (product === null) ctx.fail(404, 'not_found', 'product ' + id + ' not found'); const ing = ctx.db.get('ingredient', ctx.body.ingredient_id); if (ing === null) ctx.fail(422, 'unknown_ingredient', 'ingredient ' + ctx.body.ingredient_id + ' not found. List ingredients with GET /ingredients.'); const q = ctx.body.qty_per_unit; if (typeof q !== 'number' || !(q > 0)) ctx.fail(422, 'invalid_quantity', 'qty_per_unit must be greater than 0'); if (ctx.db.list('recipe_line', { where: { product_id: id, ingredient_id: ing.id } }).length > 0) ctx.fail(409, 'duplicate_ingredient', 'product ' + id + ' already uses ' + ing.name + ' in its recipe'); const row = ctx.db.create('recipe_line', { product_id: id, ingredient_id: ing.id, qty_per_unit: q }); return { status: 201, body: row }; }"
+  place_order:
+    method: POST
+    path: /orders
+    description: Place a pickup order. lines is a JSON array text such as [{"product_id":"prd_0001","quantity":2}]. Lines are priced from the current product price and the total is computed. The order starts as placed and reserves no stock until confirmed. pickup_at must be in the future.
+    input:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      pickup_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      lines:
+        type: text
+        description: JSON array of {product_id, quantity}. At least one line, each product once, quantity at least 1.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const b = ctx.body; const customer = ctx.db.get('customer', b.customer_id); if (customer === null) ctx.fail(422, 'unknown_customer', 'customer ' + b.customer_id + ' not found. List customers with GET /customers.'); const now = ctx.now(); if (ctx.time.minutesBetween(now, b.pickup_at) <= 0) ctx.fail(422, 'pickup_in_past', 'pickup_at ' + b.pickup_at + ' must be after the current time ' + now); let parsed = b.lines; if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch (e) { parsed = null; } } if (!Array.isArray(parsed)) ctx.fail(400, 'invalid_lines', 'lines must be a JSON array of {product_id, quantity}'); if (parsed.length === 0) ctx.fail(422, 'no_lines', 'an order needs at least one line'); const seen = {}; const priced = []; let total = 0; for (const raw of parsed) { const pid = raw ? raw.product_id : undefined; const qty = raw ? raw.quantity : undefined; if (typeof pid !== 'string') ctx.fail(422, 'invalid_line', 'every line needs a product_id'); if (!Number.isInteger(qty) || qty < 1) ctx.fail(422, 'invalid_quantity', 'quantity for ' + pid + ' must be a whole number of at least 1'); if (seen[pid]) ctx.fail(422, 'duplicate_product', 'product ' + pid + ' appears on more than one line. Combine the quantities.'); seen[pid] = true; const p = ctx.db.get('product', pid); if (p === null) ctx.fail(422, 'unknown_product', 'product ' + pid + ' not found. List products with GET /products.'); if (!p.active) ctx.fail(422, 'product_inactive', 'product ' + p.name + ' (' + p.id + ') is not active and cannot be ordered'); priced.push({ product_id: pid, quantity: qty, unit_price: p.price }); total += qty * p.price; } const note = b.note === undefined ? null : b.note; const order = ctx.db.create('bakery_order', { customer_id: customer.id, pickup_at: b.pickup_at, total, placed_at: now, note }); const lines = []; for (const l of priced) lines.push(ctx.db.create('order_line', { order_id: order.id, product_id: l.product_id, quantity: l.quantity, unit_price: l.unit_price })); return { status: 201, body: { ...order, lines } }; }"
+  confirm_order:
+    method: POST
+    path: /orders/{id}/confirm
+    description: Confirm a placed order. Every product must have enough stock_on_hand to cover its lines, otherwise 409 insufficient_stock. Confirming decrements stock_on_hand per line.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const order = ctx.db.get('bakery_order', id); if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found'); if (order.status !== 'placed') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only placed orders can be confirmed.'); const lines = ctx.db.list('order_line', { where: { order_id: id } }); const need = {}; for (const l of lines) need[l.product_id] = (need[l.product_id] || 0) + l.quantity; const pids = Object.keys(need); for (const pid of pids) { const p = ctx.db.get('product', pid); if (p.stock_on_hand < need[pid]) ctx.fail(409, 'insufficient_stock', 'insufficient stock for ' + p.name + ' (' + p.id + '): need ' + need[pid] + ', have ' + p.stock_on_hand + '. Bake a batch first.'); } for (const pid of pids) { const p = ctx.db.get('product', pid); ctx.db.update('product', pid, { stock_on_hand: p.stock_on_hand - need[pid] }); } const updated = ctx.db.update('bakery_order', id, { status: 'confirmed' }); return { status: 200, body: updated }; }"
+  mark_order_ready:
+    method: POST
+    path: /orders/{id}/ready
+    description: Mark a confirmed order ready for pickup and set ready_at to now.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const order = ctx.db.get('bakery_order', id); if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found'); if (order.status !== 'confirmed') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only confirmed orders can be marked ready.'); const updated = ctx.db.update('bakery_order', id, { status: 'ready', ready_at: ctx.now() }); return { status: 200, body: updated }; }"
+  complete_pickup:
+    method: POST
+    path: /orders/{id}/pickup
+    description: Hand a ready order to the customer. Allowed only from ready.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const order = ctx.db.get('bakery_order', id); if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found'); if (order.status !== 'ready') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only ready orders can be picked up.'); const updated = ctx.db.update('bakery_order', id, { status: 'picked_up' }); return { status: 200, body: updated }; }"
+  cancel_order:
+    method: POST
+    path: /orders/{id}/cancel
+    description: Cancel a placed, confirmed or ready order. Confirmed and ready orders give their line quantities back to stock_on_hand. A placed order changes no stock.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const order = ctx.db.get('bakery_order', id); if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found'); if (order.status !== 'placed' && order.status !== 'confirmed' && order.status !== 'ready') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only placed, confirmed and ready orders can be cancelled.'); if (order.status === 'confirmed' || order.status === 'ready') { const lines = ctx.db.list('order_line', { where: { order_id: id } }); for (const l of lines) { const p = ctx.db.get('product', l.product_id); ctx.db.update('product', l.product_id, { stock_on_hand: p.stock_on_hand + l.quantity }); } } const updated = ctx.db.update('bakery_order', id, { status: 'cancelled' }); return { status: 200, body: updated }; }"
+  complete_batch:
+    method: POST
+    path: /batches/{id}/complete
+    description: Finish a planned batch. Consumes quantity times qty_per_unit of each recipe ingredient (409 insufficient_ingredients if short), adds quantity to product stock_on_hand, sets completed_at and refreshes low_stock on the touched ingredients. A product with no recipe cannot be batched (422 no_recipe).
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const batch = ctx.db.get('production_batch', id); if (batch === null) ctx.fail(404, 'not_found', 'batch ' + id + ' not found'); if (batch.status !== 'planned') ctx.fail(409, 'invalid_state', 'batch ' + id + ' is ' + batch.status + '. Only planned batches can be completed.'); const lines = ctx.db.list('recipe_line', { where: { product_id: batch.product_id } }); if (lines.length === 0) ctx.fail(422, 'no_recipe', 'product ' + batch.product_id + ' has no recipe lines. Add them with POST /products/' + batch.product_id + '/recipe.'); const r6 = (x) => Math.round(x * 1000000) / 1000000; const need = {}; for (const l of lines) need[l.ingredient_id] = r6((need[l.ingredient_id] || 0) + batch.quantity * l.qty_per_unit); const iids = Object.keys(need); for (const iid of iids) { const ing = ctx.db.get('ingredient', iid); if (ing.stock_qty + 0.000000001 < need[iid]) ctx.fail(409, 'insufficient_ingredients', 'insufficient ' + ing.name + ' (' + ing.id + '): need ' + need[iid] + ' ' + ing.unit + ', have ' + ing.stock_qty + '. Restock it with POST /ingredients/' + ing.id + '/restock.'); } for (const iid of iids) { const ing = ctx.db.get('ingredient', iid); const left = r6(Math.max(0, ing.stock_qty - need[iid])); ctx.db.update('ingredient', iid, { stock_qty: left, low_stock: left <= ing.reorder_level }); } const product = ctx.db.get('product', batch.product_id); ctx.db.update('product', product.id, { stock_on_hand: product.stock_on_hand + batch.quantity }); const updated = ctx.db.update('production_batch', id, { status: 'completed', completed_at: ctx.now() }); return { status: 200, body: updated }; }"
+  cancel_batch:
+    method: POST
+    path: /batches/{id}/cancel
+    description: Cancel a planned batch. No stock changes.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const batch = ctx.db.get('production_batch', id); if (batch === null) ctx.fail(404, 'not_found', 'batch ' + id + ' not found'); if (batch.status !== 'planned') ctx.fail(409, 'invalid_state', 'batch ' + id + ' is ' + batch.status + '. Only planned batches can be cancelled.'); const updated = ctx.db.update('production_batch', id, { status: 'cancelled' }); return { status: 200, body: updated }; }"
+  restock_ingredient:
+    method: POST
+    path: /ingredients/{id}/restock
+    description: Add a delivered quantity (greater than 0, in the ingredient's unit) to stock_qty and recompute low_stock.
+    input:
+      quantity:
+        type: number
+        description: Delivered quantity in the ingredient's unit. Must be greater than 0.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const id = ctx.params.id; const ing = ctx.db.get('ingredient', id); if (ing === null) ctx.fail(404, 'not_found', 'ingredient ' + id + ' not found'); const q = ctx.body.quantity; if (typeof q !== 'number' || !(q > 0)) ctx.fail(422, 'invalid_quantity', 'quantity must be greater than 0'); const stock = Math.round((ing.stock_qty + q) * 1000000) / 1000000; const updated = ctx.db.update('ingredient', id, { stock_qty: stock, low_stock: stock <= ing.reorder_level }); return { status: 200, body: updated }; }"
+jobs:
+  expire_uncollected_orders:
+    description: Every hour. A ready order whose ready_at is more than 24 hours old is cancelled and its reserved stock goes back to product.stock_on_hand.
+    every: 1h
+    run: "(ctx) => { const now = ctx.now(); for (const o of ctx.db.list('bakery_order', { where: { status: 'ready' } })) { if (o.ready_at === null || o.ready_at === undefined) continue; if (ctx.time.minutesBetween(o.ready_at, now) <= 24 * 60) continue; for (const l of ctx.db.list('order_line', { where: { order_id: o.id } })) { const p = ctx.db.get('product', l.product_id); ctx.db.update('product', l.product_id, { stock_on_hand: p.stock_on_hand + l.quantity }); } ctx.db.update('bakery_order', o.id, { status: 'cancelled' }); } }"
+  flag_low_stock:
+    description: Every hour. Recompute ingredient.low_stock as stock_qty <= reorder_level for every ingredient.
+    every: 1h
+    run: "(ctx) => { for (const i of ctx.db.list('ingredient')) { const low = i.stock_qty <= i.reorder_level; if (i.low_stock !== low) ctx.db.update('ingredient', i.id, { low_stock: low }); } }"
+fixtures: {}
+seed:
+  customer: "(ctx) => { const firsts = ['Olivia','James','Priya','Daniel','Sofia','Marcus','Hannah','Ethan','Grace','Lucas','Amara','Noah']; const lasts = ['Nguyen','Patel','Johnson','Garcia','Kim','Brooks','Okafor','Schmidt','Rossi','Bennett','Walker','Silva']; const rows = [{ name: 'Maria Lopez', email: 'maria.lopez@example.com', phone: '+15125550100', loyalty_tier: 'gold' }]; for (let i = 1; i < 60; i++) { const f = firsts[i % 12]; const l = lasts[(i * 5 + Math.floor(i / 12)) % 12]; const m = i % 20; const tier = m < 11 ? 'none' : m < 18 ? 'regular' : 'gold'; rows.push({ name: f + ' ' + l, email: f.toLowerCase() + '.' + l.toLowerCase() + i + '@example.com', phone: i % 4 === 0 ? null : '+1512555' + String(1000 + i * 13).slice(-4), loyalty_tier: tier }); } return rows.map((r) => { const at = ctx.time.plus('2025-03-01T09:00:00.000Z', ctx.int(1, 250) + 'd'); return { ...r, created_at: at, updated_at: at }; }); }"
+  product: "(ctx) => { const defs = [['Sourdough Loaf','bread',900,'wheat'],['Baguette','bread',450,'wheat'],['Rye Loaf','bread',750,'wheat, rye'],['Ciabatta','bread',550,'wheat'],['Whole Wheat Sandwich Loaf','bread',650,'wheat'],['Focaccia','bread',800,'wheat'],['Multigrain Boule','bread',850,'wheat, sesame'],['Brioche Loaf','bread',950,'wheat, milk, egg'],['Butter Croissant','pastry',375,'wheat, milk'],['Pain au Chocolat','pastry',425,'wheat, milk, soy'],['Almond Croissant','pastry',475,'wheat, milk, tree nuts'],['Cinnamon Roll','pastry',400,'wheat, milk, egg'],['Blueberry Muffin','pastry',350,'wheat, milk, egg'],['Cheese Danish','pastry',425,'wheat, milk, egg'],['Apple Turnover','pastry',400,'wheat, milk'],['Morning Bun','pastry',375,'wheat, milk, egg'],['Buttermilk Scone','pastry',325,'wheat, milk'],['Lemon Poppyseed Muffin','pastry',350,'wheat, milk, egg'],['Custom Birthday Cake','cake',4200,'wheat, milk, egg'],['Chocolate Layer Cake','cake',3800,'wheat, milk, egg, soy'],['Carrot Cake','cake',3600,'wheat, milk, egg, tree nuts'],['Lemon Drizzle Loaf','cake',1800,'wheat, milk, egg'],['New York Cheesecake','cake',4000,'wheat, milk, egg'],['Red Velvet Cake','cake',3900,'wheat, milk, egg'],['Cupcake Box (6)','cake',2400,'wheat, milk, egg'],['Fruit Tart','cake',1400,'wheat, milk, egg'],['Chocolate Chip Cookie','cookie',275,'wheat, milk, egg, soy'],['Oatmeal Raisin Cookie','cookie',275,'wheat, milk, egg'],['Double Chocolate Cookie','cookie',300,'wheat, milk, egg, soy'],['Almond Biscotti','cookie',250,'wheat, egg, tree nuts'],['Shortbread','cookie',225,'wheat, milk'],['Snickerdoodle','cookie',275,'wheat, milk, egg'],['Macaron','cookie',200,'egg, tree nuts'],['Drip Coffee','drink',300,null],['Latte','drink',450,'milk'],['Cappuccino','drink',425,'milk'],['Hot Chocolate','drink',400,'milk, soy'],['Iced Tea','drink',325,null],['Orange Juice','drink',450,null],['Pecan Sticky Bun','pastry',450,'wheat, milk, egg, tree nuts'],['Espresso','drink',300,null]]; const par = { bread: 20, pastry: 24, cake: 3, cookie: 30, drink: 40 }; return defs.map((d, i) => { const p = par[d[1]]; const at = ctx.time.plus('2025-01-10T09:00:00.000Z', (i * 3 + 1) + 'd'); let stock = ctx.int(Math.floor(p / 3), p); if (d[0] === 'Butter Croissant') stock = 12; if (d[0] === 'Custom Birthday Cake') stock = 4; return { name: d[0], category: d[1], price: d[2], stock_on_hand: stock, par_level: p, active: i % 10 !== 9, contains_allergens: d[3], created_at: at, updated_at: at }; }); }"
+  ingredient: "(ctx) => { const defs = [['Bread Flour','g',10000,60000],['Unsalted Butter','g',3000,700],['Granulated Sugar','g',5000,22000],['Whole Milk','ml',8000,30000],['Eggs','each',60,240],['Active Dry Yeast','g',500,2200],['Sea Salt','g',500,3000],['Dark Chocolate','g',2000,9000],['Cocoa Powder','g',1000,4500],['Brown Sugar','g',2000,9000],['Heavy Cream','ml',3000,900],['Vanilla Extract','ml',200,50],['Baking Powder','g',300,1500],['Baking Soda','g',300,1400],['Rye Flour','g',3000,14000],['Whole Wheat Flour','g',3000,16000],['Cream Cheese','g',2000,600],['Almond Flour','g',1500,400],['Ground Cinnamon','g',200,900],['Rolled Oats','g',2000,8000],['Raisins','g',1000,4000],['Blueberries','g',1500,5000],['Lemon Juice','ml',500,2200],['Powdered Sugar','g',2000,8000],['Espresso Beans','g',3000,12000],['Honey','ml',500,150],['Olive Oil','ml',1000,4500],['Sesame Seeds','g',300,1200],['Pecans','g',1000,300],['Fondant','g',2000,6000]]; return defs.map((d, i) => { const at = ctx.time.plus('2025-01-10T09:00:00.000Z', (i * 2 + 1) + 'd'); return { name: d[0], unit: d[1], stock_qty: d[3], reorder_level: d[2], low_stock: d[3] <= d[2], created_at: at, updated_at: at }; }); }"
+  recipe_line: "(ctx) => { const P = ctx.rows('product'); const I = ctx.rows('ingredient'); const rows = []; for (let i = 0; i < P.length; i++) { const p = P[i]; const at = p.created_at; if (p.name === 'Butter Croissant') { for (const [k, q] of [[0, 60], [1, 25], [5, 4], [3, 20], [2, 8]]) rows.push({ product_id: p.id, ingredient_id: I[k].id, qty_per_unit: q, created_at: at, updated_at: at }); continue; } const cnt = 3 + (i % 4 === 0 ? 1 : 0); const start = (i * 7) % 30; for (let k = 0; k < cnt; k++) { const ing = I[(start + 4 * k) % 30]; const q = ing.unit === 'each' ? ctx.int(1, 3) : ing.unit === 'ml' ? ctx.int(10, 120) : ctx.int(5, 150); rows.push({ product_id: p.id, ingredient_id: ing.id, qty_per_unit: q, created_at: at, updated_at: at }); } } return rows; }"
+  bakery_order: "(ctx) => { const P = ctx.rows('product'); const C = ctx.rows('customer'); const act = P.filter((p) => p.active); const A = act.length; const price = {}; for (const p of P) price[p.id] = p.price; const cake = P.find((p) => p.name === 'Custom Birthday Cake'); const linesFor = (i) => { if (i === 0) return [{ pid: cake.id, qty: 1 }]; const n = i % 5 < 2 ? 3 : 2; const s = (i * 11) % A; const out = []; for (let k = 0; k < n; k++) out.push({ pid: act[(s + 7 * k) % A].id, qty: 1 + ((i + 3 * k) % 4) }); return out; }; const pat = ['picked_up','confirmed','picked_up','placed','picked_up','cancelled','picked_up','ready','confirmed','picked_up','placed','picked_up','confirmed','picked_up','ready','cancelled','picked_up','confirmed','placed','confirmed']; const notes = ['Please slice the loaf', 'Nut allergy in the family, please bag separately', 'Will pick up after work', 'Extra napkins please', 'Gift box if possible']; const base = '2025-12-20T09:00:00.000Z'; const rows = []; for (let i = 0; i < 140; i++) { const status = i === 0 ? 'confirmed' : pat[i % 20]; const past = status === 'picked_up' || status === 'cancelled'; const cust = i === 0 ? C[0].id : C[1 + ((i * 7 + 3) % 59)].id; let total = 0; for (const l of linesFor(i)) total += l.qty * price[l.pid]; const placed = i === 0 ? ctx.time.plus(base, '200h') : ctx.time.plus(base, ctx.int(1, past ? 240 : 360) + 'h'); let pickup; if (past) pickup = ctx.time.plus(placed, ctx.int(24, 72) + 'h'); else if (status === 'ready') pickup = ctx.time.plus('2026-01-05T00:00:00.000Z', (10 + (i % 8)) + 'h'); else { const day = i === 0 ? 3 : 1 + (Math.floor(i / 2) % 5); pickup = ctx.time.plus('2026-01-05T00:00:00.000Z', (day * 24 + 8 + (i % 9)) + 'h'); } let readyAt = null; if (status === 'ready') readyAt = ctx.time.plus('2026-01-04T13:00:00.000Z', ctx.int(1, 19) + 'h'); else if (status === 'picked_up') readyAt = ctx.time.plus(placed, '12h'); let updated; if (past) updated = pickup; else if (status === 'ready') updated = readyAt; else updated = ctx.time.plus(placed, ctx.int(1, 12) + 'h'); const note = i === 0 ? 'Custom cake: Happy 40th Birthday Maria, vanilla with strawberry filling' : i % 9 === 0 ? notes[(i / 9) % 5] : null; rows.push({ customer_id: cust, status, pickup_at: pickup, total, placed_at: placed, ready_at: readyAt, note, created_at: placed, updated_at: updated }); } return rows; }"
+  order_line: "(ctx) => { const P = ctx.rows('product'); const O = ctx.rows('bakery_order'); const act = P.filter((p) => p.active); const A = act.length; const cake = P.find((p) => p.name === 'Custom Birthday Cake'); const rows = []; for (let i = 0; i < O.length; i++) { const o = O[i]; let ls = []; if (i === 0) ls = [{ p: cake, qty: 1 }]; else { const n = i % 5 < 2 ? 3 : 2; const s = (i * 11) % A; for (let k = 0; k < n; k++) ls.push({ p: act[(s + 7 * k) % A], qty: 1 + ((i + 3 * k) % 4) }); } for (const l of ls) rows.push({ order_id: o.id, product_id: l.p.id, quantity: l.qty, unit_price: l.p.price, created_at: o.created_at, updated_at: o.created_at }); } return rows; }"
+  production_batch: "(ctx) => { const P = ctx.rows('product'); const bakers = ['Tomas Reyes', 'Ingrid Larsen', 'Kofi Mensah', 'Wei Chen', 'Dana Whitfield']; const croissant = P.find((p) => p.name === 'Butter Croissant'); const rows = []; for (let i = 0; i < 70; i++) { const r = i % 13; const status = i === 0 ? 'planned' : r <= 3 ? 'planned' : r === 12 ? 'cancelled' : 'completed'; let p = i === 0 ? croissant : P[(i * 3 + 1) % 40]; if (i > 0 && p.id === croissant.id) p = P[9]; const qty = i === 0 ? 48 : p.category === 'cake' ? ctx.int(2, 6) : p.category === 'drink' ? ctx.int(20, 60) : ctx.int(12, 60); const baker = bakers[i % 5]; if (status === 'planned') { const created = ctx.time.plus('2025-12-30T05:00:00.000Z', ctx.int(1, 90) + 'h'); const sched = i === 0 ? '2026-01-05T14:00:00.000Z' : ctx.time.plus('2026-01-05T06:00:00.000Z', ctx.int(1, 48) + 'h'); rows.push({ product_id: p.id, quantity: qty, status, scheduled_for: sched, completed_at: null, baker_name: baker, created_at: created, updated_at: created }); } else { const created = ctx.time.plus('2025-12-01T05:00:00.000Z', ctx.int(1, 780) + 'h'); const sched = ctx.time.plus(created, ctx.int(12, 48) + 'h'); if (status === 'completed') { const done = ctx.time.plus(sched, ctx.int(2, 5) + 'h'); rows.push({ product_id: p.id, quantity: qty, status, scheduled_for: sched, completed_at: done, baker_name: baker, created_at: created, updated_at: done }); } else rows.push({ product_id: p.id, quantity: qty, status, scheduled_for: sched, completed_at: null, baker_name: baker, created_at: created, updated_at: created }); } } return rows; }"
+tests:
+  ingredient_and_recipe_setup:
+    description: create_ingredient computes low_stock and refuses duplicate names. add_recipe_line adds recipe lines, lists them, and refuses a duplicate ingredient and a non-positive quantity.
+    script: "(ctx) => { const post = (p, b) => ctx.api('POST', p, b); const flour = post('/ingredients', { name: 'WF Setup Flour', unit: 'kg', stock_qty: 100, reorder_level: 50 }); ctx.assert(flour.status === 201 && flour.body.low_stock === false && flour.body.stock_qty === 100, 'flour: ' + JSON.stringify(flour)); const butter = post('/ingredients', { name: 'WF Setup Butter', unit: 'kg', stock_qty: 10, reorder_level: 50 }); ctx.assert(butter.status === 201 && butter.body.low_stock === true, 'butter should start low: ' + JSON.stringify(butter)); const dup = post('/ingredients', { name: 'WF Setup Butter', unit: 'kg' }); ctx.assert(dup.status === 409 && dup.body.error.code === 'duplicate_name', 'duplicate name: ' + JSON.stringify(dup)); const prod = post('/products', { name: 'WF Setup Butter Croissant', category: 'pastry', price: 450, par_level: 24 }); ctx.assert(prod.status === 201 && prod.body.stock_on_hand === 0, 'product starts with no stock: ' + JSON.stringify(prod)); const l1 = post('/products/' + prod.body.id + '/recipe', { ingredient_id: flour.body.id, qty_per_unit: 0.06 }); ctx.assert(l1.status === 201 && l1.body.product_id === prod.body.id, 'recipe line: ' + JSON.stringify(l1)); const l2 = post('/products/' + prod.body.id + '/recipe', { ingredient_id: butter.body.id, qty_per_unit: 0.03 }); ctx.assert(l2.status === 201, 'second recipe line: ' + JSON.stringify(l2)); const again = post('/products/' + prod.body.id + '/recipe', { ingredient_id: butter.body.id, qty_per_unit: 0.05 }); ctx.assert(again.status === 409 && again.body.error.code === 'duplicate_ingredient', 'duplicate recipe ingredient: ' + JSON.stringify(again)); const zero = post('/products/' + prod.body.id + '/recipe', { ingredient_id: flour.body.id, qty_per_unit: 0 }); ctx.assert(zero.status === 422 || zero.status === 409, 'zero qty refused: ' + JSON.stringify(zero)); const missing = post('/products/prd_9999/recipe', { ingredient_id: flour.body.id, qty_per_unit: 1 }); ctx.assert(missing.status === 404, 'unknown product: ' + JSON.stringify(missing)); const list = ctx.api('GET', '/products/' + prod.body.id + '/recipe').body.data; ctx.assert(list.length === 2, 'two recipe lines, got ' + list.length); }"
+  place_order_prices_lines:
+    description: place_order prices lines from current prices, computes the total, starts placed, keeps the captured price after a price change, and refuses past pickup, empty lines, bad quantity, duplicate, inactive and unknown products, and unknown customers.
+    script: "(ctx) => { const post = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 200 || r.status === 201, 'POST ' + p + ' returned ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; }; const cus = post('/customers', { name: 'Maria Lopez', email: 'wf.place.maria@example.test', loyalty_tier: 'regular' }); const rye = post('/products', { name: 'WF Rye Loaf', category: 'bread', price: 650, par_level: 10 }); const cake = post('/products', { name: 'WF Custom Birthday Cake', category: 'cake', price: 4200, par_level: 2 }); const off = post('/products', { name: 'WF Retired Scone', category: 'pastry', price: 300, par_level: 0, active: false }); const pickup = '2026-01-06T10:00:00.000Z'; const place = (body) => ctx.api('POST', '/orders', { customer_id: cus.id, pickup_at: pickup, ...body }); const r = place({ note: 'Write Happy Birthday on top', lines: JSON.stringify([{ product_id: rye.id, quantity: 2 }, { product_id: cake.id, quantity: 1 }]) }); ctx.assert(r.status === 201, 'place_order returned ' + r.status + ' ' + JSON.stringify(r.body)); ctx.assert(r.body.status === 'placed' && r.body.total === 5500 && r.body.placed_at === ctx.now(), 'placed with total 5500, got ' + JSON.stringify(r.body)); ctx.assert(r.body.lines.length === 2, 'two lines returned'); const lines = ctx.api('GET', '/orders/' + r.body.id + '/lines').body.data; ctx.assert(lines.length === 2, 'two stored lines, got ' + lines.length); ctx.assert(ctx.api('PATCH', '/products/' + rye.id, { price: 700 }).status === 200, 'price patch'); const after = ctx.api('GET', '/orders/' + r.body.id + '/lines').body.data.find((l) => l.product_id === rye.id); ctx.assert(after.unit_price === 650, 'captured price stays 650, got ' + after.unit_price); ctx.assert(ctx.api('GET', '/orders/' + r.body.id).body.total === 5500, 'total unchanged'); const past = ctx.api('POST', '/orders', { customer_id: cus.id, pickup_at: '2026-01-05T08:00:00.000Z', lines: JSON.stringify([{ product_id: rye.id, quantity: 1 }]) }); ctx.assert(past.status === 422 && past.body.error.code === 'pickup_in_past', 'past pickup: ' + JSON.stringify(past)); const empty = place({ lines: '[]' }); ctx.assert(empty.status === 422 && empty.body.error.code === 'no_lines', 'empty lines: ' + JSON.stringify(empty)); const zero = place({ lines: JSON.stringify([{ product_id: rye.id, quantity: 0 }]) }); ctx.assert(zero.status === 422 && zero.body.error.code === 'invalid_quantity', 'zero quantity: ' + JSON.stringify(zero)); const dup = place({ lines: JSON.stringify([{ product_id: rye.id, quantity: 1 }, { product_id: rye.id, quantity: 2 }]) }); ctx.assert(dup.status === 422 && dup.body.error.code === 'duplicate_product', 'duplicate product: ' + JSON.stringify(dup)); const inactive = place({ lines: JSON.stringify([{ product_id: off.id, quantity: 1 }]) }); ctx.assert(inactive.status === 422 && inactive.body.error.code === 'product_inactive', 'inactive product: ' + JSON.stringify(inactive)); const unknown = place({ lines: JSON.stringify([{ product_id: 'prd_9999', quantity: 1 }]) }); ctx.assert(unknown.status === 422 && unknown.body.error.code === 'unknown_product', 'unknown product: ' + JSON.stringify(unknown)); const garbage = place({ lines: 'not json' }); ctx.assert(garbage.status === 400, 'garbage lines: ' + JSON.stringify(garbage)); const noCus = ctx.api('POST', '/orders', { customer_id: 'cus_9999', pickup_at: pickup, lines: JSON.stringify([{ product_id: rye.id, quantity: 1 }]) }); ctx.assert(noCus.status === 400 || noCus.status === 422, 'unknown customer: ' + JSON.stringify(noCus)); }"
+  order_lifecycle_and_stock:
+    description: confirm_order reserves stock, refuses insufficient stock naming the product, mark_order_ready sets ready_at, complete_pickup only works from ready, and illegal moves are 409.
+    script: "(ctx) => { const post = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 200 || r.status === 201, 'POST ' + p + ' returned ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; }; const get = (p) => ctx.api('GET', p).body; const stocked = (name, price, units) => { const ing = post('/ingredients', { name: name + ' flour', unit: 'g', stock_qty: units * 100, reorder_level: 50 }); const prod = post('/products', { name, category: 'bread', price, par_level: 20 }); post('/products/' + prod.id + '/recipe', { ingredient_id: ing.id, qty_per_unit: 100 }); const b = post('/batches', { product_id: prod.id, quantity: units, scheduled_for: '2026-01-05T06:00:00.000Z' }); post('/batches/' + b.id + '/complete', {}); return get('/products/' + prod.id); }; const cus = post('/customers', { name: 'Maria Lopez', email: 'wf.lifecycle.maria@example.test', loyalty_tier: 'regular' }); const loaf = stocked('WF Sourdough Loaf', 900, 10); ctx.assert(loaf.stock_on_hand === 10, 'stocked 10 loaves, got ' + loaf.stock_on_hand); const order = (qty) => post('/orders', { customer_id: cus.id, pickup_at: '2026-01-06T10:00:00.000Z', lines: JSON.stringify([{ product_id: loaf.id, quantity: qty }]) }); const o1 = order(4); const early = ctx.api('POST', '/orders/' + o1.id + '/ready', {}); ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'ready from placed: ' + JSON.stringify(early)); const earlyPick = ctx.api('POST', '/orders/' + o1.id + '/pickup', {}); ctx.assert(earlyPick.status === 409 && earlyPick.body.error.code === 'invalid_state', 'pickup from placed: ' + JSON.stringify(earlyPick)); const c1 = post('/orders/' + o1.id + '/confirm', {}); ctx.assert(c1.status === 'confirmed', 'confirmed, got ' + c1.status); ctx.assert(get('/products/' + loaf.id).stock_on_hand === 6, 'stock reserved down to 6'); const again = ctx.api('POST', '/orders/' + o1.id + '/confirm', {}); ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second confirm: ' + JSON.stringify(again)); const skip = ctx.api('POST', '/orders/' + o1.id + '/pickup', {}); ctx.assert(skip.status === 409, 'pickup from confirmed: ' + JSON.stringify(skip)); const rd = post('/orders/' + o1.id + '/ready', {}); ctx.assert(rd.status === 'ready' && rd.ready_at === ctx.now(), 'ready with ready_at now, got ' + JSON.stringify(rd)); const pk = post('/orders/' + o1.id + '/pickup', {}); ctx.assert(pk.status === 'picked_up', 'picked_up, got ' + pk.status); ctx.assert(get('/products/' + loaf.id).stock_on_hand === 6, 'pickup leaves stock at 6'); const late = ctx.api('POST', '/orders/' + o1.id + '/cancel', {}); ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'cancel picked_up: ' + JSON.stringify(late)); const o2 = order(8); const short = ctx.api('POST', '/orders/' + o2.id + '/confirm', {}); ctx.assert(short.status === 409 && short.body.error.code === 'insufficient_stock', 'insufficient stock: ' + JSON.stringify(short)); ctx.assert(short.body.error.message.includes('WF Sourdough Loaf'), 'message names the product: ' + short.body.error.message); ctx.assert(get('/orders/' + o2.id).status === 'placed' && get('/products/' + loaf.id).stock_on_hand === 6, 'refused confirm changed nothing'); const missing = ctx.api('POST', '/orders/ord_9999/confirm', {}); ctx.assert(missing.status === 404, 'unknown order: ' + JSON.stringify(missing)); }"
+  cancel_order_releases_stock:
+    description: cancel_order from placed changes no stock, from confirmed and ready gives the quantities back, and a cancelled order cannot be cancelled again.
+    script: "(ctx) => { const post = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 200 || r.status === 201, 'POST ' + p + ' returned ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; }; const get = (p) => ctx.api('GET', p).body; const stocked = (name, price, units) => { const ing = post('/ingredients', { name: name + ' flour', unit: 'g', stock_qty: units * 100, reorder_level: 50 }); const prod = post('/products', { name, category: 'bread', price, par_level: 20 }); post('/products/' + prod.id + '/recipe', { ingredient_id: ing.id, qty_per_unit: 100 }); const b = post('/batches', { product_id: prod.id, quantity: units, scheduled_for: '2026-01-05T06:00:00.000Z' }); post('/batches/' + b.id + '/complete', {}); return get('/products/' + prod.id); }; const cus = post('/customers', { name: 'Maria Lopez', email: 'wf.cancel.maria@example.test', loyalty_tier: 'regular' }); const loaf = stocked('WF Baguette', 400, 10); const order = (qty) => post('/orders', { customer_id: cus.id, pickup_at: '2026-01-06T10:00:00.000Z', lines: JSON.stringify([{ product_id: loaf.id, quantity: qty }]) }); const stock = () => get('/products/' + loaf.id).stock_on_hand; const a = order(3); post('/orders/' + a.id + '/cancel', {}); ctx.assert(get('/orders/' + a.id).status === 'cancelled' && stock() === 10, 'cancel from placed leaves stock at 10, got ' + stock()); const b = order(3); post('/orders/' + b.id + '/confirm', {}); ctx.assert(stock() === 7, 'confirm reserves 3'); post('/orders/' + b.id + '/cancel', {}); ctx.assert(stock() === 10, 'cancel from confirmed releases stock, got ' + stock()); const c = order(2); post('/orders/' + c.id + '/confirm', {}); post('/orders/' + c.id + '/ready', {}); ctx.assert(stock() === 8, 'ready order holds 2'); post('/orders/' + c.id + '/cancel', {}); ctx.assert(stock() === 10, 'cancel from ready releases stock, got ' + stock()); const twice = ctx.api('POST', '/orders/' + c.id + '/cancel', {}); ctx.assert(twice.status === 409 && twice.body.error.code === 'invalid_state', 'cancel twice: ' + JSON.stringify(twice)); ctx.assert(stock() === 10, 'refused cancel changed no stock'); const revive = ctx.api('POST', '/orders/' + c.id + '/confirm', {}); ctx.assert(revive.status === 409, 'cancelled order cannot be confirmed'); }"
+  complete_batch_consumes_ingredients:
+    description: complete_batch refuses short ingredients naming the ingredient, works after restock_ingredient, consumes ingredients, adds product stock, flags low_stock, and refuses a second completion and a product with no recipe. restock_ingredient refuses bad quantities.
+    script: "(ctx) => { const post = (p, b) => ctx.api('POST', p, b); const ok = (r, what) => { ctx.assert(r.status === 200 || r.status === 201, what + ' returned ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; }; const get = (p) => ctx.api('GET', p).body; const butter = ok(post('/ingredients', { name: 'WF Batch Butter', unit: 'g', stock_qty: 50, reorder_level: 20 }), 'butter'); const flour = ok(post('/ingredients', { name: 'WF Batch Flour', unit: 'g', stock_qty: 5000, reorder_level: 1000 }), 'flour'); const croissant = ok(post('/products', { name: 'WF Batch Croissant', category: 'pastry', price: 375, par_level: 24 }), 'product'); ok(post('/products/' + croissant.id + '/recipe', { ingredient_id: butter.id, qty_per_unit: 25 }), 'butter line'); ok(post('/products/' + croissant.id + '/recipe', { ingredient_id: flour.id, qty_per_unit: 60 }), 'flour line'); const batch = ok(post('/batches', { product_id: croissant.id, quantity: 4, scheduled_for: '2026-01-05T06:00:00.000Z' }), 'batch'); ctx.assert(batch.status === 'planned', 'batch starts planned'); const short = post('/batches/' + batch.id + '/complete', {}); ctx.assert(short.status === 409 && short.body.error.code === 'insufficient_ingredients', 'short butter: ' + JSON.stringify(short)); ctx.assert(short.body.error.message.includes('WF Batch Butter'), 'message names butter: ' + short.body.error.message); ctx.assert(get('/batches/' + batch.id).status === 'planned' && get('/ingredients/' + flour.id).stock_qty === 5000 && get('/products/' + croissant.id).stock_on_hand === 0, 'refused completion changed nothing'); const bad0 = post('/ingredients/' + butter.id + '/restock', { quantity: 0 }); ctx.assert(bad0.status === 422 && bad0.body.error.code === 'invalid_quantity', 'zero restock: ' + JSON.stringify(bad0)); const badNeg = post('/ingredients/' + butter.id + '/restock', { quantity: -5 }); ctx.assert(badNeg.status === 422, 'negative restock: ' + JSON.stringify(badNeg)); const noQty = post('/ingredients/' + butter.id + '/restock', {}); ctx.assert(noQty.status === 400, 'missing quantity: ' + JSON.stringify(noQty)); const none = post('/ingredients/ing_9999/restock', { quantity: 5 }); ctx.assert(none.status === 404, 'unknown ingredient: ' + JSON.stringify(none)); const re = ok(post('/ingredients/' + butter.id + '/restock', { quantity: 60 }), 'restock'); ctx.assert(re.stock_qty === 110 && re.low_stock === false, 'butter 110 and not low, got ' + JSON.stringify(re)); const done = ok(post('/batches/' + batch.id + '/complete', {}), 'complete'); ctx.assert(done.status === 'completed' && done.completed_at === ctx.now(), 'completed now, got ' + JSON.stringify(done)); const b2 = get('/ingredients/' + butter.id); ctx.assert(b2.stock_qty === 10 && b2.low_stock === true, 'butter down to 10 and low, got ' + JSON.stringify(b2)); const f2 = get('/ingredients/' + flour.id); ctx.assert(f2.stock_qty === 4760 && f2.low_stock === false, 'flour 4760, got ' + JSON.stringify(f2)); ctx.assert(get('/products/' + croissant.id).stock_on_hand === 4, 'croissant stock 4'); const lowList = ctx.api('GET', '/ingredients?low_stock=true&q=WF+Batch').body.data; ctx.assert(lowList.some((i) => i.id === butter.id) && !lowList.some((i) => i.id === flour.id), 'low stock list has butter only: ' + JSON.stringify(lowList)); const twice = post('/batches/' + batch.id + '/complete', {}); ctx.assert(twice.status === 409 && twice.body.error.code === 'invalid_state', 'second completion: ' + JSON.stringify(twice)); const plain = ok(post('/products', { name: 'WF Plain Water', category: 'drink', price: 150, par_level: 0 }), 'water'); const nb = ok(post('/batches', { product_id: plain.id, quantity: 5, scheduled_for: '2026-01-05T06:00:00.000Z' }), 'water batch'); const nr = post('/batches/' + nb.id + '/complete', {}); ctx.assert(nr.status === 422 && nr.body.error.code === 'no_recipe', 'no recipe: ' + JSON.stringify(nr)); const miss = post('/batches/bat_9999/complete', {}); ctx.assert(miss.status === 404, 'unknown batch: ' + JSON.stringify(miss)); }"
+  cancel_batch_has_no_stock_effect:
+    description: cancel_batch cancels a planned batch without touching ingredients or product stock, and a cancelled batch can neither be completed nor cancelled again.
+    script: "(ctx) => { const post = (p, b) => ctx.api('POST', p, b); const ok = (r, what) => { ctx.assert(r.status === 200 || r.status === 201, what + ' returned ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; }; const get = (p) => ctx.api('GET', p).body; const ing = ok(post('/ingredients', { name: 'WF Cancel Cocoa Powder', unit: 'g', stock_qty: 500, reorder_level: 100 }), 'ingredient'); const prod = ok(post('/products', { name: 'WF Chocolate Cookie', category: 'cookie', price: 275, par_level: 30 }), 'product'); ok(post('/products/' + prod.id + '/recipe', { ingredient_id: ing.id, qty_per_unit: 10 }), 'recipe'); const batch = ok(post('/batches', { product_id: prod.id, quantity: 12, scheduled_for: '2026-01-05T06:00:00.000Z' }), 'batch'); const c = ok(post('/batches/' + batch.id + '/cancel', {}), 'cancel'); ctx.assert(c.status === 'cancelled', 'cancelled, got ' + c.status); ctx.assert(get('/ingredients/' + ing.id).stock_qty === 500 && get('/products/' + prod.id).stock_on_hand === 0, 'no stock effect'); const again = post('/batches/' + batch.id + '/cancel', {}); ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'cancel twice: ' + JSON.stringify(again)); const comp = post('/batches/' + batch.id + '/complete', {}); ctx.assert(comp.status === 409 && comp.body.error.code === 'invalid_state', 'complete after cancel: ' + JSON.stringify(comp)); const miss = post('/batches/bat_9999/cancel', {}); ctx.assert(miss.status === 404, 'unknown batch: ' + JSON.stringify(miss)); }"
+  expire_uncollected_job:
+    description: After 24 hours a ready order is cancelled by the hourly job and its stock is released. Orders still inside 24 hours and picked-up orders are untouched.
+    script: "(ctx) => { const post = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 200 || r.status === 201, 'POST ' + p + ' returned ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; }; const get = (p) => ctx.api('GET', p).body; const stocked = (name, price, units) => { const ing = post('/ingredients', { name: name + ' flour', unit: 'g', stock_qty: units * 100, reorder_level: 50 }); const prod = post('/products', { name, category: 'bread', price, par_level: 20 }); post('/products/' + prod.id + '/recipe', { ingredient_id: ing.id, qty_per_unit: 100 }); const b = post('/batches', { product_id: prod.id, quantity: units, scheduled_for: '2026-01-05T06:00:00.000Z' }); post('/batches/' + b.id + '/complete', {}); return get('/products/' + prod.id); }; const cus = post('/customers', { name: 'Maria Lopez', email: 'wf.expire.maria@example.test', loyalty_tier: 'regular' }); const loaf = stocked('WF Ciabatta', 500, 10); const order = (qty) => post('/orders', { customer_id: cus.id, pickup_at: '2026-01-06T10:00:00.000Z', lines: JSON.stringify([{ product_id: loaf.id, quantity: qty }]) }); const o1 = order(5); post('/orders/' + o1.id + '/confirm', {}); post('/orders/' + o1.id + '/ready', {}); const o2 = order(1); post('/orders/' + o2.id + '/confirm', {}); post('/orders/' + o2.id + '/ready', {}); post('/orders/' + o2.id + '/pickup', {}); const o3 = order(2); post('/orders/' + o3.id + '/confirm', {}); ctx.assert(get('/products/' + loaf.id).stock_on_hand === 2, 'stock reserved down to 2'); ctx.advance('23h'); ctx.assert(get('/orders/' + o1.id).status === 'ready', 'still ready at 23 hours'); const fired = ctx.advance('3h'); ctx.assert(fired.jobsFired.includes('expire_uncollected_orders'), 'expire job fired: ' + JSON.stringify(fired)); ctx.assert(get('/orders/' + o1.id).status === 'cancelled', 'ready order cancelled after 24 hours, got ' + get('/orders/' + o1.id).status); ctx.assert(get('/orders/' + o2.id).status === 'picked_up', 'picked_up order untouched'); ctx.assert(get('/orders/' + o3.id).status === 'confirmed', 'confirmed order untouched'); ctx.assert(get('/products/' + loaf.id).stock_on_hand === 7, 'released 5 units, stock 7, got ' + get('/products/' + loaf.id).stock_on_hand); }"
+  flag_low_stock_job:
+    description: The hourly flag_low_stock job fires and keeps low_stock equal to stock_qty <= reorder_level.
+    script: "(ctx) => { const post = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 200 || r.status === 201, 'POST ' + p + ' returned ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; }; const get = (p) => ctx.api('GET', p).body; const salt = post('/ingredients', { name: 'WF Job Sea Salt', unit: 'g', stock_qty: 100, reorder_level: 50 }); const yeast = post('/ingredients', { name: 'WF Job Dry Yeast', unit: 'g', stock_qty: 30, reorder_level: 50 }); const fired = ctx.advance('2h'); ctx.assert(fired.jobsFired.includes('flag_low_stock'), 'flag_low_stock fired: ' + JSON.stringify(fired)); ctx.assert(fired.jobsFailed.length === 0, 'no job failed: ' + JSON.stringify(fired.jobsFailed)); ctx.assert(get('/ingredients/' + salt.id).low_stock === false, 'salt not low'); ctx.assert(get('/ingredients/' + yeast.id).low_stock === true, 'yeast low'); post('/ingredients/' + yeast.id + '/restock', { quantity: 100 }); ctx.advance('1h'); ctx.assert(get('/ingredients/' + yeast.id).low_stock === false, 'yeast no longer low after restock'); }"
+tasks:
+  mark_marias_order_ready:
+    difficulty: easy
+    instruction: Customer Maria Lopez has a confirmed custom cake order waiting. Mark that order ready for pickup. Change nothing else.
+    decoys: []
+    alternatives: []
+  bake_croissants_after_restock:
+    difficulty: medium
+    instruction: The planned Butter Croissant production batch cannot be completed because the bakery is short of an ingredient. Restock that ingredient by exactly the missing amount (no more), then complete the croissant batch. Do not touch other batches, products or ingredients.
+    decoys: []
+    alternatives: []
+  cancel_tomorrows_orders_for_discontinued_product:
+    difficulty: hard
+    instruction: The bakery has discontinued the Baguette and the Almond Croissant. Cancel every order that is still placed or confirmed, is due for pickup tomorrow (6 January 2026, UTC) and contains at least one of those two products. Leave ready and picked-up orders, orders due on other days and orders without these products untouched.
+    decoys: []
+    alternatives: []
