@@ -25,5 +25,5 @@
   "prices": {
     "claude-sonnet-5-5": { "inputPerMTok": 2, "outputPerMTok": 10, "cacheWritePerMTok": 2.5, "cacheWrite1hPerMTok": 4, "cacheReadPerMTok": 0.2 }
   },
-  "exampleWorld": "../prod/worlds/helpdesk"
+  "exampleWorld": ["../prod/worlds/helpdesk", "../prod/worlds/retail-tau2", "../prod/worlds/gen-hotel-booking"]
 }

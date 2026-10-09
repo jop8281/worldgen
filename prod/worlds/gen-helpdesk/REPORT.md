@@ -45,6 +45,13 @@ Jobs (3):
 - `escalation_timeout`: every 15m
 - `auto_close`: every 1h
 
+## Changes
+
+- snippet_changed `tasks.escalate_breached_enterprise_tickets.grader`
+- item_changed `tasks.escalate_breached_enterprise_tickets.instruction`
+- snippet_changed `tasks.resolve_and_reopen_stale_ticket.grader`
+- item_changed `tasks.resolve_and_reopen_stale_ticket.instruction`
+
 ## Assumed and why
 
 - Mirror Zendesk Support's ticket API shape (tickets, requesters as customers, agents, comments, audit events) with a simplified REST surface, not its real field names or auth.
@@ -67,6 +74,8 @@ Jobs (3):
   - Why: Scope control.
 - List endpoints use cursor paging with data and next_cursor, a page size of 25 and q search across the listed search fields.
   - Why: Matches the engine's default list envelope. Seed volumes exceed 25 rows so paging matters.
+- Required keywords are SLA for the enterprise escalation reason and replied for the reopen reason, matched case-insensitively on ticket_event.note.
+  - Why: The keywords come from the task wording already given, so the instruction can state them without leaking ids.
 
 ## Questions asked of the input
 
@@ -84,6 +93,8 @@ Jobs (3):
   - Default answer: 2026-03-02T09:00:00.000Z, with a 1s tick per committed call. Jobs fire only when the clock is advanced.
 - Can on-call shifts, SLA policies or tickets be deleted or edited through the API?
   - Default answer: Shifts and policies are read-only. Tickets cannot be deleted. Customers can be created and edited.
+- Which keywords must the reasons contain?
+  - Default answer: SLA for the escalation reason and replied for the reopen reason.
 
 ## Left out
 
@@ -104,12 +115,16 @@ Jobs (3):
 
 The engine check passed: 7 world tests, 0 warnings. Each row is one engine TaskVerdict.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix |
-|---|---|---|---|---|---|
-| assign_newest_acme_ticket | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | n/a |
-| escalate_breached_printer_ticket | medium | 1.000 | 0.000 | 0.000, 0.700, 0.000, 0.000 | n/a |
-| escalate_breached_enterprise_tickets | hard | 1.000 | 0.000 | 0.571, 0.000, 0.000, 0.000, 0.000, 0.000 | 0.857 |
-| resolve_and_reopen_stale_ticket | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a |
+World id (WID): `wid_64bea4b8196f4824530eb38bbd0563fd80e09217e6eb85150f7af3145a6f722e`.
+
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| assign_newest_acme_ticket | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | n/a | legacy; mutants 7/8 | `tid_823ec39688162bee3cabc1b85dd807a0814aab34d94b569316a43ba5cc4fd3c1` |
+| escalate_breached_printer_ticket | medium | 1.000 | 0.000 | 0.000, 0.700, 0.000, 0.000 | n/a | legacy; mutants 6/8 | `tid_4047f0308a625addfc19bfc35c1a2ec501916f4aa26d3420e048632a829032a5` |
+| escalate_breached_enterprise_tickets | hard | 1.000 | 0.000 | 0.571, 0.000, 0.000, 0.000, 0.000, 0.000 | 0.857 | legacy; mutants 6/8 | `tid_b211545fc31e7eee40a559bed1b9be4e714ff4c08a98dfb6b326f3227768823d` |
+| resolve_and_reopen_stale_ticket | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 6/8 | `tid_d61c8502b607a25a09b233ea7195c1fdfb3f2aa8268cafc93bd1356ba120056f` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -131,21 +146,31 @@ Decoys:
 - `resolve_and_reopen_stale_ticket` 0.000: PATCHes the status back to open instead of using the reopen action, so the SLA clock and event trail are not updated
 - `resolve_and_reopen_stale_ticket` 0.000: reopens every resolved Northwind ticket without checking which one the customer replied on
 
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| assign_newest_acme_ticket | easy | 2 | none | none | none declared |
+| escalate_breached_printer_ticket | medium | 2 | none | ticket | none declared |
+| escalate_breached_enterprise_tickets | hard | 14 | ticket | ticket | hard: met |
+| resolve_and_reopen_stale_ticket | medium | 2 | none | ticket | none declared |
+
 ## Run
 
-Mode: create from description. Model: claude-sonnet-5-5. Budget: $5.00.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $3.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 0.77 | 0.0789 |
-| model | 1 | 0.31 | 0.0739 |
-| workflow | 2 | 3.26 | 0.4699 |
-| seed | 2 | 2.48 | 0.4856 |
-| tasks | 1 | 1.16 | 0.2715 |
-| Total | 7 | 7.98 | 1.3798 |
+| plan | 1 | 0.13 | 0.0540 |
+| tasks | 1 | 0.26 | 0.2183 |
+| Total | 2 | 0.39 | 0.2723 |
 
-Backtracks:
+Skipped:
 
-- `seed` to `workflow`: 1 issue
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures; it keeps 1 issue(s) the world had before this iterate: plan.seed_rows_short
 
-Run total: 8.31 minutes, $1.3798.
+Run total: 0.57 minutes, $0.2723.

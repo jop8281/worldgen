@@ -2,7 +2,7 @@
 
 An order-management desk built around the imported orders table. Customers own orders. Each order moves through pending, paid, shipped, delivered, with cancellation and refund exits. Status changes happen only through guarded actions (pay, ship, deliver, cancel, refund) that stamp timestamps and write an audit trail, and an hourly job cancels orders left unpaid for 72 hours.
 
-- Revision: 1
+- Revision: 2
 - Verdict: proceed
 - Clock: starts 2026-04-08T09:00:00.000Z, tick 0s
 
@@ -253,12 +253,12 @@ An order-management desk built around the imported orders table. Customers own o
 
 - `pay_oldest_pending_for_customer` (easy): Mark the oldest still-pending order of one named customer (identified by customer id in the instruction) as paid using the pay action, changing nothing else.
   - Decoy idea: Pays the newest pending order, or the first pending order in id order instead of the oldest by placed_at, or PATCHes status directly.
-- `refund_delivered_big_orders_for_customer` (medium): For one customer, refund every delivered order whose total is above a stated dollar threshold, with a reason on each, leaving their other orders (shipped, paid, smaller delivered) untouched.
-  - Decoy idea: Refunds all of the customer's delivered orders ignoring the threshold, or also refunds shipped orders, or misreads the threshold in dollars versus total_cents.
-- `cancel_stale_pending_with_gift_note` (medium): Cancel every pending order placed before a stated date whose note is a given text (for example 'Gift wrap, no receipt'), with a reason, and leave pending orders with other notes or later dates alone.
-  - Decoy idea: Cancels all pending orders before the date regardless of note, or cancels paid orders with that note as well.
-- `ship_all_paid_large_orders` (hard): Ship every paid order that has at least a stated item_count and a total above a stated amount, across more than one page of results, giving each a tracking number, without touching other paid orders.
-  - Decoy idea: Reads only the first page of paid orders, ignores one of the two conditions, delivers instead of ships, or marks them shipped by PATCH so shipped_at stays empty.
+- `refund_delivered_big_orders_for_customer` (medium): For one customer, refund every delivered order whose total is above a stated dollar threshold, leaving their other orders (shipped, paid, smaller delivered) untouched. The instruction states that each refund reason must contain the keyword 'damaged'; the grader checks that each refunded order's new refunded order_event.note contains it (case-insensitive), so nonsense reasons score below 1.
+  - Decoy idea: Refunds all of the customer's delivered orders ignoring the threshold, or also refunds shipped orders, or misreads the threshold in dollars versus total_cents, or refunds the right orders with a reason that lacks the keyword.
+- `cancel_stale_pending_with_gift_note` (medium): Cancel every pending order placed before a stated date whose note is a given text (for example 'Gift wrap, no receipt'), and leave pending orders with other notes or later dates alone. The instruction states that each cancel reason must contain the keyword 'stale'; the grader checks that each cancelled order's new cancelled order_event.note contains it (case-insensitive), so nonsense reasons score below 1.
+  - Decoy idea: Cancels all pending orders before the date regardless of note, or cancels paid orders with that note as well, or cancels the right orders with a reason that lacks the keyword.
+- `ship_all_paid_large_orders` (hard): Ship every paid order that has at least a stated item_count and a total above a stated amount, across more than one page of results, without touching other paid orders. The instruction states that each tracking number must start with the prefix 'TRK-'; the grader checks each shipped target's tracking_number starts with it, so nonsense tracking numbers score below 1.
+  - Decoy idea: Reads only the first page of paid orders, ignores one of the two conditions, delivers instead of ships, marks them shipped by PATCH so shipped_at stays empty, or ships with a tracking number lacking the prefix.
 
 ## Open questions
 
@@ -274,6 +274,8 @@ An order-management desk built around the imported orders table. Customers own o
   - Default answer: Yes, pending orders are auto-cancelled after 72 hours by an hourly job.
 - How should the clock behave?
   - Default answer: Start 2026-04-08T09:00:00Z, no per-call tick, time moves only on explicit advance.
+- Which keywords should the instructions require?
+  - Default answer: 'damaged' for refunds, 'stale' for cancels, and a 'TRK-' prefix for tracking numbers.
 
 ## Assumptions
 
@@ -295,6 +297,8 @@ An order-management desk built around the imported orders table. Customers own o
   - Why: Gives a time-driven rule. Old seeded pending orders will be cancelled the first time the clock advances, which only tests (not tasks) can trigger.
 - Acceptance tests create their own customers with emails ending @acceptance.example and orders through the API, and never read seed rows. The job test lists only workflow actions in its actions field; the job is exercised through ctx.advance.
   - Why: The workflow stage runs tests before any seed exists, and the actions field accepts only workflow action keys.
+- Required text: refund reason contains 'damaged', cancel reason contains 'stale', tracking numbers start with 'TRK-'.
+  - Why: The request asks for a keyword the instruction gives; these are simple, checkable and need no seed change.
 
 ## Out of scope
 
@@ -309,4 +313,6 @@ An order-management desk built around the imported orders table. Customers own o
 
 ## Changes
 
-None. The plan changes no existing item.
+- tasks.refund_delivered_big_orders_for_customer because the refund reason, stored as order_event.note, must say what the instruction requires
+- tasks.cancel_stale_pending_with_gift_note because the cancel reason, stored as order_event.note, must say what the instruction requires
+- tasks.ship_all_paid_large_orders because order.tracking_number must contain what the instruction requires

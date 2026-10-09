@@ -315,6 +315,8 @@ export type PipelineOptions = {
   readonly maxTurns: number;
   readonly budgetUsd: number;
   readonly maxMinutes: number;
+  /** Export the complete successes alone, not every episode with its outcome (A-389). */
+  readonly successesOnly?: boolean;
   /** Values the controller holds, such as API keys, that must never reach a public or private record. The caller reads them from its environment. */
   readonly secrets: readonly string[];
   /** The sandbox name, a safe slug (see `sandboxName`). */
@@ -505,9 +507,10 @@ export async function runPipeline(o: PipelineOptions, deps: PipelineDeps): Promi
 
     // 4. Export what the logs hold, reopen it, and validate it.
     try {
-      const exported = await exportDataset({ out: o.out, redact });
+      const exported = await exportDataset({ out: o.out, redact, ...(o.successesOnly === true ? { successesOnly: true } : {}) });
       manifest = exported.manifest;
-      log(`exported ${manifest.counts.accepted} accepted and ${manifest.counts.failed} failed episode(s) and reopened them`);
+      const v = manifest.counts.by_verdict;
+      log(`exported ${manifest.counts.episodes} episode(s), ${v.success} success, ${v.partial} partial, ${v.failure} failure and ${v.infra} infra, and reopened them`);
     } catch (e) {
       problems.push(`export failed: ${messageOf(e)}`);
     }

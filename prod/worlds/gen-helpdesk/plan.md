@@ -2,7 +2,7 @@
 
 A customer-support helpdesk. Customers on standard, premium or enterprise tiers file tickets. Agents work them through a fixed lifecycle (new, open, pending, escalated, resolved, closed). Each (tier, priority) pair has an SLA resolution target that sets a due time and a breach flag. Escalation hands a ticket to the agent on call at level 1 right now, and a timeout can push urgent tickets to level 2. Background jobs flag SLA breaches, auto-escalate breached urgent tickets, time out level 1 escalations and auto-close old resolved tickets.
 
-- Revision: 1
+- Revision: 2
 - Verdict: proceed
 - Clock: starts 2026-03-02T09:00:00.000Z, tick 1s
 
@@ -84,10 +84,10 @@ None. The plan records no acceptance test.
   - Decoy idea: Takes the oldest new Acme ticket, or the first in id order, instead of the newest. Another decoy PATCHes status to open, so the ticket has no assignee.
 - `escalate_breached_printer_ticket` (medium): Acme Logistics has several label-printer tickets and only one has breached its SLA. Find it, escalate it with the escalate action and a reason that mentions the SLA, and do not touch or edit it by hand before the escalation. Success means status escalated at level 1, the assignee is the level 1 on-call agent at escalation time, and the new escalated event mentions the SLA. Score 0 on any collateral change.
   - Decoy idea: Escalates the newest printer ticket without checking the breach flag, gives a reason with no SLA mention, PATCHes the status instead of calling the action, or assigns the on-call agent by hand before escalating.
-- `escalate_breached_enterprise_tickets` (hard): Escalate every ticket that is open, high priority, belongs to an enterprise customer and has breached its SLA, each with a reason, and change nothing else. The matching tickets are spread across two pages of the list, and near-miss tickets (not breached, other tiers, other statuses) are in the seed. The agent must page through, join tickets to customer tier and use the escalate action. Score is the share of targets correctly escalated to the on-call agent, and any collateral change scores 0.
-  - Decoy idea: Reads only page 1, ignores customer tier, treats open as new, open or pending, skips the breach filter, or PATCHes the status to escalated so no on-call agent is assigned.
-- `resolve_and_reopen_stale_ticket` (medium): Reopen the one recently resolved ticket (resolved within the last 72 hours) from Northwind Health whose customer replied after resolution, with a reason. Then check that the ticket is open, keeps its assignee and has the SLA restarted from the enterprise policy for its priority. Do not touch closed tickets.
-  - Decoy idea: Picks an older closed ticket (which answers 409), reopens a different Northwind ticket, or PATCHes status to open, which leaves the SLA clock unchanged and the SLA fields stale.
+- `escalate_breached_enterprise_tickets` (hard): Escalate every ticket that is open, high priority, belongs to an enterprise customer and has breached its SLA, each with a reason that contains the word SLA (stored as the escalated ticket_event note), and change nothing else. The matching tickets are spread across two pages of the list, and near-miss tickets (not breached, other tiers, other statuses) are in the seed. The agent must page through, join tickets to customer tier and use the escalate action. Score is the share of targets correctly escalated to the on-call agent with a reason mentioning SLA, and any collateral change scores 0.
+  - Decoy idea: Reads only page 1, ignores customer tier, treats open as new, open or pending, skips the breach filter, PATCHes the status to escalated so no on-call agent is assigned, or escalates correctly with a reason that does not mention the SLA.
+- `resolve_and_reopen_stale_ticket` (medium): Reopen the one recently resolved ticket (resolved within the last 72 hours) from Northwind Health whose customer replied after resolution, with a reason that contains the word replied (stored as the reopened ticket_event note). Then check that the ticket is open, keeps its assignee and has the SLA restarted from the enterprise policy for its priority. Do not touch closed tickets.
+  - Decoy idea: Picks an older closed ticket (which answers 409), reopens a different Northwind ticket, PATCHes status to open leaving the SLA clock stale, or reopens the right ticket with a reason that does not mention the customer reply.
 
 ## Open questions
 
@@ -105,6 +105,8 @@ None. The plan records no acceptance test.
   - Default answer: 2026-03-02T09:00:00.000Z, with a 1s tick per committed call. Jobs fire only when the clock is advanced.
 - Can on-call shifts, SLA policies or tickets be deleted or edited through the API?
   - Default answer: Shifts and policies are read-only. Tickets cannot be deleted. Customers can be created and edited.
+- Which keywords must the reasons contain?
+  - Default answer: SLA for the escalation reason and replied for the reopen reason.
 
 ## Assumptions
 
@@ -128,6 +130,8 @@ None. The plan records no acceptance test.
   - Why: Scope control.
 - List endpoints use cursor paging with data and next_cursor, a page size of 25 and q search across the listed search fields.
   - Why: Matches the engine's default list envelope. Seed volumes exceed 25 rows so paging matters.
+- Required keywords are SLA for the enterprise escalation reason and replied for the reopen reason, matched case-insensitively on ticket_event.note.
+  - Why: The keywords come from the task wording already given, so the instruction can state them without leaking ids.
 
 ## Out of scope
 
@@ -146,4 +150,5 @@ None. The plan records no acceptance test.
 
 ## Changes
 
-None. The plan changes no existing item.
+- tasks.escalate_breached_enterprise_tickets
+- tasks.resolve_and_reopen_stale_ticket

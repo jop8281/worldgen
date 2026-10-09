@@ -1,6 +1,6 @@
 # Public bundle and verifier threat model (YOS-208)
 
-Status: an audit of stabilize/main `ab512b17`, with the fixes of A-374 (#107) and A-377. It maps the boundary as built.
+Status: an audit of stabilize/main `ab512b17`, with the fixes of A-374 (#107) and A-377, and the verdict widening of A-389. It maps the boundary as built.
 [private-verifier-boundary.md](private-verifier-boundary.md) is the earlier YOS-125 design that led to it.
 
 ## Assets
@@ -26,8 +26,8 @@ Status: an audit of stabilize/main `ab512b17`, with the fixes of A-374 (#107) an
 | 2 | Public bundle, code package (`src/**` only, no `prod/`, `eval/` or `test/`) | A | `verifier-boundary`, the same bundle scan |
 | 3 | World port routes, error bodies, `GET /openapi.json` | A | `private-boundary` "world port leaks nothing" (canaries over every prod world); `private-output` R3 and R4; `verifier-boundary` "every /_world path on the world port is an ordinary 404" |
 | 4 | Admin port in a sandbox | A | `upworld-public` "exposes only the world port"; `verifier-boundary` "the admin port is the controller channel on loopback" |
-| 5 | Verifier verdict, stderr and ledger | A, D | `verifier-boundary` "no verdict or rejection carries grader source", "a malformed request is one bounded rejection", "bad usage … are authored failures" |
-| 6 | Episode records and dataset JSONL | D | `dataset-private-errors` (private errors stay in private evidence, keys absent everywhere); `dataset-episode` "renders the task … and nothing hidden" |
+| 5 | Verifier verdict, stderr and ledger. A graded verdict also carries goal and guard counts, two integer pairs and never a name (A-389, amending YOS-159) | A, D | `verifier-boundary` "no verdict or rejection carries grader source", "widens a graded verdict by two integer pairs only", "reads a child verdict only when its counts are two integer pairs", "a malformed request is one bounded rejection", "bad usage … are authored failures" |
+| 6 | Episode records and dataset JSONL, now every episode with its outcome. The failure cause is public words only: a stop reason, `guard broken`, `<met> of <total> goals met` or `scored <n>` (A-389) | D | `dataset-private-errors` (private errors stay in private evidence, keys absent everywhere); `dataset-episode` "renders the task … and nothing hidden"; `dataset-store` "refuses an outcome the record does not imply" (no free text, counts only) |
 | 7 | Dataset diagnostics (`private/`, mode 0700/0600, never exported) | D | `dataset-private-errors` |
 | 8 | Studio explorer and tasks | B | `studio` explorer canaries; `studio-playground` "lists a world's tasks with the public fields only" |
 | 9 | Studio console relay and reset | B | `studio` "never calls the admin port"; `studio-sensitive` relay masking |

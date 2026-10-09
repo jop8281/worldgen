@@ -1048,7 +1048,7 @@ function freeTextIssues(world: CheckedWorld, seed: State, taskId: string, host: 
       if (g.score !== 1) continue;
       const call = `${c.req.method} ${c.req.path} with ${key} ${show(nonsense)}`;
       flagged.add(field);
-      out.push(issue('task.freetext_unchecked', ['tasks', taskId, 'grader'], { field, call }, `the solution with ${call} scored 1`));
+      out.push(issue('task.freetext_unchecked', ['tasks', taskId, 'grader'], { field, call }, `${field}: the solution with ${call} scored 1`));
     }
   }
   return { issues: out, runs };

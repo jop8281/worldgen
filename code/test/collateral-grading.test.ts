@@ -224,7 +224,9 @@ describe('an edit undone before the end still counts as collateral (A-387)', () 
     const held = { wid: worldIdOf(world), worldVersion: 'a'.repeat(64), engine: 'test-engine' };
     const trace = traceOf(rt.log());
     const request = { protocol: 1, submission: 'sub-undone', task: TASK, ...held, trace, chain: chainOf(trace), state: rt.dump() };
-    assert.deepEqual(verifySubmission(world, held, JSON.stringify(request), new Set()).verdict, { task: TASK, wid: held.wid, score: 0, stop: 'graded' });
+    assert.deepEqual(verifySubmission(world, held, JSON.stringify(request), new Set()).verdict, {
+      task: TASK, wid: held.wid, score: 0, stop: 'graded', goals: { met: 0, total: 0 }, guards: { held: 0, total: 1 },
+    });
   });
 
   it('without a journal or a call log the guards see only the end state, and the score says so', () => {
@@ -282,7 +284,7 @@ describe('free text a grader never reads (A-388)', () => {
     const r = verifyRename(graderThat("subject !== ctx.seed.get('ticket', 'tkt_0002').subject"));
     if (r.ok) assert.fail('a grader that never reads the subject must fail the free-text probe');
     assert.deepEqual(r.issues.map((i) => [i.code, i.path.join('.'), i.found]), [
-      ['task.freetext_unchecked', `tasks.${RENAME}.grader`, 'the solution with PATCH /tickets/tkt_0002 with subject "bananas bananas bananas b" scored 1'],
+      ['task.freetext_unchecked', `tasks.${RENAME}.grader`, 'ticket.subject: the solution with PATCH /tickets/tkt_0002 with subject "bananas bananas bananas b" scored 1'],
     ]);
     assert.equal(r.issues[0]?.hint.includes('the grader never reads ticket.subject'), true);
   });

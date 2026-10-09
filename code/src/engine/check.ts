@@ -14,7 +14,7 @@ import { fromIso, toIso, type Instant } from './clock.ts';
 import { SnippetFault, type Snippet, type SnippetHost, type SnippetKind, type TestCtx } from './ctx.ts';
 import { FIELD_TYPES, machineOf, refOf, temporalOf, type FieldKind, type Machine } from './fields.ts';
 import { SECTIONS, STRIPE_MAX_LIMIT, taskSchema, worldSchema, type Section, type World } from './format.ts';
-import { fromZod, issue, type CheckIssue, type IssuePath, type NonEmpty } from './issues.ts';
+import { fromZod, issue, type CheckIssue, type IssueCode, type IssuePath, type NonEmpty } from './issues.ts';
 import { lowerRules } from './rules.ts';
 import { privacySplit, taskPrivacy } from './split.ts';
 import { seedState, uniqueClash, type Row, type State } from './store.ts';
@@ -122,8 +122,11 @@ const LAYERS: { readonly [L in Exclude<CheckLayer, 'schema'>]: Layer } = {
   lints,
 };
 
+/** What a check may hold back: issue codes it reports as warnings instead of errors (A-395). Defaults to none. */
+export type CheckOptions = { readonly tolerate?: ReadonlySet<IssueCode> };
+
 /** Total: never throws on a bad world. `input` is untrusted (parsed YAML or an applied edit). */
-export function check(input: unknown, host: SnippetHost): CheckReport {
+export function check(input: unknown, host: SnippetHost, options: CheckOptions = {}): CheckReport {
   const parsed = parseWorld(input);
   if (!parsed.ok) return failure('schema', parsed.issues, [], input);
   const world = parsed.world;
@@ -133,8 +136,9 @@ export function check(input: unknown, host: SnippetHost): CheckReport {
   for (const layer of CHECK_LAYERS) {
     if (layer === 'schema') continue;
     const found = LAYERS[layer](world, memo, run);
-    warnings.push(...found.filter((i) => i.severity === 'warning'));
-    const [first, ...rest] = found.filter((i) => i.severity === 'error');
+    const tolerated = (i: CheckIssue): boolean => options.tolerate?.has(i.code) === true;
+    warnings.push(...found.filter((i) => i.severity === 'warning' || tolerated(i)));
+    const [first, ...rest] = found.filter((i) => i.severity === 'error' && !tolerated(i));
     if (first) {
       if (layer === 'tasks') {
         warnings.push(...stateLints(world, run.seeded));

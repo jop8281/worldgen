@@ -130,7 +130,7 @@ export async function runLocalEpisode(o: LocalEpisodeOptions): Promise<LocalEpis
     await writeArtifacts(o.out, episode.episode_id, artifacts, o.redact);
     await appendEpisode(o.out, episode, o.redact);
     const exported = await exportDataset({ out: o.out, redact: o.redact, runIds: [o.runId] });
-    const reopened = [...exported.accepted, ...exported.failed].find((e) => e.episode_id === episode.episode_id);
+    const reopened = exported.episodes.find((e) => e.episode_id === episode.episode_id);
     // The export is canonical JSON parsed back in schema key order, so only canonical forms compare.
     if (reopened === undefined || canonicalJson(reopened) !== canonicalJson(episode)) {
       throw new Error(`the export of ${o.out} does not reopen to episode ${episode.episode_id} as it was run`);

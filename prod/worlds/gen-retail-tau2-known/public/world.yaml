@@ -1,0 +1,1425 @@
+format: 1
+meta:
+  name: world
+  description: An online store's support backend. Customers have saved payment methods (credit card, PayPal, gift card with a balance). Products have variants (size and color) with their own price and stock. Orders move pending -> shipped -> delivered. A pending order can be cancelled, or have its address, payment method or items changed (items only once, only to another variant of the same product). A delivered order can have items returned or exchanged for another variant of the same product. Money goes back to the original payment method or to one of the user's gift cards, and every refund is recorded. Every state change goes through an action that enforces these rules. A job issues refunds that are waiting and completes return and exchange requests.
+  resembles: Retail customer-service backend in the style of the tau-bench retail domain, backed by a Shopify-like order and refund model (orders, line items, variants, payment methods, gift cards, refunds)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-06T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  user:
+    description: A customer of the store. Support finds them by email or name. The address is the default address only, and existing orders keep their own shipping address.
+    idPrefix: usr
+    fields:
+      first_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+      last_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 120
+        format: email
+      address_line:
+        type: string
+        description: Default street address. Changed only by update_user_address.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 160
+      city:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 80
+      state_code:
+        type: string
+        description: State or province code such as TX
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 3
+      zip:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 12
+      country:
+        type: string
+        description: ISO country code
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 2
+        default: US
+  payment_method:
+    description: A saved payment method owned by a user. Gift cards carry a balance in USD cents, credit cards and PayPal accounts have none.
+    idPrefix: pay
+    fields:
+      user_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - credit_card
+          - paypal
+          - gift_card
+      label:
+        type: string
+        description: Human readable label, such as Visa ending 4242 or PayPal account name
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      balance:
+        type: money
+        description: Remaining balance in cents. Set only for gift cards, null for other kinds. Changed by actions and jobs.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+  product:
+    description: A catalog product such as a rain jacket or a mechanical keyboard. Each product has several variants. The catalog is read-only.
+    idPrefix: prd
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      category:
+        type: string
+        description: Catalog category such as outerwear, keyboards, desks or accessories
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+  variant:
+    description: A purchasable option of a product with its own options, price and stock. A variant is only orderable when available is true.
+    idPrefix: var
+    fields:
+      product_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: product
+        onDelete: restrict
+      option_summary:
+        type: string
+        description: The options of this variant, such as color blue, size L
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 160
+      price:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      available:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+      stock:
+        type: int
+        description: Units on hand. Changed by cancel, exchange and return completion.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+  order:
+    description: A purchase by a user with a shipping address, a payment method and a lifecycle status. Status changes only through actions and jobs. The total equals the sum of quantity times unit_price over its items.
+    idPrefix: ord
+    fields:
+      user_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: user
+        onDelete: restrict
+      status:
+        type: state
+        description: pending to shipped or cancelled. shipped to delivered. delivered to return_requested or exchange_requested. return_requested to returned. exchange_requested to exchanged. cancelled, returned and exchanged are final.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - pending
+          - shipped
+          - delivered
+          - cancelled
+          - return_requested
+          - exchange_requested
+          - returned
+          - exchanged
+        initial: pending
+        transitions:
+          pending:
+            - shipped
+            - cancelled
+          shipped:
+            - delivered
+          delivered:
+            - return_requested
+            - exchange_requested
+          cancelled: []
+          return_requested:
+            - returned
+          exchange_requested:
+            - exchanged
+          returned: []
+          exchanged: []
+      payment_method_id:
+        type: ref
+        description: The payment method the order was paid with. Must belong to the order's user.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: payment_method
+        onDelete: restrict
+      ship_address_line:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 160
+      ship_city:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 80
+      ship_state_code:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 3
+      ship_zip:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 12
+      ship_country:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        maxLength: 2
+        default: US
+      total:
+        type: money
+        description: Sum of quantity times unit_price over the order's items, in cents
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      items_modified:
+        type: bool
+        description: True once modify_pending_order_items has been used. Items can be modified only once.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      cancel_reason:
+        type: enum
+        description: Set when the order is cancelled
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        values:
+          - no longer needed
+          - ordered by mistake
+      placed_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: now
+      delivered_at:
+        type: datetime
+        description: Set when the order was delivered
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+  order_item:
+    description: A line item on an order for one variant. It also tracks any return or exchange request on that line. Returns and exchanges work on whole lines.
+    idPrefix: oit
+    fields:
+      order_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: order
+        onDelete: cascade
+      product_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: product
+        onDelete: restrict
+      variant_id:
+        type: ref
+        description: The variant ordered. Must belong to product_id. Changed only by modify_pending_order_items.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: variant
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+        max: 20
+        default: 1
+      unit_price:
+        type: money
+        description: Price of one unit in cents at the time of purchase or last modification
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      return_status:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        values:
+          - none
+          - return_requested
+          - exchange_requested
+          - returned
+          - exchanged
+        default: none
+      exchange_variant_id:
+        type: ref
+        description: The variant requested in an exchange. Null unless an exchange was requested.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: variant
+        onDelete: restrict
+  refund:
+    description: A record of money going back to a payment method, or of the extra amount settled on an exchange. A refund to a gift card is issued at once. Others start pending and are issued by a job.
+    idPrefix: rfd
+    fields:
+      order_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: order
+        onDelete: restrict
+      payment_method_id:
+        type: ref
+        description: "Destination of the money: the original payment method or a gift card of the user"
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - cancellation
+          - return
+          - exchange_difference
+      status:
+        type: state
+        description: pending until issued. issued is final.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - pending
+          - issued
+        initial: pending
+        transitions:
+          pending:
+            - issued
+          issued: []
+      issued_at:
+        type: datetime
+        description: When the refund was issued. Null while pending.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_users:
+    op: list
+    entity: user
+    filters:
+      - email
+      - last_name
+      - first_name
+      - city
+    search:
+      - first_name
+      - last_name
+      - email
+    sort:
+      - last_name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /users
+    description: List users. Filter by email, search by name or email.
+  get_user:
+    op: get
+    entity: user
+    method: GET
+    path: /users/{id}
+    description: Get one user with the default address.
+  list_payment_methods:
+    op: list
+    entity: payment_method
+    filters:
+      - kind
+    search:
+      - label
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /users/{user_id}/payment_methods
+    description: List a user's payment methods, filterable by kind.
+  list_products:
+    op: list
+    entity: product
+    filters:
+      - category
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /products
+    description: List products. Filter by category, search by name.
+  get_product:
+    op: get
+    entity: product
+    method: GET
+    path: /products/{id}
+    description: Get one product.
+  list_product_variants:
+    op: list
+    entity: variant
+    filters:
+      - available
+    search:
+      - option_summary
+    sort:
+      - price
+    pageSize: 25
+    method: GET
+    path: /products/{product_id}/variants
+    description: List a product's variants. Filter by available.
+  get_variant:
+    op: get
+    entity: variant
+    method: GET
+    path: /variants/{id}
+    description: Get one variant with price and stock.
+  list_orders:
+    op: list
+    entity: order
+    filters:
+      - user_id
+      - status
+      - payment_method_id
+    search: []
+    sort:
+      - created_at
+      - total
+    pageSize: 10
+    method: GET
+    path: /orders
+    description: List orders. Filter by user_id and status, sort by created_at.
+  get_order:
+    op: get
+    entity: order
+    method: GET
+    path: /orders/{id}
+    description: Get one order.
+  list_order_items:
+    op: list
+    entity: order_item
+    filters:
+      - return_status
+      - product_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /orders/{order_id}/items
+    description: List an order's line items.
+  list_refunds:
+    op: list
+    entity: refund
+    filters:
+      - order_id
+      - payment_method_id
+      - kind
+      - status
+    search: []
+    sort:
+      - created_at
+      - amount
+    pageSize: 25
+    method: GET
+    path: /refunds
+    description: List refunds. Filter by order_id, payment_method_id, kind and status.
+  get_refund:
+    op: get
+    entity: refund
+    method: GET
+    path: /refunds/{id}
+    description: Get one refund.
+actions:
+  cancel_order:
+    method: POST
+    path: /orders/{id}/cancel
+    description: Cancel a pending order. Sets cancel_reason, restocks the items and creates a cancellation refund for the full total to the original payment method. A gift card refund is issued at once and credited, any other refund starts pending.
+    input:
+      reason:
+        type: enum
+        description: Why the order is cancelled
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - no longer needed
+          - ordered by mistake
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const order = ctx.db.get('order', id);
+        if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found');
+        if (order.status !== 'pending') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only pending orders can be cancelled.');
+        const reason = ctx.body.reason;
+        if (reason !== 'no longer needed' && reason !== 'ordered by mistake') ctx.fail(400, 'input.invalid', 'Invalid input for cancel_order: reason must be no longer needed or ordered by mistake');
+        const pm = ctx.db.get('payment_method', order.payment_method_id);
+        if (pm === null) ctx.fail(409, 'no_payment_method', 'payment method ' + order.payment_method_id + ' of the order not found');
+        const now = ctx.now();
+        for (const it of ctx.db.list('order_item', { where: { order_id: id } })) {
+          const v = ctx.db.get('variant', it.variant_id);
+          ctx.db.update('variant', v.id, { stock: v.stock + it.quantity });
+        }
+        const updated = ctx.db.update('order', id, { status: 'cancelled', cancel_reason: reason });
+        if (order.total > 0) {
+          const r = ctx.db.create('refund', { order_id: id, payment_method_id: pm.id, amount: order.total, kind: 'cancellation' });
+          if (pm.kind === 'gift_card') {
+            ctx.db.update('refund', r.id, { status: 'issued', issued_at: now });
+            ctx.db.update('payment_method', pm.id, { balance: (pm.balance || 0) + order.total });
+          }
+        }
+        return { status: 200, body: updated };
+      }
+  modify_pending_order_address:
+    method: POST
+    path: /orders/{id}/address
+    description: Change the shipping address of a pending order. The user's default address is not changed.
+    input:
+      address_line:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 160
+      city:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      state_code:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 3
+      zip:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 12
+      country:
+        type: string
+        description: ISO country code, US when omitted
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 2
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const order = ctx.db.get('order', id);
+        if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found');
+        if (order.status !== 'pending') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only pending orders can change address.');
+        const f = {
+          ship_address_line: ctx.body.address_line,
+          ship_city: ctx.body.city,
+          ship_state_code: ctx.body.state_code,
+          ship_zip: ctx.body.zip,
+          ship_country: ctx.body.country === undefined || ctx.body.country === null ? 'US' : ctx.body.country,
+        };
+        for (const k of Object.keys(f)) {
+          if (typeof f[k] !== 'string' || f[k].trim() === '') ctx.fail(400, 'input.invalid', 'Invalid input for modify_pending_order_address: ' + k + ' expected a non-blank string');
+          f[k] = f[k].trim();
+        }
+        const updated = ctx.db.update('order', id, f);
+        return { status: 200, body: updated };
+      }
+  modify_pending_order_payment:
+    method: POST
+    path: /orders/{id}/payment
+    description: Change the payment method of a pending order. The new method must belong to the order's user and differ from the current one. A gift card must hold at least the order total.
+    input:
+      payment_method_id:
+        type: ref
+        description: The new payment method
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const order = ctx.db.get('order', id);
+        if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found');
+        if (order.status !== 'pending') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only pending orders can change payment method.');
+        const pm = ctx.db.get('payment_method', ctx.body.payment_method_id);
+        if (pm === null) ctx.fail(422, 'unknown_payment_method', 'payment method ' + ctx.body.payment_method_id + ' not found');
+        if (pm.user_id !== order.user_id) ctx.fail(409, 'payment_method_not_owned', 'payment method ' + pm.id + ' does not belong to the user of order ' + id);
+        if (pm.id === order.payment_method_id) ctx.fail(409, 'no_change', 'order ' + id + ' already uses payment method ' + pm.id);
+        if (pm.kind === 'gift_card' && (pm.balance || 0) < order.total) ctx.fail(409, 'insufficient_balance', 'gift card ' + pm.id + ' holds ' + (pm.balance || 0) + ' cents but the order total is ' + order.total);
+        const updated = ctx.db.update('order', id, { payment_method_id: pm.id });
+        return { status: 200, body: updated };
+      }
+  modify_pending_order_items:
+    method: POST
+    path: /orders/{id}/modify_items
+    description: Swap line items of a pending order for other variants of the same product. Allowed once per order. item_ids and new_variant_ids are comma separated lists of the same length, matched by position. The price difference is charged to (a gift card is debited) or refunded to payment_method_id.
+    input:
+      item_ids:
+        type: string
+        description: Comma separated order_item ids, such as oit_0001,oit_0002
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      new_variant_ids:
+        type: string
+        description: Comma separated variant ids, one per item id in the same order
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      payment_method_id:
+        type: ref
+        description: Payment method of the user that settles the price difference
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const ids = (s) => String(s).split(',').map((x) => x.trim()).filter((x) => x !== '');
+        const order = ctx.db.get('order', id);
+        if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found');
+        if (order.status !== 'pending') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only pending orders can be modified.');
+        if (order.items_modified) ctx.fail(409, 'already_modified', 'order ' + id + ' already had its items modified once.');
+        const itemIds = ids(ctx.body.item_ids);
+        const varIds = ids(ctx.body.new_variant_ids);
+        if (itemIds.length === 0 || itemIds.length !== varIds.length) ctx.fail(400, 'input.invalid', 'Invalid input for modify_pending_order_items: item_ids and new_variant_ids must be non-empty lists of the same length');
+        if (new Set(itemIds).size !== itemIds.length) ctx.fail(400, 'input.invalid', 'Invalid input for modify_pending_order_items: item_ids has duplicates');
+        const pay = ctx.db.get('payment_method', ctx.body.payment_method_id);
+        if (pay === null) ctx.fail(422, 'unknown_payment_method', 'payment method ' + ctx.body.payment_method_id + ' not found');
+        if (pay.user_id !== order.user_id) ctx.fail(409, 'payment_method_not_owned', 'payment method ' + pay.id + ' does not belong to the user of order ' + id);
+        const need = {};
+        const swaps = [];
+        let diff = 0;
+        for (let i = 0; i < itemIds.length; i++) {
+          const item = ctx.db.get('order_item', itemIds[i]);
+          if (item === null || item.order_id !== id) ctx.fail(422, 'unknown_item', 'order item ' + itemIds[i] + ' is not on order ' + id);
+          const nv = ctx.db.get('variant', varIds[i]);
+          if (nv === null) ctx.fail(422, 'unknown_variant', 'variant ' + varIds[i] + ' not found');
+          if (nv.product_id !== item.product_id) ctx.fail(409, 'wrong_product', 'variant ' + nv.id + ' is not a variant of product ' + item.product_id);
+          if (nv.id === item.variant_id) ctx.fail(409, 'same_variant', 'item ' + item.id + ' already has variant ' + nv.id);
+          if (!nv.available) ctx.fail(409, 'variant_unavailable', 'variant ' + nv.id + ' is not available');
+          need[nv.id] = (need[nv.id] || 0) + item.quantity;
+          if (nv.stock < need[nv.id]) ctx.fail(409, 'out_of_stock', 'variant ' + nv.id + ' has only ' + nv.stock + ' in stock');
+          diff += (nv.price - item.unit_price) * item.quantity;
+          swaps.push({ item, nv });
+        }
+        if (diff > 0 && pay.kind === 'gift_card' && (pay.balance || 0) < diff) ctx.fail(409, 'insufficient_balance', 'gift card ' + pay.id + ' holds ' + (pay.balance || 0) + ' cents but the price difference is ' + diff);
+        const now = ctx.now();
+        for (const s of swaps) {
+          const ov = ctx.db.get('variant', s.item.variant_id);
+          ctx.db.update('variant', ov.id, { stock: ov.stock + s.item.quantity });
+          const nv = ctx.db.get('variant', s.nv.id);
+          ctx.db.update('variant', nv.id, { stock: nv.stock - s.item.quantity });
+          ctx.db.update('order_item', s.item.id, { variant_id: nv.id, unit_price: nv.price });
+        }
+        if (diff > 0 && pay.kind === 'gift_card') {
+          ctx.db.update('payment_method', pay.id, { balance: (pay.balance || 0) - diff });
+        } else if (diff < 0) {
+          const r = ctx.db.create('refund', { order_id: id, payment_method_id: pay.id, amount: -diff, kind: 'exchange_difference' });
+          if (pay.kind === 'gift_card') {
+            ctx.db.update('refund', r.id, { status: 'issued', issued_at: now });
+            ctx.db.update('payment_method', pay.id, { balance: (pay.balance || 0) - diff });
+          }
+        }
+        const updated = ctx.db.update('order', id, { total: order.total + diff, items_modified: true });
+        return { status: 200, body: updated };
+      }
+  return_delivered_order_items:
+    method: POST
+    path: /orders/{id}/return
+    description: Request a return of whole line items of a delivered order. The refund for the sum of the returned items goes to the original payment method or to a gift card of the user. A gift card refund is issued at once. The order moves to return_requested.
+    input:
+      item_ids:
+        type: string
+        description: Comma separated order_item ids to return
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      payment_method_id:
+        type: ref
+        description: "Refund destination: the original payment method or a gift card of the user"
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const ids = (s) => String(s).split(',').map((x) => x.trim()).filter((x) => x !== '');
+        const order = ctx.db.get('order', id);
+        if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found');
+        if (['return_requested', 'exchange_requested', 'returned', 'exchanged'].includes(order.status)) ctx.fail(409, 'already_requested', 'order ' + id + ' is ' + order.status + ' and already had a return or exchange.');
+        if (order.status !== 'delivered') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only delivered orders can be returned.');
+        const itemIds = ids(ctx.body.item_ids);
+        if (itemIds.length === 0) ctx.fail(400, 'input.invalid', 'Invalid input for return_delivered_order_items: item_ids must list at least one order item');
+        if (new Set(itemIds).size !== itemIds.length) ctx.fail(400, 'input.invalid', 'Invalid input for return_delivered_order_items: item_ids has duplicates');
+        const pm = ctx.db.get('payment_method', ctx.body.payment_method_id);
+        if (pm === null) ctx.fail(422, 'unknown_payment_method', 'payment method ' + ctx.body.payment_method_id + ' not found');
+        if (pm.user_id !== order.user_id) ctx.fail(409, 'payment_method_not_owned', 'payment method ' + pm.id + ' does not belong to the user of order ' + id);
+        if (pm.id !== order.payment_method_id && pm.kind !== 'gift_card') ctx.fail(409, 'invalid_refund_destination', 'refunds go to the original payment method ' + order.payment_method_id + ' or to a gift card of the user.');
+        let amount = 0;
+        const items = [];
+        for (const itemId of itemIds) {
+          const item = ctx.db.get('order_item', itemId);
+          if (item === null || item.order_id !== id) ctx.fail(422, 'unknown_item', 'order item ' + itemId + ' is not on order ' + id);
+          if (item.return_status !== 'none') ctx.fail(409, 'already_requested', 'order item ' + itemId + ' is ' + item.return_status);
+          amount += item.quantity * item.unit_price;
+          items.push(item);
+        }
+        const now = ctx.now();
+        for (const item of items) ctx.db.update('order_item', item.id, { return_status: 'return_requested' });
+        const updated = ctx.db.update('order', id, { status: 'return_requested' });
+        if (amount > 0) {
+          const r = ctx.db.create('refund', { order_id: id, payment_method_id: pm.id, amount, kind: 'return' });
+          if (pm.kind === 'gift_card') {
+            ctx.db.update('refund', r.id, { status: 'issued', issued_at: now });
+            ctx.db.update('payment_method', pm.id, { balance: (pm.balance || 0) + amount });
+          }
+        }
+        return { status: 200, body: updated };
+      }
+  exchange_delivered_order_items:
+    method: POST
+    path: /orders/{id}/exchange
+    description: Request an exchange of whole line items of a delivered order for other available variants of the same product. item_ids and new_variant_ids are comma separated lists matched by position. The price difference is charged to (a gift card is debited) or refunded to payment_method_id. The order moves to exchange_requested.
+    input:
+      item_ids:
+        type: string
+        description: Comma separated order_item ids to exchange
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      new_variant_ids:
+        type: string
+        description: Comma separated variant ids, one per item id in the same order
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      payment_method_id:
+        type: ref
+        description: Payment method of the user that settles the price difference
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: payment_method
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const ids = (s) => String(s).split(',').map((x) => x.trim()).filter((x) => x !== '');
+        const order = ctx.db.get('order', id);
+        if (order === null) ctx.fail(404, 'not_found', 'order ' + id + ' not found');
+        if (['return_requested', 'exchange_requested', 'returned', 'exchanged'].includes(order.status)) ctx.fail(409, 'already_requested', 'order ' + id + ' is ' + order.status + ' and already had a return or exchange.');
+        if (order.status !== 'delivered') ctx.fail(409, 'invalid_state', 'order ' + id + ' is ' + order.status + '. Only delivered orders can be exchanged.');
+        const itemIds = ids(ctx.body.item_ids);
+        const varIds = ids(ctx.body.new_variant_ids);
+        if (itemIds.length === 0 || itemIds.length !== varIds.length) ctx.fail(400, 'input.invalid', 'Invalid input for exchange_delivered_order_items: item_ids and new_variant_ids must be non-empty lists of the same length');
+        if (new Set(itemIds).size !== itemIds.length) ctx.fail(400, 'input.invalid', 'Invalid input for exchange_delivered_order_items: item_ids has duplicates');
+        const pay = ctx.db.get('payment_method', ctx.body.payment_method_id);
+        if (pay === null) ctx.fail(422, 'unknown_payment_method', 'payment method ' + ctx.body.payment_method_id + ' not found');
+        if (pay.user_id !== order.user_id) ctx.fail(409, 'payment_method_not_owned', 'payment method ' + pay.id + ' does not belong to the user of order ' + id);
+        const need = {};
+        const swaps = [];
+        let diff = 0;
+        for (let i = 0; i < itemIds.length; i++) {
+          const item = ctx.db.get('order_item', itemIds[i]);
+          if (item === null || item.order_id !== id) ctx.fail(422, 'unknown_item', 'order item ' + itemIds[i] + ' is not on order ' + id);
+          if (item.return_status !== 'none') ctx.fail(409, 'already_requested', 'order item ' + item.id + ' is ' + item.return_status);
+          const nv = ctx.db.get('variant', varIds[i]);
+          if (nv === null) ctx.fail(422, 'unknown_variant', 'variant ' + varIds[i] + ' not found');
+          if (nv.product_id !== item.product_id) ctx.fail(409, 'wrong_product', 'variant ' + nv.id + ' is not a variant of product ' + item.product_id);
+          if (nv.id === item.variant_id) ctx.fail(409, 'same_variant', 'item ' + item.id + ' already has variant ' + nv.id);
+          if (!nv.available) ctx.fail(409, 'variant_unavailable', 'variant ' + nv.id + ' is not available');
+          need[nv.id] = (need[nv.id] || 0) + item.quantity;
+          if (nv.stock < need[nv.id]) ctx.fail(409, 'out_of_stock', 'variant ' + nv.id + ' has only ' + nv.stock + ' in stock');
+          diff += (nv.price - item.unit_price) * item.quantity;
+          swaps.push({ item, nv });
+        }
+        if (diff > 0 && pay.kind === 'gift_card' && (pay.balance || 0) < diff) ctx.fail(409, 'insufficient_balance', 'gift card ' + pay.id + ' holds ' + (pay.balance || 0) + ' cents but the price difference is ' + diff);
+        const now = ctx.now();
+        for (const s of swaps) {
+          const ov = ctx.db.get('variant', s.item.variant_id);
+          ctx.db.update('variant', ov.id, { stock: ov.stock + s.item.quantity });
+          const nv = ctx.db.get('variant', s.nv.id);
+          ctx.db.update('variant', nv.id, { stock: nv.stock - s.item.quantity });
+          ctx.db.update('order_item', s.item.id, { return_status: 'exchange_requested', exchange_variant_id: nv.id });
+        }
+        if (diff > 0 && pay.kind === 'gift_card') {
+          ctx.db.update('payment_method', pay.id, { balance: (pay.balance || 0) - diff });
+        } else if (diff < 0) {
+          const r = ctx.db.create('refund', { order_id: id, payment_method_id: pay.id, amount: -diff, kind: 'exchange_difference' });
+          if (pay.kind === 'gift_card') {
+            ctx.db.update('refund', r.id, { status: 'issued', issued_at: now });
+            ctx.db.update('payment_method', pay.id, { balance: (pay.balance || 0) - diff });
+          }
+        }
+        const updated = ctx.db.update('order', id, { status: 'exchange_requested' });
+        return { status: 200, body: updated };
+      }
+  update_user_address:
+    method: POST
+    path: /users/{id}/address
+    description: Change a user's default address. Orders already placed keep their shipping address.
+    input:
+      address_line:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 160
+      city:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      state_code:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 3
+      zip:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 12
+      country:
+        type: string
+        description: ISO country code, US when omitted
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 2
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const user = ctx.db.get('user', id);
+        if (user === null) ctx.fail(404, 'not_found', 'user ' + id + ' not found');
+        const f = {
+          address_line: ctx.body.address_line,
+          city: ctx.body.city,
+          state_code: ctx.body.state_code,
+          zip: ctx.body.zip,
+          country: ctx.body.country === undefined || ctx.body.country === null ? 'US' : ctx.body.country,
+        };
+        for (const k of Object.keys(f)) {
+          if (typeof f[k] !== 'string' || f[k].trim() === '') ctx.fail(400, 'input.invalid', 'Invalid input for update_user_address: ' + k + ' expected a non-blank string');
+          f[k] = f[k].trim();
+        }
+        const updated = ctx.db.update('user', id, f);
+        return { status: 200, body: updated };
+      }
+jobs:
+  issue_pending_refunds:
+    description: Every 6 hours. A pending refund at least 24 hours old becomes issued with issued_at set to now. Gift card refunds are created issued and credited, so nothing is credited here.
+    every: 6h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const r of ctx.db.list('refund', { where: { status: 'pending' } })) {
+          if (ctx.time.minutesBetween(r.created_at, now) < 24 * 60) continue;
+          ctx.db.update('refund', r.id, { status: 'issued', issued_at: now });
+        }
+      }
+  complete_return_and_exchange_requests:
+    description: Every day. A return_requested order not updated for 72 hours becomes returned, its return_requested items become returned and the stock goes back. An exchange_requested order of the same age becomes exchanged and its items become exchanged.
+    every: 1d
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const o of ctx.db.list('order', { where: { status: 'return_requested' } })) {
+          if (ctx.time.minutesBetween(o.updated_at, now) < 72 * 60) continue;
+          for (const it of ctx.db.list('order_item', { where: { order_id: o.id, return_status: 'return_requested' } })) {
+            ctx.db.update('order_item', it.id, { return_status: 'returned' });
+            const v = ctx.db.get('variant', it.variant_id);
+            ctx.db.update('variant', v.id, { stock: v.stock + it.quantity });
+          }
+          ctx.db.update('order', o.id, { status: 'returned' });
+        }
+        for (const o of ctx.db.list('order', { where: { status: 'exchange_requested' } })) {
+          if (ctx.time.minutesBetween(o.updated_at, now) < 72 * 60) continue;
+          for (const it of ctx.db.list('order_item', { where: { order_id: o.id, return_status: 'exchange_requested' } })) {
+            ctx.db.update('order_item', it.id, { return_status: 'exchanged' });
+          }
+          ctx.db.update('order', o.id, { status: 'exchanged' });
+        }
+      }
+fixtures: {}
+seed:
+  user: (ctx) => { const BASE='2025-01-01T00:00:00.000Z'; const X=ctx.time.minutesBetween(BASE, ctx.now()); const iso=(a)=> X-a===0?BASE:ctx.time.plus(BASE,(X-a)+'m'); const AN=[['Yusuf','Rossi','412 Congress Ave','Austin','TX','78701'],['Yusuf','Rossi','88 Larimer St','Denver','CO','80202'],['Mei','Tanaka','1520 Pine St','Seattle','WA','98101'],['Priya','Nair','240 W Madison St','Chicago','IL','60601'],['Amara','Okafor','75 Peachtree Rd','Atlanta','GA','30303']]; const F=['Liam','Noah','Olivia','Emma','Sofia','Lucas','Ethan','Ava','Mia','Daniel','Chen','Fatima','Omar','Hannah','Diego','Nora','Kenji','Elena','Marcus','Yusuf']; const L=['Rossi','Tanaka','Nair','Okafor','Smith','Johnson','Garcia','Kim','Nguyen','Patel','Brown','Martinez','Anderson','Lopez','Wilson','Schmidt','Ivanov','Haddad','Costa','Walker']; const C=['Portland|OR|97201','Boston|MA|02108','Denver|CO|80203','Miami|FL|33101','Phoenix|AZ|85004','Columbus|OH|43215','Nashville|TN|37203','San Diego|CA|92101','Minneapolis|MN|55401','Dallas|TX|75201','Raleigh|NC|27601','Salt Lake City|UT|84101']; const ST=['Maple St','Oak Ave','Cedar Ln','Elm St','Lake Dr','Hillcrest Rd','Park Blvd','River Rd']; const rows=[]; for (let i=0;i<60;i++){ let f,l,line,city,st,zip,email; if(i<5){ const a=AN[i]; f=a[0]; l=a[1]; line=a[2]; city=a[3]; st=a[4]; zip=a[5]; email=(i===1)?'yusuf.rossi.denver@mail.example':(f+'.'+l).toLowerCase()+'@mail.example'; } else { f=F[(i*7)%20]; l=L[(i*11+Math.floor(i/3))%20]; while(AN.some((a)=>a[0]===f&&a[1]===l)) l=L[(L.indexOf(l)+1)%20]; const c=C[i%12].split('|'); city=c[0]; st=c[1]; zip=c[2]; line=(100+(i*83)%900)+' '+ST[i%8]; email=(f+'.'+l).toLowerCase()+i+'@mail.example'; } const t=iso((60+((i*53)%300))*1440); rows.push({first_name:f,last_name:l,email:email,address_line:line,city:city,state_code:st,zip:zip,country:'US',created_at:t,updated_at:t}); } return rows; }
+  payment_method: (ctx) => { const users=ctx.rows('user'); const ANK={0:['credit_card','gift_card'],1:['credit_card','paypal'],2:['credit_card','gift_card','paypal'],3:['credit_card','gift_card','paypal'],4:['credit_card','paypal','gift_card']}; const BAL={'0:1':3000,'2:1':8500,'3:1':12000,'4:2':6000}; const rows=[]; users.forEach((u,i)=>{ let kinds; if(ANK[i]) kinds=ANK[i]; else { const n=1+(i%3!==0?1:0)+(i%2===0?1:0); kinds=[i%4===3?'paypal':'credit_card']; if(n>=2) kinds.push(i%3===1?'paypal':'gift_card'); if(n>=3) kinds.push(i%4===0?'credit_card':'gift_card'); } kinds.forEach((k,s)=>{ const digits=String(1000+(i*977+s*313)%9000); let label; let balance=null; if(k==='credit_card') label=(i%2===0?'Visa':'Mastercard')+' ending '+digits; else if(k==='paypal') label='PayPal '+(u.first_name+'.'+u.last_name).toLowerCase()+'@mail.example'; else { label='Gift card ending '+digits; const key=i+':'+s; balance=BAL[key]!==undefined?BAL[key]:500+Math.round(((i*7919+s*1301)%19500)/100)*100; } rows.push({user_id:u.id,kind:k,label:label,balance:balance,created_at:u.created_at,updated_at:u.created_at}); }); }); return rows; }
+  product: (ctx) => { const SPEC=['Waterproof Rain Jacket|outerwear','Mechanical Keyboard|keyboards','Wireless Mouse|accessories','USB-C Hub|accessories','Standing Desk|desks','Ergonomic Office Chair|furniture','Running Shoes|footwear','Yoga Mat|sports','Insulated Water Bottle|kitchen','Bluetooth Speaker|electronics','Noise Cancelling Headphones|electronics','Commuter Backpack|bags','Merino Wool Sweater|apparel','Straight Leg Jeans|apparel','LED Desk Lamp|lighting','Drip Coffee Maker|kitchen','Electric Kettle|kitchen','Computer Monitor|electronics','Laptop Sleeve|bags','HD Webcam|electronics','Smart Watch|electronics','Fleece Hoodie|apparel','Camping Tent|sports','Bookshelf|furniture','Gaming Mouse Pad|accessories','Dumbbell Set|sports','Polarized Sunglasses|apparel','Leather Wallet|bags','Desk Organizer|desks','Portable Charger|electronics']; return SPEC.map((s)=>{ const a=s.split('|'); return {name:a[0],category:a[1],created_at:'2025-01-02T09:00:00.000Z',updated_at:'2025-01-02T09:00:00.000Z'}; }); }
+  variant: (ctx) => { const SPEC=['Waterproof Rain Jacket|outerwear|8900|color=blue,black,green;size=S,M,L,XL','Mechanical Keyboard|keyboards|11900|layout=tenkeyless,full-size;switch=red,brown,blue,silent','Wireless Mouse|accessories|3500|color=black,white,gray;connection=bluetooth,2.4GHz receiver','USB-C Hub|accessories|4500|ports=4-in-1,7-in-1,10-in-1;color=gray,silver','Standing Desk|desks|38000|material=oak,walnut,black;width=48 in,60 in;motor=single,dual','Ergonomic Office Chair|furniture|24000|color=black,gray,navy;armrest=fixed,adjustable','Running Shoes|footwear|12000|color=white,black,red;size=8,9,10,11','Yoga Mat|sports|3000|color=purple,teal,gray;thickness=4 mm,6 mm','Insulated Water Bottle|kitchen|2500|capacity=18 oz,24 oz,32 oz;color=steel,blue,black','Bluetooth Speaker|electronics|8000|color=black,red,blue;size=mini,standard','Noise Cancelling Headphones|electronics|28000|color=black,silver,navy;style=over-ear,on-ear','Commuter Backpack|bags|6500|color=black,olive,gray;capacity=20 L,28 L,35 L','Merino Wool Sweater|apparel|7500|color=oatmeal,navy,charcoal;size=S,M,L,XL','Straight Leg Jeans|apparel|6800|wash=light,dark,black;size=30,32,34,36','LED Desk Lamp|lighting|3800|finish=white,black;light=warm,neutral,cool','Drip Coffee Maker|kitchen|9500|color=black,white,red;capacity=6 cup,12 cup','Electric Kettle|kitchen|4500|color=steel,black,white;capacity=1.0 L,1.7 L','Computer Monitor|electronics|22000|size=24 in,27 in,32 in;resolution=1080p,1440p','Laptop Sleeve|bags|3200|size=13 in,15 in,16 in;color=gray,black,navy','HD Webcam|electronics|6000|resolution=1080p,4K;mount=clip,tripod;color=black,white','Smart Watch|electronics|25000|color=black,silver,rose;band=sport,leather;size=40 mm,44 mm','Fleece Hoodie|apparel|5500|color=gray,black,navy;size=S,M,L,XL','Camping Tent|sports|41000|capacity=2-person,3-person,4-person;season=3-season,4-season','Bookshelf|furniture|14000|finish=oak,walnut,white;height=3 shelf,5 shelf','Gaming Mouse Pad|accessories|800|size=medium,large,XL;color=black,blue','Dumbbell Set|sports|12000|weight=10 lb,20 lb,30 lb,40 lb;coating=rubber,neoprene','Polarized Sunglasses|apparel|9000|frame=black,tortoise,silver;lens=gray,brown,green','Leather Wallet|bags|4800|color=black,brown,tan;style=bifold,trifold','Desk Organizer|desks|1800|color=bamboo,black,white;size=small,large','Portable Charger|electronics|4000|capacity=10000 mAh,20000 mAh;color=black,white,blue']; const P=[]; let g=0; SPEC.forEach((sp,p)=>{ const a=sp.split('|'); const axes=a[3].split(';').map((x)=>{ const y=x.split('='); return {k:y[0],v:y[1].split(',')}; }); let combos=[{o:[],s:0}]; axes.forEach((ax)=>{ const n=[]; combos.forEach((c)=>ax.v.forEach((val,j)=>n.push({o:c.o.concat(ax.k+' '+val),s:c.s+j}))); combos=n; }); const b=+a[2]; const step=Math.max(100,Math.round(b/4000)*100); const vs=combos.map((c,v)=>{ const av=(p*7+v*13)%17!==0; return {opt:c.o.join(', '),price:b+step*c.s,avail:av,stock:av?(((p*3+v*5)%16===0)?0:3+((p*5+v*11)%38)):0,gid:g+v+1}; }); g+=vs.length; P.push({vs:vs}); }); const rows=[]; P.forEach((pp,p)=>{ pp.vs.forEach((v)=>{ rows.push({product_id:'prd_'+String(p+1).padStart(4,'0'),option_summary:v.opt,price:v.price,available:v.avail,stock:v.stock,created_at:'2025-01-02T09:00:00.000Z',updated_at:'2025-01-02T09:00:00.000Z'}); }); }); return rows; }
+  order: (ctx) => { const SPEC=['Waterproof Rain Jacket|outerwear|8900|color=blue,black,green;size=S,M,L,XL','Mechanical Keyboard|keyboards|11900|layout=tenkeyless,full-size;switch=red,brown,blue,silent','Wireless Mouse|accessories|3500|color=black,white,gray;connection=bluetooth,2.4GHz receiver','USB-C Hub|accessories|4500|ports=4-in-1,7-in-1,10-in-1;color=gray,silver','Standing Desk|desks|38000|material=oak,walnut,black;width=48 in,60 in;motor=single,dual','Ergonomic Office Chair|furniture|24000|color=black,gray,navy;armrest=fixed,adjustable','Running Shoes|footwear|12000|color=white,black,red;size=8,9,10,11','Yoga Mat|sports|3000|color=purple,teal,gray;thickness=4 mm,6 mm','Insulated Water Bottle|kitchen|2500|capacity=18 oz,24 oz,32 oz;color=steel,blue,black','Bluetooth Speaker|electronics|8000|color=black,red,blue;size=mini,standard','Noise Cancelling Headphones|electronics|28000|color=black,silver,navy;style=over-ear,on-ear','Commuter Backpack|bags|6500|color=black,olive,gray;capacity=20 L,28 L,35 L','Merino Wool Sweater|apparel|7500|color=oatmeal,navy,charcoal;size=S,M,L,XL','Straight Leg Jeans|apparel|6800|wash=light,dark,black;size=30,32,34,36','LED Desk Lamp|lighting|3800|finish=white,black;light=warm,neutral,cool','Drip Coffee Maker|kitchen|9500|color=black,white,red;capacity=6 cup,12 cup','Electric Kettle|kitchen|4500|color=steel,black,white;capacity=1.0 L,1.7 L','Computer Monitor|electronics|22000|size=24 in,27 in,32 in;resolution=1080p,1440p','Laptop Sleeve|bags|3200|size=13 in,15 in,16 in;color=gray,black,navy','HD Webcam|electronics|6000|resolution=1080p,4K;mount=clip,tripod;color=black,white','Smart Watch|electronics|25000|color=black,silver,rose;band=sport,leather;size=40 mm,44 mm','Fleece Hoodie|apparel|5500|color=gray,black,navy;size=S,M,L,XL','Camping Tent|sports|41000|capacity=2-person,3-person,4-person;season=3-season,4-season','Bookshelf|furniture|14000|finish=oak,walnut,white;height=3 shelf,5 shelf','Gaming Mouse Pad|accessories|800|size=medium,large,XL;color=black,blue','Dumbbell Set|sports|12000|weight=10 lb,20 lb,30 lb,40 lb;coating=rubber,neoprene','Polarized Sunglasses|apparel|9000|frame=black,tortoise,silver;lens=gray,brown,green','Leather Wallet|bags|4800|color=black,brown,tan;style=bifold,trifold','Desk Organizer|desks|1800|color=bamboo,black,white;size=small,large','Portable Charger|electronics|4000|capacity=10000 mAh,20000 mAh;color=black,white,blue']; const rngf=(sd)=>{ let s=sd%2147483647; if(s<=0) s+=2147483646; return ()=>{ s=s*48271%2147483647; return s/2147483647; }; }; const P=[]; let g=0; SPEC.forEach((sp,p)=>{ const a=sp.split('|'); const axes=a[3].split(';').map((x)=>{ const y=x.split('='); return {k:y[0],v:y[1].split(',')}; }); let combos=[{o:[],s:0}]; axes.forEach((ax)=>{ const n=[]; combos.forEach((c)=>ax.v.forEach((val,j)=>n.push({o:c.o.concat(ax.k+' '+val),s:c.s+j}))); combos=n; }); const b=+a[2]; const step=Math.max(100,Math.round(b/4000)*100); const vs=combos.map((c,v)=>{ const av=(p*7+v*13)%17!==0; return {opt:c.o.join(', '),price:b+step*c.s,avail:av,stock:av?(((p*3+v*5)%16===0)?0:3+((p*5+v*11)%38)):0,gid:g+v+1}; }); g+=vs.length; P.push({vs:vs}); }); const ANCH=[[0,'pending',2,0,[[4,0,1],[24,0,1]]],[1,'pending',1,0,[[4,3,1],[18,0,1]]],[2,'delivered',6,0,[[0,1,1],[24,1,1]]],[2,'delivered',35,0,[[0,11,1]]],[3,'delivered',20,0,[[2,0,1],[3,0,1]]],[3,'pending',3,0,[[2,1,1],[14,0,1]]],[3,'pending',4,0,[[1,1,1]]],[3,'delivered',15,0,[[14,1,2]]],[3,'shipped',5,0,[[2,3,1]]],[3,'pending',2,0,[[2,4,1],[3,2,1]]],[3,'delivered',28,0,[[2,5,1],[11,0,1]]],[3,'cancelled',9,0,[[2,1,1]]],[3,'pending',1,0,[[3,3,1]]],[3,'delivered',12,0,[[5,0,1],[16,0,1]]],[3,'pending',5,0,[[2,3,2],[24,1,1]]],[3,'delivered',33,0,[[2,1,1],[11,2,1]]],[3,'pending',1,0,[[14,2,1]]],[4,'pending',2,0,[[1,1,1],[3,1,1]]],[4,'delivered',14,0,[[12,1,1]]]]; const alt=(p,v)=>{ const vs=P[p].vs; for(let t=1;t<vs.length;t++){ const w=vs[(v+t)%vs.length]; if(w.avail&&w.stock>0) return w; } return null; }; const lines=(i,status)=>{ let raw; if(i<ANCH.length) raw=ANCH[i][4]; else { const r=rngf((i+1)*9973+17); const u=r(); const n=u<0.3?1:u<0.6?2:u<0.82?3:u<0.94?4:5; raw=[]; const used={}; for(let k=0;k<n;k++){ let p=Math.floor(r()*30); let v=Math.floor(r()*P[p].vs.length); for(let t=0;t<30;t++){ const vs=P[p].vs; let f=-1; for(let s=0;s<vs.length;s++){ const w=(v+s)%vs.length; if(vs[w].avail&&vs[w].stock>0&&!used[vs[w].gid]){ f=w; break; } } if(f>=0){ v=f; break; } p=(p+1)%30; v=0; } used[P[p].vs[v].gid]=true; raw.push([p,v,r()<0.82?1:2+Math.floor(r()*2)]); } } return raw.map((x,k)=>{ const p=x[0]; const v=x[1]; const V=P[p].vs[v]; let rs='none'; let xv=null; let xp=null; if((status==='return_requested'||status==='returned')&&k%2===0) rs=status==='returned'?'returned':'return_requested'; else if((status==='exchange_requested'||status==='exchanged')&&k===0){ const a=alt(p,v); if(a){ rs=status==='exchanged'?'exchanged':'exchange_requested'; xv=a.gid; xp=a.price; } } return {pid:p+1,vid:V.gid,q:x[2],price:V.price,rs:rs,xv:xv,xp:xp}; }); }; const users=ctx.rows('user'); const pms=ctx.rows('payment_method'); const BASE='2025-01-01T00:00:00.000Z'; const X=ctx.time.minutesBetween(BASE, ctx.now()); const iso=(a)=> X-a===0?BASE:ctx.time.plus(BASE,(X-a)+'m'); const T={pending:45,shipped:22,delivered:53,cancelled:19,return_requested:6,exchange_requested:6,returned:5,exchanged:4}; ANCH.forEach((a)=>{ T[a[1]]--; }); const pool=[]; Object.keys(T).forEach((k)=>{ for(let j=0;j<Math.max(0,T[k]);j++) pool.push(k); }); const need=160-ANCH.length; while(pool.length<need) pool.push('delivered'); pool.length=need; const sh=rngf(424242); for(let j=pool.length-1;j>0;j--){ const m=Math.floor(sh()*(j+1)); const tmp=pool[j]; pool[j]=pool[m]; pool[m]=tmp; } const rows=[]; for(let i=0;i<160;i++){ const an=i<ANCH.length?ANCH[i]:null; const r=rngf(i*31+5); const status=an?an[1]:pool[i-ANCH.length]; let ui; if(an) ui=an[0]; else if(status==='pending') ui=r()<0.7?5+Math.floor(r()*8):5+Math.floor(r()*55); else ui=r()<0.4?5+Math.floor(r()*12):5+Math.floor(r()*55); const u=users[ui]; const mine=pms.filter((p)=>p.user_id===u.id); const ls=lines(i,status); const total=ls.reduce((s,l)=>s+l.q*l.price,0); let pm; if(an) pm=mine[an[3]]; else { const plain=mine.filter((p)=>p.kind!=='gift_card'); const gifts=mine.filter((p)=>p.kind==='gift_card'&&p.balance>=total); const c1=r(); const c2=r(); pm=(gifts.length>0&&c1<0.2)?gifts[0]:plain[Math.floor(c2*plain.length)]; } const A=an?an[2]*1440+300+(i*53)%400:null; const pick=(lo,hi)=> A!==null?A:lo+Math.floor(r()*(hi-lo)); let placedAgo; let updAgo; let delAgo=null; if(status==='pending'){ placedAgo=pick(60,7200); updAgo=placedAgo; } else if(status==='shipped'){ placedAgo=pick(2880,11520); updAgo=placedAgo-1440; } else if(status==='delivered'){ delAgo=pick(1440,57600); placedAgo=delAgo+5760+Math.floor(r()*1440); updAgo=delAgo; } else if(status==='cancelled'){ placedAgo=pick(1440,21600); updAgo=Math.floor(placedAgo*2/3); } else if(status==='return_requested'||status==='exchange_requested'){ updAgo=1500+Math.floor(r()*2600); delAgo=updAgo+1440+Math.floor(r()*8000); placedAgo=delAgo+5760; } else { updAgo=4500+Math.floor(r()*10000); delAgo=updAgo+1440+Math.floor(r()*8000); placedAgo=delAgo+5760; } const mod=r()<0.1; const why=r()<0.5?'no longer needed':'ordered by mistake'; rows.push({user_id:u.id,status:status,payment_method_id:pm.id,ship_address_line:u.address_line,ship_city:u.city,ship_state_code:u.state_code,ship_zip:u.zip,ship_country:u.country,total:total,items_modified:(!an&&mod&&(status==='pending'||status==='shipped'||status==='delivered')),cancel_reason:status==='cancelled'?why:null,placed_at:iso(placedAgo),delivered_at:delAgo===null?null:iso(delAgo),created_at:iso(placedAgo),updated_at:iso(updAgo)}); } return rows; }
+  order_item: (ctx) => { const SPEC=['Waterproof Rain Jacket|outerwear|8900|color=blue,black,green;size=S,M,L,XL','Mechanical Keyboard|keyboards|11900|layout=tenkeyless,full-size;switch=red,brown,blue,silent','Wireless Mouse|accessories|3500|color=black,white,gray;connection=bluetooth,2.4GHz receiver','USB-C Hub|accessories|4500|ports=4-in-1,7-in-1,10-in-1;color=gray,silver','Standing Desk|desks|38000|material=oak,walnut,black;width=48 in,60 in;motor=single,dual','Ergonomic Office Chair|furniture|24000|color=black,gray,navy;armrest=fixed,adjustable','Running Shoes|footwear|12000|color=white,black,red;size=8,9,10,11','Yoga Mat|sports|3000|color=purple,teal,gray;thickness=4 mm,6 mm','Insulated Water Bottle|kitchen|2500|capacity=18 oz,24 oz,32 oz;color=steel,blue,black','Bluetooth Speaker|electronics|8000|color=black,red,blue;size=mini,standard','Noise Cancelling Headphones|electronics|28000|color=black,silver,navy;style=over-ear,on-ear','Commuter Backpack|bags|6500|color=black,olive,gray;capacity=20 L,28 L,35 L','Merino Wool Sweater|apparel|7500|color=oatmeal,navy,charcoal;size=S,M,L,XL','Straight Leg Jeans|apparel|6800|wash=light,dark,black;size=30,32,34,36','LED Desk Lamp|lighting|3800|finish=white,black;light=warm,neutral,cool','Drip Coffee Maker|kitchen|9500|color=black,white,red;capacity=6 cup,12 cup','Electric Kettle|kitchen|4500|color=steel,black,white;capacity=1.0 L,1.7 L','Computer Monitor|electronics|22000|size=24 in,27 in,32 in;resolution=1080p,1440p','Laptop Sleeve|bags|3200|size=13 in,15 in,16 in;color=gray,black,navy','HD Webcam|electronics|6000|resolution=1080p,4K;mount=clip,tripod;color=black,white','Smart Watch|electronics|25000|color=black,silver,rose;band=sport,leather;size=40 mm,44 mm','Fleece Hoodie|apparel|5500|color=gray,black,navy;size=S,M,L,XL','Camping Tent|sports|41000|capacity=2-person,3-person,4-person;season=3-season,4-season','Bookshelf|furniture|14000|finish=oak,walnut,white;height=3 shelf,5 shelf','Gaming Mouse Pad|accessories|800|size=medium,large,XL;color=black,blue','Dumbbell Set|sports|12000|weight=10 lb,20 lb,30 lb,40 lb;coating=rubber,neoprene','Polarized Sunglasses|apparel|9000|frame=black,tortoise,silver;lens=gray,brown,green','Leather Wallet|bags|4800|color=black,brown,tan;style=bifold,trifold','Desk Organizer|desks|1800|color=bamboo,black,white;size=small,large','Portable Charger|electronics|4000|capacity=10000 mAh,20000 mAh;color=black,white,blue']; const rngf=(sd)=>{ let s=sd%2147483647; if(s<=0) s+=2147483646; return ()=>{ s=s*48271%2147483647; return s/2147483647; }; }; const P=[]; let g=0; SPEC.forEach((sp,p)=>{ const a=sp.split('|'); const axes=a[3].split(';').map((x)=>{ const y=x.split('='); return {k:y[0],v:y[1].split(',')}; }); let combos=[{o:[],s:0}]; axes.forEach((ax)=>{ const n=[]; combos.forEach((c)=>ax.v.forEach((val,j)=>n.push({o:c.o.concat(ax.k+' '+val),s:c.s+j}))); combos=n; }); const b=+a[2]; const step=Math.max(100,Math.round(b/4000)*100); const vs=combos.map((c,v)=>{ const av=(p*7+v*13)%17!==0; return {opt:c.o.join(', '),price:b+step*c.s,avail:av,stock:av?(((p*3+v*5)%16===0)?0:3+((p*5+v*11)%38)):0,gid:g+v+1}; }); g+=vs.length; P.push({vs:vs}); }); const ANCH=[[0,'pending',2,0,[[4,0,1],[24,0,1]]],[1,'pending',1,0,[[4,3,1],[18,0,1]]],[2,'delivered',6,0,[[0,1,1],[24,1,1]]],[2,'delivered',35,0,[[0,11,1]]],[3,'delivered',20,0,[[2,0,1],[3,0,1]]],[3,'pending',3,0,[[2,1,1],[14,0,1]]],[3,'pending',4,0,[[1,1,1]]],[3,'delivered',15,0,[[14,1,2]]],[3,'shipped',5,0,[[2,3,1]]],[3,'pending',2,0,[[2,4,1],[3,2,1]]],[3,'delivered',28,0,[[2,5,1],[11,0,1]]],[3,'cancelled',9,0,[[2,1,1]]],[3,'pending',1,0,[[3,3,1]]],[3,'delivered',12,0,[[5,0,1],[16,0,1]]],[3,'pending',5,0,[[2,3,2],[24,1,1]]],[3,'delivered',33,0,[[2,1,1],[11,2,1]]],[3,'pending',1,0,[[14,2,1]]],[4,'pending',2,0,[[1,1,1],[3,1,1]]],[4,'delivered',14,0,[[12,1,1]]]]; const alt=(p,v)=>{ const vs=P[p].vs; for(let t=1;t<vs.length;t++){ const w=vs[(v+t)%vs.length]; if(w.avail&&w.stock>0) return w; } return null; }; const lines=(i,status)=>{ let raw; if(i<ANCH.length) raw=ANCH[i][4]; else { const r=rngf((i+1)*9973+17); const u=r(); const n=u<0.3?1:u<0.6?2:u<0.82?3:u<0.94?4:5; raw=[]; const used={}; for(let k=0;k<n;k++){ let p=Math.floor(r()*30); let v=Math.floor(r()*P[p].vs.length); for(let t=0;t<30;t++){ const vs=P[p].vs; let f=-1; for(let s=0;s<vs.length;s++){ const w=(v+s)%vs.length; if(vs[w].avail&&vs[w].stock>0&&!used[vs[w].gid]){ f=w; break; } } if(f>=0){ v=f; break; } p=(p+1)%30; v=0; } used[P[p].vs[v].gid]=true; raw.push([p,v,r()<0.82?1:2+Math.floor(r()*2)]); } } return raw.map((x,k)=>{ const p=x[0]; const v=x[1]; const V=P[p].vs[v]; let rs='none'; let xv=null; let xp=null; if((status==='return_requested'||status==='returned')&&k%2===0) rs=status==='returned'?'returned':'return_requested'; else if((status==='exchange_requested'||status==='exchanged')&&k===0){ const a=alt(p,v); if(a){ rs=status==='exchanged'?'exchanged':'exchange_requested'; xv=a.gid; xp=a.price; } } return {pid:p+1,vid:V.gid,q:x[2],price:V.price,rs:rs,xv:xv,xp:xp}; }); }; const idf=(pre,n)=>pre+'_'+String(n).padStart(4,'0'); const rows=[]; ctx.rows('order').forEach((o,i)=>{ lines(i,o.status).forEach((l)=>{ rows.push({order_id:o.id,product_id:idf('prd',l.pid),variant_id:idf('var',l.vid),quantity:l.q,unit_price:l.price,return_status:l.rs,exchange_variant_id:l.xv===null?null:idf('var',l.xv),created_at:o.created_at,updated_at:o.updated_at}); }); }); return rows; }
+  refund: (ctx) => { const SPEC=['Waterproof Rain Jacket|outerwear|8900|color=blue,black,green;size=S,M,L,XL','Mechanical Keyboard|keyboards|11900|layout=tenkeyless,full-size;switch=red,brown,blue,silent','Wireless Mouse|accessories|3500|color=black,white,gray;connection=bluetooth,2.4GHz receiver','USB-C Hub|accessories|4500|ports=4-in-1,7-in-1,10-in-1;color=gray,silver','Standing Desk|desks|38000|material=oak,walnut,black;width=48 in,60 in;motor=single,dual','Ergonomic Office Chair|furniture|24000|color=black,gray,navy;armrest=fixed,adjustable','Running Shoes|footwear|12000|color=white,black,red;size=8,9,10,11','Yoga Mat|sports|3000|color=purple,teal,gray;thickness=4 mm,6 mm','Insulated Water Bottle|kitchen|2500|capacity=18 oz,24 oz,32 oz;color=steel,blue,black','Bluetooth Speaker|electronics|8000|color=black,red,blue;size=mini,standard','Noise Cancelling Headphones|electronics|28000|color=black,silver,navy;style=over-ear,on-ear','Commuter Backpack|bags|6500|color=black,olive,gray;capacity=20 L,28 L,35 L','Merino Wool Sweater|apparel|7500|color=oatmeal,navy,charcoal;size=S,M,L,XL','Straight Leg Jeans|apparel|6800|wash=light,dark,black;size=30,32,34,36','LED Desk Lamp|lighting|3800|finish=white,black;light=warm,neutral,cool','Drip Coffee Maker|kitchen|9500|color=black,white,red;capacity=6 cup,12 cup','Electric Kettle|kitchen|4500|color=steel,black,white;capacity=1.0 L,1.7 L','Computer Monitor|electronics|22000|size=24 in,27 in,32 in;resolution=1080p,1440p','Laptop Sleeve|bags|3200|size=13 in,15 in,16 in;color=gray,black,navy','HD Webcam|electronics|6000|resolution=1080p,4K;mount=clip,tripod;color=black,white','Smart Watch|electronics|25000|color=black,silver,rose;band=sport,leather;size=40 mm,44 mm','Fleece Hoodie|apparel|5500|color=gray,black,navy;size=S,M,L,XL','Camping Tent|sports|41000|capacity=2-person,3-person,4-person;season=3-season,4-season','Bookshelf|furniture|14000|finish=oak,walnut,white;height=3 shelf,5 shelf','Gaming Mouse Pad|accessories|800|size=medium,large,XL;color=black,blue','Dumbbell Set|sports|12000|weight=10 lb,20 lb,30 lb,40 lb;coating=rubber,neoprene','Polarized Sunglasses|apparel|9000|frame=black,tortoise,silver;lens=gray,brown,green','Leather Wallet|bags|4800|color=black,brown,tan;style=bifold,trifold','Desk Organizer|desks|1800|color=bamboo,black,white;size=small,large','Portable Charger|electronics|4000|capacity=10000 mAh,20000 mAh;color=black,white,blue']; const rngf=(sd)=>{ let s=sd%2147483647; if(s<=0) s+=2147483646; return ()=>{ s=s*48271%2147483647; return s/2147483647; }; }; const P=[]; let g=0; SPEC.forEach((sp,p)=>{ const a=sp.split('|'); const axes=a[3].split(';').map((x)=>{ const y=x.split('='); return {k:y[0],v:y[1].split(',')}; }); let combos=[{o:[],s:0}]; axes.forEach((ax)=>{ const n=[]; combos.forEach((c)=>ax.v.forEach((val,j)=>n.push({o:c.o.concat(ax.k+' '+val),s:c.s+j}))); combos=n; }); const b=+a[2]; const step=Math.max(100,Math.round(b/4000)*100); const vs=combos.map((c,v)=>{ const av=(p*7+v*13)%17!==0; return {opt:c.o.join(', '),price:b+step*c.s,avail:av,stock:av?(((p*3+v*5)%16===0)?0:3+((p*5+v*11)%38)):0,gid:g+v+1}; }); g+=vs.length; P.push({vs:vs}); }); const ANCH=[[0,'pending',2,0,[[4,0,1],[24,0,1]]],[1,'pending',1,0,[[4,3,1],[18,0,1]]],[2,'delivered',6,0,[[0,1,1],[24,1,1]]],[2,'delivered',35,0,[[0,11,1]]],[3,'delivered',20,0,[[2,0,1],[3,0,1]]],[3,'pending',3,0,[[2,1,1],[14,0,1]]],[3,'pending',4,0,[[1,1,1]]],[3,'delivered',15,0,[[14,1,2]]],[3,'shipped',5,0,[[2,3,1]]],[3,'pending',2,0,[[2,4,1],[3,2,1]]],[3,'delivered',28,0,[[2,5,1],[11,0,1]]],[3,'cancelled',9,0,[[2,1,1]]],[3,'pending',1,0,[[3,3,1]]],[3,'delivered',12,0,[[5,0,1],[16,0,1]]],[3,'pending',5,0,[[2,3,2],[24,1,1]]],[3,'delivered',33,0,[[2,1,1],[11,2,1]]],[3,'pending',1,0,[[14,2,1]]],[4,'pending',2,0,[[1,1,1],[3,1,1]]],[4,'delivered',14,0,[[12,1,1]]]]; const alt=(p,v)=>{ const vs=P[p].vs; for(let t=1;t<vs.length;t++){ const w=vs[(v+t)%vs.length]; if(w.avail&&w.stock>0) return w; } return null; }; const lines=(i,status)=>{ let raw; if(i<ANCH.length) raw=ANCH[i][4]; else { const r=rngf((i+1)*9973+17); const u=r(); const n=u<0.3?1:u<0.6?2:u<0.82?3:u<0.94?4:5; raw=[]; const used={}; for(let k=0;k<n;k++){ let p=Math.floor(r()*30); let v=Math.floor(r()*P[p].vs.length); for(let t=0;t<30;t++){ const vs=P[p].vs; let f=-1; for(let s=0;s<vs.length;s++){ const w=(v+s)%vs.length; if(vs[w].avail&&vs[w].stock>0&&!used[vs[w].gid]){ f=w; break; } } if(f>=0){ v=f; break; } p=(p+1)%30; v=0; } used[P[p].vs[v].gid]=true; raw.push([p,v,r()<0.82?1:2+Math.floor(r()*2)]); } } return raw.map((x,k)=>{ const p=x[0]; const v=x[1]; const V=P[p].vs[v]; let rs='none'; let xv=null; let xp=null; if((status==='return_requested'||status==='returned')&&k%2===0) rs=status==='returned'?'returned':'return_requested'; else if((status==='exchange_requested'||status==='exchanged')&&k===0){ const a=alt(p,v); if(a){ rs=status==='exchanged'?'exchanged':'exchange_requested'; xv=a.gid; xp=a.price; } } return {pid:p+1,vid:V.gid,q:x[2],price:V.price,rs:rs,xv:xv,xp:xp}; }); }; const orders=ctx.rows('order'); const pms=ctx.rows('payment_method'); const now=ctx.now(); const rows=[]; orders.forEach((o,i)=>{ const ls=lines(i,o.status); const opm=pms.find((p)=>p.id===o.payment_method_id); let kind=null; let amount=0; let dest=opm; if(o.status==='cancelled'){ kind='cancellation'; amount=o.total; } else if(o.status==='return_requested'||o.status==='returned'){ kind='return'; amount=ls.filter((l)=>l.rs==='return_requested'||l.rs==='returned').reduce((s,l)=>s+l.q*l.price,0); const gifts=pms.filter((p)=>p.user_id===o.user_id&&p.kind==='gift_card'); if(i%3===0&&gifts.length>0) dest=gifts[0]; } else if(o.status==='exchange_requested'||o.status==='exchanged'){ const l=ls.find((x)=>x.xv!==null); if(l&&l.xp<l.price){ kind='exchange_difference'; amount=(l.price-l.xp)*l.q; } } if(kind===null||amount<=0) return; const age=ctx.time.minutesBetween(o.updated_at,now); const gift=dest.kind==='gift_card'; if(gift){ rows.push({order_id:o.id,payment_method_id:dest.id,amount:amount,kind:kind,status:'issued',issued_at:o.updated_at,created_at:o.updated_at,updated_at:o.updated_at}); } else if(age>=1440){ const at=ctx.time.plus(o.updated_at,'1440m'); rows.push({order_id:o.id,payment_method_id:dest.id,amount:amount,kind:kind,status:'issued',issued_at:at,created_at:o.updated_at,updated_at:at}); } else { rows.push({order_id:o.id,payment_method_id:dest.id,amount:amount,kind:kind,status:'pending',issued_at:null,created_at:o.updated_at,updated_at:o.updated_at}); } }); return rows; }
+tests:
+  actions_refuse_unknown_rows:
+    description: Every action answers 404 for an order or user that does not exist, and refuses bad input before touching data.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/orders/ord_9999/cancel', { reason: 'ordered by mistake' });
+        ctx.assert(c.status === 404 && c.body.error.code === 'not_found', 'cancel unknown order: ' + JSON.stringify(c));
+        const a = ctx.api('POST', '/orders/ord_9999/address', { address_line: '1 Main St', city: 'Austin', state_code: 'TX', zip: '78701' });
+        ctx.assert(a.status === 404 && a.body.error.code === 'not_found', 'address unknown order: ' + JSON.stringify(a));
+        const u = ctx.api('POST', '/users/usr_9999/address', { address_line: '1 Main St', city: 'Austin', state_code: 'TX', zip: '78701' });
+        ctx.assert(u.status === 404 && u.body.error.code === 'not_found', 'address unknown user: ' + JSON.stringify(u));
+        const p = ctx.api('POST', '/orders/ord_9999/payment', { payment_method_id: 'pay_9999' });
+        ctx.assert(p.status === 400 || p.status === 404, 'payment unknown order: ' + JSON.stringify(p));
+        const m = ctx.api('POST', '/orders/ord_9999/modify_items', { item_ids: 'oit_9999', new_variant_ids: 'var_9999', payment_method_id: 'pay_9999' });
+        ctx.assert(m.status === 400 || m.status === 404, 'modify unknown order: ' + JSON.stringify(m));
+        const r = ctx.api('POST', '/orders/ord_9999/return', { item_ids: 'oit_9999', payment_method_id: 'pay_9999' });
+        ctx.assert(r.status === 400 || r.status === 404, 'return unknown order: ' + JSON.stringify(r));
+        const x = ctx.api('POST', '/orders/ord_9999/exchange', { item_ids: 'oit_9999', new_variant_ids: 'var_9999', payment_method_id: 'pay_9999' });
+        ctx.assert(x.status === 400 || x.status === 404, 'exchange unknown order: ' + JSON.stringify(x));
+      }
+  actions_refuse_bad_input:
+    description: Missing or invalid inputs are refused with 400 input.invalid.
+    script: |-
+      (ctx) => {
+        const c1 = ctx.api('POST', '/orders/ord_9999/cancel', {});
+        ctx.assert(c1.status === 400 && c1.body.error.code === 'input.invalid', 'cancel without reason: ' + JSON.stringify(c1));
+        const c2 = ctx.api('POST', '/orders/ord_9999/cancel', { reason: 'changed my mind' });
+        ctx.assert(c2.status === 400 && c2.body.error.code === 'input.invalid', 'cancel with a reason outside the enum: ' + JSON.stringify(c2));
+        const a = ctx.api('POST', '/orders/ord_9999/address', { address_line: '1 Main St', state_code: 'TX', zip: '78701' });
+        ctx.assert(a.status === 400 && a.body.error.code === 'input.invalid', 'address without city: ' + JSON.stringify(a));
+        const u = ctx.api('POST', '/users/usr_9999/address', { address_line: '1 Main St', city: 'Austin', state_code: 'TX' });
+        ctx.assert(u.status === 400 && u.body.error.code === 'input.invalid', 'user address without zip: ' + JSON.stringify(u));
+        const r = ctx.api('POST', '/orders/ord_9999/return', { payment_method_id: 'pay_9999' });
+        ctx.assert(r.status === 400 && r.body.error.code === 'input.invalid', 'return without item_ids: ' + JSON.stringify(r));
+        const x = ctx.api('POST', '/orders/ord_9999/exchange', { item_ids: 'oit_9999', payment_method_id: 'pay_9999' });
+        ctx.assert(x.status === 400 && x.body.error.code === 'input.invalid', 'exchange without new_variant_ids: ' + JSON.stringify(x));
+        const m = ctx.api('POST', '/orders/ord_9999/modify_items', { new_variant_ids: 'var_9999', payment_method_id: 'pay_9999' });
+        ctx.assert(m.status === 400 && m.body.error.code === 'input.invalid', 'modify without item_ids: ' + JSON.stringify(m));
+        const p = ctx.api('POST', '/orders/ord_9999/payment', {});
+        ctx.assert(p.status === 400 && p.body.error.code === 'input.invalid', 'payment without payment_method_id: ' + JSON.stringify(p));
+      }
+  jobs_run_cleanly:
+    description: Both jobs run on a week of engine time without failing.
+    script: |-
+      (ctx) => {
+        const r = ctx.advance('7d');
+        ctx.assert(r.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(r.jobsFailed));
+      }
+  cancel_order_flow:
+    description: Cancelling a pending order sets the reason, restocks the items and creates one full-total cancellation refund to the original payment method. A second cancel is refused. Skips while there is no pending order.
+    script: |-
+      (ctx) => {
+        const list = ctx.api('GET', '/orders?status=pending').body.data;
+        if (!list || list.length === 0) return;
+        const order = list[0];
+        const items = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data;
+        const before = {};
+        const gain = {};
+        for (const it of items) {
+          before[it.variant_id] = ctx.api('GET', '/variants/' + it.variant_id).body.stock;
+          gain[it.variant_id] = (gain[it.variant_id] || 0) + it.quantity;
+        }
+        const pms = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data;
+        const pm = pms.find((p) => p.id === order.payment_method_id);
+        const bad = ctx.api('POST', '/orders/' + order.id + '/cancel', { reason: 'changed my mind' });
+        ctx.assert(bad.status === 400, 'a reason outside the enum is refused: ' + JSON.stringify(bad));
+        const r = ctx.api('POST', '/orders/' + order.id + '/cancel', { reason: 'ordered by mistake' });
+        ctx.assert(r.status === 200, 'cancel returned ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(r.body.status === 'cancelled' && r.body.cancel_reason === 'ordered by mistake', 'cancelled with reason, got ' + JSON.stringify(r.body));
+        for (const v of Object.keys(before)) {
+          const now = ctx.api('GET', '/variants/' + v).body.stock;
+          ctx.assert(now === before[v] + gain[v], 'variant ' + v + ' restocked from ' + before[v] + ' to ' + (before[v] + gain[v]) + ', got ' + now);
+        }
+        const refunds = ctx.api('GET', '/refunds?order_id=' + order.id + '&kind=cancellation').body.data;
+        if (order.total > 0) {
+          ctx.assert(refunds.length === 1, 'one cancellation refund, got ' + refunds.length);
+          ctx.assert(refunds[0].amount === order.total && refunds[0].payment_method_id === order.payment_method_id, 'refund of the full total to the original method, got ' + JSON.stringify(refunds[0]));
+          if (pm && pm.kind === 'gift_card') {
+            ctx.assert(refunds[0].status === 'issued' && refunds[0].issued_at !== null, 'gift card refund is issued at once');
+            const after = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data.find((p) => p.id === pm.id);
+            ctx.assert(after.balance === pm.balance + order.total, 'gift card credited, got ' + after.balance);
+          } else {
+            ctx.assert(refunds[0].status === 'pending' && refunds[0].issued_at === null, 'refund to another method starts pending');
+          }
+        }
+        const again = ctx.api('POST', '/orders/' + order.id + '/cancel', { reason: 'no longer needed' });
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second cancel: ' + JSON.stringify(again));
+      }
+  cancel_refuses_non_pending:
+    description: A delivered order cannot be cancelled and nothing changes. Skips while there is no delivered order.
+    script: |-
+      (ctx) => {
+        const list = ctx.api('GET', '/orders?status=delivered&limit=1').body.data;
+        if (!list || list.length === 0) return;
+        const o = list[0];
+        const r = ctx.api('POST', '/orders/' + o.id + '/cancel', { reason: 'no longer needed' });
+        ctx.assert(r.status === 409 && r.body.error.code === 'invalid_state', 'cancel delivered: ' + JSON.stringify(r));
+        const a = ctx.api('POST', '/orders/' + o.id + '/address', { address_line: '9 Elm St', city: 'Reno', state_code: 'NV', zip: '89501' });
+        ctx.assert(a.status === 409 && a.body.error.code === 'invalid_state', 'address on delivered: ' + JSON.stringify(a));
+        const after = ctx.api('GET', '/orders/' + o.id).body;
+        ctx.assert(JSON.stringify(after) === JSON.stringify(o), 'the refused calls changed the order');
+        ctx.assert(ctx.api('GET', '/refunds?order_id=' + o.id + '&kind=cancellation').body.data.length === 0, 'no cancellation refund for a delivered order');
+      }
+  modify_address_flow:
+    description: modify_pending_order_address changes only the shipping address of a pending order and leaves the user's default address alone. Skips while there is no pending order.
+    script: |-
+      (ctx) => {
+        const list = ctx.api('GET', '/orders?status=pending&limit=1').body.data;
+        if (!list || list.length === 0) return;
+        const o = list[0];
+        const userBefore = ctx.api('GET', '/users/' + o.user_id).body;
+        const r = ctx.api('POST', '/orders/' + o.id + '/address', { address_line: '77 Harbor Road', city: 'Portland', state_code: 'OR', zip: '97201' });
+        ctx.assert(r.status === 200, 'address returned ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(r.body.ship_address_line === '77 Harbor Road' && r.body.ship_city === 'Portland' && r.body.ship_state_code === 'OR' && r.body.ship_zip === '97201' && r.body.ship_country === 'US', 'address changed, got ' + JSON.stringify(r.body));
+        ctx.assert(r.body.status === 'pending' && r.body.total === o.total, 'status and total unchanged');
+        const userAfter = ctx.api('GET', '/users/' + o.user_id).body;
+        ctx.assert(JSON.stringify(userAfter) === JSON.stringify(userBefore), 'the user default address must not change');
+        const blank = ctx.api('POST', '/orders/' + o.id + '/address', { address_line: '  ', city: 'Portland', state_code: 'OR', zip: '97201' });
+        ctx.assert(blank.status === 400 && blank.body.error.code === 'input.invalid', 'blank address line: ' + JSON.stringify(blank));
+      }
+  modify_payment_flow:
+    description: modify_pending_order_payment switches a pending order to another payment method of the same user, refuses the current method, and refuses a gift card with too little balance. Skips while there is no suitable order.
+    script: |-
+      (ctx) => {
+        const orders = ctx.api('GET', '/orders?status=pending').body.data;
+        if (!orders) return;
+        for (const o of orders) {
+          const pms = ctx.api('GET', '/users/' + o.user_id + '/payment_methods?limit=25').body.data;
+          const other = pms.find((p) => p.id !== o.payment_method_id && (p.kind !== 'gift_card' || p.balance >= o.total));
+          if (!other) continue;
+          const same = ctx.api('POST', '/orders/' + o.id + '/payment', { payment_method_id: o.payment_method_id });
+          ctx.assert(same.status === 409 && same.body.error.code === 'no_change', 'same method: ' + JSON.stringify(same));
+          const poor = pms.find((p) => p.id !== o.payment_method_id && p.kind === 'gift_card' && p.balance < o.total);
+          if (poor) {
+            const refused = ctx.api('POST', '/orders/' + o.id + '/payment', { payment_method_id: poor.id });
+            ctx.assert(refused.status === 409 && refused.body.error.code === 'insufficient_balance', 'poor gift card: ' + JSON.stringify(refused));
+          }
+          const r = ctx.api('POST', '/orders/' + o.id + '/payment', { payment_method_id: other.id });
+          ctx.assert(r.status === 200 && r.body.payment_method_id === other.id, 'payment switched: ' + JSON.stringify(r));
+          ctx.assert(r.body.total === o.total && r.body.status === 'pending', 'total and status unchanged');
+          return;
+        }
+      }
+  modify_items_flow:
+    description: modify_pending_order_items swaps one line to another available variant of the same product, recomputes the total, settles the difference on the given payment method and refuses a second modification. Skips while there is no suitable order.
+    script: |-
+      (ctx) => {
+        const orders = ctx.api('GET', '/orders?status=pending').body.data;
+        if (!orders) return;
+        for (const order of orders) {
+          if (order.items_modified) continue;
+          const items = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data;
+          const pms = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data;
+          const pay = pms.find((p) => p.kind !== 'gift_card');
+          if (!pay) continue;
+          for (const item of items) {
+            const vs = ctx.api('GET', '/products/' + item.product_id + '/variants?limit=25').body.data;
+            const nv = vs.find((v) => v.available && v.id !== item.variant_id && v.stock >= item.quantity);
+            if (!nv) continue;
+            const oldStock = ctx.api('GET', '/variants/' + item.variant_id).body.stock;
+            const diff = (nv.price - item.unit_price) * item.quantity;
+            const r = ctx.api('POST', '/orders/' + order.id + '/modify_items', { item_ids: item.id, new_variant_ids: nv.id, payment_method_id: pay.id });
+            ctx.assert(r.status === 200, 'modify returned ' + r.status + ' ' + JSON.stringify(r.body));
+            ctx.assert(r.body.items_modified === true && r.body.total === order.total + diff, 'total recomputed to ' + (order.total + diff) + ', got ' + JSON.stringify(r.body));
+            const after = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data.find((i) => i.id === item.id);
+            ctx.assert(after.variant_id === nv.id && after.unit_price === nv.price && after.quantity === item.quantity, 'line swapped, got ' + JSON.stringify(after));
+            ctx.assert(ctx.api('GET', '/variants/' + nv.id).body.stock === nv.stock - item.quantity, 'new variant stock went down');
+            ctx.assert(ctx.api('GET', '/variants/' + item.variant_id).body.stock === oldStock + item.quantity, 'old variant stock went up');
+            const refunds = ctx.api('GET', '/refunds?order_id=' + order.id + '&kind=exchange_difference').body.data;
+            if (diff < 0) {
+              ctx.assert(refunds.length === 1 && refunds[0].amount === -diff && refunds[0].payment_method_id === pay.id, 'difference refunded to the chosen method, got ' + JSON.stringify(refunds));
+            } else {
+              ctx.assert(refunds.length === 0, 'no refund when the price does not drop');
+            }
+            const again = ctx.api('POST', '/orders/' + order.id + '/modify_items', { item_ids: item.id, new_variant_ids: item.variant_id, payment_method_id: pay.id });
+            ctx.assert(again.status === 409 && again.body.error.code === 'already_modified', 'second modification: ' + JSON.stringify(again));
+            return;
+          }
+        }
+      }
+  return_flow_and_completion:
+    description: return_delivered_order_items marks only the listed items, moves the order to return_requested and creates a return refund to the original method. A second request is refused with 409. After 4 days the job marks the order and items returned, restocks and issues the refund. Skips while there is no delivered order.
+    script: |-
+      (ctx) => {
+        const orders = ctx.api('GET', '/orders?status=delivered').body.data;
+        if (!orders) return;
+        for (const order of orders) {
+          const items = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data;
+          const item = items.find((i) => i.return_status === 'none');
+          if (!item) continue;
+          const before = ctx.api('GET', '/variants/' + item.variant_id).body.stock;
+          const unknown = ctx.api('POST', '/orders/' + order.id + '/return', { item_ids: 'oit_9999', payment_method_id: order.payment_method_id });
+          ctx.assert(unknown.status === 422 && unknown.body.error.code === 'unknown_item', 'unknown item: ' + JSON.stringify(unknown));
+          const r = ctx.api('POST', '/orders/' + order.id + '/return', { item_ids: item.id, payment_method_id: order.payment_method_id });
+          ctx.assert(r.status === 200 && r.body.status === 'return_requested', 'return: ' + JSON.stringify(r));
+          const lines = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data;
+          for (const l of lines) {
+            ctx.assert(l.return_status === (l.id === item.id ? 'return_requested' : 'none'), 'only the listed item is marked, got ' + l.id + ' ' + l.return_status);
+          }
+          const amount = item.quantity * item.unit_price;
+          const refunds = ctx.api('GET', '/refunds?order_id=' + order.id + '&kind=return').body.data;
+          if (amount > 0) {
+            ctx.assert(refunds.length === 1 && refunds[0].amount === amount && refunds[0].payment_method_id === order.payment_method_id, 'return refund of ' + amount + ', got ' + JSON.stringify(refunds));
+          }
+          const again = ctx.api('POST', '/orders/' + order.id + '/return', { item_ids: item.id, payment_method_id: order.payment_method_id });
+          ctx.assert(again.status === 409 && again.body.error.code === 'already_requested', 'second return: ' + JSON.stringify(again));
+          const ex = ctx.api('POST', '/orders/' + order.id + '/exchange', { item_ids: item.id, new_variant_ids: item.variant_id, payment_method_id: order.payment_method_id });
+          ctx.assert(ex.status === 409, 'exchange after return: ' + JSON.stringify(ex));
+          const fired = ctx.advance('4d');
+          ctx.assert(fired.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(fired.jobsFailed));
+          const done = ctx.api('GET', '/orders/' + order.id).body;
+          ctx.assert(done.status === 'returned', 'order returned by the job, got ' + done.status);
+          const doneLine = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data.find((i) => i.id === item.id);
+          ctx.assert(doneLine.return_status === 'returned', 'item returned, got ' + doneLine.return_status);
+          ctx.assert(ctx.api('GET', '/variants/' + item.variant_id).body.stock === before + item.quantity, 'stock went back');
+          for (const f of ctx.api('GET', '/refunds?order_id=' + order.id + '&kind=return').body.data) {
+            ctx.assert(f.status === 'issued' && f.issued_at !== null, 'refund issued after 4 days, got ' + f.status);
+          }
+          return;
+        }
+      }
+  return_refund_to_gift_card:
+    description: A return refunded to a gift card of the user is issued at once and credits the balance. A destination that is neither the original method nor a gift card is refused. Skips while there is no suitable order.
+    script: |-
+      (ctx) => {
+        const orders = ctx.api('GET', '/orders?status=delivered').body.data;
+        if (!orders) return;
+        for (const order of orders) {
+          const items = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data;
+          const item = items.find((i) => i.return_status === 'none');
+          if (!item) continue;
+          const pms = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data;
+          const gift = pms.find((p) => p.kind === 'gift_card');
+          if (!gift) continue;
+          const wrong = pms.find((p) => p.kind !== 'gift_card' && p.id !== order.payment_method_id);
+          if (wrong) {
+            const refused = ctx.api('POST', '/orders/' + order.id + '/return', { item_ids: item.id, payment_method_id: wrong.id });
+            ctx.assert(refused.status === 409 && refused.body.error.code === 'invalid_refund_destination', 'wrong destination: ' + JSON.stringify(refused));
+          }
+          const r = ctx.api('POST', '/orders/' + order.id + '/return', { item_ids: item.id, payment_method_id: gift.id });
+          ctx.assert(r.status === 200, 'return to gift card: ' + JSON.stringify(r));
+          const amount = item.quantity * item.unit_price;
+          if (amount > 0) {
+            const refunds = ctx.api('GET', '/refunds?order_id=' + order.id + '&kind=return').body.data;
+            ctx.assert(refunds.length === 1 && refunds[0].payment_method_id === gift.id && refunds[0].amount === amount, 'refund to the gift card, got ' + JSON.stringify(refunds));
+            ctx.assert(refunds[0].status === 'issued' && refunds[0].issued_at !== null, 'gift card refund is issued at once');
+            const after = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data.find((p) => p.id === gift.id);
+            ctx.assert(after.balance === gift.balance + amount, 'gift card credited by ' + amount + ', got ' + after.balance);
+          }
+          return;
+        }
+      }
+  exchange_flow_and_completion:
+    description: exchange_delivered_order_items points the line to a new variant of the same product, moves stock, settles the price difference, moves the order to exchange_requested and refuses a second request. After 4 days the job marks the order and item exchanged. Skips while there is no suitable order.
+    script: |-
+      (ctx) => {
+        const orders = ctx.api('GET', '/orders?status=delivered').body.data;
+        if (!orders) return;
+        for (const order of orders) {
+          const items = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data;
+          const pms = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data;
+          const pay = pms.find((p) => p.kind !== 'gift_card');
+          if (!pay) continue;
+          for (const item of items) {
+            if (item.return_status !== 'none') continue;
+            const vs = ctx.api('GET', '/products/' + item.product_id + '/variants?limit=25').body.data;
+            const nv = vs.find((v) => v.available && v.id !== item.variant_id && v.stock >= item.quantity);
+            if (!nv) continue;
+            const oldStock = ctx.api('GET', '/variants/' + item.variant_id).body.stock;
+            const diff = (nv.price - item.unit_price) * item.quantity;
+            const wrongProduct = ctx.api('GET', '/variants/' + item.variant_id).body;
+            ctx.assert(wrongProduct.product_id === item.product_id, 'seed: the line variant belongs to the line product');
+            const same = ctx.api('POST', '/orders/' + order.id + '/exchange', { item_ids: item.id, new_variant_ids: item.variant_id, payment_method_id: pay.id });
+            ctx.assert(same.status === 409 && same.body.error.code === 'same_variant', 'same variant: ' + JSON.stringify(same));
+            const r = ctx.api('POST', '/orders/' + order.id + '/exchange', { item_ids: item.id, new_variant_ids: nv.id, payment_method_id: pay.id });
+            ctx.assert(r.status === 200 && r.body.status === 'exchange_requested', 'exchange: ' + JSON.stringify(r));
+            ctx.assert(r.body.total === order.total, 'the order total does not change on an exchange');
+            const line = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data.find((i) => i.id === item.id);
+            ctx.assert(line.return_status === 'exchange_requested' && line.exchange_variant_id === nv.id && line.variant_id === item.variant_id, 'line marked for exchange, got ' + JSON.stringify(line));
+            ctx.assert(ctx.api('GET', '/variants/' + nv.id).body.stock === nv.stock - item.quantity, 'new variant stock went down');
+            ctx.assert(ctx.api('GET', '/variants/' + item.variant_id).body.stock === oldStock + item.quantity, 'old variant stock went up');
+            const refunds = ctx.api('GET', '/refunds?order_id=' + order.id + '&kind=exchange_difference').body.data;
+            if (diff < 0) {
+              ctx.assert(refunds.length === 1 && refunds[0].amount === -diff && refunds[0].payment_method_id === pay.id, 'difference refunded, got ' + JSON.stringify(refunds));
+            } else {
+              ctx.assert(refunds.length === 0, 'no refund when the price does not drop');
+            }
+            const again = ctx.api('POST', '/orders/' + order.id + '/exchange', { item_ids: item.id, new_variant_ids: nv.id, payment_method_id: pay.id });
+            ctx.assert(again.status === 409 && again.body.error.code === 'already_requested', 'second exchange: ' + JSON.stringify(again));
+            const fired = ctx.advance('4d');
+            ctx.assert(fired.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(fired.jobsFailed));
+            ctx.assert(ctx.api('GET', '/orders/' + order.id).body.status === 'exchanged', 'order exchanged by the job');
+            const done = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data.find((i) => i.id === item.id);
+            ctx.assert(done.return_status === 'exchanged', 'item exchanged, got ' + done.return_status);
+            return;
+          }
+        }
+      }
+  exchange_gift_card_difference:
+    description: When an exchange costs more, a gift card pays the difference and is debited. Too little balance is refused. Skips while there is no suitable order.
+    script: |-
+      (ctx) => {
+        const orders = ctx.api('GET', '/orders?status=delivered').body.data;
+        if (!orders) return;
+        for (const order of orders) {
+          const items = ctx.api('GET', '/orders/' + order.id + '/items?limit=25').body.data;
+          const pms = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data;
+          const gift = pms.find((p) => p.kind === 'gift_card');
+          if (!gift) continue;
+          for (const item of items) {
+            if (item.return_status !== 'none') continue;
+            const vs = ctx.api('GET', '/products/' + item.product_id + '/variants?limit=25').body.data;
+            const nv = vs.find((v) => v.available && v.id !== item.variant_id && v.stock >= item.quantity && (v.price - item.unit_price) * item.quantity > 0);
+            if (!nv) continue;
+            const diff = (nv.price - item.unit_price) * item.quantity;
+            const body = { item_ids: item.id, new_variant_ids: nv.id, payment_method_id: gift.id };
+            if (gift.balance < diff) {
+              const refused = ctx.api('POST', '/orders/' + order.id + '/exchange', body);
+              ctx.assert(refused.status === 409 && refused.body.error.code === 'insufficient_balance', 'poor gift card: ' + JSON.stringify(refused));
+              ctx.assert(ctx.api('GET', '/orders/' + order.id).body.status === 'delivered', 'the refused exchange changed nothing');
+            } else {
+              const r = ctx.api('POST', '/orders/' + order.id + '/exchange', body);
+              ctx.assert(r.status === 200, 'exchange: ' + JSON.stringify(r));
+              const after = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data.find((p) => p.id === gift.id);
+              ctx.assert(after.balance === gift.balance - diff, 'gift card debited by ' + diff + ', got ' + after.balance);
+            }
+            return;
+          }
+        }
+      }
+  pending_refund_is_issued_by_job:
+    description: A pending refund to a non-gift-card method stays pending, and issue_pending_refunds issues it once it is 24 hours old. Skips while there is no suitable order.
+    script: |-
+      (ctx) => {
+        const orders = ctx.api('GET', '/orders?status=pending').body.data;
+        if (!orders) return;
+        for (const order of orders) {
+          if (order.total <= 0) continue;
+          const pm = ctx.api('GET', '/users/' + order.user_id + '/payment_methods?limit=25').body.data.find((p) => p.id === order.payment_method_id);
+          if (!pm || pm.kind === 'gift_card') continue;
+          const r = ctx.api('POST', '/orders/' + order.id + '/cancel', { reason: 'no longer needed' });
+          ctx.assert(r.status === 200, 'cancel: ' + JSON.stringify(r));
+          ctx.advance('6h');
+          const early = ctx.api('GET', '/refunds?order_id=' + order.id + '&kind=cancellation').body.data[0];
+          ctx.assert(early.status === 'pending', 'still pending after 6 hours, got ' + early.status);
+          ctx.advance('30h');
+          const late = ctx.api('GET', '/refunds?order_id=' + order.id + '&kind=cancellation').body.data[0];
+          ctx.assert(late.status === 'issued' && late.issued_at !== null, 'issued after 36 hours, got ' + JSON.stringify(late));
+          return;
+        }
+      }
+  update_user_address_flow:
+    description: update_user_address changes the user's default address and leaves existing orders alone. Skips while there are no users.
+    script: |-
+      (ctx) => {
+        const users = ctx.api('GET', '/users?limit=1').body.data;
+        if (!users || users.length === 0) return;
+        const u = users[0];
+        const ordersBefore = ctx.api('GET', '/orders?user_id=' + u.id).body.data;
+        const r = ctx.api('POST', '/users/' + u.id + '/address', { address_line: '500 Lakeview Drive', city: 'Madison', state_code: 'WI', zip: '53703', country: 'US' });
+        ctx.assert(r.status === 200, 'update address: ' + JSON.stringify(r));
+        ctx.assert(r.body.address_line === '500 Lakeview Drive' && r.body.city === 'Madison' && r.body.state_code === 'WI' && r.body.zip === '53703', 'address changed, got ' + JSON.stringify(r.body));
+        ctx.assert(r.body.email === u.email && r.body.first_name === u.first_name && r.body.last_name === u.last_name, 'name and email unchanged');
+        const ordersAfter = ctx.api('GET', '/orders?user_id=' + u.id).body.data;
+        ctx.assert(JSON.stringify(ordersAfter) === JSON.stringify(ordersBefore), 'existing orders keep their shipping address');
+      }
+tasks:
+  cancel_pending_order_mistake:
+    difficulty: easy
+    instruction: Yusuf Rossi, the customer who lives in Austin, has a pending order that contains a standing desk. Cancel that order because it was ordered by mistake. There is another customer with the same name in a different city, so make sure you pick the right one. Change nothing else.
+    decoys: []
+    alternatives: []
+  exchange_delivered_jacket_to_gift_card_diff:
+    difficulty: medium
+    instruction: Mei Tanaka received a delivered order that contains a waterproof rain jacket in size M. She wants the same jacket in size L, in the same color, and she wants the price difference paid with her gift card. Exchange that jacket. She has more than one delivered order, so make sure you use the one with the size M jacket. Change nothing else.
+    decoys: []
+    alternatives: []
+  return_and_cancel_across_orders:
+    difficulty: hard
+    instruction: Priya Nair has many orders, and her order list spans more than one page. For each of her pending orders that contains a wireless mouse, cancel the order with the reason 'no longer needed'. For each of her delivered orders that contains a wireless mouse, return only the wireless mouse items, with the refund going to her gift card. Do not touch any other order or any other item. Note that a gaming mouse pad is a different product from a wireless mouse.
+    decoys: []
+    alternatives: []
+  modify_pending_items_once:
+    difficulty: medium
+    instruction: Amara Okafor has a pending order with a mechanical keyboard in a tenkeyless layout and a USB-C hub. Change the keyboard to the full-size layout of the same model with the same switch type, and settle the price difference on her PayPal account, not her gift card. Leave the hub alone. Items on an order can only be modified once, so do it in a single change.
+    decoys: []
+    alternatives: []
