@@ -11,7 +11,7 @@ import { nodeRunner, type Runner } from '../src/sandboxes/backend.ts';
 import { engineGrader } from '../src/dataset/verifier.ts';
 import type { SolverProposer } from '../src/dataset/solver.ts';
 import { GRADER_CANARY, saveCanaryWorld } from './helpers/world.ts';
-import { COMMIT, EASY_REPLY, HELPDESK_DIR, RUN_BUDGET, easyOnly, fakeBackend, helpdesk, randomPort, solveAll, tmp } from './dataset-kit.ts';
+import { COMMIT, EASY_REPLY, HELPDESK_DIR, RUN_BUDGET, easyOnly, fakeBackend, helpdesk, freePortPair, solveAll, tmp } from './dataset-kit.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 /** These tests pass an env without PATH, so the bun children get the test process's PATH. */
@@ -162,7 +162,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
 
   it('uploads exactly the public form of the world through the production makeBundle default (A-377)', RUN_BUDGET, async () => {
     const { dir, checked } = await saveCanaryWorld(tmp('canary'), 'canary-world');
-    const port = randomPort();
+    const port = await freePortPair();
     const backend = fakeBackend(checked, { port });
     const err: string[] = [];
     // No makeBundle here: the default in cli/dataset.ts is under test.
@@ -187,7 +187,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     });
     const env = { PATH: '', WORLDGEN_CLAUDE_BIN: bin, WORLDGEN_COSTS_FILE: path.join(tmp('cli-costs'), 'costs.jsonl') };
     const args = required(tmp('cli-default'));
-    const port = randomPort();
+    const port = await freePortPair();
     const backend = fakeBackend(await helpdesk(), { port });
     const r = await run(args, { backend, port }, env);
     assert.equal(r.code, 3, r.err.join('\n'));
@@ -219,7 +219,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
         stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 100, output_tokens: 20 },
       }), { headers: { 'content-type': 'application/json' } });
     });
-    const port = randomPort();
+    const port = await freePortPair();
     const backend = fakeBackend(await helpdesk(), { port });
     const r = await run(required(tmp('cli-sdk'), { transport: 'sdk' }), { backend, port }, {
       ...KEYS, PATH: '', WORLDGEN_COSTS_FILE: path.join(tmp('sdk-costs'), 'costs.jsonl'),
@@ -231,7 +231,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
 
   it('exits 0 and says where everything is when every task has an accepted episode', RUN_BUDGET, async () => {
     const outDir = tmp('cli-ok');
-    const port = randomPort();
+    const port = await freePortPair();
     const backend = fakeBackend(await helpdesk(), { port });
     const r = await run(required(outDir), { backend, nextTurn: solveAll, port });
     assert.equal(r.code, 0, r.err.join('\n'));
@@ -245,7 +245,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
   });
 
   it('exits 3 and names the missing episodes when the pipeline is sound but a task was not solved', RUN_BUDGET, async () => {
-    const port = randomPort();
+    const port = await freePortPair();
     const r = await run(required(tmp('cli-partial')), { backend: fakeBackend(await helpdesk(), { port }), nextTurn: easyOnly, port });
     assert.equal(r.code, 3);
     assert.equal(r.err.includes('dataset run cli-run: incomplete'), true);
@@ -257,7 +257,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     const lines = (dir: string, file: string): unknown[] => readFileSync(path.join(dir, file), 'utf8').split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { model: unknown }).model);
     for (const [flag, model] of [[[], 'claude-sonnet-5-5'], [['--model', 'claude-opus-5-5'], 'claude-opus-5-5']] as const) {
       const outDir = tmp('cli-model');
-      const port = randomPort();
+      const port = await freePortPair();
       const r = await run([...required(outDir), ...flag], { backend: fakeBackend(await helpdesk(), { port }), nextTurn: solveAll, port });
       assert.equal(r.code, 0, r.err.join('\n'));
       assert.equal((JSON.parse(readFileSync(path.join(outDir, 'manifest.json'), 'utf8')) as { model: unknown }).model, model);
@@ -267,7 +267,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
 
   it('refuses a --model with no known price before it touches the sandbox, and creates nothing', RUN_BUDGET, async () => {
     const outDir = path.join(tmp('cli-unpriced'), 'out');
-    const port = randomPort();
+    const port = await freePortPair();
     const backend = fakeBackend(await helpdesk(), { port });
     const r = await run([...required(outDir), '--model', 'claude-haiku-4-5'], { backend, nextTurn: solveAll, port });
     assert.equal(r.code, 1);
@@ -277,7 +277,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
   });
 
   it('exits 1 with the problem named when the sandbox stop is not confirmed', RUN_BUDGET, async () => {
-    const port = randomPort();
+    const port = await freePortPair();
     const r = await run(required(tmp('cli-down')), { backend: fakeBackend(await helpdesk(), { port, failDown: true }), nextTurn: solveAll, port });
     assert.equal(r.code, 1);
     assert.equal(r.err.includes('dataset run cli-run: failed'), true);
@@ -287,7 +287,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
 
   it('exits 1 for a reused run id, without touching the sandbox', RUN_BUDGET, async () => {
     const outDir = tmp('cli-reuse');
-    const port = randomPort();
+    const port = await freePortPair();
     const first = await run(required(outDir), { backend: fakeBackend(await helpdesk(), { port }), nextTurn: easyOnly, port });
     assert.equal(first.code, 3, first.err.join('\n'));
     const backend = fakeBackend(await helpdesk(), { port });
@@ -316,7 +316,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
       },
     };
     const outDir = tmp('cli-proposer');
-    const port = randomPort();
+    const port = await freePortPair();
     const r = await run(required(outDir), { backend: fakeBackend(w, { port }), proposer, port });
     assert.equal(r.code, 3);
     assert.equal(seen.length, 5 + 1 + 1);
