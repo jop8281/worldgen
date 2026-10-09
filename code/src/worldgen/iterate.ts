@@ -10,7 +10,7 @@
  */
 import { z } from 'zod';
 import { SECTIONS, renderWorldYaml, type Section, type World } from '#engine';
-import { changeItem, planSchema, plannedItems, renderPlanYaml, untestedActions, type Plan } from './plan.ts';
+import { changeItem, jobActionIssues, planSchema, plannedItems, renderPlanYaml, untestedActions, type Plan } from './plan.ts';
 import { stagesToRun } from './stages.ts';
 
 /**
@@ -226,6 +226,7 @@ export function iteratePlanSchema(world: World, oldPlan: Plan | null): typeof pl
       ctx.addIssue({ code: 'custom', path: ['clock'], message: `iterate must preserve the existing world clock: ${JSON.stringify(world.meta.clock)}` });
     }
     if (plan.verdict.kind !== 'proceed') return;
+    jobActionIssues(plan, ctx);
     for (const action of untestedActions(plan).filter((a) => !Object.hasOwn(world.actions, a))) {
       ctx.addIssue({ code: 'custom', path: ['acceptanceTests'], message: `acceptance tests must cover new workflow action ${action}` });
     }

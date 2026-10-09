@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { parse } from 'yaml';
 import type { World } from '#engine';
 import { z } from 'zod';
-import { planCoverage, planSchema, planSchemaFor, pressurePlanIssues, renderPlanYaml, workflowIssues, type Plan } from '../src/worldgen/plan.ts';
+import { parsePlanYaml, planCoverage, planSchema, planSchemaFor, pressurePlanIssues, renderPlanYaml, workflowIssues, type Plan } from '../src/worldgen/plan.ts';
+import { iteratePlanSchema } from '../src/worldgen/iterate.ts';
 import { ownerOf } from '../src/worldgen/policy.ts';
 
 const plan: Plan = {
@@ -589,21 +590,28 @@ describe('acceptance test actions are declared workflow actions (YOS-53)', () =>
       path: ['acceptanceTests', 0, 'actions'],
     }]);
   });
-  it('refuses a plan job listed as a workflow action or a test action, which the workflow step would have to build twice (YOS-257, bookmarks)', () => {
+  it('refuses a plan job listed as a workflow action or a test action in a proposal, but still loads an older plan that does (YOS-257, YOS-274)', () => {
     const doubled: unknown = {
       ...plan,
+      seed: { ...plan.seed, stateMix: { ticket: { open: 80, solved: 20 } } },
       workflows: [{ ...plan.workflows[0]!, actions: ['assign', 'solve', 'close_stale'] }],
       jobs: [{ name: 'close_stale', every: '1d', rule: 'close tickets solved a week ago' }],
-      acceptanceTests: [{ ...plan.acceptanceTests[0]!, actions: ['solve', 'close_stale'] }],
+      acceptanceTests: [{ ...plan.acceptanceTests[0]!, actions: ['assign', 'solve', 'close_stale'] }],
     };
-    const r = planSchema.safeParse(doubled);
-    assert.deepEqual(r.success ? [] : r.error.issues.map((i) => ({ message: i.message, path: i.path })), [{
+    const loaded = planSchema.safeParse(doubled);
+    assert.equal(loaded.success, true);
+    assert.notEqual(parsePlanYaml(renderPlanYaml(planSchema.parse(doubled))), null);
+    const jobIssues = [{
       message: "workflow triage lists close_stale in its actions, but close_stale is a job: a job runs on the clock, so list it only under jobs and in a rule's by, and let the test call the workflow action that sets up the job's rows through ctx.api, name that action in its actions, then reach the job with ctx.advance",
       path: ['workflows', 0, 'actions', 2],
     }, {
       message: "acceptance test solve_ticket names close_stale in its actions, but close_stale is a job: a job runs on the clock, so list it only under jobs and in a rule's by, and let the test call the workflow action that sets up the job's rows through ctx.api, name that action in its actions, then reach the job with ctx.advance",
       path: ['acceptanceTests', 0, 'actions'],
-    }]);
+    }];
+    const created = planSchemaFor('description').safeParse(doubled);
+    assert.deepEqual(created.success ? [] : created.error.issues.map((i) => ({ message: i.message, path: i.path })), jobIssues);
+    const iterated = iteratePlanSchema(world({ meta: { ...meta, clock: plan.clock } }), null).safeParse(doubled);
+    assert.deepEqual(iterated.success ? [] : iterated.error.issues.map((i) => ({ message: i.message, path: i.path })), jobIssues);
   });
   it('accepts the fixed shape: the job only under jobs and a rule\'s by, its test naming the action that sets it up (YOS-257)', () => {
     const fixed: unknown = {

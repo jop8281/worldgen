@@ -20,6 +20,7 @@
     "dataset": "bun src/cli/dataset.ts",
     "episode": "bun src/cli/episode.ts",
     "studio": "bun src/cli/studio.ts",
+    "scenario": "bun src/cli/scenario.ts",
     "studio-watch": "bun src/cli/studio-watch.ts",
     "docs": "bun src/cli/worldplay.ts docs",
     "demo:prepare": "bash ../scripts/demo-rehearsal.sh prepare",
