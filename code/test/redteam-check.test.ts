@@ -80,6 +80,7 @@ const EARLIEST = {
   'task.decoy_trivial': 'tasks',
   'task.prefix_full_marks': 'tasks',
   'task.mutant_full_marks': 'tasks',
+  'task.freetext_unchecked': 'tasks',
   'task.nondeterministic': 'tasks',
   'world.too_few_tasks': 'tasks',
   'tasks.private_mixed': 'tasks',
@@ -186,6 +187,7 @@ const CODE_CAPS: Readonly<Partial<Record<IssueCode, readonly CapName[]>>> = {
   'task.decoy_trivial': ['check.tasks.discriminating'],
   'task.prefix_full_marks': ['check.tasks.discriminating'],
   'task.mutant_full_marks': ['check.tasks.discriminating'],
+  'task.freetext_unchecked': ['check.tasks.discriminating'],
   'world.too_few_tasks': ['check.tasks'],
   'action.unexercised': ['check.seed', 'check.tests'],
 };

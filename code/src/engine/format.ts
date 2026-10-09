@@ -87,7 +87,7 @@ export const taskSchema = z.strictObject({
   decoys: z.array(decoySchema).default([]).describe('wrong solutions that must score below 1. Required on medium and hard.'),
   alternatives: z.array(alternativeSchema).default([]).describe('other correct solutions that must score exactly 1, so the grader judges the outcome, not one path (A-199)'),
   allows: z.array(allowanceSchema).optional().describe(
-    'the changes the task permits, from its instruction, not from what the solution happens to write. When set, the engine adds a guard that scores 0 for any change outside it; job changes and engine timestamps are exempt. A task without it is a legacy task, judged by its grader\'s own guards and the engine mutants (YOS-156).'),
+    'the changes the task permits, from its instruction, not from what the solution happens to write. When set, the engine adds a guard that scores 0 for any change outside it, a call edit later reverted included (A-387); job changes and engine timestamps are exempt. A task without it is a legacy task, judged by its grader\'s own guards and the engine mutants (YOS-156).'),
 });
 
 const Scalar = z.union([z.string(), z.number(), z.boolean(), z.null()]);
@@ -299,6 +299,7 @@ const ISSUE_EXAMPLES: { readonly [C in IssueCode]: CheckIssue } = {
   'task.decoy_server_error': issue('task.decoy_server_error', ['format'], { task: '<task>', why: '<why>', call: '<method> <path> answered <status>', body: '<body>' }, '<found>'),
   'task.prefix_full_marks': issue('task.prefix_full_marks', ['format'], { writes: 2, of: 3 }, '<found>'),
   'task.mutant_full_marks': issue('task.mutant_full_marks', ['format'], { kind: 'other_row', call: '<call>' }, '<found>'),
+  'task.freetext_unchecked': issue('task.freetext_unchecked', ['format'], { field: '<entity>.<field>', call: '<call>' }, '<found>'),
   'task.nondeterministic': issue('task.nondeterministic', ['format'], { first: '<hash>', second: '<hash>' }, '<found>'),
   'world.too_few_tasks': issue('world.too_few_tasks', ['format'], { have: 2 }, '<found>'),
   'tasks.private_mixed': issue('tasks.private_mixed', ['format'], { complete: ['<task ids>'], bare: ['<task ids>'] }, '<found>'),
