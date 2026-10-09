@@ -31,7 +31,7 @@ const def =
     d;
 
 /** The engine-built mutant kinds verifyTask runs, and what each one's task.mutant_full_marks says (A-199). */
-export type MutantKind = 'target_field' | 'other_row' | 'extra_action' | 'extra_create' | 'extra_delete' | 'retarget' | 'perturb';
+export type MutantKind = 'target_field' | 'other_row' | 'extra_action' | 'extra_create' | 'extra_delete' | 'undone_write' | 'retarget' | 'perturb';
 const MUTANT_TEXT: Readonly<Record<MutantKind, { readonly expected: string; readonly hint: (call: string) => string }>> = {
   target_field: {
     expected: 'the solution plus one collateral write scores below 1',
@@ -52,6 +52,10 @@ const MUTANT_TEXT: Readonly<Record<MutantKind, { readonly expected: string; read
   extra_delete: {
     expected: 'the solution plus one collateral write scores below 1',
     hint: (call) => `The solution's calls plus ${call}, which deletes a row the solution never touched, still score 1. Reject deleted rows with ctx.guardChanges or a ctx.changes() check.`,
+  },
+  undone_write: {
+    expected: 'the solution plus one collateral write that is then undone scores below 1',
+    hint: (call) => `The solution's calls plus ${call} still score 1: an edit undone before the end leaves the end state as the solution's, and the grader judges only the end state. Declare the task's allows, or use ctx.guardChanges; both judge every write a call made, undone or not (A-387).`,
   },
   retarget: {
     expected: 'the solution with one write sent to a different row scores below 1',
@@ -175,6 +179,9 @@ export const ISSUES = {
   'task.mutant_full_marks': def<{ kind: MutantKind; call: string }>()({ severity: 'error', owner: 'tasks',
     expected: (p) => MUTANT_TEXT[p.kind].expected,
     hint: (p) => MUTANT_TEXT[p.kind].hint(p.call) }),
+  'task.freetext_unchecked': def<{ field: string; call: string }>()({ severity: 'error', owner: 'tasks',
+    expected: () => 'nonsense in a free-text field the solution writes scores below 1',
+    hint: (p) => `The solution's calls with ${p.call} still score 1: the grader never reads ${p.field}. Check that text against what the instruction asks it to say, such as a keyword, a name or an amount the instruction gives (A-388).` }),
   'task.nondeterministic': def<{ first: string; second: string }>()({ severity: 'error', owner: 'at_path',
     expected: () => 'two runs from seed end in the same state hash', hint: () => 'Something reads state the engine does not control. Report this as an engine bug if the snippet uses only ctx.' }),
   'world.too_few_tasks': def<{ have: number }>()({ severity: 'error', owner: 'tasks',
