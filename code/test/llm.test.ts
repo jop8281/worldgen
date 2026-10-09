@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { describe, it } from 'node:test';
-import { BUILTIN_PRICES, configSchema, loadConfig } from '../src/worldgen/config.ts';
+import { BUILTIN_PRICES, configSchema, isPriced, loadConfig } from '../src/worldgen/config.ts';
 import { dirname, join, resolve } from 'node:path';
 import {
   anthropicModel, CallStalled, claudeArgs, claudeCliModel, costOf, MAX_ARG_BYTES, ModelError, spawnClaude,
@@ -63,6 +63,13 @@ describe('costOf', () => {
     // lib1 wrote all 18971 cache tokens to the 1-hour cache; its result line says total_cost_usd 0.4830332. lib2 wrote none: 0.5000982.
     assert.equal(costOf({ inputTokens: 4, outputTokens: 38980, cacheReadTokens: 86706, cacheWriteTokens: 18971, cacheWrite1hTokens: 18971 }, 'claude-sonnet-5-5', BUILTIN_PRICES), 0.4830332);
     assert.equal(costOf({ inputTokens: 2, outputTokens: 49136, cacheReadTokens: 43671, cacheWriteTokens: 0, cacheWrite1hTokens: 0 }, 'claude-sonnet-5-5', BUILTIN_PRICES), 0.5000982);
+  });
+  it('prices Claude Haiku 5.5 at its over-100K tier, so a call is never under-counted (A-403)', () => {
+    assert.deepEqual(BUILTIN_PRICES['claude-haiku-5-5'], { inputPerMTok: 0.5, outputPerMTok: 2.5, cacheWritePerMTok: 0.625, cacheWrite1hPerMTok: 1, cacheReadPerMTok: 0.05 });
+    // 1000 * 0.5 + 2000 * 2.5 + 10000 * 0.625 + 20000 * 1 + 100000 * 0.05, per million
+    assert.equal(costOf({ inputTokens: 1000, outputTokens: 2000, cacheReadTokens: 100_000, cacheWriteTokens: 30_000, cacheWrite1hTokens: 20_000 }, 'claude-haiku-5-5', BUILTIN_PRICES), 0.03675);
+    assert.equal(isPriced('claude-haiku-5-5', {}), true);
+    assert.deepEqual(['claude-haiku-5-5', 'claude-haiku-4-5'].map((model) => configSchema.safeParse({ model, maxCostUsd: 1 }).success), [true, false]);
   });
   it('returns 0 for zero usage', () => {
     assert.equal(costOf(u(0, 0), 'claude-sonnet-5-5', PRICES), 0);

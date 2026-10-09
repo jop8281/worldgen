@@ -266,9 +266,9 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     }
   });
 
-  it('records a --model override on the manifest and every episode, and the default model without one (A-283)', RUN_BUDGET, async () => {
+  it('records a --model override on the manifest and every episode, and the default model without one (A-283, A-403)', RUN_BUDGET, async () => {
     const lines = (dir: string, file: string): unknown[] => readFileSync(path.join(dir, file), 'utf8').split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { model: unknown }).model);
-    for (const [flag, model] of [[[], 'claude-sonnet-5-5'], [['--model', 'claude-opus-5-5'], 'claude-opus-5-5']] as const) {
+    for (const [flag, model] of [[[], 'claude-sonnet-5-5'], [['--model', 'claude-opus-5-5'], 'claude-opus-5-5'], [['--model', 'claude-haiku-5-5'], 'claude-haiku-5-5']] as const) {
       const outDir = tmp('cli-model');
       const port = await freePortPair();
       const r = await run([...required(outDir), ...flag], { backend: fakeBackend(await helpdesk(), { port }), nextTurn: solveAll, port });
