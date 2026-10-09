@@ -289,9 +289,9 @@ describe('task pressure from reference traces (A-225..A-227)', () => {
     routes: { list_tickets: listRoute } as unknown as World['routes'],
     ...over,
   });
-  type Trace = { taskId: string; difficulty: 'easy' | 'medium' | 'hard'; solutionRowsChanged: number; solutionLaterPageEntities: string[]; solutionDistractorEntities: string[] };
-  const v = (taskId: string, difficulty: Trace['difficulty'], rows: number, later: string[] = [], distractors: string[] = []): Trace =>
-    ({ taskId, difficulty, solutionRowsChanged: rows, solutionLaterPageEntities: later, solutionDistractorEntities: distractors });
+  type Trace = { taskId: string; difficulty: 'easy' | 'medium' | 'hard'; solutionRowsChanged: number; solutionLaterPageEntities: string[]; solutionDistractorEntities: string[]; solutionChangedEntities: string[] };
+  const v = (taskId: string, difficulty: Trace['difficulty'], rows: number, later: string[] = [], distractors: string[] = [], changed: string[] = ['ticket']): Trace =>
+    ({ taskId, difficulty, solutionRowsChanged: rows, solutionLaterPageEntities: later, solutionDistractorEntities: distractors, solutionChangedEntities: changed });
   const withTraces = (w: World, traces: readonly Trace[], stats: Partial<WorldStats> = {}): OkReport =>
     ({ ...report(w, stats), verdicts: Object.fromEntries(traces.map((t) => [t.taskId, t])) }) as unknown as OkReport;
   const pressed = (id: string, pressure: NonNullable<Plan['tasks'][number]['pressure']>): Plan =>
@@ -348,6 +348,21 @@ describe('task pressure from reference traces (A-225..A-227)', () => {
     const imported = traced({ fixtures: { tickets: [{ subject: 'a' }] } as unknown as World['fixtures'] });
     assert.deepEqual(pressureChecks(withTraces(imported, [v('solve_vip', 'medium', 2)]), near).map((c) => [c.met, c.exempt]), [
       [false, 'ticket is imported; the input decides which near-duplicate rows exist, and none were fabricated'],
+    ]);
+  });
+
+  it('sends a distractor claim on an entity the reference changes no row of to the plan, whatever the seed holds (A-406)', () => {
+    // stress-8 helpdesk-sla: assigning a ticket to a named agent changes the ticket; the agent is only looked up.
+    const lookup = pressed('solve_vip', { distractors: 'agent' });
+    for (const rows of [8, 1]) {
+      assert.deepEqual(pressureIssues(withTraces(traced(), [v('solve_vip', 'medium', 2)], { rows: { ticket: 40, agent: rows } }), lookup).map((i) => [i.code, i.path, i.expected, i.found]), [
+        ['task.pressure_unmet', ['plan', 'tasks', 1, 'pressure', 'distractors'], 'the pressure task solve_vip declares: distractors: a filtered agent list returns a row the reference leaves unchanged',
+          'the reference changes no agent row, so no agent row can be a distractor: a distractor is a near-duplicate of a row the task changes'],
+      ]);
+    }
+    // Once the reference changes an agent row, the claim is the reference's or the seed's again (A-317).
+    assert.deepEqual(pressureIssues(withTraces(traced(), [v('solve_vip', 'medium', 2, [], [], ['agent', 'ticket'])], { rows: { agent: 8 } }), lookup).map((i) => [i.code, i.path]), [
+      ['task.pressure_unmet', ['tasks', 'solve_vip']],
     ]);
   });
 

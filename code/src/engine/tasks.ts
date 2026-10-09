@@ -62,6 +62,8 @@ export type TaskVerdict = {
   readonly solutionLaterPageEntities: readonly string[];
   /** Entities the solution changed rows of, where its filtered list calls also returned a row it left unchanged, sorted: near-duplicate distractors it had to tell apart (YOS-180). */
   readonly solutionDistractorEntities: readonly string[];
+  /** Entities the solution changed rows of, sorted. Only these can hold a distractor: a lookup row competes with no target (A-230, A-406). */
+  readonly solutionChangedEntities: readonly string[];
   /** Every engine mutant kind, in order: the call it graded and its score, or nulls when no candidate committed a visible change, so the kind was not probed. */
   readonly collateral: readonly MutantProbe[];
   /** Each grader check and the probes that flipped it: prefixes, decoys, engine mutants and free-text swaps. Doing nothing is not a probe. */
@@ -1113,7 +1115,7 @@ function pagedEntities(world: World, log: readonly CallRecord[]): readonly strin
  * list call with at least one of its route's filters returned a row the solution did not change, among
  * entities it changed rows of.
  */
-function traceCoverage(world: World, log: readonly CallRecord[]): { solutionRowsChanged: number; solutionLaterPageEntities: readonly string[]; solutionDistractorEntities: readonly string[] } {
+function traceCoverage(world: World, log: readonly CallRecord[]): { solutionRowsChanged: number; solutionLaterPageEntities: readonly string[]; solutionDistractorEntities: readonly string[]; solutionChangedEntities: readonly string[] } {
   const list = world.meta.api.list;
   const pageParams = [list.cursorParam, list.startingAfterParam, list.endingBeforeParam];
   const seen = { first: new Set<string>(), later: new Set<string>(), filtered: new Set<string>() };
@@ -1140,7 +1142,10 @@ function traceCoverage(world: World, log: readonly CallRecord[]): { solutionRows
   // Only an entity the solution changed rows of has near-duplicates: an unchanged lookup row (the customer that scopes a ticket search) competes with no target.
   const targeted = new Set([...changed].map((k) => k.slice(0, k.indexOf('/'))));
   const distractors = [...seen.filtered].filter((k) => !changed.has(k)).map((k) => k.slice(0, k.indexOf('/'))).filter((e) => targeted.has(e));
-  return { solutionRowsChanged: changed.size, solutionLaterPageEntities: [...new Set(later)].sort(), solutionDistractorEntities: [...new Set(distractors)].sort() };
+  return {
+    solutionRowsChanged: changed.size, solutionLaterPageEntities: [...new Set(later)].sort(), solutionDistractorEntities: [...new Set(distractors)].sort(),
+    solutionChangedEntities: [...targeted].sort(),
+  };
 }
 
 export function verifyTask(

@@ -322,7 +322,7 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
     const decoys = [{ why: DECOY_WHY, script: RESOLVE_ALL_PENDING }];
     const w = only(MEDIUM, { grader: PRO_GRADER, solution: PRO_SOLUTION, decoys });
     assert.deepEqual(plain(verdictOf(verify(w, MEDIUM))), {
-      taskId: MEDIUM, difficulty: 'medium', solution: 1, noop: 0, decoys: [{ why: DECOY_WHY, score: 0.5 }], bestPrefixScore: 0.6666666666666666, solutionCalls: 6, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 3, solutionLaterPageEntities: [], solutionDistractorEntities: [],
+      taskId: MEDIUM, difficulty: 'medium', solution: 1, noop: 0, decoys: [{ why: DECOY_WHY, score: 0.5 }], bestPrefixScore: 0.6666666666666666, solutionCalls: 6, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 3, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'],
     });
   });
 });
@@ -400,7 +400,7 @@ describe('collateral mutants (A-156)', () => {
 
   it('a grader that rejects both passes, and the mutants leave the verdict unchanged', () => {
     assert.deepEqual(plain(verdictOf(verify(only(EASY), EASY))), {
-      taskId: EASY, difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [],
+      taskId: EASY, difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'],
     });
   });
 
@@ -572,11 +572,11 @@ describe('minimalWorld under the full rules (R9)', () => {
     assert.equal(r.ok, true);
     if (!r.ok) return;
     assert.deepEqual(Object.values(r.verdicts).map(plain), [
-      { taskId: EASY, difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [] },
-      { taskId: MEDIUM, difficulty: 'medium', solution: 1, noop: 0, decoys: [{ why: DECOY_WHY, score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 4, solutionWrites: 2, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: [] },
+      { taskId: EASY, difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'] },
+      { taskId: MEDIUM, difficulty: 'medium', solution: 1, noop: 0, decoys: [{ why: DECOY_WHY, score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 4, solutionWrites: 2, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'] },
       {
         taskId: HARD, difficulty: 'hard', solution: 1, noop: 0,
-        decoys: [{ why: 'raises priority to urgent but forgets to resolve the pending Acme ticket', score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 5, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: ['ticket'],
+        decoys: [{ why: 'raises priority to urgent but forgets to resolve the pending Acme ticket', score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 5, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: ['ticket'], solutionChangedEntities: ['ticket'],
       },
     ]);
   });

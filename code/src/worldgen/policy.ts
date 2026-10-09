@@ -18,7 +18,7 @@ import { ISSUES, type CheckIssue, type Section } from '#engine';
 import { stepModel, type Config, type Effort } from './config.ts';
 import { assertNever } from '#lib/never';
 import type { AttemptOutcome, StopReason } from './events.ts';
-import { SECTION_OWNER, isTestRun, type StepId } from './stages.ts';
+import { SECTION_OWNER, isTestRun, isTestRunEntry, type StepId } from './stages.ts';
 
 export type Ledger = {
   readonly startedAtMs: number;
@@ -43,7 +43,8 @@ export type OwnedIssue = { readonly issue: CheckIssue; readonly owner: StepId };
 export type Decision =
   | { readonly kind: 'advance'; readonly overspent?: Overspend }
   | { readonly kind: 'retry' }
-  | { readonly kind: 'backtrack'; readonly to: StepId }
+  /** `withFrozenTests`: the step traded the plan's frozen tests against another check, so the plan also needs the tests it failed (A-406). */
+  | { readonly kind: 'backtrack'; readonly to: StepId; readonly withFrozenTests?: true }
   | { readonly kind: 'stop'; readonly reason: StopReason };
 
 /** Step order is dependency order. An owner "earlier" than the current step is a backtrack target. */
@@ -120,8 +121,8 @@ function typeMiss(issues: readonly CheckIssue[]): string | null {
   return real.some((i) => i.code === 'plan.not_covered' || i.expected.includes(' to satisfy field.type ')) ? [...fields][0]! : null;
 }
 
-/** The one field an issue-set key's seed issues miss, its `layer.blocked` left out, or null. Keys escape `\\` and `|` (issueSetKey). */
-function fieldOfKey(key: string): string | null {
+/** The `code@path: found` entries of an issue-set key, unescaped. Keys escape `\\` and `|` (issueSetKey). */
+function keyEntries(key: string): string[] {
   const entries: string[] = [];
   let entry = '';
   for (let i = 0; i < key.length; i++) {
@@ -133,12 +134,31 @@ function fieldOfKey(key: string): string | null {
     } else entry += c;
   }
   entries.push(entry);
+  return entries;
+}
+
+/** The one field an issue-set key's seed issues miss, its `layer.blocked` left out, or null. */
+function fieldOfKey(key: string): string | null {
+  const entries = keyEntries(key);
   const fields = new Set(entries.filter((e) => !e.startsWith('layer.blocked@')).map((e) => {
     const at = e.indexOf('@');
     const colon = e.indexOf(': ', at);
     return at < 0 || colon < 0 ? null : missedField(e.slice(0, at), e.slice(at + 1, colon).split('/'), e.slice(colon + 2));
   }));
   return fields.size === 1 && !fields.has(null) ? [...fields][0]! : null;
+}
+
+/**
+ * Whether the step failed only the plan's frozen tests at some attempt between the first and the latest sighting of `key`:
+ * it fixed the tests' failure by breaking a check it cannot drop and came back, so neither holds until the plan rewrites
+ * the tests (A-406). `layer.blocked` entries are left out, as they only follow the failure.
+ */
+function tradesWithTests(seen: readonly string[], key: string): boolean {
+  const testsOnly = (k: string): boolean => {
+    const real = keyEntries(k).filter((e) => !e.startsWith('layer.blocked@'));
+    return real.length > 0 && real.every(isTestRunEntry);
+  };
+  return seen.slice(seen.indexOf(key) + 1, seen.lastIndexOf(key)).some((k) => k !== key && testsOnly(k));
 }
 
 /**
@@ -277,8 +297,9 @@ export function preflight(config: Config, ledger: Ledger, nowMs: number, estimat
  * Call `record` (with `attemptIssueSet`) for the attempt just made, then `decide`. So `ledger.attempts[step]` counts
  * that attempt, and `seenIssueSets[step]` already holds its set.
  * Order of rules: budget, time, accepted, share_expired, judge_expired, stalled, model_error, backtrack, a seed's second
- * miss on one field's type (back to model, A-368), no_progress (a
- * repeated failing test at workflow or seed, or a repeated unmet pressure claim at tasks, backtracks to plan instead), attempts, retry.
+ * miss on one field's type (back to model, A-368), no_progress (a repeated failing test at workflow or seed, a set repeated
+ * there after failing only frozen tests in between (A-406), or a repeated unmet pressure claim at tasks, backtracks to plan
+ * instead), attempts, retry.
  * A stalled call is the transport's failure, not the model's: it retries once per step (`stallRetries`), outside
  * `maxAttempts`, and preflight decides whether the retry fits in the time left. A second stall stops.
  * Budget: at or over `maxCostUsd` stops, except an accepted last step, which advances with
@@ -342,12 +363,16 @@ export function decide(config: Config, state: LoopState, outcome: AttemptOutcome
     if (field !== null && before !== undefined && before !== key && fieldOfKey(before) === field) return { kind: 'backtrack', to: 'model' };
   }
   if (seen >= 2) {
-    // Neither workflow nor seed can edit the plan's frozen tests, so a test they keep failing goes back to the plan that wrote it (A-161, A-165).
-    if ((step === 'workflow' || step === 'seed') && owned.length > 0 && owned.every((o) => isTestRun(o.issue))) {
-      if (ledger.backtracks >= config.maxBacktracks) {
-        return { kind: 'stop', reason: { kind: 'backtrack_limit', step, backtracks: ledger.backtracks } };
+    // Neither workflow nor seed can edit the plan's frozen tests, so a test they keep failing goes back to the plan that wrote it (A-161, A-165),
+    // and so does a set they keep coming back to after failing only frozen tests in between, the tests traded against it (A-406).
+    if ((step === 'workflow' || step === 'seed') && owned.length > 0) {
+      const traded = !owned.every((o) => isTestRun(o.issue)) && tradesWithTests(ledger.seenIssueSets[step] ?? [], key);
+      if (traded || owned.every((o) => isTestRun(o.issue))) {
+        if (ledger.backtracks >= config.maxBacktracks) {
+          return { kind: 'stop', reason: { kind: 'backtrack_limit', step, backtracks: ledger.backtracks } };
+        }
+        return traded ? { kind: 'backtrack', to: 'plan', withFrozenTests: true } : { kind: 'backtrack', to: 'plan' };
       }
-      return { kind: 'backtrack', to: 'plan' };
     }
     // A pressure claim the tasks step keeps missing is the plan's to drop: the seed cannot make it true (A-285).
     if (step === 'tasks' && owned.length > 0 && owned.every((o) => o.issue.code === 'task.pressure_unmet')) {

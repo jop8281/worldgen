@@ -95,6 +95,21 @@ const KEY_NAME_DEFAULTED = 'openapi.required_field_missing@input/openapi/POST /p
 // stress-5 stripe-customers (YOS-253): the plan pressed customer.active, a state only its removal lifecycle names.
 const unreach = issue('plan.pressure_unreachable', ['plan', 'tasks', 1, 'pressure', 'states', 0],
   { task: 'mark_delinquent_exempt', entity: 'customer', state: 'active', workflows: ['customer_lifecycle'] }, 'customer.active is a state only of customer_lifecycle (lifecycle removal)');
+// stress-8 petstore-store (run_20261009T121521Z_3ebc5b07, A-406): workflow traded the plan's frozen tests against the spec.
+// With petId and quantity required the tests, which place orders without them, threw (attempts 1 and 3); with them optional
+// openapi.required_field_missing failed (attempts 2 and 4). These are the four recorded workflow issue sets.
+const petOptional = (field: string) => issue('openapi.required_field_missing', ['input', 'openapi', 'POST /store/orders', 'request', field], { op: 'POST /store/orders', field }, `${field} is optional`);
+const petIdOptional = petOptional('petId');
+const quantityOptional = petOptional('quantity');
+const KEY_PET_SPEC = 'openapi.required_field_missing@input/openapi/POST /store/orders/request/petId: petId is optional|openapi.required_field_missing@input/openapi/POST /store/orders/request/quantity: quantity is optional';
+const KEY_PET_TESTS_1 = 'snippet.runtime_error@tests/delete_order_returns_stock/script: threw undefined is not an object (evaluating "*")|'
+  + 'snippet.runtime_error@tests/order_progress/script: threw undefined is not an object (evaluating "*")|'
+  + 'snippet.runtime_error@tests/place_order_refusals/script: threw undefined is not an object (evaluating "*")';
+const KEY_PET_TESTS_3 = 'snippet.runtime_error@tests/place_order_refusals/script: threw undefined is not an object (evaluating "*")';
+// stress-8 helpdesk-sla (A-406): a distractor claim on agent, which a task that assigns a ticket never changes, is the plan's.
+const agentNotTarget = issue('task.pressure_unmet', ['plan', 'tasks', 0, 'pressure', 'distractors'],
+  { task: 'assign_ticket_to_named_agent', need: 'distractors: a filtered agent list returns a row the reference leaves unchanged' },
+  'the reference changes no agent row, so no agent row can be a distractor');
 /** The key the loop records for a seed rejection with these issues. */
 const seedKey = (...is: CheckIssue[]): string => attemptIssueSet(rejected(...is), is.map((i) => ({ issue: i, owner: 'seed' as const }))) ?? '';
 const tasksKey = (i: CheckIssue): string => attemptIssueSet(rejected(i), owned([i, 'tasks'])) ?? '';
@@ -191,6 +206,26 @@ const rows: Row[] = [
     outcome: rejected(threw), issues: owned([threw, 'workflow']), want: { kind: 'retry' } },
   { name: 'a frozen test that throws twice at workflow backtracks to plan, not no_progress', step: 'workflow', ledger: { attempts: { plan: 1, model: 1, workflow: 2, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_THREW, KEY_THREW], seed: [], tasks: [] } },
     outcome: rejected(threw), issues: owned([threw, 'workflow']), want: { kind: 'backtrack', to: 'plan' } },
+  // A-406: a step that fails only frozen tests between two sightings of another issue set is trading the plan's tests against
+  // a check it cannot drop, so the plan that wrote the tests gets both, instead of a no_progress stop.
+  { name: 'petstore-store, stress-8: workflow alternating the spec check with frozen tests backtracks to plan, not no_progress', step: 'workflow',
+    ledger: { attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
+    outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'backtrack', to: 'plan', withFrozenTests: true } },
+  { name: 'the same alternation stops backtrack_limit when no backtrack is left', step: 'workflow',
+    ledger: { backtracks: 2, attempts: { plan: 2, model: 1, workflow: 4, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_TESTS_3, KEY_PET_SPEC], seed: [], tasks: [] } },
+    outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']), want: { kind: 'stop', reason: { kind: 'backtrack_limit', step: 'workflow', backtracks: 2 } } },
+  { name: 'a frozen test failing only before the repeated set is no trade: it still stops no_progress', step: 'workflow',
+    ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_TESTS_1, KEY_PET_SPEC, KEY_PET_SPEC], seed: [], tasks: [] } },
+    outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
+    want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
+  { name: 'a non-test issue set between the two sightings is no trade with the tests: it still stops no_progress', step: 'workflow',
+    ledger: { attempts: { plan: 2, model: 1, workflow: 3, seed: 0, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [KEY_PET_SPEC, KEY_TF_AND_ACTION, KEY_PET_SPEC], seed: [], tasks: [] } },
+    outcome: rejected(petIdOptional, quantityOptional), issues: owned([petIdOptional, 'workflow'], [quantityOptional, 'workflow']),
+    want: { kind: 'stop', reason: { kind: 'no_progress', step: 'workflow', repeatedIssueSet: KEY_PET_SPEC, lastIssues: [petIdOptional, quantityOptional] } } },
+  // A-406: helpdesk-sla, stress-8: the plan pressed distractors on an entity the reference never changes, so it goes back at once.
+  { name: 'helpdesk-sla, stress-8: a distractor claim on an entity the task never changes backtracks to plan on its first sight', step: 'tasks',
+    ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 1, tasks: 1 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [], tasks: [tasksKey(agentNotTarget)] } },
+    outcome: rejected(agentNotTarget), issues: owned([agentNotTarget, ownerOf(agentNotTarget)]), want: { kind: 'backtrack', to: 'plan' } },
   // A-165: the seed cannot edit the plan's frozen tests either, so a failing test it keeps repeating goes back to plan.
   { name: 'a frozen test failing twice at seed backtracks to plan, not no_progress', step: 'seed', ledger: { attempts: { plan: 1, model: 1, workflow: 1, seed: 2, tasks: 0 }, seenIssueSets: { plan: [], model: [], workflow: [], seed: [KEY_TF, KEY_TF], tasks: [] } },
     outcome: rejected(tf), issues: owned([tf, 'seed']), want: { kind: 'backtrack', to: 'plan' } },
@@ -378,6 +413,7 @@ describe('ownerOf', () => {
     ['layer.blocked elsewhere follows its path', issue('layer.blocked', ['tasks'], { layer: 'tasks' }, 'skipped layers: tasks'), 'tasks'],
     ['at_path with path[0] seed maps to seed', cv, 'seed'],
     ['at_path with path[0] plan maps to plan', planShape, 'plan'],
+    ['a distractor claim on an entity the reference never changes maps to plan, which named it (A-406)', agentNotTarget, 'plan'],
     ['plan.lifecycle_unrepresented maps to plan, which writes the lifecycle the path names, not to the model or workflow stage (YOS-155)', issue('plan.lifecycle_unrepresented', ['plan', 'workflows', 0, 'lifecycle'], { workflow: 'escalation', entity: 'ticket', states: ['escalated', 'acknowledged'] }, 'no state field of ticket declares any state of this workflow'), 'plan'],
     ['plan.pressure_unreachable maps to plan, which wrote the claim no seed can meet (A-369)', unreach, 'plan'],
     ['plan.not_covered for an entity maps to model', nc, 'model'],

@@ -1076,6 +1076,29 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     ]);
     assert.equal(calls[4]?.prompt.includes('row.not_found'), true);
   });
+
+  // stress-8 petstore-store (A-406): one workflow answer failed a frozen test, the next a check workflow cannot drop, and back.
+  const BROKEN_ESCALATE = { note: 'the actions with the escalate handler cut short', upsert: { actions: { ...TARGET.actions, escalate_ticket: { ...TARGET.actions.escalate_ticket!, handler: '(ctx) => {' } }, jobs: TARGET.jobs } };
+
+  it('backtracks to plan when workflow trades a frozen test against another check, and tells the plan both (A-406)', async () => {
+    const { result, events, calls } = await run([
+      { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: BROKEN_ESCALATE }, { input: EDITS.workflow }, { input: BROKEN_ESCALATE },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ]);
+    assert.equal(result.kind, 'done');
+    assert.deepEqual(attempts(events).map(([step, , outcome]) => [step, outcome]), [
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'rejected'], ['workflow', 'rejected'], ['workflow', 'rejected'],
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'accepted'],
+    ]);
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => [i.code, i.path])] : [], [
+      'workflow', 'plan', [
+        ['snippet.compile_error', ['actions', 'escalate_ticket', 'handler']], ['layer.blocked', ['tests']],
+        ['test.failed', ['tests', 'unknown_ticket_404', 'script']],
+      ],
+    ]);
+    assert.deepEqual(['snippet.compile_error', 'unknown_ticket_404'].map((s) => calls[5]?.prompt.includes(s)), [true, true]);
+  });
 });
 
 describe('runWorldGen gates a description that names a fidelity reference at the last step (A-258)', () => {
@@ -2126,6 +2149,26 @@ describe('runWorldGen: a seed shortfall found at tasks goes back to seed with it
       '- escalate_acme, distractors ticket: call GET /tickets with one of its filters (customer, status, priority) so that it returns a ticket row the task leaves unchanged, and change at least one ticket row. With cursor too, the call still counts as a later page.',
     ]);
     assert.deepEqual(listed(calls[3]?.prompt ?? '', 'Pressure each task must show, every claim in every answer'), []);
+    assert.equal(result.kind, 'done');
+  });
+
+  // stress-8 helpdesk-sla (A-406): the plan pressed distractors on an entity the task only looks up, which no reference can meet.
+  it('sends a distractor claim on an entity the reference never changes back to the plan at the first tasks rejection (A-406)', async () => {
+    const lookup = { ...PLAN, tasks: PLAN.tasks.map((t) => (t.id === 'escalate_acme' ? { ...t, pressure: { distractors: 'customer' } } : t)) };
+    const { result, events, calls } = await run([
+      { input: lookup }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+      { input: { ...PLAN, revision: 2 } }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ]);
+    assert.deepEqual(steps(events), [
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'rejected'],
+      ['plan', 'accepted'], ['model', 'accepted'], ['workflow', 'accepted'], ['seed', 'accepted'], ['tasks', 'accepted'],
+    ]);
+    const back = events.filter((e) => e.t === 'backtracked');
+    assert.deepEqual(back.map((e) => (e.t === 'backtracked' ? [e.from, e.to, e.because.map((i) => [i.code, i.path, i.found])] : [])), [
+      ['tasks', 'plan', [['task.pressure_unmet', ['plan', 'tasks', 2, 'pressure', 'distractors'],
+        'the reference changes no customer row, so no customer row can be a distractor: a distractor is a near-duplicate of a row the task changes']]],
+    ]);
+    assert.equal(calls[5]?.prompt.includes('the reference changes no customer row'), true);
     assert.equal(result.kind, 'done');
   });
 

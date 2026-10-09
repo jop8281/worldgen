@@ -152,6 +152,15 @@ function historyLine(t: TriedAttempt): string {
  * The attempt to build on: the one with the fewest own issues among those that left no owned item out, the latest on
  * a tie. The first attempt leaves nothing out, so there is always one.
  */
+/** The frozen-test failures of the latest attempt that had any, its `layer.blocked` left out (A-406). */
+function lastFrozenTestFailures(tried: readonly TriedAttempt[]): readonly CheckIssue[] {
+  for (const t of [...tried].reverse()) {
+    const failed = t.issues.filter((i) => isTestRun(i) && i.code !== 'layer.blocked');
+    if (failed.length > 0) return failed;
+  }
+  return [];
+}
+
 function bestAttempt(tried: readonly TriedAttempt[]): TriedAttempt | undefined {
   let best: TriedAttempt | undefined;
   for (const t of tried) if (t.left.length === 0 && (best === undefined || t.issues.length <= best.issues.length)) best = t;
@@ -968,8 +977,11 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
               : { issues: best.issues, previous: best.input, history: tried, ...(best.n === made ? {} : { bestOf: best.n }) };
           }
           break;
-        case 'backtrack':
-          return { kind: 'backtrack', to: decision.to, because: issues, previous: proposal?.input };
+        case 'backtrack': {
+          // A step that traded the frozen tests against another check also hands the plan the test failures it last saw (A-406).
+          const failedTests = decision.withFrozenTests === true ? lastFrozenTestFailures(tried) : [];
+          return { kind: 'backtrack', to: decision.to, because: [...issues, ...failedTests], previous: proposal?.input };
+        }
         case 'stop':
           return { kind: 'stop', reason: decision.reason };
         default:

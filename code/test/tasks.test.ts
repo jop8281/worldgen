@@ -169,7 +169,7 @@ describe('verifyTask (R3, R4, R7)', () => {
     assert.match(endStateHash, /^[0-9a-f]{32}$/);
     assert.equal(collateral.length, 8);
     assert.deepEqual(rest, {
-      taskId: 'resolve_password_ticket', difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [],
+      taskId: 'resolve_password_ticket', difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [], solutionChangedEntities: ['ticket'],
       checks: [{ check: 'return', flippedBy: ['target_field', 'other_row', 'extra_create', 'extra_delete', 'undone_write', 'retarget'] }], unattributedProbes: [],
     });
     assert.deepEqual(r.log.map((c) => c.routeId), ['list_tickets', 'resolve_ticket']);
@@ -428,6 +428,20 @@ describe('trace coverage (A-225, A-226)', () => {
     const plain = minimalWorld();
     const p = verifyTask(checkedForTest(plain), seeded(plain), 'resolve_password_ticket', host);
     assert.deepEqual(p.ok ? p.verdict.solutionDistractorEntities : null, []);
+  });
+
+  it('records the entities the reference changed rows of, and a filtered lookup list holds no distractor (A-230, A-406)', () => {
+    const w = minimalWorld();
+    // A filtered customer list is a lookup: the reference changes a ticket, never a customer.
+    w.tasks.resolve_password_ticket!.solution = `(ctx) => {
+      ctx.assert(ctx.api('GET', '/customers?tier=enterprise').status === 200, 'customer list failed');
+      const t = ctx.api('GET', '/tickets').body.data.find((x) => x.subject === 'Password reset loop');
+      ctx.assert(ctx.api('POST', '/tickets/' + t.id + '/resolve').status === 200, 'resolve failed');
+    }`;
+    const r = verifyTask(checkedForTest(w), seeded(w), 'resolve_password_ticket', host);
+    assert.equal(r.ok, true, r.ok ? '' : r.issues.map((i) => `${i.code} ${i.found}`).join(', '));
+    if (!r.ok) return;
+    assert.deepEqual([r.verdict.solutionChangedEntities, r.verdict.solutionDistractorEntities], [['ticket'], []]);
   });
 
   it('records no later page for a target on page one', () => {
