@@ -81,6 +81,7 @@ const EARLIEST = {
   'task.prefix_full_marks': 'tasks',
   'task.mutant_full_marks': 'tasks',
   'task.freetext_unchecked': 'tasks',
+  'task.omission_full_marks': 'tasks',
   'task.nondeterministic': 'tasks',
   'world.too_few_tasks': 'tasks',
   'tasks.private_mixed': 'tasks',
@@ -120,6 +121,7 @@ const EARLIEST = {
   'plan.not_covered': null,
   'plan.fixture_changed': null,
   'task.difficulty_unproven': null,
+  'task.planned_action_uncalled': null,
   'task.pressure_unmet': null,
   'plan.seed_rows_short': null,
   'plan.state_missing': null,
@@ -188,6 +190,7 @@ const CODE_CAPS: Readonly<Partial<Record<IssueCode, readonly CapName[]>>> = {
   'task.prefix_full_marks': ['check.tasks.discriminating'],
   'task.mutant_full_marks': ['check.tasks.discriminating'],
   'task.freetext_unchecked': ['check.tasks.discriminating'],
+  'task.omission_full_marks': ['check.tasks.discriminating'],
   'world.too_few_tasks': ['check.tasks'],
   'action.unexercised': ['check.seed', 'check.tests'],
 };

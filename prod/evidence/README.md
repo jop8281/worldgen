@@ -2,6 +2,8 @@
 
 Each public claim in [README.md](../../README.md), with the files behind it and the command that re-checks it from a clone. Commands run from `code/` after `bun install --frozen-lockfile` on Bun 1.4.2. None calls a model or needs a key (A-392).
 
+[prod/scorecards.md](../scorecards.md) sorts the measured numbers into four separate scorecards, for the generator, environment fidelity, the graders and agents; `bun run scorecards` regenerates it from committed files (A-402).
+
 ## Re-check from the repository
 
 | Claim | Evidence | Command, from `code/` | You should see |
@@ -34,7 +36,7 @@ Each public claim in [README.md](../../README.md), with the files behind it and 
 | The planned-actions check: PLANNED_ACTIONS_LINE | PLANNED_ACTIONS_EVIDENCE | PLANNED_ACTIONS_CHECK | PLANNED_ACTIONS_OUTPUT |
 | stress-8 ran the stress suite on v2.0.0's code: STRESS8_RESULT | [summary](../../eval/runs/2026-10-09-stress-8-v2/summary.md), and each done case's `world/plan.yaml`, which gives the `kind` of each task that has one (a new plan needs at least one) | `bun scripts/analyze-eval.ts ../eval/suite.yaml ../eval/runs/2026-10-09-stress-8-v2` for the outcomes, and `bun run worldplay verify ../eval/runs/2026-10-09-stress-8-v2/<case>/world` for each case that ended done | STRESS8_RESULT. `worldplay verify` prints `prefix -` for a task whose reference solution makes at most one successful write call. A solution with none also draws a `task.no_write` warning |
 | In `prod/worlds`, 52 of 95 reference solutions make one write call, 44 of the 84 in generated worlds: the baseline for stress-8's share | [prod/worlds/](../worlds/) | `bun run worldplay verify ../prod/worlds/helpdesk`, and the same for every other folder in `prod/worlds/` | 52 of the 95 task lines show `prefix -`: helpdesk 2 of 3, retail-tau2 6 of 8, and 44 of 84 in the generated worlds. `1308cb7c`'s own `worldplay verify` gives the same 52 there, where A-390 says 51, from a probe that is not in the repository |
-| COVERAGE_LINE (A-393). OMIT_WRITE_LINE | [research/evidence/probe-coverage.md](../../research/evidence/probe-coverage.md) | `bun scripts/probe-coverage.ts ../prod/worlds` | COVERAGE_OUTPUT, and the same table as the committed file, with the unflipped checks listed |
+| 278 of 299 grader checks (93.0%) are flipped by some probe, and 364 of 760 mutant slots are probed (A-393, A-401) | [research/evidence/probe-coverage.md](../../research/evidence/probe-coverage.md) | `bun scripts/probe-coverage.ts ../prod/worlds` | `\| **Total** \| 95 \| 278/299 (93.0%) \| 364/760 (47.9%) \| 0 \|`, and the same table as the committed file, with the 21 unflipped checks listed |
 | A scenario: existing worlds behind one gateway, with a trace, faults and an all-or-nothing grade (A-386) | `prod/scenarios/support-payments/` | `bun run scenario check ../prod/scenarios/support-payments` | `ok support-payments: 2 worlds (support, payments), 2 gates, 1 fault` |
 | The flagship scenario: SCENARIO_LINE | SCENARIO_EVIDENCE | SCENARIO_CHECK | SCENARIO_OUTPUT |
 

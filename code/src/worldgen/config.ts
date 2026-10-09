@@ -47,12 +47,17 @@ export const claudeModelId = z.string().refine(isClaudeModelId, { error: (iss) =
  * Prices known without config, used for a model that `prices` does not list. `prices` wins per
  * field within a model. Sonnet 5.5 lists $2 / $10, 5-minute cache writes $2.50 (1.25x), 1-hour
  * cache writes $4 (2x), cache reads $0.20 (0.1x). The claude CLI writes 1-hour entries. Opus 5.5
- * lists $4 / $20, cache writes $5, cache reads $0.20, as config held it before A-66. Any other
- * model runs only once `prices` gives it an input and an output price.
+ * lists $4 / $20, cache writes $5, cache reads $0.20, as config held it before A-66.
+ * Haiku 5.5 is priced by prompt length: up to 100K tokens $0.10 / $0.50, 5-minute writes $0.125,
+ * 1-hour writes $0.20, reads $0.01; over 100K $0.50 / $2.50, $0.625, $1, $0.05. A price entry has
+ * no prompt-length tiers, so Haiku carries the over-100K tier and the ledger never under-counts a
+ * call; a short prompt is over-counted 5x (A-403). Any other model runs only once `prices` gives
+ * it an input and an output price.
  */
 export const BUILTIN_PRICES: Readonly<Record<string, PriceEntry>> = {
   [DEFAULT_MODEL]: { inputPerMTok: 2, outputPerMTok: 10, cacheWritePerMTok: 2.5, cacheWrite1hPerMTok: 4, cacheReadPerMTok: 0.2 },
   'claude-opus-5-5': { inputPerMTok: 4, outputPerMTok: 20, cacheWritePerMTok: 5, cacheReadPerMTok: 0.2 },
+  'claude-haiku-5-5': { inputPerMTok: 0.5, outputPerMTok: 2.5, cacheWritePerMTok: 0.625, cacheWrite1hPerMTok: 1, cacheReadPerMTok: 0.05 },
 };
 
 /** Whether `model` has an input and an output price, built in or from a `prices` entry that `configSchema` accepted. */

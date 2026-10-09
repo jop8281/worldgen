@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { configSchema, loadConfig, stepModel, transportOf } from '../src/worldgen/config.ts';
+import { checkWorld } from '#engine';
 import { loadExampleWorlds } from '../src/cli/models.ts';
 
 const REAL = resolve(import.meta.dirname, '../worldgen.config.json');
@@ -105,8 +106,9 @@ describe('loadConfig', () => {
 });
 
 describe('the shipped example worlds (A-390)', () => {
-  it('each loads and checks, and gen-hotel-booking is a generated world with a job', async () => {
+  it('each loads and passes the full check, and gen-hotel-booking is a generated world with a job', async () => {
     const worlds = await loadExampleWorlds(await loadConfig(REAL, {}));
+    assert.deepEqual(worlds.map((w) => checkWorld(w).ok), [true, true, true]);
     assert.deepEqual(worlds.map((w) => [Object.keys(w.jobs).length > 0, Object.keys(w.actions).length >= 2]), [[true, true], [false, true], [true, true]]);
   });
 });
