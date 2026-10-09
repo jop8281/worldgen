@@ -21,6 +21,19 @@ Each public claim in [README.md](../../README.md), with the files behind it and 
 - Each export folder keeps the world its episodes ran on, in `world/world.yaml`. `bun scripts/freeze-export-world.ts ../prod/worlds/gen-orders ../eval/dataset/2026-10-07/gen-orders` writes one, and refuses unless its hash is the version the manifest names. Five came from `prod/worlds`. helpdesk came from the root commit (`git show 733538fd:prod/worlds/helpdesk/world.yaml`), because A-356 changed helpdesk after the export.
 - Three frozen worlds (gen-orders, gen-insurance-claims, helpdesk) predate the free-text gate (A-388), so their graders never read some text the solution writes; `bun run evidence` replays them anyway, since that does not change a recorded score, and prints a `note  frozen world predates A-388: <task> grader never reads <field>` line for each gap.
 
+## v2.0 claims
+
+| Claim | Evidence | Command, from `code/` | You should see |
+|---|---|---|---|
+| Grading counts an edit a later call undoes, and the proof step swaps each free-text string a solution sends for nonsense; all 25 prod worlds pass (A-387, A-388) | `code/src/engine/tasks.ts`, `code/test/collateral-grading.test.ts` | `bun scripts/probe-coverage.ts ../prod/worlds` | exit 0 with 25 world rows, `\| undone_write \| 70 \|` and `\| free_text \| 25 \|` |
+| How hard each task is, measured per model (A-391) | `code/src/dataset/difficulty.ts` | `bun run difficulty --help` shows the flags. A run calls a model, so it is a new measurement with its own cost | No difficulty measurement has been run yet; the pilot waits for budget approval |
+| The dataset export writes every episode with a reward, a verdict, a public failure cause and goal and guard counts, and no grader text; a run-wide cut is infra (A-389, A-396) | `code/src/dataset/store.ts`, `code/test/dataset-store.test.ts` | `bun run dataset --help` | `Writes <out>/dataset.jsonl (every episode, with its reward, verdict and failure cause)` and the `--successes-only` line. The committed 2026-10-07 export predates this: schema 1, 38 successes |
+| Generated worlds vary: the few-shot example rotates by input among three worlds, and a new plan needs a hard task naming two or more distinct workflow actions, and a task with a kind | `exampleWorld` in [code/worldgen.config.json](../../code/worldgen.config.json), `pickExample` in `code/src/worldgen/run.ts`, `taskVarietyIssues` in `code/src/worldgen/plan.ts` | `bun test --timeout 120000 test/worldgen.test.ts test/plan.test.ts test/config.test.ts` | every test passes: the rotation table, the variety rule's table and the three listed example worlds |
+| 275 of 299 grader checks (92.0%) are flipped by some probe, and 364 of 760 mutant slots are probed (A-393) | [research/evidence/probe-coverage.md](../../research/evidence/probe-coverage.md) | `bun scripts/probe-coverage.ts ../prod/worlds` | `\| **Total** \| 95 \| 275/299 (92.0%) \| 364/760 (47.9%) \| 0 \|`, and the same table as the committed file, with the 24 unflipped checks listed |
+| A scenario: existing worlds behind one gateway, with a trace, faults and an all-or-nothing grade (A-386) | `prod/scenarios/support-payments/` | `bun run scenario check ../prod/scenarios/support-payments` | `ok support-payments: 2 worlds (support, payments), 2 gates, 1 fault` |
+
+Training benefit is not claimed: [research/training-experiment.md](../../research/training-experiment.md) designs the experiment that would test it, and nothing is run (A-394).
+
 ## Check on GitHub
 
 - v1.1.1's code, `71f84d45`, passed CI twice. `gh run view 37860510831 --repo jop8281/worldgen --json headSha,conclusion` prints `{"conclusion":"success","headSha":"71f84d45efdc7144e17b858df535ba66c120d83b"}`, and so does run 37860513520. The [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1) links both.

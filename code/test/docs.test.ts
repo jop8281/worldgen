@@ -348,7 +348,7 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
 
   it('finds the documented commands in each file, fenced and inline', () => {
     const heads = (file: string): string[] => [...new Set(commands.filter((c) => c.file === file).map((c) => c.head))].sort();
-    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'scripts/demo-all.sh']);
+    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run difficulty', 'bun run evidence', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'scripts/demo-all.sh']);
     assert.deepEqual(heads('prod/README.md'), ['../scripts/live.sh', 'bun run docs', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay']);
     assert.deepEqual(heads('prod/prompts/README.md'), ['bun run live', 'bun run worldgen']);
     assert.deepEqual(heads('research/live-run-runbook.md'), [
@@ -357,8 +357,9 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
     ]);
     assert.deepEqual(heads('research/studio-demo-runbook.md'), ['bun run studio', 'bun scripts/studio-rehearse.ts', 'scripts/studio-deploy.sh']);
     assert.deepEqual(heads('prod/evidence/README.md'), [
-      '../scripts/demo-all.sh', 'bun run evidence', 'bun run live', 'bun run worldplay',
-      'bun scripts/analyze-eval.ts', 'bun scripts/freeze-export-world.ts', 'bun scripts/render-public-worlds.ts',
+      '../scripts/demo-all.sh', 'bun run dataset', 'bun run difficulty', 'bun run evidence', 'bun run live', 'bun run scenario',
+      'bun run worldplay', 'bun scripts/analyze-eval.ts', 'bun scripts/freeze-export-world.ts', 'bun scripts/probe-coverage.ts',
+      'bun scripts/render-public-worlds.ts',
     ]);
   });
 
