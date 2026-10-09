@@ -442,7 +442,7 @@ describe('boatBackend.up', () => {
     await b.down('sb_1');
     assert.equal(writes, 3);
     assert.equal(stops, 2);
-    assert.deepEqual(slept, [5000, 10000, 5000]);
+    assert.deepEqual(slept, [2000, 4000, 2000]);
     assert.deepEqual(calls.filter((c) => c[0] === 'stop' || c[0] === 'waitStopped').map((c) => c[0]), ['stop', 'waitStopped']);
   });
 

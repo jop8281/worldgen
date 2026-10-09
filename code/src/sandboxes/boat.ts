@@ -53,7 +53,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
  */
 const REFUSED_CREATE: ReadonlySet<number> = new Set([400, 401, 402, 403, 404, 422]);
 
-/** boat.dev answers 502, 503 or 504 for minutes at a time; a write or a stop is tried this many times before it fails. */
+/** boat.dev answers 502, 503 or 504 for minutes at a time; a write or a stop is tried this many times, 2 s then 4 s apart, before it fails. */
 export const BOAT_TRANSIENT_TRIES = 3;
 const TRANSIENT: ReadonlySet<number> = new Set([502, 503, 504]);
 
@@ -63,7 +63,7 @@ async function withRetry<T>(f: () => Promise<T>, sleep: (ms: number) => Promise<
       return await f();
     } catch (err) {
       if (n >= BOAT_TRANSIENT_TRIES || !(err instanceof BoatError && TRANSIENT.has(err.status ?? 0))) throw err;
-      await sleep(5_000 * n);
+      await sleep(2_000 * n);
     }
   }
 }
