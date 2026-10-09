@@ -59,6 +59,8 @@ try {
     return r.stdout;
   };
   await sh('mkdir -p repo && tar -xzf repo.tgz -C repo');
+  // A git archive has no .git; tests that run git rev-parse or check-ignore need the tree to be a repository, as on GitHub CI.
+  await sh(`cd repo && git init -q && git add -A && git -c user.name=boat-ci -c user.email=boat-ci@localhost commit -qm ${JSON.stringify(label)}`);
   await sh(BUN_BOOTSTRAP); // the same pinned Bun as upWorld, by curl, so the VM needs no Node or npm (A-385)
   await sh(`${PATHS} && bun --version && bun install --frozen-lockfile >/tmp/install.log 2>&1`);
   log(`installed bun ${SANDBOX_BUN_VERSION}, ${(await sh('nproc')).trim()} cpus, WORLDGEN_GUARD_SCALE=${GUARD_SCALE}`);
