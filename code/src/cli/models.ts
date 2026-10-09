@@ -1,6 +1,6 @@
 /**
  * Shared CLI wiring for model calls: picks the transport, meters every call into the spend
- * ledger (YOS-87), loads the few-shot example world and writes REPORT.md. Used by the worldgen, eval and live CLIs.
+ * ledger (YOS-87), loads the few-shot example worlds and writes REPORT.md. Used by the worldgen, eval and live CLIs.
  * Keys are read from the environment only and never printed; the ledger stores a fingerprint.
  */
 import { accessSync, constants, statSync } from 'node:fs';
@@ -73,13 +73,15 @@ export function makeModel(config: Config, env: Env = process.env, transport: Tra
   }
 }
 
-/** Loads and checks config.exampleWorld; WorldGen renders it into every system prompt. */
-export async function loadExampleWorld(config: Config): Promise<World> {
-  const loaded = await loadWorld(config.exampleWorld);
-  if (!loaded.ok) throw new Error(`example world ${config.exampleWorld} does not load: ${loaded.error[0].code}`);
-  const report = checkWorld(loaded.value);
-  if (!report.ok) throw new Error(`example world ${config.exampleWorld} does not check: ${report.issues[0].code}`);
-  return report.world;
+/** Loads and checks every config.exampleWorld; a run renders the one its input digest picks into every system prompt (A-390). */
+export async function loadExampleWorlds(config: Config): Promise<readonly World[]> {
+  return Promise.all(config.exampleWorld.map(async (dir) => {
+    const loaded = await loadWorld(dir);
+    if (!loaded.ok) throw new Error(`example world ${dir} does not load: ${loaded.error[0].code}`);
+    const report = checkWorld(loaded.value);
+    if (!report.ok) throw new Error(`example world ${dir} does not check: ${report.issues[0].code}`);
+    return report.world;
+  }));
 }
 
 export const mtimeOf = (file: string): Promise<number | null> => stat(file).then((s) => s.mtimeMs, () => null);

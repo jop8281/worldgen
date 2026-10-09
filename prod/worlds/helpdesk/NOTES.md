@@ -1,6 +1,6 @@
 # Helpdesk (golden world)
 
-Hand-built, not generated. It is the engine's end-to-end fixture and WorldGen's few-shot example (A-17, A-42, U-9).
+Hand-built, not generated. It is the engine's end-to-end fixture and one of WorldGen's few-shot examples (A-17, A-42, U-9, A-390).
 It resembles the Zendesk Support tickets API: tickets from requesters, worked by agents, with SLA policies.
 The target behaviour is research/helpdesk-expected-behaviour.md. Where this world differs, see
 research/spec-calls/world-helpdesk-model.md and research/spec-calls/world-helpdesk.md.

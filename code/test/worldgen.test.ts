@@ -22,9 +22,9 @@ import type { Input, InputDigest } from '../src/worldgen/input.ts';
 import { claudeCliModel, CallStalled, ModelError, StepShareExpired, type Model, type ProposeRequest } from '../src/worldgen/llm.ts';
 import { planCoverage, planSchemaFor } from '../src/worldgen/plan.ts';
 import { renderReport } from '../src/worldgen/report.ts';
-import { partialDir, runWorldGen, scopeIssues, stagePrompt, systemPrompt, type RunResult } from '../src/worldgen/run.ts';
+import { partialDir, pickExample, runWorldGen, scopeIssues, stagePrompt, systemPrompt, type RunResult } from '../src/worldgen/run.ts';
 import { PLAN_BRIEF, STAGES } from '../src/worldgen/stages.ts';
-import { CUSTOMERS, EDITS, PLAN, RESOLVE_TEST, TARGET } from './helpers/scripted-world.ts';
+import { CUSTOMERS, EDITS, ESCALATE_TEST, PLAN, RESOLVE_TEST, TARGET } from './helpers/scripted-world.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 const REVISED_PLAN = {
@@ -38,7 +38,7 @@ const REVISED_PLAN = {
       "  ctx.assert(r.status === 200, 'resolve failed');\n}",
       "  ctx.assert(r.status === 200, 'resolve failed');\n  const final = ctx.api('GET', '/tickets/' + t.body.id);\n  ctx.assert(final.body.status === 'resolved', 'ticket not resolved');\n}",
     ),
-  }],
+  }, PLAN.acceptanceTests[1]!],
 };
 const REAPPROVED_PLAN = { ...PLAN, revision: 2 };
 
@@ -214,7 +214,7 @@ const newOutDir = (): string => join(mkdtempSync(join(tmpdir(), 'wg-run-')), 'ge
 
 /** `outDir` is the destination; `filesDir` holds the run's files: `<out>` when done, `<out>.partial` on a stop (A-293). */
 type Ran = { result: RunResult; events: RunEvent[]; calls: ProposeRequest[]; outDir: string; filesDir: string };
-async function run(script: Script, opts: { config?: Config; outDir?: string; input?: Input; digest?: InputDigest; digestThrows?: Error; check?: (world: World) => CheckReport; callAdvanceMs?: readonly number[]; signal?: AbortSignal; abortOnCall?: { n: number; controller: AbortController } } = {}): Promise<Ran> {
+async function run(script: Script, opts: { config?: Config; outDir?: string; input?: Input; exampleWorld?: World | readonly World[]; digest?: InputDigest; digestThrows?: Error; check?: (world: World) => CheckReport; callAdvanceMs?: readonly number[]; signal?: AbortSignal; abortOnCall?: { n: number; controller: AbortController } } = {}): Promise<Ran> {
   const outDir = opts.outDir ?? newOutDir();
   const fake = fakeModel(script);
   const model: typeof fake = { calls: fake.calls, propose: (req) => {
@@ -230,7 +230,7 @@ async function run(script: Script, opts: { config?: Config; outDir?: string; inp
     opts.config ?? CONFIG,
     {
       model,
-      exampleWorld: minimalWorld(),
+      exampleWorld: opts.exampleWorld ?? minimalWorld(),
       emit: (e) => events.push(e),
       now: () => (t += 1000),
       runId: 'run_test',
@@ -245,6 +245,36 @@ async function run(script: Script, opts: { config?: Config; outDir?: string; inp
 }
 
 const kinds = (events: readonly RunEvent[]) => events.map((e) => e.t);
+
+describe('pickExample (A-390)', () => {
+  it('takes the entry the first eight hex digits of the digest pick, modulo the list length', () => {
+    const rows: [string, string][] = [
+      ['00000000aa', 'a'], ['00000001aa', 'b'], ['00000002aa', 'c'], ['00000003aa', 'a'], ['ffffffffaa', 'a'], ['0000000a', 'b'], ['', 'a'], ['zz', 'a'],
+    ];
+    for (const [digest, want] of rows) assert.equal(pickExample(['a', 'b', 'c'], digest), want, digest);
+    assert.equal(pickExample(['only'], 'ffffffff'), 'only');
+    assert.throws(() => pickExample([], '00000000'), /no example world/);
+  });
+});
+
+describe('runWorldGen picks its few-shot world from the config list by the input digest (A-390)', () => {
+  const marked = (mark: string): World => minimalWorld({ actions: { resolve_ticket: { description: `Resolve a pending ticket. ${mark}` } } });
+  const EXAMPLES = [marked('EXAMPLE-A'), marked('EXAMPLE-B'), marked('EXAMPLE-C')];
+  const shown = (calls: readonly ProposeRequest[]) => ['EXAMPLE-A', 'EXAMPLE-B', 'EXAMPLE-C'].filter((m) => calls[0]?.system.includes(m));
+
+  it('renders the same example for the same input and spreads other inputs over the list', async () => {
+    const helpdesk = { kind: 'description', text: 'A helpdesk where overdue tickets escalate' } as const;
+    const first = await run([{ input: PLAN }, new ModelError('stop after the plan')], { input: helpdesk, exampleWorld: EXAMPLES });
+    const again = await run([{ input: PLAN }, new ModelError('stop after the plan')], { input: helpdesk, exampleWorld: EXAMPLES });
+    const other = await run([{ input: PLAN }, new ModelError('stop after the plan')], { input: { kind: 'description', text: 'A bakery that takes cake orders' }, exampleWorld: EXAMPLES });
+    assert.deepEqual([shown(first.calls), shown(again.calls), shown(other.calls)], [['EXAMPLE-C'], ['EXAMPLE-C'], ['EXAMPLE-B']]);
+  });
+
+  it('renders a single world as before', async () => {
+    const one = await run([{ input: PLAN }, new ModelError('stop after the plan')], { exampleWorld: marked('EXAMPLE-A') });
+    assert.deepEqual(shown(one.calls), ['EXAMPLE-A']);
+  });
+});
 const attempts = (events: readonly RunEvent[]) =>
   events.flatMap((e) => (e.t === 'attempt' ? [[e.step, e.n, e.outcome.kind] as const] : []));
 const brief = (issues: readonly CheckIssue[]) => issues.map((i) => [i.code, i.path] as const);
@@ -302,7 +332,7 @@ describe('runWorldGen create: success on the first try', () => {
     assert.equal(report.world.meta.resembles, 'Zendesk-style helpdesk');
     assert.equal(report.world.meta.description, 'Customers file tickets, agents resolve pending ones, and overdue tickets escalate.');
     assert.deepEqual(Object.keys(report.world.tasks), ['resolve_password_ticket', 'resolve_initech_pending', 'escalate_acme']);
-    assert.deepEqual(Object.keys(report.world.tests), ['resolve_pending_ticket']);
+    assert.deepEqual(Object.keys(report.world.tests), ['resolve_pending_ticket', 'escalate_open_ticket']);
   });
 
   it('applies the planned clock before seeding imported history and preserves it on disk', async () => {
@@ -473,7 +503,7 @@ describe('runWorldGen create: an action no acceptance test calls (A-136)', () =>
     ]);
     assert.equal(calls[3]?.prompt.includes('- code: action.unexercised'), true);
     const saved = parseYaml(readFileSync(join(filesDir, 'world.yaml'), 'utf8')) as World;
-    assert.deepEqual(Object.keys(saved.actions), ['resolve_ticket']);
+    assert.deepEqual(Object.keys(saved.actions), ['resolve_ticket', 'escalate_ticket']);
   });
 });
 
@@ -555,7 +585,10 @@ describe('runWorldGen create: a rule binds the acceptance test that exercises it
     const report = checkWorld(loaded.value);
     assert.equal(report.ok, true);
     if (!report.ok) return;
-    assert.deepEqual(report.world.tests, { resolve_pending_ticket: { description: 'a pending ticket can be resolved', script: RESOLVE_TEST } });
+    assert.deepEqual(report.world.tests, {
+      resolve_pending_ticket: { description: 'a pending ticket can be resolved', script: RESOLVE_TEST },
+      escalate_open_ticket: { description: 'an unresolved ticket can be escalated', script: ESCALATE_TEST },
+    });
   });
 });
 
@@ -612,7 +645,7 @@ describe('runWorldGen create: stage tools and scope', () => {
   const BROKEN_HANDLER = {
     note: 'the resolve action and the escalation job',
     upsert: {
-      actions: { resolve_ticket: { ...TARGET.actions['resolve_ticket'], handler: "(ctx) => ctx.fail(409, 'invalid_state', 'not yet')" } },
+      actions: { ...TARGET.actions, resolve_ticket: { ...TARGET.actions['resolve_ticket'], handler: "(ctx) => ctx.fail(409, 'invalid_state', 'not yet')" } },
       jobs: TARGET.jobs,
     },
   };
@@ -653,6 +686,7 @@ describe('runWorldGen create: stage tools and scope', () => {
     const saved = await loadWorld(outDir);
     assert.deepEqual(saved.ok ? (saved.value as World).tests : null, {
       resolve_pending_ticket: { description: 'a pending ticket can be resolved and reads back as resolved', script: REVISED_PLAN.acceptanceTests[0]?.script },
+      escalate_open_ticket: { description: 'an unresolved ticket can be escalated', script: ESCALATE_TEST },
     });
   });
 
@@ -675,7 +709,10 @@ describe('runWorldGen create: stage tools and scope', () => {
     assert.equal(repair[0]?.path.join('.'), 'tests');
     assert.deepEqual(events.flatMap((e) => (e.t === 'backtracked' ? [[e.from, e.to]] : [])), [['workflow', 'plan']]);
     const saved = await loadWorld(outDir);
-    assert.deepEqual(saved.ok ? (saved.value as World).tests : null, { resolve_pending_ticket: { description: 'a pending ticket can be resolved', script: RESOLVE_TEST } });
+    assert.deepEqual(saved.ok ? (saved.value as World).tests : null, {
+      resolve_pending_ticket: { description: 'a pending ticket can be resolved', script: RESOLVE_TEST },
+      escalate_open_ticket: { description: 'an unresolved ticket can be escalated', script: ESCALATE_TEST },
+    });
   });
 
   it('flags unknown edit keys and section names instead of dropping them, and ignores empty unowned parts', () => {
@@ -1055,7 +1092,7 @@ describe('runWorldGen gates a description that names a fidelity reference at the
     const rejected = events.find((e) => e.t === 'attempt' && e.step === 'tasks' && e.outcome.kind === 'rejected');
     const issues = rejected?.t === 'attempt' && rejected.outcome.kind === 'rejected' ? rejected.outcome.issues : [];
     assert.equal(issues.length > 0 && issues.every((i) => i.code === 'fidelity.below_floor'), true);
-    assert.equal(issues[0]?.expected.includes('fidelity to the frozen reference is 0.3803, below the floor of 0.8'), true);
+    assert.equal(issues[0]?.expected.includes('fidelity to the frozen reference is 0.3944, below the floor of 0.8'), true);
     const back = events.find((e) => e.t === 'backtracked');
     assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to] : [], ['tasks', 'model']);
   });
@@ -1567,7 +1604,7 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
   const ACTION_ROUTE_PLAN = {
     ...PLAN,
     routes: [...PLAN.routes, { id: 'resolve_ticket', method: 'POST', path: '/tickets/{id}/resolve', purpose: 'resolve a pending ticket' }],
-    workflows: [{ ...PLAN.workflows[0]!, actions: ['resolve_ticket (POST /tickets/{id}/resolve)'] }],
+    workflows: [{ ...PLAN.workflows[0]!, actions: ['resolve_ticket (POST /tickets/{id}/resolve)', 'escalate_ticket'] }],
   };
   const plan = planSchemaFor('description').parse(ACTION_ROUTE_PLAN);
 
@@ -1592,7 +1629,9 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
     const noAction = { ...TARGET, actions: {}, tests: {} };
     assert.deepEqual(planCoverage(plan, noAction).map((i) => [i.path.join('.'), i.found]), [
       ['plan.workflows.0.actions.0', 'no actions.resolve_ticket'],
+      ['plan.workflows.0.actions.1', 'no actions.escalate_ticket'],
       ['plan.acceptanceTests.0', 'no tests.resolve_pending_ticket'],
+      ['plan.acceptanceTests.1', 'no tests.escalate_open_ticket'],
     ]);
     assert.deepEqual(planCoverage(plan, TARGET), []);
   });
@@ -1603,7 +1642,7 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
 
   it('the workflow-stage prompt lists planned actions and the paths routes already own', () => {
     const prompt = stagePrompt('workflow', plan, TARGET, null);
-    assert.deepEqual(listed(prompt, 'Required keys'), ['- actions.resolve_ticket (exists)', '- jobs.escalate_overdue (exists)']);
+    assert.deepEqual(listed(prompt, 'Required keys'), ['- actions.resolve_ticket (exists)', '- actions.escalate_ticket (exists)', '- jobs.escalate_overdue (exists)']);
     assert.equal(systemPrompt('workflow', TARGET).includes('never edit, remove or replace a test'), true);
     assert.equal(prompt.includes('- POST /tickets (routes.create_ticket)'), true);
     assert.equal(prompt.includes('- PATCH /tickets/{id} (routes.update_ticket)'), true);
@@ -1641,7 +1680,7 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
     const action = TARGET.actions['resolve_ticket']!;
     const naive = { method: 'POST', path: '/tickets' };
     const placed = taken.has(routeKey(naive.method, naive.path)) ? { method: action.method, path: action.path } : naive;
-    return { input: { ...EDITS.workflow, upsert: { ...EDITS.workflow.upsert, actions: { resolve_ticket: { ...action, ...placed } } } } };
+    return { input: { ...EDITS.workflow, upsert: { ...EDITS.workflow.upsert, actions: { ...TARGET.actions, resolve_ticket: { ...action, ...placed } } } } };
   }
   /** The request without the prompt sections YOS-45 added. */
   const withoutLists = (req: ProposeRequest): ProposeRequest => ({

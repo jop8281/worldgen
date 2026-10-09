@@ -36,7 +36,7 @@ This is the workflow as of 2026-10-08. Linear and GitHub split the work, and one
 | `eval/` | The rehearsal suite (`suite.yaml`), its inputs, and run output, which `bun run eval` writes under eval/runs on its first run. | Code, or worlds meant for submission. |
 | `prod/` | What gets handed in: `design.md`, the generated `world-format.md`, the hand-built world, generated worlds, and scenarios in `prod/scenarios/`. | Drafts and rehearsal runs. Tests check every world here, so a broken world fails `bun run test`. |
 
-`code/` reads `prod/worlds/*` by path, in tests and as the few-shot example (`exampleWorld` in `code/worldgen.config.json`). It never imports from `research/`, `eval/` or `prod/`.
+`code/` reads `prod/worlds/*` by path, in tests and as the few-shot examples (`exampleWorld` in `code/worldgen.config.json`, one picked per input, A-390). It never imports from `research/`, `eval/` or `prod/`.
 
 ## Module map
 
@@ -122,7 +122,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `cli/studio-check.ts` | The Studio's check child (A-338): spawned once per Explorer request with an environment of only TZ, PATH and the guard scale, it loads and checks one world and prints the Explorer view as one JSON object. Exit 3 means the world does not load or check, with one authored line on stderr. |
 | `cli/episode-prepare.ts` | The prepare child (A-347, A-353): spawned by `dataset/local.ts` once per episode and by `dataset/pipeline.ts` for a dataset run's check and prepare, with an environment of only TZ, PATH and the guard scale, it checks and freezes one world and prints the prepared world, without the CheckedWorld, as one JSON object. `--check <worldDir>` only checks and prints `{ tasks, source }`. Exit 3 means the world does not check, with the message on stderr. |
 | `cli/live.ts` | `bun run live`: lists the prompts, runs WorldGen on each one at a time, checks and verifies, moves a verified world to `prod/worlds`, writes the table. The dry run prints each world's real destination, and the results file when it is not the default. |
-| `cli/models.ts` | The shared wiring for CLIs: transport choice, metering into the ledger, the example world, and writing `REPORT.md`. |
+| `cli/models.ts` | The shared wiring for CLIs: transport choice, metering into the ledger, the example worlds, and writing `REPORT.md`. |
 | `cli/options.ts` | The options the model-calling CLIs repeat (YOS-203): `--model`, `--transport`, `--budget-usd` and `--max-minutes` read into config overrides, the rule for an option's value, `CONFIG_FILE` and `UsageError`. Parsing only; each CLI keeps its own walk over argv. `test/cli-options-golden.test.ts` pins every CLI's results and refusals. |
 | `cli/episode.ts` | Argument parsing and wiring for `bun run episode`: one local agent episode for the studio's Agent Playground. The work is in `dataset/local.ts`. No logic. |
 | `cli/scenario.ts` | Argument parsing and printing for `bun run scenario`: `check <dir>` and `serve <dir> [--port] [--admin-port]`. The work is in `scenario/manifest.ts` and `scenario/gateway.ts`. No logic. |

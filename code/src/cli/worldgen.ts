@@ -20,7 +20,7 @@ import { parseFidelityReference } from '../worldgen/fidelity.ts';
 import { genDirName, parseInputArgs, type Input } from '../worldgen/input.ts';
 import type { Model } from '../worldgen/llm.ts';
 import { partialDir, runWorldGen, type Job, type RunResult } from '../worldgen/run.ts';
-import { loadExampleWorld, makeModel, mtimeOf, writeReport } from './models.ts';
+import { loadExampleWorlds, makeModel, mtimeOf, writeReport } from './models.ts';
 import { CONFIG_FILE, MODEL_OPTIONS, UsageError, modelOverrides, optionValue } from './options.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
@@ -154,11 +154,11 @@ async function main(argv: readonly string[]): Promise<number> {
 
   let config: Config;
   let model: Model;
-  let exampleWorld: World;
+  let exampleWorld: readonly World[];
   try {
     config = await loadConfig(CONFIG_FILE, args.overrides);
     model = makeModel(config, process.env, transportOf(config));
-    exampleWorld = await loadExampleWorld(config);
+    exampleWorld = await loadExampleWorlds(config);
   } catch (e) {
     err(message(e));
     return 2;
