@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { checkWorld, createRuntime, loadWorld, publicWorldOf, renderWorldYaml, type CheckedWorld, type Runtime } from '#engine';
 import { parsePlanYaml } from '../src/worldgen/plan.ts';
+import { plannedActionIssues } from '../src/worldgen/stages.ts';
 
 const WORLDS = fileURLToPath(new URL('../../prod/worlds/', import.meta.url));
 const HELPDESK = path.join(WORLDS, 'helpdesk');
@@ -57,6 +58,8 @@ describe('prod worlds', async () => {
       const planText = await readFile(path.join(WORLDS, name, 'plan.yaml'), 'utf8').catch(() => null);
       const plan = planText === null ? null : parsePlanYaml(planText);
       if (report.ok && plan !== null) assert.deepEqual(plan.clock, report.world.meta.clock, `${name}: plan.yaml clock differs from world.yaml`);
+      // A-398: the tasks stage's planned-action check passes every committed world.
+      if (report.ok && plan !== null) assert.deepEqual(plannedActionIssues(report, plan), [], `${name}: a reference misses a planned action`);
     });
   }
 

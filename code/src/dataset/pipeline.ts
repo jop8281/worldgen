@@ -312,6 +312,8 @@ export type PipelineOptions = {
   readonly engineCommit: string;
   /** The model the solver calls, recorded on every episode (A-283). */
   readonly model: string;
+  /** The prompt version every episode records. Default PROMPT_VERSION; a red-team run passes its own (A-404). */
+  readonly promptVersion?: string;
   readonly maxTurns: number;
   readonly budgetUsd: number;
   readonly maxMinutes: number;
@@ -471,7 +473,7 @@ export async function runPipeline(o: PipelineOptions, deps: PipelineDeps): Promi
         break;
       }
       const { episode, artifacts } = await runEpisode({
-        runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: PROMPT_VERSION, configVersion: cfg, model: o.model,
+        runId: o.runId, engineCommit: o.engineCommit, worldId: prep.worldId, worldVersion: prep.worldVersion, promptVersion: o.promptVersion ?? PROMPT_VERSION, configVersion: cfg, model: o.model,
         task, index: 1, openapi: prep.openapi, seedHash: prep.seedHash, port: world, grade, nextTurn: deps.nextTurn,
         // The budget and deadline are the run's, shared by its episodes, so a cut by them is the run's, not the agent's (A-396).
         maxTurns: o.maxTurns, budgetLeftUsd: o.budgetUsd - spent, deadline, limitScope: 'run', now, redact, interrupt: deps.interrupt,

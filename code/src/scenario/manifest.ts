@@ -3,8 +3,8 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { checkWorld, loadWorld, type CheckedWorld } from '#engine';
+import { alias, linkSchema, type LinkEnd } from './links.ts';
 
-const alias = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 const faultSchema = z.strictObject({
   world: alias,
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
@@ -18,6 +18,7 @@ export const scenarioSchema = z.strictObject({
   worlds: z.record(alias, z.string().min(1)),
   gates: z.array(z.strictObject({ world: alias, task: z.string().min(1) })).min(1),
   faults: z.array(faultSchema).default([]),
+  links: z.array(linkSchema).default([]),
 });
 export type Scenario = z.output<typeof scenarioSchema>;
 export type FaultKind = Scenario['faults'][number]['kind'];
@@ -80,6 +81,29 @@ export async function loadScenario(dir: string): Promise<{ ok: true; value: Load
   });
   scenario.faults.forEach((f, i) => {
     if (!aliases.includes(f.world)) errors.push(`faults[${i}]: world ${f.world} is not declared in worlds. ${known}`);
+  });
+  const linkEnd = (at: string, e: LinkEnd): void => {
+    if (!aliases.includes(e.world)) {
+      errors.push(`${at}: world ${e.world} is not declared in worlds. ${known}`);
+      return;
+    }
+    const w = worlds[e.world];
+    if (w === undefined) return;
+    const entity = Object.hasOwn(w.entities, e.entity) ? w.entities[e.entity] : undefined;
+    if (entity === undefined) {
+      errors.push(`${at}: world ${e.world} has no entity "${e.entity}". Entities: ${Object.keys(w.entities).join(', ')}`);
+      return;
+    }
+    const fields = ['id', ...Object.keys(entity.fields)];
+    const unknown = (key: string, name: string): void => {
+      if (!fields.includes(name)) errors.push(`${at}.${key}: ${e.entity} in world ${e.world} has no field "${name}". Fields: ${fields.join(', ')}`);
+    };
+    for (const name of Object.keys(e.where)) unknown('where', name);
+    unknown('field', e.field);
+  };
+  scenario.links.forEach((l, i) => {
+    linkEnd(`links[${i}].from`, l.from);
+    linkEnd(`links[${i}].to`, l.to);
   });
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value: { scenario, worlds } };

@@ -18,7 +18,7 @@ import { collectBundle } from '../sandboxes/files.ts';
 import { PreflightError, checkInChild, runPipeline, type CheckedForRun, type PipelineResult } from '../dataset/pipeline.ts';
 import type { NextTurn } from '../dataset/episode.ts';
 import { childGrader, type GraderFactory } from '../dataset/verifier.ts';
-import { solverTurn, type SolverProposer } from '../dataset/solver.ts';
+import { PROMPT_VERSION_OF, solverTurn, type SolverMode, type SolverProposer } from '../dataset/solver.ts';
 import { GRADING_NOTE, redactor, type Redactor } from '../dataset/schema.ts';
 import { releaseStaleClaim } from '../dataset/store.ts';
 import { DEFAULT_API_KEY_ENV, loadConfig, transportOf, type Config, type Transport } from '../worldgen/config.ts';
@@ -50,6 +50,7 @@ and REPORT.md, reopens and validates them, and always stops the sandbox.
   --model <id>          the solver's model, default the config's (claude-sonnet-5-5); any Claude model with a known price
   --transport <kind>    claude-cli (default) or sdk; sdk needs ${DEFAULT_API_KEY_ENV}
   --successes-only      export the complete successes alone, the view dataset.jsonl gave before A-389
+  --redteam             the solver makes a near-miss of each task on purpose; a full score is a grader bug (A-404)
 
 Needs ${BOAT_KEY_ENV} and ${ORG_ENV} (the one Boat organization this machine bills to, A-247) in the environment. Exit 0 only when every task has an
 accepted episode, the export reopened clean and the sandbox stop was confirmed; 3 when the
@@ -94,6 +95,7 @@ type Args = {
   readonly transport?: Transport;
   readonly model?: string;
   readonly successesOnly: boolean;
+  readonly mode: SolverMode;
 };
 // dataset words its number and transport refusals its own way, and reads numbers stricter than options.ts does;
 // YOS-203 lists both for a decision before they move there.
@@ -111,7 +113,7 @@ function parse(argv: readonly string[]): Args | 'help' {
       allowPositionals: true,
       options: {
         world: { type: 'string' }, out: { type: 'string' }, 'run-id': { type: 'string' }, 'engine-commit': { type: 'string' },
-        transport: { type: 'string' }, model: { type: 'string' }, 'max-turns': { type: 'string' }, 'budget-usd': { type: 'string' }, 'max-minutes': { type: 'string' }, 'successes-only': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+        transport: { type: 'string' }, model: { type: 'string' }, 'max-turns': { type: 'string' }, 'budget-usd': { type: 'string' }, 'max-minutes': { type: 'string' }, 'successes-only': { type: 'boolean' }, redteam: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       },
     });
   } catch (e) {
@@ -134,6 +136,7 @@ function parse(argv: readonly string[]): Args | 'help' {
     budgetUsd: positive('--budget-usd', need('budget-usd'), false),
     maxMinutes: positive('--max-minutes', need('max-minutes'), false),
     successesOnly: p.values['successes-only'] === true,
+    mode: p.values.redteam === true ? 'redteam' : 'solve',
   };
 }
 
@@ -245,7 +248,7 @@ export async function main(argv: readonly string[], env: Env = process.env, deps
     let nextTurn = deps.nextTurn;
     let backend = deps.backend;
     try {
-      if (nextTurn === undefined) nextTurn = solverTurn(deps.proposer ?? makeModel(config, env, transport), args.runId);
+      if (nextTurn === undefined) nextTurn = solverTurn(deps.proposer ?? makeModel(config, env, transport), args.runId, args.mode);
       // Signals are handled above, so the registry's exit hook must not turn Ctrl-C into an exit that skips the teardown.
       if (backend === undefined) backend = backendFor('boat', env, nodeRunner, { runId: args.runId, flushOnExit: false }).backend;
     } catch (e) {
@@ -256,7 +259,7 @@ export async function main(argv: readonly string[], env: Env = process.env, deps
     try {
       result = await runPipeline(
         {
-          worldDir: args.world, out: args.out, runId: args.runId, engineCommit: args.engineCommit, model: config.model,
+          worldDir: args.world, out: args.out, runId: args.runId, engineCommit: args.engineCommit, model: config.model, promptVersion: PROMPT_VERSION_OF[args.mode],
           maxTurns: args.maxTurns, budgetUsd: args.budgetUsd, maxMinutes: args.maxMinutes, ...(args.successesOnly ? { successesOnly: true } : {}),
           secrets, sandboxName: sandboxName(`ds-${args.runId}`), ...(deps.port === undefined ? {} : { port: deps.port }),
         },

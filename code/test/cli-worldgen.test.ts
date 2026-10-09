@@ -197,10 +197,15 @@ describe('worldgen CLI: a run that stops', () => {
 });
 
 describe('worldgen CLI: exit', () => {
+  // The CLI exits in about 0.2 s here. The cap only catches a process that never exits. 10 s failed under CI runner
+  // contention: run 37928549911 on #172, 37936070173 on #178 and 37888448968 on main, when startup checked every
+  // example world in full and took about 7 s.
+  const EXIT_CAP_MS = 30_000;
+
   it('exits once the run returns, even with a handle still open, and flushes stdout first', () => {
     // The interval stands in for a lingering handle such as an abandoned claude child's pipes.
     const r = spawnSync(process.execPath, ['test/helpers/linger-cli.ts', '--help'], {
-      cwd: CODE_DIR, encoding: 'utf8', env: scratch().env, timeout: 10_000, killSignal: 'SIGKILL',
+      cwd: CODE_DIR, encoding: 'utf8', env: scratch().env, timeout: EXIT_CAP_MS, killSignal: 'SIGKILL',
     });
     assert.equal(r.error, undefined);
     assert.equal(r.signal, null);
@@ -215,7 +220,7 @@ describe('worldgen CLI: exit', () => {
     const r = spawnSync(
       process.execPath,
       ['test/helpers/linger-cli.ts', '--openapi', path.join(home, 'missing.openapi.yaml'), '--transport', 'sdk', '--out', out],
-      { cwd: CODE_DIR, encoding: 'utf8', env: { ...env, LLM_KEY: 'test-key-never-sent' }, timeout: 10_000, killSignal: 'SIGKILL' },
+      { cwd: CODE_DIR, encoding: 'utf8', env: { ...env, LLM_KEY: 'test-key-never-sent' }, timeout: EXIT_CAP_MS, killSignal: 'SIGKILL' },
     );
     assert.equal(r.error, undefined);
     assert.equal(r.signal, null);

@@ -114,14 +114,14 @@ export const BAD_TASKS: readonly BadTask[] = [
   },
   {
     id: 'GR-prefix-any', note: 'hard grader gives 1 once any target is escalated', code: 'task.prefix_full_marks', expect: 'present',
-    taskId: 'escalate_unassigned', accept: ['task.decoy_full_marks', 'task.mutant_full_marks'],
+    taskId: 'escalate_unassigned', accept: ['task.decoy_full_marks', 'task.mutant_full_marks', 'task.omission_full_marks'],
     mutate: (w) => {
       task(w, 'escalate_unassigned').grader = `(ctx) => ctx.db.list('ticket', { where: { escalated: true } }).length > 0 ? 1 : 0`;
     },
   },
   {
     id: 'GR-prefix-medium', note: 'medium grader gives 1 once one target is pending', code: 'task.prefix_full_marks', expect: 'present',
-    taskId: 'pend_open_urgent', accept: ['task.decoy_full_marks'],
+    taskId: 'pend_open_urgent', accept: ['task.decoy_full_marks', 'task.omission_full_marks'],
     mutate: (w) => {
       task(w, 'pend_open_urgent').grader = `(ctx) => { const g = ${SNIPPETS.mediumGrader}; return g(ctx) > 0 ? 1 : 0; }`;
     },
@@ -138,6 +138,16 @@ export const BAD_TASKS: readonly BadTask[] = [
     taskId: 'pend_hd1005',
     mutate: (w) => {
       task(w, 'pend_hd1005').grader = SNIPPETS.easyGrader.replace("  if (ctx.changes().some((c) => c.fields.some((f) => f !== 'status'))) return 0;\n", '');
+    },
+  },
+  {
+    id: 'GR-omission-last-only', note: 'medium grader checks only the last target, so leaving out the first write still scores 1 (A-401)', code: 'task.omission_full_marks',
+    expect: 'present', taskId: 'pend_open_urgent', accept: ['task.decoy_full_marks'],
+    mutate: (w) => {
+      task(w, 'pend_open_urgent').grader = SNIPPETS.mediumGrader.replace(
+        "  const done = ids.filter((id) => { const r = ctx.db.get('ticket', id); return r && r.status === 'pending'; }).length;\n  return done / ids.length;\n",
+        "  const last = ctx.db.get('ticket', ids[ids.length - 1]);\n  return last && last.status === 'pending' ? 1 : 0;\n",
+      );
     },
   },
   {
