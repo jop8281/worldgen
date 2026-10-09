@@ -179,33 +179,51 @@ export function testOperations(plan: Plan): ReadonlyMap<string, readonly string[
   }));
 }
 
+/** Whether `i` is a frozen test that failed or threw; `layer.blocked` only follows a failure. */
+const failedTest = (i: CheckIssue): boolean => isTestRun(i) && i.code !== 'layer.blocked';
+/** The operation an input issue names at `input/openapi/<METHOD path>`, as `operationKey` writes it, or null. */
+const namedOperation = (i: CheckIssue): string | null =>
+  (i.path[0] === 'input' && i.path[1] === 'openapi' && typeof i.path[2] === 'string' ? i.path[2].replace(/\{[^}]*\}/g, '{}') : null);
+/** The operations the frozen test an issue sits on exercises (`testOperations`), or none. */
+const exercisedBy = (i: CheckIssue, tests: ReadonlyMap<string, readonly string[]>): readonly string[] => tests.get(String(i.path[1])) ?? [];
+
 /**
  * The other side of a trade between the plan's frozen tests and a check the input fixes (A-406), only about the operations
  * the two share (`testOperations`, `{param}` compared as `{}`): when `issues` holds the input check, the failing tests of the
  * latest tests-only attempt (its `layer.blocked` left out) that exercise an operation the check names; when it holds the
  * tests, the input-rooted issues of the latest attempt that name an operation one of those tests exercises. A failing
- * test of another operation is the step's own to fix, so the plan is never shown it as the conflict (J191). Issues
+ * test of another operation is the step's own to fix, so the plan is never shown it as the conflict (A-416). Issues
  * already in `issues` are left out.
  */
 function tradedSide(tried: readonly TriedAttempt[], issues: readonly CheckIssue[], tests: ReadonlyMap<string, readonly string[]>): readonly CheckIssue[] {
   const fromInput = (i: CheckIssue): boolean => i.path[0] === 'input';
-  const failedTest = (i: CheckIssue): boolean => isTestRun(i) && i.code !== 'layer.blocked';
   const same = (a: CheckIssue, b: CheckIssue): boolean => a.code === b.code && a.path.join('/') === b.path.join('/') && a.found === b.found;
-  /** The operation an input issue names at `input/openapi/<METHOD path>`, as `operationKey` writes it. */
-  const named = (i: CheckIssue): string | null => (fromInput(i) && i.path[1] === 'openapi' && typeof i.path[2] === 'string' ? i.path[2].replace(/\{[^}]*\}/g, '{}') : null);
-  const exercised = (i: CheckIssue): readonly string[] => tests.get(String(i.path[1])) ?? [];
   const side = (t: TriedAttempt): readonly CheckIssue[] => {
     if (!issues.some(fromInput)) {
-      const ops = new Set(issues.filter(failedTest).flatMap(exercised));
-      return t.issues.filter((i) => ops.has(named(i) ?? ''));
+      const ops = new Set(issues.filter(failedTest).flatMap((i) => exercisedBy(i, tests)));
+      return t.issues.filter((i) => ops.has(namedOperation(i) ?? ''));
     }
     const real = t.issues.filter((i) => i.code !== 'layer.blocked');
     if (!(real.length > 0 && real.every(failedTest))) return [];
-    const ops = new Set(issues.map(named).filter((op): op is string => op !== null));
-    return real.filter((i) => exercised(i).some((op) => ops.has(op)));
+    const ops = new Set(issues.map(namedOperation).filter((op): op is string => op !== null));
+    return real.filter((i) => exercisedBy(i, tests).some((op) => ops.has(op)));
   };
   const found = [...tried].reverse().map(side).find((s) => s.length > 0) ?? [];
   return found.filter((i) => !issues.some((j) => same(i, j)));
+}
+
+/**
+ * What the plan is told on a traded backtrack: the step's last issues, each failing test among them kept only when it
+ * exercises an operation the trade's input check names, then the other side (`tradedSide`). When no other side is found,
+ * the step's issues go whole. The step that backtracked still gets its whole last rejection when it runs again (J192,
+ * follow-up to A-416).
+ */
+function tradedForTarget(tried: readonly TriedAttempt[], issues: readonly CheckIssue[], tests: ReadonlyMap<string, readonly string[]>): readonly CheckIssue[] {
+  const other = tradedSide(tried, issues, tests);
+  // With no other side found there is nothing to narrow against, so the plan gets the step's issues whole, never none.
+  if (other.length === 0) return issues;
+  const ops = new Set([...issues, ...other].map(namedOperation).filter((op): op is string => op !== null));
+  return [...issues.filter((i) => !failedTest(i) || exercisedBy(i, tests).some((op) => ops.has(op))), ...other];
 }
 
 /** The owned items an edit writes, as `section.key`. A plan answer is always whole, so it writes none here. */
@@ -229,8 +247,11 @@ type Judged<T> =
 
 type StepOutcome<T> =
   | { readonly kind: 'advance'; readonly value: T }
-  /** `alsoForTarget`: issues of earlier attempts the backtrack target needs as well; the step that backtracked is not shown them again (A-406). */
-  | { readonly kind: 'backtrack'; readonly to: StepId; readonly because: readonly CheckIssue[]; readonly alsoForTarget: readonly CheckIssue[]; readonly previous: unknown }
+  /**
+   * `because`: the step's own last issues, which it gets again on its rerun. `forTarget`: what the backtrack target is
+   * told, `because` itself unless a trade narrows it and adds the other side (A-406, A-416).
+   */
+  | { readonly kind: 'backtrack'; readonly to: StepId; readonly because: readonly CheckIssue[]; readonly forTarget: readonly CheckIssue[]; readonly previous: unknown }
   | { readonly kind: 'stop'; readonly reason: StopReason };
 
 /** A stage's accepted edit: the new world, the edit that made it (null when a skipped stage changed nothing), and the checked world when the engine report is ok. */
@@ -1066,7 +1087,7 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
           break;
         case 'backtrack':
           // A step that traded the frozen tests against an input check hands the plan the other side too (A-406).
-          return { kind: 'backtrack', to: decision.to, because: issues, alsoForTarget: decision.tradedTests === true && plan !== null ? tradedSide(tried, issues, testOperations(plan)) : [], previous: proposal?.input };
+          return { kind: 'backtrack', to: decision.to, because: issues, forTarget: decision.tradedTests === true && plan !== null ? tradedForTarget(tried, issues, testOperations(plan)) : issues, previous: proposal?.input };
         case 'stop':
           return { kind: 'stop', reason: decision.reason };
         default:
@@ -1244,13 +1265,13 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
         carried = null;
         break;
       case 'backtrack':
-        emit({ ...at(), t: 'backtracked', from: step, to: outcome.to, because: [...outcome.because, ...outcome.alsoForTarget] });
+        emit({ ...at(), t: 'backtracked', from: step, to: outcome.to, because: outcome.forTarget });
         rejectedBefore.set(step, { issues: outcome.because, previous: outcome.previous, rerunBy: outcome.to });
         ledger = recordBacktrack(ledger, outcome.to);
         index = STEPS.indexOf(outcome.to);
         reason = 'backtracked';
         // The world is not rolled back, so a stage sees its earlier answer in it; the plan gets its earlier plan.
-        carried = { issues: [...outcome.because, ...outcome.alsoForTarget], previous: outcome.to === 'plan' ? (plan ?? undefined) : undefined, from: step };
+        carried = { issues: outcome.forTarget, previous: outcome.to === 'plan' ? (plan ?? undefined) : undefined, from: step };
         break;
       case 'stop':
           return await stop(outcome.reason);

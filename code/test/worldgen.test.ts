@@ -1168,6 +1168,38 @@ describe('runWorldGen sends a frozen test the workflow stage keeps failing back 
     assert.equal(result.kind, 'done');
   });
 
+  it('narrows the deciding attempt\'s own failing tests for the plan when the tests side decides the trade, and keeps them whole for the rerun (J192)', async () => {
+    const withTeapot = { ...planWith('not_found', 1), acceptanceTests: [...planWith('not_found', 1).acceptanceTests, teapot] };
+    const { result, events, calls } = await run([
+      { input: withTeapot }, { input: EDITS.model }, { input: EDITS.workflow }, { input: specOff }, { input: EDITS.workflow },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { check: specCheck });
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => [i.code, i.path])] : [], [
+      'workflow', 'plan', [['test.failed', ['tests', 'unknown_ticket_404', 'script']], ['openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}', 'request', 'reason']]],
+    ]);
+    assert.deepEqual(['unknown_ticket_404', 'customers: 200'].map((s) => calls[5]?.prompt.includes(s)), [true, false]);
+    // The workflow rerun is shown its own last rejection whole, the teapot failure included.
+    assert.equal(calls[7]?.prompt.includes('customers: 200'), true);
+    assert.equal(result.kind, 'done');
+  });
+
+  it('tells the plan the deciding attempt\'s issues whole when no other side of the trade is found, never none (J192 review)', async () => {
+    // 66's block on #198: the policy's prefix match trades GET /tickets/{} against a check on the nested GET /tickets/{ticket_id}/events,
+    // whose exact operation tradedSide never matches, so an unguarded narrowing left the plan with no issues at all.
+    const nested = issue('openapi.required_field_missing', ['input', 'openapi', 'GET /tickets/{ticket_id}/events', 'request', 'reason'], { op: 'GET /tickets/{ticket_id}/events', field: 'reason' }, 'reason is optional');
+    const nestedCheck = (world: World): CheckReport =>
+      world.actions.escalate_ticket?.description?.includes('(reason optional)') === true ? { ok: false, reached: 'lints', issues: [nested], warnings: [] } : checkWorld(world);
+    const withTeapot = { ...planWith('not_found', 1), acceptanceTests: [...planWith('not_found', 1).acceptanceTests, teapot] };
+    const { result, events } = await run([
+      { input: withTeapot }, { input: EDITS.model }, { input: EDITS.workflow }, { input: specOff }, { input: EDITS.workflow },
+      { input: planWith('row.not_found', 2) }, { input: EDITS.model }, { input: EDITS.workflow }, { input: EDITS.seed }, { input: EDITS.tasks },
+    ], { check: nestedCheck });
+    const back = events.find((e) => e.t === 'backtracked');
+    assert.deepEqual(back?.t === 'backtracked' ? [back.from, back.to, back.because.map((i) => String(i.path[1]))] : [], ['workflow', 'plan', ['unknown_ticket_404', 'customers_teapot']]);
+    assert.equal(result.kind, 'done');
+  });
+
   it('backtracks to plan when workflow trades a frozen test against a check the input fixes, and tells the plan both (A-406)', async () => {
     const { result, events, calls } = await run([
       { input: planWith('not_found', 1) }, { input: EDITS.model }, { input: specOff }, { input: EDITS.workflow }, { input: specOff },

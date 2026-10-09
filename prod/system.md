@@ -112,6 +112,48 @@ flowchart LR
 - A summary counts five outcomes: success, expected refusal, product failure, infrastructure failure and not run. Only an `input_rejected` stop counts as an expected refusal (A-384).
 - stress-6 ran the 29-case suite once on main `42ab9ca9` and passed 27 of 29 (93%): 24 successes and 3 expected refusals, with p50 4.5 min, p95 8.2 and max 8.8, for $25.32 settled. Its two failures, bookmarks and stripe-charges, both end done with verify passing in the stress-7 targeted rerun on the v1.1.1 code `2da7dd17`, which ran 5 of 5 for $5.74 ([summary](../eval/runs/2026-10-08-stress-7-targeted/summary.md)). stress-4 (23 of 29 on the hand-in candidate `4b3d2be4`) and stress-5 (its six failures rerun, five then passing) are the earlier steps. The source is [eval/runs/2026-10-08-stress-6/summary.md](../eval/runs/2026-10-08-stress-6/summary.md).
 
+## Scenarios: one incident across several worlds
+
+```mermaid
+flowchart LR
+  A["agent under test"] -- "/support/... and /payments/..." --> G["scenario gateway<br/>one request at a time,<br/>each stamped x-scenario-seq"]
+  G --> S["support world"]
+  G --> P["payments world"]
+  G -. "faults: drop_response,<br/>duplicate, operator" .-> P
+  P -- "events: a refund notifies the ticket,<br/>duplicate or out_of_order" --> S
+  OP["operator"] --> AD["admin port<br/>GET /_scenario/trace<br/>POST /_scenario/grade?final=1"]
+  AD --> V["verdict: every gate, link and<br/>provenance gate must pass"]
+```
+
+- A scenario is existing worlds behind one gateway, described by one `scenario.yaml` (A-386). The agent gets only the gateway port. Each world keeps its own engine, and grading reads each world's state.
+- **Gates** are tasks of the member worlds. **Links** pass only when a row in one world cites or equals a value from a row in another, written by the agent after the cited row exists (A-397). A **provenance gate** fails a payment event the agent forged instead of the payments world sending it (A-410).
+- `prod/scenarios/` holds three: `support-payments`, the flagship `billing-duplicate-charge` (Acme charged $149.00 twice for order O-7301), and its race variant `billing-duplicate-charge-race`.
+
+## Measuring the worlds
+
+```mermaid
+flowchart LR
+  PW[("prod/worlds<br/>25 worlds, 95 tasks")] --> DF["bun run difficulty<br/>N episodes per task per model,<br/>on loopback"]
+  PW --> DS["bun run dataset<br/>episodes on Boat VMs,<br/>public world only"]
+  PW --> RT["bun run redteam<br/>a solver told to make a near-miss"]
+  DF --> VC["verifier child<br/>holds the private world,<br/>answers a bounded verdict"]
+  DS --> VC
+  RT --> VC
+  DF --> M[("eval/difficulty/<br/>pass rate, Wilson 95% interval,<br/>measured tier")]
+  DS --> X[("eval/dataset/<br/>every episode, failures included")]
+  RT --> RR[("eval/redteam/<br/>any full score is a candidate grader bug")]
+  X --> EVD["bun run evidence<br/>replays exports with a frozen world"]
+  M --> SC["bun run scorecards<br/>prod/scorecards.md"]
+  X --> SC
+```
+
+- The engine grades every episode, in a verifier child that holds the private world. No model grades. The solver gets only a world port and the world's public OpenAPI, never a grader, solution or decoy (YOS-159).
+- v2.5.0 measured with these tools:
+  - Claude Haiku 5.5 passed 89 of the 95 tasks 3 of 3, so most tasks are easy.
+  - No red-team near-miss scored 1. Two tasks scored 1, and triage found that neither attempt was a near-miss.
+  - `bun run evidence` replays the 2026-10-07 export, 38 of 38 episodes.
+  - The [v2.5.0 release notes](https://github.com/jop8281/worldgen/releases/tag/v2.5.0) give every number.
+
 ## How to run each part
 
 Install, then try the engine:
@@ -157,6 +199,23 @@ Serve a world on a Boat VM, then build a graded dataset. Both need `BOAT_API_KEY
 bun run sandbox up ../prod/worlds/helpdesk --backend boat --ttl 1800
 bun run dataset --world ../prod/worlds/helpdesk --out ../eval/runs/dataset-helpdesk --run-id ds1 --engine-commit 6e28ba99 --max-turns 12 --budget-usd 2 --max-minutes 10
 ```
+
+Check a scenario, then serve it behind one gateway on port 4100, with its admin port on 4101:
+
+```sh
+bun run scenario check ../prod/scenarios/billing-duplicate-charge
+bun run scenario serve ../prod/scenarios/billing-duplicate-charge --port 4100
+```
+
+Re-check the measurements from a clone, with no model call:
+
+```sh
+bun run evidence
+bun run scorecards
+bun run redteam --out ../eval/redteam/2026-10-09 --triage ../eval/redteam/2026-10-09/triage.json --render-only
+```
+
+`bun run difficulty --help` and `bun run redteam --help` give the flags for a new measurement, which calls a model and has its own cost.
 
 Evaluate, and run the team's prompts:
 
