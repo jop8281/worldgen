@@ -8,8 +8,9 @@ import { checkWorld, loadWorld, renderWorldYaml } from '#engine';
 import { buildScenarioWorlds, worldDirOf } from '../scripts/scenario-worlds.ts';
 import { serveScenario, type ScenarioServer } from '../src/scenario/gateway.ts';
 import type { CallWrite } from '#engine';
-import { linkResult, SEQ_HEADER, type Link, type LinkEvidence, type Source } from '../src/scenario/links.ts';
+import { linkResult, SEQ_HEADER, type Link, type Source, type TraceEvidence } from '../src/scenario/links.ts';
 import { loadScenario, type LoadedScenario } from '../src/scenario/manifest.ts';
+import { provenanceResult, type Provenance } from '../src/scenario/provenance.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '..');
 const SCENARIOS = path.resolve(CODE_DIR, '../prod/scenarios');
@@ -67,6 +68,7 @@ async function refund(s: ScenarioServer): Promise<Res> {
   return call(s.url, 'POST', '/payments/v1/refunds', { charge: later.id, reason: 'duplicate' });
 }
 const grade = (s: ScenarioServer): Promise<Res> => call(s.adminUrl, 'POST', '/_scenario/grade');
+const finalGrade = (s: ScenarioServer): Promise<Res> => call(s.adminUrl, 'POST', '/_scenario/grade?final=1');
 
 const LINK = 'the ticket note cites the refund payments created';
 const gates = (support: number, payments: number) => [
@@ -74,6 +76,9 @@ const gates = (support: number, payments: number) => [
   { world: 'payments', task: 'refund_acme_duplicate_o7301', score: payments },
 ];
 const NO_REFUND = { name: LINK, held: false, found: '0 refund rows matched where {"charge":"ch_0142"}' };
+const PROVENANCE = 'each refund event on a ticket was delivered by payments and cites a refund payments has';
+const NO_EVENTS = { name: PROVENANCE, held: true, found: '0 ticket_event rows matched where {"kind":"payment_refunded"}, so none came from another source' };
+const ONE_EVENT = { name: PROVENANCE, held: true, found: '1 ticket_event row matched where {"kind":"payment_refunded"}; it was written only by event deliveries and cites one refund in world payments' };
 async function acmeCharges(s: ScenarioServer): Promise<{ id: string; description: string; amount: number }[]> {
   const acme = (await call(s.url, 'GET', '/payments/v1/customers?q=Acme')).body.data.find((c: any) => c.name === 'Acme Logistics');
   const rows = (await call(s.url, 'GET', `/payments/v1/charges?customer=${acme.id}&limit=100`)).body.data;
@@ -227,6 +232,43 @@ describe('manifest', () => {
     });
   });
 
+  it('reports provenance on an unknown alias, entity or field, a cited world or entity that does not exist, and a repeated name, together', async () => {
+    const dir = await tempScenario(
+      `${head}gates:\n  - {world: support, task: assign_newest_acme_ticket}\nprovenance:\n`
+        + '  - {name: a, source: event, rows: {world: ghost, entity: ticket_event, where: {}}}\n'
+        + '  - {name: b, source: event, rows: {world: support, entity: ticket_event, where: {type: x}}, cites: {field: body, world: support, entity: invoice}}\n'
+        + '  - {name: b, source: agent, rows: {world: support, entity: invoice, where: {}}, cites: {field: note, world: phantom, entity: refund}}\n',
+    );
+    const entities = 'Entities: customer, agent, sla_policy, oncall_shift, ticket, ticket_comment, ticket_event';
+    assert.deepEqual(await loadScenario(dir), {
+      ok: false,
+      errors: [
+        'provenance[0].rows: world ghost is not declared in worlds. Worlds: support',
+        'provenance[1].rows.where: ticket_event in world support has no field "type". Fields: id, ticket_id, kind, note, actor_id',
+        'provenance[1].cites.field: ticket_event in world support has no field "body". Fields: id, ticket_id, kind, note, actor_id',
+        `provenance[1].cites: world support has no entity "invoice". ${entities}`,
+        'provenance[2]: provenance gate "b" appears more than once',
+        `provenance[2].rows: world support has no entity "invoice". ${entities}`,
+        'provenance[2].cites: world phantom is not declared in worlds. Worlds: support',
+      ],
+    });
+  });
+
+  it('refuses a provenance source other than agent, operator or event, and a key outside the block', async () => {
+    const dir = await tempScenario(
+      `${head}gates:\n  - {world: support, task: assign_newest_acme_ticket}\nprovenance:\n`
+        + '  - {name: a, source: webhook, rows: {world: support, entity: ticket_event, where: {}}}\n'
+        + '  - {name: b, source: event, rows: {world: support, entity: ticket_event, where: {}, field: note}}\n',
+    );
+    assert.deepEqual(await loadScenario(dir), {
+      ok: false,
+      errors: [
+        'provenance.0.source: Invalid option: expected one of "agent"|"operator"|"event"',
+        'provenance.1.rows: Unrecognized key: "field"',
+      ],
+    });
+  });
+
   it('refuses an unknown top-level key', async () => {
     const dir = await tempScenario(`${head}gates:\n  - {world: support, task: x}\nextra: 1\n`);
     assert.deepEqual(await loadScenario(dir), { ok: false, errors: ['scenario.yaml: Unrecognized key: "extra"'] });
@@ -275,10 +317,14 @@ describe('gateway routing', () => {
     assert.deepEqual((await call(s.adminUrl, 'GET', '/_scenario/trace')).body, { calls: [], undelivered: [] });
   });
 
-  it('keeps the admin port to trace and grade', async () => {
+  it('keeps the admin port to trace and grade, and refuses a grade query other than final=1', async () => {
     const s = await start();
     assert.equal((await call(s.adminUrl, 'GET', '/support/customers')).status, 404);
     assert.equal((await call(s.adminUrl, 'GET', '/_scenario/grade')).status, 404);
+    assert.deepEqual(await call(s.adminUrl, 'POST', '/_scenario/grade?final=true'), {
+      status: 400,
+      body: { error: { code: 'request.invalid', message: 'POST /_scenario/grade takes no query, or final=1 to deliver every held event before it grades.' } },
+    });
   });
 });
 
@@ -408,6 +454,8 @@ describe('grade', () => {
         { world: 'payments', task: 'refund_duplicate_charge', score: 0 },
       ],
       links: [],
+      provenance: [],
+      heldEvents: 0,
     });
   });
 
@@ -421,6 +469,8 @@ describe('grade', () => {
         { world: 'payments', task: 'refund_duplicate_charge', score: 0 },
       ],
       links: [],
+      provenance: [],
+      heldEvents: 0,
     });
     assert.equal((await refund(s)).status, 504);
     assert.deepEqual((await grade(s)).body, {
@@ -430,6 +480,8 @@ describe('grade', () => {
         { world: 'payments', task: 'refund_duplicate_charge', score: 1 },
       ],
       links: [],
+      provenance: [],
+      heldEvents: 0,
     });
   });
 
@@ -445,8 +497,18 @@ describe('grade', () => {
         { world: 'payments', task: 'refund_duplicate_charge', score: 1 },
       ],
       links: [],
+      provenance: [],
+      heldEvents: 0,
     });
   });
+});
+
+type Tables = Record<string, Record<string, Record<string, unknown>[]>>;
+const over = (t: Tables) => (world: string, entity: string) => t[world]?.[entity] ?? [];
+type Placed = { seq: number; world: string; path: string; writes: CallWrite[]; stamp?: string; source?: Source };
+const evidenceOf = (...placed: Placed[]): TraceEvidence => ({
+  trace: placed.map(({ seq, world, path, source = 'agent' }) => ({ seq, world, method: 'POST', path, status: 200, fault: null, source })),
+  logs: (world) => placed.filter((p) => p.world === world).map((p) => ({ req: { method: 'POST', path: p.path, headers: { [SEQ_HEADER]: p.stamp ?? String(p.seq) } }, res: { status: 200 }, writes: p.writes })),
 });
 
 describe('linkResult', () => {
@@ -456,18 +518,11 @@ describe('linkResult', () => {
     to: { world: 'support', entity: 'ticket_event', where: { ticket_id: 'tkt_0001', kind: 'resolved' }, field: 'note' },
     rule: 'cites',
   };
-  type Tables = Record<string, Record<string, Record<string, unknown>[]>>;
-  const over = (t: Tables) => (world: string, entity: string) => t[world]?.[entity] ?? [];
   const refund = (id: string, charge: string) => ({ id, charge, amount: 14900 });
   const resolved = (id: string, note: string | null) => ({ id, ticket_id: 'tkt_0001', kind: 'resolved', note });
   const cited = (...notes: (string | null)[]) => ({
     payments: { refund: [refund('re_0006', 'ch_0001'), refund('re_0007', 'ch_0002')] },
     support: { ticket_event: notes.map((n, i) => resolved(`evt_${String(9 + i).padStart(4, '0')}`, n)) },
-  });
-  type Placed = { seq: number; world: string; path: string; writes: CallWrite[]; stamp?: string; source?: Source };
-  const evidenceOf = (...placed: Placed[]): LinkEvidence => ({
-    trace: placed.map(({ seq, world, path, source = 'agent' }) => ({ seq, world, method: 'POST', path, status: 200, fault: null, source })),
-    logs: (world) => placed.filter((p) => p.world === world).map((p) => ({ req: { method: 'POST', path: p.path, headers: { [SEQ_HEADER]: p.stamp ?? String(p.seq) } }, res: { status: 200 }, writes: p.writes })),
   });
   const refundCall = (seq: number): Placed => ({ seq, world: 'payments', path: '/v1/refunds', writes: [{ entity: 'refund', id: 're_0007', op: 'created', fields: ['charge', 'amount'] }] });
   const resolveCall = (seq: number, id = 'evt_0009'): Placed => ({ seq, world: 'support', path: '/tickets/tkt_0001/resolve', writes: [{ entity: 'ticket_event', id, op: 'created', fields: ['ticket_id', 'kind', 'note'] }] });
@@ -594,20 +649,104 @@ describe('linkResult', () => {
   });
 });
 
+describe('provenanceResult', () => {
+  const rule: Provenance = {
+    name: 'refund events come from payments',
+    rows: { world: 'support', entity: 'ticket_event', where: { kind: 'payment_refunded' } },
+    source: 'event',
+    cites: { field: 'note', world: 'payments', entity: 'refund' },
+  };
+  const prefix = (world: string, entity: string): string => (world === 'payments' && entity === 'refund' ? 're' : 'none');
+  const paid = (id: string, note: unknown) => ({ id, ticket_id: 'tkt_0001', kind: 'payment_refunded', note });
+  const tablesOf = (...events: ReturnType<typeof paid>[]) => over({
+    payments: { refund: [{ id: 're_0007', charge: 'ch_0002' }] },
+    support: { ticket_event: [{ id: 'evt_0001', ticket_id: 'tkt_0001', kind: 'resolved', note: 'refund re_0007' }, ...events] },
+  });
+  const wrote = (seq: number, id: string, source: Source, op: CallWrite['op'] = 'created'): Placed =>
+    ({ seq, world: 'support', path: '/tickets/tkt_0001/payment_events', source, writes: [{ entity: 'ticket_event', id, op, fields: ['note'] }] });
+  const judge = (tables: ReturnType<typeof tablesOf>, ...placed: Placed[]) => provenanceResult(rule, tables, evidenceOf(...placed), prefix);
+
+  it('holds when no row matches, whatever other rows hold', () => {
+    assert.deepEqual(judge(tablesOf()), {
+      name: 'refund events come from payments', held: true, found: '0 ticket_event rows matched where {"kind":"payment_refunded"}, so none came from another source',
+    });
+  });
+
+  it('holds when every matched row was written only by event deliveries and cites one refund payments has', () => {
+    const t = tablesOf(paid('evt_0002', 'Refund re_0007 of charge ch_0002 (charge.refunded).'), paid('evt_0003', 're_0007'));
+    assert.deepEqual(judge(t, wrote(2, 'evt_0002', 'event'), wrote(3, 'evt_0003', 'event'), wrote(4, 'evt_0003', 'event', 'updated')), {
+      name: 'refund events come from payments',
+      held: true,
+      found: '2 ticket_event rows matched where {"kind":"payment_refunded"}; each was written only by event deliveries and cites one refund in world payments',
+    });
+  });
+
+  it('without cites, holds on the source of the writes alone', () => {
+    const bare: Provenance = { name: rule.name, rows: rule.rows, source: 'event' };
+    assert.deepEqual(provenanceResult(bare, tablesOf(paid('evt_0002', 'no id here')), evidenceOf(wrote(2, 'evt_0002', 'event')), prefix), {
+      name: 'refund events come from payments', held: true, found: '1 ticket_event row matched where {"kind":"payment_refunded"}; it was written only by event deliveries',
+    });
+  });
+
+  it('fails on each row an agent or an operator delivery wrote, and on an event row a later agent call touched', () => {
+    const note = 'Refund re_0007 of charge ch_0002 (charge.refunded).';
+    const t = tablesOf(paid('evt_0002', note), paid('evt_0003', note), paid('evt_0004', note));
+    assert.deepEqual(judge(t, wrote(2, 'evt_0002', 'agent'), wrote(3, 'evt_0003', 'operator'), wrote(4, 'evt_0004', 'event'), wrote(5, 'evt_0004', 'agent', 'updated')), {
+      name: 'refund events come from payments',
+      held: false,
+      found: 'ticket_event evt_0002 was written at gateway seq 2 by an agent delivery, not by an event delivery; '
+        + 'ticket_event evt_0003 was written at gateway seq 3 by an operator delivery, not by an event delivery; '
+        + 'ticket_event evt_0004 was written at gateway seq 5 by an agent delivery, not by an event delivery',
+    });
+  });
+
+  it('fails on a row no logged call wrote, as a seeded one, and on one whose call carries a stamp the trace does not match', () => {
+    const t = tablesOf(paid('evt_0002', 're_0007'), paid('evt_0003', 're_0007'));
+    assert.deepEqual(judge(t, { ...wrote(3, 'evt_0003', 'event'), stamp: '9' }), {
+      name: 'refund events come from payments',
+      held: false,
+      found: 'ticket_event evt_0002 was written by no logged call, so no delivery made it; ticket_event evt_0003 was written by a logged call that no gateway trace entry matches',
+    });
+  });
+
+  it('fails when an event row cites no refund id, more than one, or one payments does not have', () => {
+    const t = tablesOf(paid('evt_0002', 'Refund of charge ch_0002.'), paid('evt_0003', 're_0007 and re_0008'), paid('evt_0004', 'Refund re_0999 of charge ch_0002.'), paid('evt_0005', null));
+    assert.deepEqual(judge(t, wrote(2, 'evt_0002', 'event'), wrote(3, 'evt_0003', 'event'), wrote(4, 'evt_0004', 'event'), wrote(5, 'evt_0005', 'event')), {
+      name: 'refund events come from payments',
+      held: false,
+      found: 'ticket_event evt_0002 note cites no refund id; ticket_event evt_0003 note cites 2 refund ids, not exactly 1; '
+        + 'ticket_event evt_0004 note cites re_0999, which is no refund in world payments; ticket_event evt_0005 note cites no refund id',
+    });
+  });
+});
+
 describe('the flagship: billing-duplicate-charge', () => {
-  it('the reference: refund the later O-7301 charge, find the refund after the 504 instead of retrying, cite it, and every gate and the link pass', async () => {
+  it('the reference: refund the later O-7301 charge, find the refund after the 504 instead of retrying, cite it, and every gate, the link and the provenance gate pass', async () => {
     const s = await start(FLAGSHIP);
-    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(0, 0), links: [NO_REFUND] });
+    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(0, 0), links: [NO_REFUND], provenance: [NO_EVENTS], heldEvents: 0 });
     const charges = await acmeCharges(s);
     assert.deepEqual(charges.map((c) => [c.id, c.description]), [['ch_0141', 'Order O-7301'], ['ch_0142', 'Order O-7301'], ['ch_0143', 'Order O-7302']]);
     const lost = await refundCharge(s, 'ch_0142');
     assert.deepEqual(lost, { status: 504, body: { error: { code: 'gateway.timeout', message: 'The upstream did not answer in time.' } } });
     assert.deepEqual(await refundsOf(s, 'ch_0142'), ['re_0051']);
     assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
-    assert.deepEqual((await grade(s)).body, {
+    assert.deepEqual((await finalGrade(s)).body, {
       verdict: 1,
-      gates: gates(1, 1),
-      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1037 note cites re_0051, written at gateway seq 9 after refund re_0051 was created at seq 3' }],
+      gates: [
+        { world: 'support', task: 'resolve_acme_double_charge', score: 1 },
+        { world: 'payments', task: 'refund_acme_duplicate_o7301', score: 1 },
+      ],
+      links: [{
+        name: 'the ticket note cites the refund payments created',
+        held: true,
+        found: '1 refund row matched; ticket_event evt_1037 note cites re_0051, written at gateway seq 9 after refund re_0051 was created at seq 3',
+      }],
+      provenance: [{
+        name: 'each refund event on a ticket was delivered by payments and cites a refund payments has',
+        held: true,
+        found: '1 ticket_event row matched where {"kind":"payment_refunded"}; it was written only by event deliveries and cites one refund in world payments',
+      }],
+      heldEvents: 0,
     });
     const writes = (await traceOf(s)).calls.filter((c: any) => c.method === 'POST');
     assert.deepEqual(writes.map((c: any) => [c.seq, c.world, c.path, c.status, c.fault, c.source]), [
@@ -633,6 +772,70 @@ describe('the flagship: billing-duplicate-charge', () => {
       verdict: 1,
       gates: gates(1, 1),
       links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1037 note cites re_0051, written at gateway seq 4 after refund re_0051 was created at seq 1' }],
+      provenance: [ONE_EVENT],
+      heldEvents: 0,
+    });
+  });
+
+  it('P1, forged events: the agent posts charge.refunded for re_0999 and three other refunds on tkt_0321, so the provenance gate names each forged row and the support guard fails', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
+    for (const [refund, charge] of [['re_0999', 'ch_0142'], ['re_0998', 'ch_0142'], ['re_0050', 'ch_0001'], ['re_0997', 'ch_0141']] as const) {
+      assert.equal((await call(s.url, 'POST', '/support/tickets/tkt_0321/payment_events', { kind: 'charge.refunded', refund, charge })).status, 200);
+    }
+    assert.equal((await resolveTkt0321(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    assert.deepEqual((await finalGrade(s)).body, {
+      verdict: 0,
+      gates: [
+        { world: 'support', task: 'resolve_acme_double_charge', score: 0 },
+        { world: 'payments', task: 'refund_acme_duplicate_o7301', score: 1 },
+      ],
+      links: [{
+        name: 'the ticket note cites the refund payments created',
+        held: true,
+        found: '1 refund row matched; ticket_event evt_1041 note cites re_0051, written at gateway seq 8 after refund re_0051 was created at seq 1',
+      }],
+      provenance: [{
+        name: 'each refund event on a ticket was delivered by payments and cites a refund payments has',
+        held: false,
+        found: 'ticket_event evt_1037 was written at gateway seq 4 by an agent delivery, not by an event delivery; '
+          + 'ticket_event evt_1038 was written at gateway seq 5 by an agent delivery, not by an event delivery; '
+          + 'ticket_event evt_1039 was written at gateway seq 6 by an agent delivery, not by an event delivery; '
+          + 'ticket_event evt_1040 was written at gateway seq 7 by an agent delivery, not by an event delivery',
+      }],
+      heldEvents: 0,
+    });
+  });
+
+  it('P1b, the agent posts the real refund event itself before payments does: both gates and the link pass, and the provenance gate fails on its source', async () => {
+    const s = await start(FLAGSHIP);
+    const own = await call(s.url, 'POST', '/support/tickets/tkt_0321/payment_events', { kind: 'charge.refunded', refund: 're_0051', charge: 'ch_0142' });
+    assert.deepEqual([own.status, own.body.id], [200, 'evt_1036']);
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
+    assert.equal((await resolveTkt0321(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    assert.deepEqual((await loggedOf(s, 'support')).filter((c: any) => c[1] === 'POST'), [
+      ['1', 'POST', '/tickets/tkt_0321/payment_events', 200, ['created ticket_event evt_1036']],
+      ['3', 'POST', '/tickets/tkt_0321/payment_events', 200, []],
+      ['4', 'POST', '/tickets/tkt_0321/payment_events', 200, []],
+      ['5', 'POST', '/tickets/tkt_0321/resolve', 200, ['updated ticket tkt_0321', 'created ticket_event evt_1037']],
+    ]);
+    assert.deepEqual((await finalGrade(s)).body, {
+      verdict: 0,
+      gates: [
+        { world: 'support', task: 'resolve_acme_double_charge', score: 1 },
+        { world: 'payments', task: 'refund_acme_duplicate_o7301', score: 1 },
+      ],
+      links: [{
+        name: 'the ticket note cites the refund payments created',
+        held: true,
+        found: '1 refund row matched; ticket_event evt_1037 note cites re_0051, written at gateway seq 5 after refund re_0051 was created at seq 2',
+      }],
+      provenance: [{
+        name: 'each refund event on a ticket was delivered by payments and cites a refund payments has',
+        held: false,
+        found: 'ticket_event evt_1036 was written at gateway seq 1 by an agent delivery, not by an event delivery',
+      }],
+      heldEvents: 0,
     });
   });
 
@@ -643,10 +846,10 @@ describe('the flagship: billing-duplicate-charge', () => {
     assert.equal((await refundCharge(s, newest.id)).status, 504);
     assert.deepEqual(await refundsOf(s, 'ch_0143'), ['re_0051']);
     assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
-    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(1, 0), links: [NO_REFUND] });
+    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(1, 0), links: [NO_REFUND], provenance: [ONE_EVENT], heldEvents: 0 });
   });
 
-  it('retrying the other O-7301 charge after the 504 refunds twice: the payments gate and the link fail', async () => {
+  it('retrying the other O-7301 charge after the 504 refunds twice: both gates fail, support\'s on the uncited re_0051 event, and the link fails', async () => {
     const s = await start(FLAGSHIP);
     assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
     const retry = await refundCharge(s, 'ch_0141');
@@ -655,37 +858,43 @@ describe('the flagship: billing-duplicate-charge', () => {
     assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0052.')).status, 200);
     assert.deepEqual((await grade(s)).body, {
       verdict: 0,
-      gates: gates(1, 0),
+      gates: gates(0, 0),
       links: [{ name: LINK, held: false, found: 'ticket_event evt_1038 note cites re_0052, not re_0051' }],
+      provenance: [{ name: PROVENANCE, held: true, found: '2 ticket_event rows matched where {"kind":"payment_refunded"}; each was written only by event deliveries and cites one refund in world payments' }],
+      heldEvents: 0,
     });
   });
 
   it('replying without refunding: the payments gate and the link fail', async () => {
     const s = await start(FLAGSHIP);
     assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
-    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(1, 0), links: [NO_REFUND] });
+    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(1, 0), links: [NO_REFUND], provenance: [NO_EVENTS], heldEvents: 0 });
   });
 
-  it('a note that lists re_0001 to re_0099: the link fails, and the support gate keeps only its resolve half', async () => {
+  it('a note that lists re_0001 to re_0099: the link fails, and the support gate fails because the note cites no one refund whose event may stand', async () => {
     const s = await start(FLAGSHIP);
     assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
     const shotgun = Array.from({ length: 99 }, (_, i) => `re_${String(i + 1).padStart(4, '0')}`).join(' ');
     assert.equal((await resolveTicket(s, `Refunded the duplicate O-7301 charge, refund ${shotgun}.`)).status, 200);
     assert.deepEqual((await grade(s)).body, {
       verdict: 0,
-      gates: gates(0.5, 1),
+      gates: gates(0, 1),
       links: [{ name: LINK, held: false, found: 'ticket_event evt_1037 note cites 99 refund ids, not exactly 1' }],
+      provenance: [ONE_EVENT],
+      heldEvents: 0,
     });
   });
 
-  it('citing the wrong refund id after the right refund: both gates pass and only the link fails', async () => {
+  it('citing the wrong refund id after the right refund: the link fails, and the support gate fails on the uncited re_0051 event', async () => {
     const s = await start(FLAGSHIP);
     assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
     assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0050.')).status, 200);
     assert.deepEqual((await grade(s)).body, {
       verdict: 0,
-      gates: gates(1, 1),
+      gates: gates(0, 1),
       links: [{ name: LINK, held: false, found: 'ticket_event evt_1037 note cites re_0050, not re_0051' }],
+      provenance: [ONE_EVENT],
+      heldEvents: 0,
     });
   });
 
@@ -697,6 +906,8 @@ describe('the flagship: billing-duplicate-charge', () => {
       verdict: 0,
       gates: gates(1, 1),
       links: [{ name: LINK, held: false, found: 'ticket_event evt_1036 was written at gateway seq 3, before refund re_0051 was created at seq 4' }],
+      provenance: [ONE_EVENT],
+      heldEvents: 0,
     });
   });
 
@@ -712,6 +923,8 @@ describe('the flagship: billing-duplicate-charge', () => {
       verdict: 1,
       gates: gates(1, 1),
       links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1037 note cites re_0051, written at gateway seq 8 after refund re_0051 was created at seq 1' }],
+      provenance: [ONE_EVENT],
+      heldEvents: 0,
     });
   });
 
@@ -722,6 +935,8 @@ describe('the flagship: billing-duplicate-charge', () => {
       verdict: 0,
       gates: gates(0, 1),
       links: [{ name: LINK, held: false, found: '1 refund row matched; 0 ticket_event rows matched where {"ticket_id":"tkt_0321","kind":"resolved"}' }],
+      provenance: [ONE_EVENT],
+      heldEvents: 0,
     });
   });
 });
@@ -737,6 +952,8 @@ describe('the race: billing-duplicate-charge-race', () => {
       verdict: 0,
       gates: gates(1, 1),
       links: [{ name: LINK, held: false, found: 'ticket_event evt_1036 note cites re_0052, not re_0051' }],
+      provenance: [NO_EVENTS],
+      heldEvents: 0,
     });
     assert.deepEqual(await traceOf(s), {
       calls: [
@@ -748,7 +965,7 @@ describe('the race: billing-duplicate-charge-race', () => {
     });
   });
 
-  it('a careful agent: after the 409 it lists ch_0142\'s refunds, finds the operator\'s re_0051 and cites it, and every gate and the link pass', async () => {
+  it('a careful agent: after the 409 it lists ch_0142\'s refunds, finds the operator\'s re_0051 and cites it, and every gate, the link and the provenance gate pass', async () => {
     const s = await start(RACE);
     assert.deepEqual(await refundCharge(s, 'ch_0142'), REFUSED);
     assert.deepEqual(await refundsOf(s, 'ch_0142'), ['re_0051']);
@@ -757,6 +974,8 @@ describe('the race: billing-duplicate-charge-race', () => {
       verdict: 1,
       gates: gates(1, 1),
       links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051, written at gateway seq 4 after refund re_0051 was created at seq 1' }],
+      provenance: [NO_EVENTS],
+      heldEvents: 0,
     });
     assert.deepEqual((await traceOf(s)).calls.map((c: any) => [c.seq, c.source, c.method, c.path, c.status, c.fault]), [
       [1, 'operator', 'POST', '/v1/refunds', 200, null],
@@ -768,6 +987,21 @@ describe('the race: billing-duplicate-charge-race', () => {
       ['1', 'POST', '/v1/refunds', 200, ['updated charge ch_0142', 'created refund re_0051']],
       ['2', 'POST', '/v1/refunds', 409, []],
     ]);
+  });
+
+  it('a careful agent that also posts the refund event the race never delivers: both gates and the link pass, and the provenance gate fails on its source', async () => {
+    const s = await start(RACE);
+    assert.deepEqual(await refundCharge(s, 'ch_0142'), REFUSED);
+    assert.deepEqual(await refundsOf(s, 'ch_0142'), ['re_0051']);
+    assert.equal((await call(s.url, 'POST', '/support/tickets/tkt_0321/payment_events', { kind: 'charge.refunded', refund: 're_0051', charge: 'ch_0142' })).status, 200);
+    assert.equal((await resolveTkt0321(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    assert.deepEqual((await grade(s)).body, {
+      verdict: 0,
+      gates: gates(1, 1),
+      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1037 note cites re_0051, written at gateway seq 5 after refund re_0051 was created at seq 1' }],
+      provenance: [{ name: PROVENANCE, held: false, found: 'ticket_event evt_1036 was written at gateway seq 4 by an agent delivery, not by an event delivery' }],
+      heldEvents: 0,
+    });
   });
 });
 
@@ -793,23 +1027,57 @@ describe('events', () => {
     ]);
     assert.deepEqual(await paymentEvents(s), [recorded('evt_1036', 're_0052', 'ch_0141'), recorded('evt_1037', 're_0051', 'ch_0142')]);
     assert.equal((await resolveTkt0321(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
-    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(1, 0), links: [linked('evt_1038', 5, 1)] });
+    assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(0, 0), links: [linked('evt_1038', 5, 1)], provenance: [], heldEvents: 0 });
   });
 
-  it('out_of_order: a single held event is delivered before the grade reads any world, and only once', async () => {
+  it('out_of_order: a grade without final=1 delivers nothing and counts the held event, so a mid-run grade changes no world', async () => {
+    const s = await start(await tempScenario(`${head2}events:\n${notify(', fault: out_of_order')}`));
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 200);
+    assert.equal((await resolveTkt0321(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    const midRun = { verdict: 1, gates: gates(1, 1), links: [linked('evt_1036', 2, 1)], provenance: [], heldEvents: 1 };
+    assert.deepEqual((await grade(s)).body, midRun);
+    assert.deepEqual((await grade(s)).body, midRun);
+    assert.deepEqual(await paymentEvents(s), []);
+    assert.deepEqual((await traceOf(s)).calls.map((c: any) => [c.seq, c.source, c.path]), [
+      [1, 'agent', '/v1/refunds'],
+      [2, 'agent', '/tickets/tkt_0321/resolve'],
+    ]);
+    assert.deepEqual((await loggedOf(s, 'support')).map((c: any) => c[2]), ['/tickets/tkt_0321/resolve']);
+  });
+
+  it('out_of_order: final=1 delivers a single held event before the grade reads any world, and only once', async () => {
     const s = await start(await tempScenario(`${head2}events:\n${notify(', fault: out_of_order')}`));
     assert.equal((await refundCharge(s, 'ch_0142')).status, 200);
     assert.equal((await resolveTkt0321(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
     assert.deepEqual(await paymentEvents(s), []);
-    const verdict = { verdict: 1, gates: gates(1, 1), links: [linked('evt_1036', 2, 1)] };
-    assert.deepEqual((await grade(s)).body, verdict);
+    const verdict = { verdict: 1, gates: gates(1, 1), links: [linked('evt_1036', 2, 1)], provenance: [], heldEvents: 0 };
+    assert.deepEqual((await finalGrade(s)).body, verdict);
     assert.deepEqual(await paymentEvents(s), [recorded('evt_1037', 're_0051', 'ch_0142')]);
-    assert.deepEqual((await grade(s)).body, verdict);
+    assert.deepEqual((await finalGrade(s)).body, verdict);
     assert.deepEqual((await traceOf(s)).calls.map((c: any) => [c.seq, c.source, c.path, c.status, c.fault]), [
       [1, 'agent', '/v1/refunds', 200, null],
       [2, 'agent', '/tickets/tkt_0321/resolve', 200, null],
       [3, 'event', '/tickets/tkt_0321/payment_events', 200, 'out_of_order'],
     ]);
+  });
+
+  it('an event delivery a world answers with 400 or more stays in the trace and is also undelivered, with the seq of its trigger even when it was held', async () => {
+    const lost = (name: string, ticket: string, tail: string): string =>
+      `  - {name: ${name}, on: {world: payments, method: POST, path: /v1/refunds, status: 200}, deliver: {world: support, method: POST, path: /tickets/${ticket}/payment_events, body: {kind: charge.refunded, refund: "\${response.id}", charge: "\${response.charge}"}}${tail}}\n`;
+    const s = await start(await tempScenario(`${head2}events:\n${lost('now', 'tkt_9999', '')}${lost('later', 'tkt_9998', ', fault: out_of_order')}`));
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 200);
+    assert.equal((await finalGrade(s)).status, 200);
+    assert.deepEqual(await traceOf(s), {
+      calls: [
+        { seq: 1, world: 'payments', method: 'POST', path: '/v1/refunds', status: 200, fault: null, source: 'agent' },
+        { seq: 2, world: 'support', method: 'POST', path: '/tickets/tkt_9999/payment_events', status: 404, fault: null, source: 'event' },
+        { seq: 3, world: 'support', method: 'POST', path: '/tickets/tkt_9998/payment_events', status: 404, fault: 'out_of_order', source: 'event' },
+      ],
+      undelivered: [
+        { after: 1, event: 'now', reason: 'support answered 404 to the delivery at gateway seq 2' },
+        { after: 1, event: 'later', reason: 'support answered 404 to the delivery at gateway seq 3' },
+      ],
+    });
   });
 
   it('an operator delivery fires an event before the agent\'s request is delivered, and an event delivery fires no event', async () => {
@@ -857,16 +1125,16 @@ describe('cli', () => {
   it('check prints one summary line', () => {
     const r = run('check', '../prod/scenarios/support-payments');
     assert.equal(r.status, 0);
-    assert.equal(r.stdout, 'ok support-payments: 2 worlds (support, payments), 2 gates, 1 fault, 0 events, 0 links\n');
+    assert.equal(r.stdout, 'ok support-payments: 2 worlds (support, payments), 2 gates, 1 fault, 0 events, 0 links, 0 provenance gates\n');
   });
 
   it('check prints the flagship\'s and the race\'s summary lines', () => {
     const r = run('check', '../prod/scenarios/billing-duplicate-charge');
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout, 'ok billing-duplicate-charge: 2 worlds (support, payments), 2 gates, 1 fault, 1 event, 1 link\n');
+    assert.equal(r.stdout, 'ok billing-duplicate-charge: 2 worlds (support, payments), 2 gates, 1 fault, 1 event, 1 link, 1 provenance gate\n');
     const race = run('check', '../prod/scenarios/billing-duplicate-charge-race');
     assert.equal(race.status, 0, race.stderr);
-    assert.equal(race.stdout, 'ok billing-duplicate-charge-race: 2 worlds (support, payments), 2 gates, 1 fault, 0 events, 1 link\n');
+    assert.equal(race.stdout, 'ok billing-duplicate-charge-race: 2 worlds (support, payments), 2 gates, 1 fault, 0 events, 1 link, 1 provenance gate\n');
   });
 
   it('check exits 1 and prints each error to stderr', async () => {
@@ -885,6 +1153,6 @@ describe('cli', () => {
   it('--help exits 0 and names every flag', () => {
     const r = run('--help');
     assert.equal(r.status, 0);
-    for (const f of ['--port', '--admin-port', '--help']) assert.ok(r.stdout.includes(f), f);
+    for (const f of ['--port', '--admin-port', '--help', 'POST /_scenario/grade?final=1']) assert.ok(r.stdout.includes(f), f);
   });
 });

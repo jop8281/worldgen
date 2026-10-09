@@ -24,20 +24,20 @@ const SUPPORT_TASK = {
   if (!ticket) return 0;
   const old = new Set(ctx.seed.list('ticket_event', { where: { ticket_id: ticket.id } }).map((e) => e.id));
   const resolved = ctx.db.list('ticket_event', { where: { ticket_id: ticket.id, kind: 'resolved' } }).filter((e) => !old.has(e.id));
-  // The payments system's refund event reaches the ticket through receive_payment_event, which writes this note with no actor (A-410).
-  const perRefund = new Map();
-  for (const e of ctx.db.list('ticket_event', { where: { ticket_id: ticket.id, kind: 'payment_refunded' } })) {
-    const m = e.actor_id === null && typeof e.note === 'string' ? /^Refund (re_[A-Za-z0-9]+) of charge ch_[A-Za-z0-9]+ \\(charge\\.refunded\\)\\.$/.exec(e.note) : null;
-    if (m && !perRefund.has(m[1])) perRefund.set(m[1], e.id);
-  }
-  ctx.guardChanges('only the resolve fields of the ticket, its resolved event and one payment event per refund changed', [
-    { entity: 'ticket', id: ticket.id, kind: 'updated', fields: ['status', 'resolved_at'] },
-    ...[...resolved.map((e) => e.id), ...perRefund.values()].map((id) => ({ entity: 'ticket_event', id, kind: 'created', fields: ['ticket_id', 'kind', 'note', 'actor_id'] })),
-  ]);
-  ctx.goal(0.5, 'the ticket is resolved, with one resolved event', ctx.db.get('ticket', ticket.id).status === 'resolved' && resolved.length === 1);
   // The note must name the order and exactly one refund id as the payments world writes them (re_ and at least four digits), so a note of nonsense or a list of ids scores below 1 (A-388, A-397).
   const note = resolved.length === 1 && typeof resolved[0].note === 'string' ? resolved[0].note : '';
-  ctx.goal(0.5, 'the resolution note names order O-7301 and exactly one refund id', note.includes('O-7301') && (note.match(/\\bre_\\d{4,}\\b/g) || []).length === 1);
+  const cited = note.match(/\\bre_\\d{4,}\\b/g) || [];
+  // The payments system's refund event reaches the ticket through receive_payment_event, which writes this note with no actor. Only the event of the refund the note cites may be new, so an event the agent forges for any other refund fails the guard (A-410).
+  const refundEvent = ctx.db.list('ticket_event', { where: { ticket_id: ticket.id, kind: 'payment_refunded' } }).find((e) => {
+    const m = e.actor_id === null && typeof e.note === 'string' ? /^Refund (re_[A-Za-z0-9]+) of charge ch_[A-Za-z0-9]+ \\(charge\\.refunded\\)\\.$/.exec(e.note) : null;
+    return m !== null && cited.length === 1 && m[1] === cited[0];
+  });
+  ctx.guardChanges('only the resolve fields of the ticket, its resolved event and the payment event of the refund its note cites changed', [
+    { entity: 'ticket', id: ticket.id, kind: 'updated', fields: ['status', 'resolved_at'] },
+    ...[...resolved.map((e) => e.id), ...(refundEvent ? [refundEvent.id] : [])].map((id) => ({ entity: 'ticket_event', id, kind: 'created', fields: ['ticket_id', 'kind', 'note', 'actor_id'] })),
+  ]);
+  ctx.goal(0.5, 'the ticket is resolved, with one resolved event', ctx.db.get('ticket', ticket.id).status === 'resolved' && resolved.length === 1);
+  ctx.goal(0.5, 'the resolution note names order O-7301 and exactly one refund id', note.includes('O-7301') && cited.length === 1);
   return ctx.score();
 }`,
   solution: `(ctx) => {

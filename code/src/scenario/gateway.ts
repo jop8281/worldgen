@@ -4,6 +4,7 @@ import { serve, type CallRecord, type StateDump, type WorldServer } from '#engin
 import { EVENT_DELIVERY, filled, type JsonRequest } from './events.ts';
 import { linkResult, SEQ_HEADER, type LinkResult, type Source } from './links.ts';
 import type { EventFault, FaultKind, LoadedScenario } from './manifest.ts';
+import { provenanceResult, type ProvenanceResult } from './provenance.ts';
 
 export type BoundaryCall = {
   readonly seq: number;
@@ -16,7 +17,14 @@ export type BoundaryCall = {
 };
 export type Undelivered = { readonly after: number; readonly event: string; readonly reason: string };
 export type GateResult = { readonly world: string; readonly task: string; readonly score: number };
-export type ScenarioVerdict = { readonly verdict: 0 | 1; readonly gates: readonly GateResult[]; readonly links: readonly LinkResult[] };
+export type ScenarioVerdict = {
+  readonly verdict: 0 | 1;
+  readonly gates: readonly GateResult[];
+  readonly links: readonly LinkResult[];
+  readonly provenance: readonly ProvenanceResult[];
+  /** Events an `out_of_order` rule still holds: a grade delivers them only when it is final. */
+  readonly heldEvents: number;
+};
 export interface ScenarioServer {
   readonly url: string;
   readonly adminUrl: string;
@@ -31,8 +39,11 @@ const MAX_BODY = 1_048_576;
 const HOP_BY_HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive']);
 
 type Upstream = { readonly status: number; readonly type: string | null; readonly body: Buffer };
+type Delivered = Upstream & { readonly seq: number };
 type Delivery = { readonly world: string; readonly method: string; readonly path: string; readonly headers: Readonly<Record<string, string>>; readonly body: Buffer | undefined };
 type Reply = { readonly status: number; readonly type: string; readonly body: Buffer | string };
+/** One firing of the event rule at index `event` of the scenario's events, triggered by the delivery at gateway seq `after`. */
+type Firing = { readonly event: number; readonly after: number; readonly delivery: Delivery };
 
 const DELIVERY: Record<FaultKind | 'normal', { readonly deliveries: number; readonly reply: (first: Upstream) => Upstream | Reply }> = {
   normal: { deliveries: 1, reply: (first) => first },
@@ -119,7 +130,7 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
     const calls: BoundaryCall[] = [];
     const undelivered: Undelivered[] = [];
     const faults = scenario.faults.map((f) => ({ ...f, seen: 0 }));
-    const held = new Map<number, Delivery>();
+    const held = new Map<number, Firing>();
     let delivered = 0;
     let turn: Promise<unknown> = Promise.resolve();
     // One delivery at a time, and no grade during one, so the trace's seq is the order the worlds ran the calls in.
@@ -129,16 +140,22 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
       return run;
     };
 
-    const deliver = async (d: Delivery, source: Source, fault: BoundaryCall['fault']): Promise<Upstream> => {
+    const deliver = async (d: Delivery, source: Source, fault: BoundaryCall['fault']): Promise<Delivered> => {
       delivered += 1;
       const seq = delivered;
       const init: RequestInit = { method: d.method, headers: { ...d.headers, [SEQ_HEADER]: String(seq) } };
       if (d.body !== undefined && d.body.length > 0) init.body = new Uint8Array(d.body);
       const r = await fetch(`${worlds[d.world]!.url}${d.path}`, init);
-      const out = { status: r.status, type: r.headers.get('content-type'), body: Buffer.from(await r.arrayBuffer()) };
+      const out = { seq, status: r.status, type: r.headers.get('content-type'), body: Buffer.from(await r.arrayBuffer()) };
       calls.push({ seq, world: d.world, method: d.method, path: d.path, status: out.status, fault, source });
       if (source !== 'event') await fire(seq, d, out);
       return out;
+    };
+
+    const deliverEvent = async ({ event, after, delivery }: Firing): Promise<void> => {
+      const e = scenario.events[event]!;
+      const out = await deliver(delivery, 'event', e.fault ?? null);
+      if (out.status >= 400) undelivered.push({ after, event: e.name, reason: `${delivery.world} answered ${out.status} to the delivery at gateway seq ${out.seq}` });
     };
 
     const fire = async (seq: number, d: Delivery, out: Upstream): Promise<void> => {
@@ -151,17 +168,17 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
           undelivered.push({ after: seq, event: e.name, reason: request.reason });
           continue;
         }
-        const { send, hold } = EVENT_DELIVERY[e.fault ?? 'none'](jsonDelivery(request.value), held.get(i));
+        const { send, hold } = EVENT_DELIVERY[e.fault ?? 'none']({ event: i, after: seq, delivery: jsonDelivery(request.value) }, held.get(i));
         held.delete(i);
         if (hold !== undefined) held.set(i, hold);
-        for (const r of send) await deliver(r, 'event', e.fault ?? null);
+        for (const f of send) await deliverEvent(f);
       }
     };
 
     const flush = async (): Promise<void> => {
-      for (const [i, d] of [...held]) {
+      for (const [i, f] of [...held]) {
         held.delete(i);
-        await deliver(d, 'event', scenario.events[i]!.fault ?? null);
+        await deliverEvent(f);
       }
     };
 
@@ -214,7 +231,8 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
       }
       const tables: Record<string, StateDump['tables']> = {};
       const logs: Record<string, readonly CallRecord[]> = {};
-      for (const name of new Set(scenario.links.flatMap((l) => [l.from.world, l.to.world]))) {
+      const read = [...scenario.links.flatMap((l) => [l.from.world, l.to.world]), ...scenario.provenance.flatMap((p) => [p.rows.world, ...(p.cites === undefined ? [] : [p.cites.world])])];
+      for (const name of new Set(read)) {
         const state = await fetch(`${worlds[name]!.adminUrl}/_world/state`);
         const log = await fetch(`${worlds[name]!.adminUrl}/_world/log`);
         for (const [route, r] of [['state', state], ['log', log]] as const) {
@@ -224,8 +242,11 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
         logs[name] = ((await log.json()) as { calls: CallRecord[] }).calls;
       }
       const evidence = { trace: calls, logs: (world: string) => logs[world] ?? [] };
-      const links = scenario.links.map((l) => linkResult(l, (world, entity) => tables[world]?.[entity] ?? [], evidence));
-      const verdict: ScenarioVerdict = { verdict: gates.every((g) => g.score === 1) && links.every((l) => l.held) ? 1 : 0, gates, links };
+      const rows = (world: string, entity: string) => tables[world]?.[entity] ?? [];
+      const links = scenario.links.map((l) => linkResult(l, rows, evidence));
+      const provenance = scenario.provenance.map((p) => provenanceResult(p, rows, evidence, (world, entity) => loaded.worlds[world]!.entities[entity]!.idPrefix));
+      const passed = gates.every((g) => g.score === 1) && links.every((l) => l.held) && provenance.every((p) => p.held);
+      const verdict: ScenarioVerdict = { verdict: passed ? 1 : 0, gates, links, provenance, heldEvents: held.size };
       return json(200, verdict);
     };
 
@@ -234,8 +255,12 @@ export async function serveScenario(loaded: LoadedScenario, opts: { port: number
         const url = new URL(req.url ?? '/', 'http://admin');
         if (req.method === 'GET' && url.pathname === '/_scenario/trace') return send(res, json(200, { calls, undelivered }));
         if (req.method === 'POST' && url.pathname === '/_scenario/grade') {
+          const final = url.search === '?final=1';
+          if (url.search !== '' && !final) {
+            return send(res, json(400, { error: { code: 'request.invalid', message: 'POST /_scenario/grade takes no query, or final=1 to deliver every held event before it grades.' } }));
+          }
           return send(res, await serially(async () => {
-            await flush();
+            if (final) await flush();
             return grade();
           }));
         }

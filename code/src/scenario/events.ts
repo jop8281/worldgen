@@ -5,7 +5,7 @@ type Release<R> = { readonly send: readonly R[]; readonly hold: R | undefined };
 
 /**
  * Per event fault, what a firing sends given its own request and the one the rule held. `out_of_order` holds a request
- * until the rule fires again, then sends the newer one first; the gateway flushes any still held before a grade.
+ * until the rule fires again, then sends the newer one first; the gateway flushes any still held before a final grade.
  */
 export const EVENT_DELIVERY: Readonly<Record<EventFault | 'none', <R>(now: R, held: R | undefined) => Release<R>>> = {
   none: (now) => ({ send: [now], hold: undefined }),

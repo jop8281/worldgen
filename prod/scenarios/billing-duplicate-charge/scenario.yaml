@@ -46,3 +46,15 @@ links:
         kind: resolved
       field: note
     rule: cites
+provenance:
+  - name: each refund event on a ticket was delivered by payments and cites a refund payments has
+    rows:
+      world: support
+      entity: ticket_event
+      where:
+        kind: payment_refunded
+    source: event
+    cites:
+      field: note
+      world: payments
+      entity: refund
