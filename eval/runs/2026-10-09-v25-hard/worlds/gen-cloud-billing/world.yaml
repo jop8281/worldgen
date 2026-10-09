@@ -1,0 +1,1394 @@
+format: 1
+meta:
+  name: gen_cloud_billing
+  description: A billing console where customers hold subscriptions to plans, invoices are paid, voided or written off, account credits are granted and applied, refunds go through a request and decision step, and a daily dunning job escalates overdue invoices and the subscriptions behind them.
+  resembles: Stripe Billing / AWS Billing-style cloud billing console (subscriptions, invoices, credits, refunds, dunning)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  customer:
+    description: A billed account holder with an account credit balance in USD cents.
+    idPrefix: cus
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      credit_balance:
+        type: money
+        description: Spendable account credit in cents. Changed only by credit grants, credit applications and approved account_credit refunds.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+  plan:
+    description: A priced cloud plan billed monthly.
+    idPrefix: pln
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      monthly_price:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+  subscription:
+    description: A customer's subscription to a plan. Its status moves through dunning and cancellation.
+    idPrefix: sub
+    fields:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      plan_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: plan
+        onDelete: restrict
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - active
+          - past_due
+          - suspended
+          - canceled
+        initial: active
+        transitions:
+          active:
+            - past_due
+            - suspended
+            - canceled
+          past_due:
+            - active
+            - suspended
+            - canceled
+          suspended:
+            - active
+            - canceled
+          canceled: []
+      current_period_end:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      canceled_at:
+        type: datetime
+        description: Set when the subscription is canceled.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+  invoice:
+    description: A bill for a subscription with payment, refund and dunning tracking. Amounts are USD cents.
+    idPrefix: inv
+    fields:
+      number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      subscription_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: subscription
+        onDelete: restrict
+      total:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      amount_paid:
+        type: money
+        description: Cents collected so far by card or by applied credit.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+      amount_refunded:
+        type: money
+        description: Cents refunded through approved refunds.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - open
+          - paid
+          - void
+          - uncollectible
+        initial: open
+        transitions:
+          open:
+            - paid
+            - void
+            - uncollectible
+          paid: []
+          void: []
+          uncollectible: []
+      due_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      attempt_count:
+        type: int
+        description: Card payment attempts made, successful or failed.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      dunning_level:
+        type: int
+        description: 0 current, 1 under 14 days overdue, 2 at least 14 days overdue.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        max: 2
+        default: 0
+      memo:
+        type: text
+        description: Free-text note. Not authoritative; the money and status fields are.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  payment_attempt:
+    description: One card charge attempt against an invoice.
+    idPrefix: pat
+    fields:
+      invoice_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: invoice
+        onDelete: restrict
+      outcome:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - succeeded
+          - failed
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+  credit_entry:
+    description: Ledger row of account credit grants, applications to invoices and refund credits.
+    idPrefix: crd
+    fields:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - grant
+          - application
+          - refund
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      invoice_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: invoice
+        onDelete: restrict
+      note:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  refund:
+    description: A refund request on a paid invoice, decided once by approval or rejection.
+    idPrefix: rfd
+    fields:
+      invoice_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: invoice
+        onDelete: restrict
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 1
+      destination:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - original_payment
+          - account_credit
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - requested
+          - approved
+          - rejected
+        initial: requested
+        transitions:
+          requested:
+            - approved
+            - rejected
+          approved: []
+          rejected: []
+      reason:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+routes:
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - email
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /customers
+    description: List customers, filter by email.
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /customers/{id}
+  create_customer:
+    op: create
+    entity: customer
+    method: POST
+    path: /customers
+  list_plans:
+    op: list
+    entity: plan
+    filters:
+      - name
+    search:
+      - name
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /plans
+  get_plan:
+    op: get
+    entity: plan
+    method: GET
+    path: /plans/{id}
+  create_plan:
+    op: create
+    entity: plan
+    method: POST
+    path: /plans
+  list_subscriptions:
+    op: list
+    entity: subscription
+    filters:
+      - customer_id
+      - plan_id
+      - status
+    search: []
+    sort:
+      - current_period_end
+    pageSize: 25
+    method: GET
+    path: /subscriptions
+  get_subscription:
+    op: get
+    entity: subscription
+    method: GET
+    path: /subscriptions/{id}
+  create_subscription:
+    op: create
+    entity: subscription
+    method: POST
+    path: /subscriptions
+    description: Create an active subscription.
+  list_invoices:
+    op: list
+    entity: invoice
+    filters:
+      - number
+      - customer_id
+      - subscription_id
+      - status
+      - dunning_level
+    search: []
+    sort:
+      - due_at
+    pageSize: 25
+    method: GET
+    path: /invoices
+    description: List invoices; sort by due_at.
+  get_invoice:
+    op: get
+    entity: invoice
+    method: GET
+    path: /invoices/{id}
+  create_invoice:
+    op: create
+    entity: invoice
+    method: POST
+    path: /invoices
+    description: Create an open invoice.
+  list_payment_attempts:
+    op: list
+    entity: payment_attempt
+    filters:
+      - invoice_id
+      - outcome
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /payment_attempts
+  list_credit_entries:
+    op: list
+    entity: credit_entry
+    filters:
+      - customer_id
+      - kind
+      - invoice_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /credit_entries
+  list_refunds:
+    op: list
+    entity: refund
+    filters:
+      - invoice_id
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /refunds
+  get_refund:
+    op: get
+    entity: refund
+    method: GET
+    path: /refunds/{id}
+actions:
+  pay_invoice:
+    method: POST
+    path: /invoices/{id}/pay
+    description: Simulate a card charge on an open invoice. A failed charge answers 200 and leaves it open.
+    input:
+      card_result:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - succeeded
+          - failed
+    handler: |-
+      (ctx) => {
+      const inv = ctx.db.get('invoice', ctx.params.id);
+      if (inv === null) ctx.fail(404, 'not_found', 'invoice ' + ctx.params.id + ' not found');
+      if (inv.status !== 'open') ctx.fail(409, 'invalid_state', 'invoice ' + inv.number + ' is ' + inv.status + '. Only open invoices can be paid.');
+      const ok = ctx.body.card_result === 'succeeded';
+      ctx.db.create('payment_attempt', { invoice_id: inv.id, outcome: ok ? 'succeeded' : 'failed', amount: inv.total - inv.amount_paid });
+      const patch = { attempt_count: inv.attempt_count + 1 };
+      if (ok) { patch.amount_paid = inv.total; patch.status = 'paid'; }
+      return { status: 200, body: ctx.db.update('invoice', inv.id, patch) };
+      }
+  void_invoice:
+    method: POST
+    path: /invoices/{id}/void
+    description: Void an open invoice.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const inv = ctx.db.get('invoice', ctx.params.id);
+      if (inv === null) ctx.fail(404, 'not_found', 'invoice ' + ctx.params.id + ' not found');
+      if (inv.status !== 'open') ctx.fail(409, 'invalid_state', 'invoice ' + inv.number + ' is ' + inv.status + '. Only open invoices can be voided.');
+      return { status: 200, body: ctx.db.update('invoice', inv.id, { status: 'void' }) };
+      }
+  apply_credit:
+    method: POST
+    path: /invoices/{id}/apply_credit
+    description: Spend account credit on an open invoice, up to the outstanding amount.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const inv = ctx.db.get('invoice', ctx.params.id);
+      if (inv === null) ctx.fail(404, 'not_found', 'invoice ' + ctx.params.id + ' not found');
+      if (inv.status !== 'open') ctx.fail(409, 'invalid_state', 'invoice ' + inv.number + ' is ' + inv.status + '. Only open invoices accept credit.');
+      const cus = ctx.db.get('customer', inv.customer_id);
+      const outstanding = inv.total - inv.amount_paid;
+      if (cus.credit_balance <= 0 || outstanding <= 0) ctx.fail(409, 'insufficient_credit', 'customer has no credit to apply');
+      const use = Math.min(cus.credit_balance, outstanding);
+      ctx.db.update('customer', cus.id, { credit_balance: cus.credit_balance - use });
+      ctx.db.create('credit_entry', { customer_id: cus.id, kind: 'application', amount: use, invoice_id: inv.id, note: null });
+      const paidNow = inv.amount_paid + use;
+      const patch = { amount_paid: paidNow };
+      if (paidNow >= inv.total) patch.status = 'paid';
+      return { status: 200, body: ctx.db.update('invoice', inv.id, patch) };
+      }
+  write_off_invoice:
+    method: POST
+    path: /invoices/{id}/write_off
+    description: Write off an open invoice at dunning level 2 as uncollectible.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const inv = ctx.db.get('invoice', ctx.params.id);
+      if (inv === null) ctx.fail(404, 'not_found', 'invoice ' + ctx.params.id + ' not found');
+      if (inv.status !== 'open') ctx.fail(409, 'invalid_state', 'invoice ' + inv.number + ' is ' + inv.status + '. Only open invoices can be written off.');
+      if (inv.dunning_level !== 2) ctx.fail(409, 'not_overdue', 'invoice ' + inv.number + ' is not at dunning level 2');
+      return { status: 200, body: ctx.db.update('invoice', inv.id, { status: 'uncollectible' }) };
+      }
+  cancel_subscription:
+    method: POST
+    path: /subscriptions/{id}/cancel
+    description: Cancel immediately and void open invoices that have no payment.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const sub = ctx.db.get('subscription', ctx.params.id);
+      if (sub === null) ctx.fail(404, 'not_found', 'subscription ' + ctx.params.id + ' not found');
+      if (sub.status === 'canceled') ctx.fail(409, 'invalid_state', 'subscription is already canceled');
+      const invs = ctx.db.list('invoice', { where: { subscription_id: sub.id, status: 'open' } });
+      for (const i of invs) {
+        if (i.amount_paid === 0) ctx.db.update('invoice', i.id, { status: 'void' });
+      }
+      return { status: 200, body: ctx.db.update('subscription', sub.id, { status: 'canceled', canceled_at: ctx.now() }) };
+      }
+  reactivate_subscription:
+    method: POST
+    path: /subscriptions/{id}/reactivate
+    description: Move a past_due or suspended subscription back to active when it has no overdue open invoice.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const sub = ctx.db.get('subscription', ctx.params.id);
+      if (sub === null) ctx.fail(404, 'not_found', 'subscription ' + ctx.params.id + ' not found');
+      if (sub.status !== 'past_due' && sub.status !== 'suspended') ctx.fail(409, 'invalid_state', 'subscription is ' + sub.status + '. Only past_due or suspended subscriptions can be reactivated.');
+      const now = ctx.now();
+      const overdue = ctx.db.list('invoice', { where: { subscription_id: sub.id, status: 'open' } }).filter((i) => ctx.time.minutesBetween(i.due_at, now) > 0);
+      if (overdue.length > 0) ctx.fail(409, 'overdue_invoices', 'subscription has overdue open invoices');
+      return { status: 200, body: ctx.db.update('subscription', sub.id, { status: 'active' }) };
+      }
+  request_refund:
+    method: POST
+    path: /invoices/{id}/refunds
+    description: Request a refund on a paid invoice.
+    input:
+      amount:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      destination:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - original_payment
+          - account_credit
+      reason:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const inv = ctx.db.get('invoice', ctx.params.id);
+      if (inv === null) ctx.fail(404, 'not_found', 'invoice ' + ctx.params.id + ' not found');
+      if (inv.status !== 'paid') ctx.fail(409, 'invalid_state', 'invoice ' + inv.number + ' is ' + inv.status + '. Only paid invoices can be refunded.');
+      const held = ctx.db.list('refund', { where: { invoice_id: inv.id } }).filter((r) => r.status === 'requested' || r.status === 'approved').reduce((s, r) => s + r.amount, 0);
+      if (held + ctx.body.amount > inv.amount_paid) ctx.fail(409, 'refund_exceeds_paid', 'requested and approved refunds would exceed the amount paid');
+      const r = ctx.db.create('refund', { invoice_id: inv.id, amount: ctx.body.amount, destination: ctx.body.destination, reason: ctx.body.reason === undefined ? null : ctx.body.reason });
+      return { status: 201, body: r };
+      }
+  approve_refund:
+    method: POST
+    path: /refunds/{id}/approve
+    description: Approve a requested refund.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const r = ctx.db.get('refund', ctx.params.id);
+      if (r === null) ctx.fail(404, 'not_found', 'refund ' + ctx.params.id + ' not found');
+      if (r.status !== 'requested') ctx.fail(409, 'invalid_state', 'refund is ' + r.status);
+      const inv = ctx.db.get('invoice', r.invoice_id);
+      ctx.db.update('invoice', inv.id, { amount_refunded: inv.amount_refunded + r.amount });
+      if (r.destination === 'account_credit') {
+        const cus = ctx.db.get('customer', inv.customer_id);
+        ctx.db.update('customer', cus.id, { credit_balance: cus.credit_balance + r.amount });
+        ctx.db.create('credit_entry', { customer_id: cus.id, kind: 'refund', amount: r.amount, invoice_id: inv.id, note: null });
+      }
+      return { status: 200, body: ctx.db.update('refund', r.id, { status: 'approved' }) };
+      }
+  reject_refund:
+    method: POST
+    path: /refunds/{id}/reject
+    description: Reject a requested refund; no money moves.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const r = ctx.db.get('refund', ctx.params.id);
+      if (r === null) ctx.fail(404, 'not_found', 'refund ' + ctx.params.id + ' not found');
+      if (r.status !== 'requested') ctx.fail(409, 'invalid_state', 'refund is ' + r.status);
+      return { status: 200, body: ctx.db.update('refund', r.id, { status: 'rejected' }) };
+      }
+  grant_credit:
+    method: POST
+    path: /customers/{id}/credits
+    description: Grant account credit to a customer.
+    input:
+      amount:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      note:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const cus = ctx.db.get('customer', ctx.params.id);
+      if (cus === null) ctx.fail(404, 'not_found', 'customer ' + ctx.params.id + ' not found');
+      ctx.db.create('credit_entry', { customer_id: cus.id, kind: 'grant', amount: ctx.body.amount, invoice_id: null, note: ctx.body.note === undefined ? null : ctx.body.note });
+      return { status: 200, body: ctx.db.update('customer', cus.id, { credit_balance: cus.credit_balance + ctx.body.amount }) };
+      }
+jobs:
+  dunning_sweep:
+    description: "Daily sweep: escalate open overdue invoices and the subscriptions behind them."
+    every: 1d
+    run: |-
+      (ctx) => {
+      const now = ctx.now();
+      const invs = ctx.db.list('invoice', { where: { status: 'open' } });
+      for (const inv of invs) {
+        const mins = ctx.time.minutesBetween(inv.due_at, now);
+        if (mins <= 0) continue;
+        const level = mins < 14 * 1440 ? 1 : 2;
+        if (inv.dunning_level !== level) ctx.db.update('invoice', inv.id, { dunning_level: level });
+        const sub = ctx.db.get('subscription', inv.subscription_id);
+        if (sub === null || sub.status === 'canceled') continue;
+        if (level === 1 && sub.status === 'active') ctx.db.update('subscription', sub.id, { status: 'past_due' });
+        else if (level === 2 && (sub.status === 'active' || sub.status === 'past_due')) ctx.db.update('subscription', sub.id, { status: 'suspended' });
+      }
+      }
+fixtures: {}
+seed:
+  customer: |-
+    (ctx) => {
+    const d = [['Northwind Labs',25000],['Helios Systems',29999],['Orbital Freight',20000],['Pine Analytics',12000],['Kestrel Robotics',5000],['Maple Logistics',0],['Juniper Health',3000],['Quartz Media',0],['Bluefin Foods',500],['Atlas Learning',1500],['Cobalt Energy',0],['Sable Studios',800]];
+    return d.map(([name, bal], i) => ({ name, email: 'billing' + (i + 1) + '@' + name.toLowerCase().split(' ')[0] + '.example.com', credit_balance: bal }));
+    }
+  plan: |-
+    (ctx) => {
+    return [['Starter', 2900], ['Pro', 9900], ['Team', 24900], ['Enterprise', 150000]].map(([name, monthly_price]) => ({ name, monthly_price }));
+    }
+  subscription: |-
+    (ctx) => {
+    const c = ctx.rows('customer'); const p = ctx.rows('plan');
+    const now = ctx.now();
+    const d = [[0,3,'past_due'],[1,3,'suspended'],[2,3,'past_due'],[3,3,'suspended'],[4,3,'past_due'],[5,1,'active'],[6,2,'active'],[7,0,'active'],[8,1,'active'],[9,2,'active'],[10,0,'active'],[11,1,'canceled'],[6,0,'canceled'],[7,1,'canceled']];
+    return d.map(([ci, pi, status], i) => ({ customer_id: c[ci].id, plan_id: p[pi].id, status, current_period_end: ctx.time.plus(now, (10 + i) + 'd'), canceled_at: status === 'canceled' ? ctx.time.minus(now, (5 + i) + 'd') : null }));
+    }
+  invoice: |-
+    (ctx) => {
+    const now = ctx.now(); const subs = ctx.rows('subscription');
+    const ago = (n) => ctx.time.minus(now, n + 'd'); const fwd = (n) => ctx.time.plus(now, n + 'd');
+    let n = 1000;
+    const mk = (si, total, due, status, extra) => Object.assign({ number: 'INV-' + (++n), customer_id: subs[si].customer_id, subscription_id: subs[si].id, total, amount_paid: 0, amount_refunded: 0, status, due_at: due, attempt_count: 0, dunning_level: 0, memo: null }, extra);
+    const out = [];
+    const totals = [9000,6000,12000,4500,8000,5000,15000,3500,10000,7000,6000,9500];
+    const ref = { 1: 2000, 4: 1500, 6: 4000 };
+    totals.forEach((t, k) => out.push(mk(5 + (k % 9), t, ago(40 + k), 'paid', { amount_paid: t, amount_refunded: ref[k] || 0, attempt_count: 1 })));
+    [11, 12, 13].forEach((si) => out.push(mk(si, 3000, ago(60), 'void', { memo: 'subscription canceled' })));
+    [2, 5, 8, 9].forEach((si) => out.push(mk(si, 4000, ago(90), 'uncollectible', { dunning_level: 2 })));
+    const open = [
+    [5,5000,13,0,1,null],[6,4000,14,0,1,null],[7,6000,29,0,1,null],[8,3000,-1,0,0,null],[9,2500,-10,1000,0,null],[10,7000,5,0,1,'paid offline, ignore'],[5,1500,-5,0,0,null],[6,8000,40,2000,1,null],
+    [0,20000,45,0,0,null],[1,30000,31,0,1,null],[2,15000,30,0,0,null],[3,12000,60,0,1,'paid offline, ignore'],[4,18000,29,0,1,'already refunded']];
+    open.forEach(([si, t, days, paid, att, memo]) => {
+      const lvl = days >= 14 ? 2 : (days > 0 ? 1 : 0);
+      out.push(mk(si, t, days > 0 ? ago(days) : fwd(-days), 'open', { amount_paid: paid, attempt_count: att, dunning_level: lvl, memo }));
+    });
+    return out;
+    }
+  payment_attempt: |-
+    (ctx) => {
+    const out = [];
+    for (const i of ctx.rows('invoice')) {
+      if (i.status === 'paid') out.push({ invoice_id: i.id, outcome: 'succeeded', amount: i.total });
+      else if (i.status === 'open' && i.attempt_count > 0) out.push({ invoice_id: i.id, outcome: 'failed', amount: i.total - i.amount_paid });
+    }
+    return out;
+    }
+  credit_entry: |-
+    (ctx) => {
+    const c = ctx.rows('customer'); const inv = ctx.rows('invoice');
+    const open = inv.filter((i) => i.status === 'open');
+    const g = (ci, amount) => ({ customer_id: c[ci].id, kind: 'grant', amount, invoice_id: null, note: 'goodwill credit' });
+    return [g(0,25000), g(1,29999), g(2,20000), g(3,12000), g(4,5000),
+    { customer_id: open[4].customer_id, kind: 'application', amount: 1000, invoice_id: open[4].id, note: null },
+    { customer_id: open[7].customer_id, kind: 'application', amount: 2000, invoice_id: open[7].id, note: null },
+    { customer_id: inv[6].customer_id, kind: 'refund', amount: 4000, invoice_id: inv[6].id, note: null }];
+    }
+  refund: |-
+    (ctx) => {
+    const inv = ctx.rows('invoice');
+    const r = (k, amount, destination, status, reason) => ({ invoice_id: inv[k].id, amount, destination, status, reason });
+    return [
+    r(0, 7500, 'account_credit', 'requested', 'service outage'),
+    r(2, 5000, 'account_credit', 'requested', 'outage credit, pre-approved by finance'),
+    r(1, 3500, 'original_payment', 'requested', 'duplicate charge'),
+    r(1, 2000, 'original_payment', 'approved', 'partial service credit'),
+    r(4, 1500, 'original_payment', 'approved', 'billing error'),
+    r(6, 4000, 'account_credit', 'approved', 'downtime'),
+    r(3, 1000, 'account_credit', 'rejected', 'changed mind'),
+    r(5, 2000, 'original_payment', 'rejected', 'out of policy')];
+    }
+tests:
+  t_pay:
+    description: A failed card leaves the invoice open and logs an attempt; a success marks it paid.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('pay1',5000,'2030-01-01T00:00:00Z');
+      const f=ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'failed'});
+      ctx.assert(f.status===200&&f.body.status==='open'&&f.body.amount_paid===0&&f.body.attempt_count===1,'failed pay '+JSON.stringify(f.body));
+      const ok=ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'succeeded'});
+      ctx.assert(ok.status===200&&ok.body.status==='paid'&&ok.body.amount_paid===5000&&ok.body.attempt_count===2,'paid '+JSON.stringify(ok.body));
+      const a=ctx.api('GET','/payment_attempts?invoice_id='+x.i.id);
+      ctx.assert(a.status===200&&a.body.data.length===2&&a.body.data.filter((r)=>r.outcome==='failed').length===1,'attempts '+JSON.stringify(a.body));
+      const bad=ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'maybe'});
+      ctx.assert(bad.status===400&&bad.body.error.code==='input.invalid','bad input '+JSON.stringify(bad.body));
+      }
+  t_invoice_state:
+    description: Only open invoices accept pay and void.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('st1',5000,'2030-01-01T00:00:00Z');
+      ctx.assert(ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'succeeded'}).status===200,'pay');
+      const p2=ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'succeeded'});
+      ctx.assert(p2.status===409&&p2.body.error.code==='invalid_state','pay paid '+JSON.stringify(p2.body));
+      const v1=ctx.api('POST','/invoices/'+x.i.id+'/void',{});
+      ctx.assert(v1.status===409&&v1.body.error.code==='invalid_state','void paid '+JSON.stringify(v1.body));
+      const y=mk('st2',5000,'2030-01-01T00:00:00Z');
+      const v2=ctx.api('POST','/invoices/'+y.i.id+'/void',{});
+      ctx.assert(v2.status===200&&v2.body.status==='void','void open '+JSON.stringify(v2.body));
+      const p3=ctx.api('POST','/invoices/'+y.i.id+'/pay',{card_result:'succeeded'});
+      ctx.assert(p3.status===409&&p3.body.error.code==='invalid_state','pay void '+JSON.stringify(p3.body));
+      const v3=ctx.api('POST','/invoices/'+y.i.id+'/void',{});
+      ctx.assert(v3.status===409,'void twice');
+      }
+  t_credit:
+    description: Credit partially then fully covers an invoice; zero balance is refused.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('cr1',5000,'2030-01-01T00:00:00Z');
+      const z=ctx.api('POST','/invoices/'+x.i.id+'/apply_credit',{});
+      ctx.assert(z.status===409&&z.body.error.code==='insufficient_credit','zero balance '+JSON.stringify(z.body));
+      const g=ctx.api('POST','/customers/'+x.c.id+'/credits',{amount:3000,note:'goodwill'});
+      ctx.assert(g.status===200&&g.body.credit_balance===3000,'grant '+JSON.stringify(g.body));
+      const a1=ctx.api('POST','/invoices/'+x.i.id+'/apply_credit',{});
+      ctx.assert(a1.status===200&&a1.body.status==='open'&&a1.body.amount_paid===3000,'partial '+JSON.stringify(a1.body));
+      ctx.assert(ctx.api('GET','/customers/'+x.c.id).body.credit_balance===0,'balance spent');
+      ctx.api('POST','/customers/'+x.c.id+'/credits',{amount:4000,note:'more'});
+      const a2=ctx.api('POST','/invoices/'+x.i.id+'/apply_credit',{});
+      ctx.assert(a2.status===200&&a2.body.status==='paid'&&a2.body.amount_paid===5000,'full '+JSON.stringify(a2.body));
+      ctx.assert(ctx.api('GET','/customers/'+x.c.id).body.credit_balance===2000,'remaining 2000');
+      const a3=ctx.api('POST','/invoices/'+x.i.id+'/apply_credit',{});
+      ctx.assert(a3.status===409&&a3.body.error.code==='invalid_state','paid invoice '+JSON.stringify(a3.body));
+      }
+  t_writeoff:
+    description: After the dunning sweep an invoice 14+ days overdue can be written off; a current one cannot.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('wo1',4000,'2020-01-01T00:00:00Z');
+      const y=mk('wo2',4000,'2030-01-01T00:00:00Z');
+      const n=ctx.api('POST','/invoices/'+y.i.id+'/write_off',{});
+      ctx.assert(n.status===409&&n.body.error.code==='not_overdue','current invoice '+JSON.stringify(n.body));
+      ctx.advance('2d');
+      ctx.assert(ctx.api('GET','/invoices/'+x.i.id).body.dunning_level===2,'level 2 after sweep');
+      const w=ctx.api('POST','/invoices/'+x.i.id+'/write_off',{});
+      ctx.assert(w.status===200&&w.body.status==='uncollectible','write off '+JSON.stringify(w.body));
+      const p=ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'succeeded'});
+      ctx.assert(p.status===409&&p.body.error.code==='invalid_state','pay written off');
+      }
+  t_cancel:
+    description: Cancel stamps canceled_at, voids unpaid open invoices, keeps paid ones, refuses a second cancel.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('can1',3000,'2030-01-01T00:00:00Z');
+      const r=ctx.api('POST','/subscriptions/'+x.s.id+'/cancel',{});
+      ctx.assert(r.status===200&&r.body.status==='canceled'&&r.body.canceled_at,'cancel '+JSON.stringify(r.body));
+      ctx.assert(ctx.api('GET','/invoices/'+x.i.id).body.status==='void','open invoice voided');
+      const r2=ctx.api('POST','/subscriptions/'+x.s.id+'/cancel',{});
+      ctx.assert(r2.status===409&&r2.body.error.code==='invalid_state','second cancel '+JSON.stringify(r2.body));
+      const y=mk('can2',3000,'2030-01-01T00:00:00Z');
+      ctx.assert(ctx.api('POST','/invoices/'+y.i.id+'/pay',{card_result:'succeeded'}).status===200,'pay');
+      ctx.assert(ctx.api('POST','/subscriptions/'+y.s.id+'/cancel',{}).status===200,'cancel y');
+      ctx.assert(ctx.api('GET','/invoices/'+y.i.id).body.status==='paid','paid invoice untouched');
+      }
+  t_reactivate:
+    description: A past_due subscription cannot be reactivated until its overdue invoice is paid.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('rea1',3000,ctx.now());
+      const a=ctx.api('POST','/subscriptions/'+x.s.id+'/reactivate',{});
+      ctx.assert(a.status===409&&a.body.error.code==='invalid_state','active reactivate '+JSON.stringify(a.body));
+      ctx.advance('2d');
+      ctx.assert(ctx.api('GET','/subscriptions/'+x.s.id).body.status==='past_due','past_due after sweep');
+      const b=ctx.api('POST','/subscriptions/'+x.s.id+'/reactivate',{});
+      ctx.assert(b.status===409&&b.body.error.code==='overdue_invoices','overdue '+JSON.stringify(b.body));
+      ctx.assert(ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'succeeded'}).status===200,'pay');
+      const c=ctx.api('POST','/subscriptions/'+x.s.id+'/reactivate',{});
+      ctx.assert(c.status===200&&c.body.status==='active','reactivated '+JSON.stringify(c.body));
+      }
+  t_dunning:
+    description: Short-overdue invoice gives past_due level 1, long-overdue gives suspended level 2, future and paid invoices are untouched.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const a=mk('dun1',2000,ctx.now());
+      const b=mk('dun2',2000,'2020-01-01T00:00:00Z');
+      const c=mk('dun3',2000,'2030-01-01T00:00:00Z');
+      const d=mk('dun4',2000,ctx.now());
+      ctx.assert(ctx.api('POST','/invoices/'+d.i.id+'/pay',{card_result:'succeeded'}).status===200,'pay d');
+      ctx.advance('2d');
+      const st=(x)=>ctx.api('GET','/subscriptions/'+x.s.id).body.status;
+      const lv=(x)=>ctx.api('GET','/invoices/'+x.i.id).body.dunning_level;
+      ctx.assert(st(a)==='past_due'&&lv(a)===1,'a '+st(a)+' '+lv(a));
+      ctx.assert(st(b)==='suspended'&&lv(b)===2,'b '+st(b)+' '+lv(b));
+      ctx.assert(st(c)==='active'&&lv(c)===0,'c untouched');
+      ctx.assert(st(d)==='active'&&lv(d)===0,'d paid untouched');
+      }
+  t_refund_limit:
+    description: Open invoices refuse refunds; pending refunds count toward the paid cap.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('rl1',5000,'2030-01-01T00:00:00Z');
+      const o=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:1000,destination:'original_payment',reason:'test'});
+      ctx.assert(o.status===409&&o.body.error.code==='invalid_state','open invoice '+JSON.stringify(o.body));
+      ctx.assert(ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'succeeded'}).status===200,'pay');
+      const big=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:6000,destination:'original_payment',reason:'too much'});
+      ctx.assert(big.status===409&&big.body.error.code==='refund_exceeds_paid','too big '+JSON.stringify(big.body));
+      const r1=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:2000,destination:'original_payment',reason:'partial'});
+      ctx.assert(r1.status===201&&r1.body.status==='requested','first '+JSON.stringify(r1.body));
+      const r2=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:3500,destination:'original_payment',reason:'over cap with pending'});
+      ctx.assert(r2.status===409&&r2.body.error.code==='refund_exceeds_paid','pending counts '+JSON.stringify(r2.body));
+      const r3=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:3000,destination:'account_credit',reason:'rest'});
+      ctx.assert(r3.status===201,'exact remainder '+JSON.stringify(r3.body));
+      }
+  t_refund_approve:
+    description: Approved account_credit refund grows the credit balance; original_payment does not; decisions are final.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('ra1',5000,'2030-01-01T00:00:00Z');
+      ctx.assert(ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'succeeded'}).status===200,'pay');
+      const r1=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:2000,destination:'account_credit',reason:'service outage'});
+      ctx.assert(r1.status===201,'request '+JSON.stringify(r1.body));
+      const ap=ctx.api('POST','/refunds/'+r1.body.id+'/approve',{});
+      ctx.assert(ap.status===200&&ap.body.status==='approved','approve '+JSON.stringify(ap.body));
+      ctx.assert(ctx.api('GET','/invoices/'+x.i.id).body.amount_refunded===2000,'amount_refunded 2000');
+      ctx.assert(ctx.api('GET','/customers/'+x.c.id).body.credit_balance===2000,'credit 2000');
+      const again=ctx.api('POST','/refunds/'+r1.body.id+'/approve',{});
+      ctx.assert(again.status===409&&again.body.error.code==='invalid_state','second approve '+JSON.stringify(again.body));
+      const r2=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:1000,destination:'original_payment',reason:'card refund'});
+      ctx.assert(r2.status===201,'second request');
+      ctx.assert(ctx.api('POST','/refunds/'+r2.body.id+'/approve',{}).status===200,'approve 2');
+      ctx.assert(ctx.api('GET','/invoices/'+x.i.id).body.amount_refunded===3000,'amount_refunded 3000');
+      ctx.assert(ctx.api('GET','/customers/'+x.c.id).body.credit_balance===2000,'credit unchanged');
+      }
+  t_refund_reject:
+    description: A rejected refund leaves balances alone, cannot be decided again, and frees its amount.
+    script: |-
+      (ctx) => {
+      const mk=(tag,total,due)=>{const c=ctx.api('POST','/customers',{name:'AT '+tag,email:tag+'@example.test'});ctx.assert(c.status===201,'customer '+JSON.stringify(c.body));const p=ctx.api('POST','/plans',{name:'AT plan '+tag,monthly_price:total});ctx.assert(p.status===201,'plan');const s=ctx.api('POST','/subscriptions',{customer_id:c.body.id,plan_id:p.body.id,current_period_end:'2026-12-01T00:00:00Z'});ctx.assert(s.status===201,'sub '+JSON.stringify(s.body));const i=ctx.api('POST','/invoices',{number:'AT-'+tag,customer_id:c.body.id,subscription_id:s.body.id,total:total,due_at:due});ctx.assert(i.status===201,'invoice '+JSON.stringify(i.body));return {c:c.body,s:s.body,i:i.body};};
+      const x=mk('rr1',5000,'2030-01-01T00:00:00Z');
+      ctx.assert(ctx.api('POST','/invoices/'+x.i.id+'/pay',{card_result:'succeeded'}).status===200,'pay');
+      const r1=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:1500,destination:'account_credit',reason:'dispute'});
+      ctx.assert(r1.status===201,'request');
+      const rj=ctx.api('POST','/refunds/'+r1.body.id+'/reject',{});
+      ctx.assert(rj.status===200&&rj.body.status==='rejected','reject '+JSON.stringify(rj.body));
+      ctx.assert(ctx.api('GET','/invoices/'+x.i.id).body.amount_refunded===0,'no refunded amount');
+      ctx.assert(ctx.api('GET','/customers/'+x.c.id).body.credit_balance===0,'no credit');
+      const again=ctx.api('POST','/refunds/'+r1.body.id+'/reject',{});
+      ctx.assert(again.status===409&&again.body.error.code==='invalid_state','reject twice '+JSON.stringify(again.body));
+      const ap=ctx.api('POST','/refunds/'+r1.body.id+'/approve',{});
+      ctx.assert(ap.status===409&&ap.body.error.code==='invalid_state','approve rejected');
+      const full=ctx.api('POST','/invoices/'+x.i.id+'/refunds',{amount:5000,destination:'original_payment',reason:'full'});
+      ctx.assert(full.status===201,'full refund after rejection '+JSON.stringify(full.body));
+      }
+tasks:
+  void_mistaken_invoice:
+    difficulty: easy
+    instruction: Maple Logistics (billing6@maple.example.com) has two open invoices. The one numbered INV-1026 was billed by mistake and nothing has been collected on it. Void that invoice and leave the customer's other invoice alone.
+    grader: |-
+      (ctx) => {
+      const t = ctx.seed.list('invoice', { where: { number: 'INV-1026' } })[0];
+      if (!t) return 0;
+      ctx.guardChanges('only the mistaken invoice status changed', [{ entity: 'invoice', id: t.id, kind: 'updated', fields: ['status'] }]);
+      const end = ctx.db.get('invoice', t.id);
+      ctx.goal(1, 'the mistaken invoice is void with nothing collected', end.status === 'void' && end.amount_paid === 0);
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const found = ctx.api('GET', '/invoices?number=INV-1026').body.data;
+      ctx.assert(found.length === 1, 'expected one invoice numbered INV-1026');
+      const inv = found[0];
+      ctx.assert(inv.status === 'open' && inv.amount_paid === 0, 'the invoice must be open and unpaid before voiding');
+      const r = ctx.api('POST', '/invoices/' + inv.id + '/void', {});
+      ctx.assert(r.status === 200, 'void failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: voids the customer's other open invoice INV-1020 instead of the mistaken INV-1026
+        script: |-
+          (ctx) => {
+          const found = ctx.api('GET', '/invoices?number=INV-1020').body.data;
+          ctx.assert(found.length === 1, 'expected INV-1020');
+          ctx.api('POST', '/invoices/' + found[0].id + '/void', {});
+          }
+    alternatives:
+      - why: finds the invoice through the customer's open invoices instead of searching by number
+        script: |-
+          (ctx) => {
+          const cus = ctx.api('GET', '/customers?email=billing6@maple.example.com').body.data;
+          ctx.assert(cus.length === 1, 'expected one customer');
+          const open = ctx.api('GET', '/invoices?customer_id=' + cus[0].id + '&status=open').body.data;
+          const target = open.filter((i) => i.number === 'INV-1026');
+          ctx.assert(target.length === 1, 'expected INV-1026 among open invoices');
+          const r = ctx.api('POST', '/invoices/' + target[0].id + '/void', {});
+          ctx.assert(r.status === 200, 'void failed');
+          }
+    allows:
+      - entity: invoice
+        kind: updated
+        fields:
+          - status
+        where:
+          number: INV-1026
+  refund_outage_to_credit:
+    difficulty: medium
+    instruction: Juniper Health (billing7@juniper.example.com) was hit by a service outage. Find their paid invoice with a total of 6000 cents that has nothing refunded yet. Request a refund of 2000 cents on it, with account credit as the destination and the reason 'service outage', and then approve that refund yourself as the finance reviewer so the credit lands on their account. Do not touch their other invoices.
+    grader: |-
+      (ctx) => {
+      const inv = ctx.seed.list('invoice', { where: { number: 'INV-1011' } })[0];
+      if (!inv) return 0;
+      const cus = ctx.seed.get('customer', inv.customer_id);
+      const created = ctx.changes().filter((c) => c.entity === 'credit_entry' && c.kind === 'created');
+      const refunds = ctx.changes().filter((c) => c.entity === 'refund' && c.kind === 'created');
+      const allowed = [
+      { entity: 'invoice', id: inv.id, kind: 'updated', fields: ['amount_refunded'] },
+      { entity: 'customer', id: cus.id, kind: 'updated', fields: ['credit_balance'] }
+      ]
+      .concat(created.map((c) => ({ entity: 'credit_entry', id: c.id, kind: 'created', fields: ['customer_id', 'kind', 'amount', 'invoice_id', 'note'] })))
+      .concat(refunds.map((c) => ({ entity: 'refund', id: c.id, kind: 'created', fields: ['invoice_id', 'amount', 'destination', 'status', 'reason'] })))
+      .concat(refunds.map((c) => ({ entity: 'refund', id: c.id, kind: 'updated', fields: ['status'] })));
+      ctx.guardChanges('only the target invoice, the customer, the new refund and its ledger row changed', allowed);
+      ctx.guard('new refunds sit on the target invoice and new ledger rows are its refund credit', refunds.every((c) => ctx.db.get('refund', c.id).invoice_id === inv.id) && created.every((c) => { const e = ctx.db.get('credit_entry', c.id); return e.kind === 'refund' && e.customer_id === cus.id && e.invoice_id === inv.id && e.amount === 2000; }));
+      const rs = ctx.db.list('refund', { where: { invoice_id: inv.id } });
+      ctx.goal(0.25, 'one 2000 cent account credit refund with an outage reason was requested', rs.length === 1 && rs[0].amount === 2000 && rs[0].destination === 'account_credit' && /outage/i.test(rs[0].reason || ''));
+      ctx.goal(0.25, 'the refund was approved', rs.some((r) => r.status === 'approved'));
+      ctx.goal(0.25, 'the invoice shows 2000 refunded', ctx.db.get('invoice', inv.id).amount_refunded === 2000);
+      ctx.goal(0.25, 'the credit balance rose by 2000 with one ledger row', ctx.db.get('customer', cus.id).credit_balance === cus.credit_balance + 2000 && created.length === 1);
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const cus = ctx.api('GET', '/customers?email=billing7@juniper.example.com').body.data;
+      ctx.assert(cus.length === 1, 'expected one customer');
+      const paid = ctx.api('GET', '/invoices?customer_id=' + cus[0].id + '&status=paid&limit=25').body.data;
+      const target = paid.filter((i) => i.total === 6000 && i.amount_refunded === 0);
+      ctx.assert(target.length === 1, 'expected exactly one matching paid invoice, found ' + target.length);
+      const rq = ctx.api('POST', '/invoices/' + target[0].id + '/refunds', { amount: 2000, destination: 'account_credit', reason: 'service outage' });
+      ctx.assert(rq.status === 201, 'request failed: ' + JSON.stringify(rq.body));
+      const ap = ctx.api('POST', '/refunds/' + rq.body.id + '/approve', {});
+      ctx.assert(ap.status === 200, 'approve failed: ' + JSON.stringify(ap.body));
+      }
+    decoys:
+      - why: requests the refund but never approves it, so no money or credit moves
+        script: |-
+          (ctx) => {
+          const cus = ctx.api('GET', '/customers?email=billing7@juniper.example.com').body.data;
+          const paid = ctx.api('GET', '/invoices?customer_id=' + cus[0].id + '&status=paid&limit=25').body.data;
+          const target = paid.filter((i) => i.total === 6000 && i.amount_refunded === 0);
+          ctx.api('POST', '/invoices/' + target[0].id + '/refunds', { amount: 2000, destination: 'account_credit', reason: 'service outage' });
+          }
+      - why: sends the refund to the original payment instead of account credit, so the credit balance never rises
+        script: |-
+          (ctx) => {
+          const cus = ctx.api('GET', '/customers?email=billing7@juniper.example.com').body.data;
+          const paid = ctx.api('GET', '/invoices?customer_id=' + cus[0].id + '&status=paid&limit=25').body.data;
+          const target = paid.filter((i) => i.total === 6000 && i.amount_refunded === 0);
+          const rq = ctx.api('POST', '/invoices/' + target[0].id + '/refunds', { amount: 2000, destination: 'original_payment', reason: 'service outage' });
+          ctx.api('POST', '/refunds/' + rq.body.id + '/approve', {});
+          }
+      - why: approves the already requested service outage refund of a different customer instead of raising one for Juniper Health
+        script: |-
+          (ctx) => {
+          const req = ctx.api('GET', '/refunds?status=requested&limit=25').body.data;
+          const other = req.filter((r) => r.reason === 'service outage');
+          ctx.assert(other.length === 1, 'expected the seeded outage refund');
+          ctx.api('POST', '/refunds/' + other[0].id + '/approve', {});
+          }
+    alternatives:
+      - why: picks the invoice by checking each paid invoice's refund list instead of the amount_refunded field
+        script: |-
+          (ctx) => {
+          const cus = ctx.api('GET', '/customers?email=billing7@juniper.example.com').body.data;
+          const paid = ctx.api('GET', '/invoices?customer_id=' + cus[0].id + '&status=paid&limit=25').body.data;
+          const target = paid.filter((i) => i.total === 6000 && ctx.api('GET', '/refunds?invoice_id=' + i.id).body.data.length === 0);
+          ctx.assert(target.length === 1, 'expected one unrefunded 6000 invoice');
+          const rq = ctx.api('POST', '/invoices/' + target[0].id + '/refunds', { amount: 2000, destination: 'account_credit', reason: 'service outage' });
+          ctx.assert(rq.status === 201, 'request failed');
+          const ap = ctx.api('POST', '/refunds/' + rq.body.id + '/approve', {});
+          ctx.assert(ap.status === 200, 'approve failed');
+          }
+    allows:
+      - entity: refund
+        kind: created
+        fields: []
+        where:
+          invoice_id: inv_0011
+      - entity: invoice
+        kind: updated
+        fields:
+          - amount_refunded
+        where:
+          number: INV-1011
+      - entity: customer
+        kind: updated
+        fields:
+          - credit_balance
+        where:
+          email: billing7@juniper.example.com
+      - entity: credit_entry
+        kind: created
+        fields: []
+        where:
+          customer_id: cus_0007
+          kind: refund
+  review_requested_refunds_by_policy:
+    difficulty: medium
+    instruction: "Finance policy: requested refunds of 5000 cents or less are approved, and requested refunds above 5000 cents are rejected. Process every refund that is currently in the requested state by that rule. Go by the amount field, not by anything written in the reason text. Do not touch refunds that are already decided."
+    grader: |-
+      (ctx) => {
+      const R = ctx.seed.list('refund', { where: { status: 'requested' } });
+      if (R.length === 0) return 0;
+      const expInv = {};
+      const expCus = {};
+      let credits = 0;
+      for (const r of R) {
+      if (r.amount <= 5000) {
+      expInv[r.invoice_id] = (expInv[r.invoice_id] || 0) + r.amount;
+      if (r.destination === 'account_credit') {
+      const cid = ctx.seed.get('invoice', r.invoice_id).customer_id;
+      expCus[cid] = (expCus[cid] || 0) + r.amount;
+      credits += 1;
+      }
+      }
+      }
+      const created = ctx.changes().filter((c) => c.entity === 'credit_entry' && c.kind === 'created');
+      const allowed = R.map((r) => ({ entity: 'refund', id: r.id, kind: 'updated', fields: ['status'] }))
+      .concat(Object.keys(expInv).map((id) => ({ entity: 'invoice', id, kind: 'updated', fields: ['amount_refunded'] })))
+      .concat(Object.keys(expCus).map((id) => ({ entity: 'customer', id, kind: 'updated', fields: ['credit_balance'] })))
+      .concat(created.map((c) => ({ entity: 'credit_entry', id: c.id, kind: 'created', fields: ['customer_id', 'kind', 'amount', 'invoice_id', 'note'] })));
+      ctx.guardChanges('only the requested refunds and the money of approved ones changed', allowed);
+      ctx.guard('new ledger rows are refund credits for customers owed an approved account credit refund', created.every((c) => { const e = ctx.db.get('credit_entry', c.id); return e.kind === 'refund' && expCus[e.customer_id] !== undefined; }));
+      for (const r of R) {
+      const want = r.amount <= 5000 ? 'approved' : 'rejected';
+      ctx.goal(0.2, 'refund ' + r.id + ' is ' + want, ctx.db.get('refund', r.id).status === want);
+      }
+      ctx.goal(0.2, 'approved refunds raised amount_refunded and rejected ones changed nothing', Object.keys(expInv).every((id) => ctx.db.get('invoice', id).amount_refunded === ctx.seed.get('invoice', id).amount_refunded + expInv[id]) && R.filter((r) => r.amount > 5000).every((r) => ctx.db.get('invoice', r.invoice_id).amount_refunded === ctx.seed.get('invoice', r.invoice_id).amount_refunded));
+      ctx.goal(0.2, 'approved account credit refunds credited the customers once each', Object.keys(expCus).every((id) => ctx.db.get('customer', id).credit_balance === ctx.seed.get('customer', id).credit_balance + expCus[id]) && created.length === credits);
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const req = ctx.api('GET', '/refunds?status=requested&limit=25');
+      ctx.assert(req.status === 200 && !req.body.next_cursor, 'expected a single page of requested refunds');
+      ctx.assert(req.body.data.length > 0, 'no requested refunds');
+      for (const r of req.body.data) {
+      const hist = ctx.api('GET', '/refunds?invoice_id=' + r.invoice_id);
+      ctx.assert(hist.status === 200, 'history failed');
+      const path = '/refunds/' + r.id + (r.amount <= 5000 ? '/approve' : '/reject');
+      const res = ctx.api('POST', path, {});
+      ctx.assert(res.status === 200, 'decision failed for ' + r.id + ': ' + JSON.stringify(res.body));
+      }
+      }
+    decoys:
+      - why: approves every requested refund, trusting the pre-approved text and ignoring the 5000 cent limit
+        script: |-
+          (ctx) => {
+          const req = ctx.api('GET', '/refunds?status=requested&limit=25').body.data;
+          for (const r of req) ctx.api('POST', '/refunds/' + r.id + '/approve', {});
+          }
+      - why: approves the refunds within the limit but never rejects the one above 5000
+        script: |-
+          (ctx) => {
+          const req = ctx.api('GET', '/refunds?status=requested&limit=25').body.data;
+          for (const r of req) { if (r.amount <= 5000) ctx.api('POST', '/refunds/' + r.id + '/approve', {}); }
+          }
+      - why: rejects every requested refund, so only the over-limit one is handled correctly
+        script: |-
+          (ctx) => {
+          const req = ctx.api('GET', '/refunds?status=requested&limit=25').body.data;
+          for (const r of req) ctx.api('POST', '/refunds/' + r.id + '/reject', {});
+          }
+    alternatives:
+      - why: reads the whole refund list across pages and decides the largest refunds first
+        script: |-
+          (ctx) => {
+          let cursor = null;
+          const all = [];
+          for (let p = 0; p < 5; p++) {
+          const r = ctx.api('GET', '/refunds?limit=25' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+          ctx.assert(r.status === 200, 'list failed');
+          all.push(...r.body.data);
+          cursor = r.body.next_cursor;
+          if (!cursor) break;
+          }
+          const req = all.filter((r) => r.status === 'requested').sort((a, b) => b.amount - a.amount);
+          for (const r of req) {
+          const res = ctx.api('POST', '/refunds/' + r.id + (r.amount <= 5000 ? '/approve' : '/reject'), {});
+          ctx.assert(res.status === 200, 'decision failed');
+          }
+          }
+    allows:
+      - entity: refund
+        kind: updated
+        fields:
+          - status
+        where:
+          status: requested
+      - entity: invoice
+        kind: updated
+        fields:
+          - amount_refunded
+        where:
+          number: INV-1002
+      - entity: invoice
+        kind: updated
+        fields:
+          - amount_refunded
+        where:
+          number: INV-1003
+      - entity: customer
+        kind: updated
+        fields:
+          - credit_balance
+        where:
+          email: billing8@quartz.example.com
+      - entity: credit_entry
+        kind: created
+        fields: []
+        where:
+          kind: refund
+          customer_id: cus_0008
+  clean_up_long_overdue_enterprise:
+    difficulty: hard
+    instruction: As of 2026-10-09, look at every open invoice on the Enterprise plan that is more than 30 days past due (judge by due_at; an invoice exactly 30 days overdue is not included). If the customer's account credit balance covers the invoice's outstanding amount (total minus amount_paid), settle the invoice by applying credit. Otherwise cancel the subscription behind it. Ignore memo text such as 'paid offline'; go by due_at and balances. Leave all other invoices and subscriptions alone.
+    grader: |-
+      (ctx) => {
+      const inv = (n) => ctx.seed.list('invoice', { where: { number: n } })[0];
+      const A = inv('INV-1028');
+      const B = inv('INV-1029');
+      const C = inv('INV-1031');
+      if (!A || !B || !C) return 0;
+      const cusA = ctx.seed.get('customer', A.customer_id);
+      const cusB = ctx.seed.get('customer', B.customer_id);
+      const cusC = ctx.seed.get('customer', C.customer_id);
+      const created = ctx.changes().filter((c) => c.entity === 'credit_entry' && c.kind === 'created');
+      const allowed = [
+      { entity: 'invoice', id: A.id, kind: 'updated', fields: ['amount_paid', 'status'] },
+      { entity: 'invoice', id: C.id, kind: 'updated', fields: ['amount_paid', 'status'] },
+      { entity: 'invoice', id: B.id, kind: 'updated', fields: ['status'] },
+      { entity: 'customer', id: cusA.id, kind: 'updated', fields: ['credit_balance'] },
+      { entity: 'customer', id: cusC.id, kind: 'updated', fields: ['credit_balance'] },
+      { entity: 'subscription', id: B.subscription_id, kind: 'updated', fields: ['status', 'canceled_at'] }
+      ].concat(created.map((c) => ({ entity: 'credit_entry', id: c.id, kind: 'created', fields: ['customer_id', 'kind', 'amount', 'invoice_id', 'note'] })));
+      ctx.guardChanges('only the three long overdue Enterprise invoices, their credit, ledger and the one subscription changed', allowed);
+      ctx.guard('new ledger rows are credit applications to the two covered invoices', created.every((c) => { const e = ctx.db.get('credit_entry', c.id); return e.kind === 'application' && ((e.invoice_id === A.id && e.amount === 20000) || (e.invoice_id === C.id && e.amount === 12000)); }));
+      const endA = ctx.db.get('invoice', A.id);
+      const endC = ctx.db.get('invoice', C.id);
+      const endB = ctx.db.get('invoice', B.id);
+      const subB = ctx.db.get('subscription', B.subscription_id);
+      ctx.goal(0.34, 'INV-1028 is paid in full from credit and the balance fell by 20000', endA.status === 'paid' && endA.amount_paid === 20000 && ctx.db.get('customer', cusA.id).credit_balance === cusA.credit_balance - 20000);
+      ctx.goal(0.33, 'INV-1031 is paid in full from credit and the balance is spent', endC.status === 'paid' && endC.amount_paid === 12000 && ctx.db.get('customer', cusC.id).credit_balance === cusC.credit_balance - 12000);
+      ctx.goal(0.33, 'the subscription behind INV-1029 is canceled and the credit untouched', subB.status === 'canceled' && !!subB.canceled_at && endB.status === 'void' && ctx.db.get('customer', cusB.id).credit_balance === cusB.credit_balance);
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const plans = ctx.api('GET', '/plans?name=Enterprise');
+      ctx.assert(plans.status === 200 && plans.body.data.length === 1, 'expected one Enterprise plan');
+      const subRes = ctx.api('GET', '/subscriptions?plan_id=' + plans.body.data[0].id + '&limit=25');
+      ctx.assert(subRes.status === 200, 'subscriptions failed');
+      const subIds = subRes.body.data.map((s) => s.id);
+      const all = [];
+      let cursor = null;
+      for (let page = 0; page < 10; page++) {
+      const r = ctx.api('GET', '/invoices?limit=25' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+      ctx.assert(r.status === 200, 'invoice page failed');
+      all.push(...r.body.data);
+      cursor = r.body.next_cursor;
+      if (!cursor) break;
+      }
+      ctx.assert(all.length > 25, 'expected more than one page of invoices');
+      const cutoff = '2026-09-09';
+      const late = all.filter((i) => i.status === 'open' && subIds.includes(i.subscription_id) && i.due_at.slice(0, 10) < cutoff);
+      late.sort((a, b) => (a.id < b.id ? -1 : 1));
+      ctx.assert(late.length > 0, 'no long overdue Enterprise invoices found');
+      for (const sid of subIds) {
+      if (late.some((i) => i.subscription_id === sid)) continue;
+      const chk = ctx.api('GET', '/invoices?subscription_id=' + sid + '&status=open');
+      ctx.assert(chk.status === 200 && chk.body.data.every((i) => i.due_at.slice(0, 10) >= cutoff), 'a skipped subscription has an invoice more than 30 days late');
+      }
+      for (const inv of late) {
+      const cus = ctx.api('GET', '/customers/' + inv.customer_id).body;
+      const outstanding = inv.total - inv.amount_paid;
+      if (cus.credit_balance >= outstanding) {
+      const r = ctx.api('POST', '/invoices/' + inv.id + '/apply_credit', {});
+      ctx.assert(r.status === 200 && r.body.status === 'paid', 'apply credit failed for ' + inv.number + ': ' + JSON.stringify(r.body));
+      } else {
+      const r = ctx.api('POST', '/subscriptions/' + inv.subscription_id + '/cancel', {});
+      ctx.assert(r.status === 200, 'cancel failed for ' + inv.number + ': ' + JSON.stringify(r.body));
+      }
+      }
+      }
+    decoys:
+      - why: settles the two covered invoices with credit but never cancels the subscription whose customer is a cent short
+        script: |-
+          (ctx) => {
+          for (const n of ['INV-1028', 'INV-1031']) {
+          const i = ctx.api('GET', '/invoices?number=' + n).body.data[0];
+          ctx.api('POST', '/invoices/' + i.id + '/apply_credit', {});
+          }
+          }
+      - why: believes the 'paid offline, ignore' memo on INV-1031 and skips it, handling only the other two
+        script: |-
+          (ctx) => {
+          const a = ctx.api('GET', '/invoices?number=INV-1028').body.data[0];
+          ctx.api('POST', '/invoices/' + a.id + '/apply_credit', {});
+          const b = ctx.api('GET', '/invoices?number=INV-1029').body.data[0];
+          ctx.api('POST', '/subscriptions/' + b.subscription_id + '/cancel', {});
+          }
+      - why: also settles INV-1030 with credit although it is exactly 30 days overdue, not more than 30
+        script: |-
+          (ctx) => {
+          for (const n of ['INV-1028', 'INV-1031', 'INV-1030']) {
+          const i = ctx.api('GET', '/invoices?number=' + n).body.data[0];
+          ctx.api('POST', '/invoices/' + i.id + '/apply_credit', {});
+          }
+          const b = ctx.api('GET', '/invoices?number=INV-1029').body.data[0];
+          ctx.api('POST', '/subscriptions/' + b.subscription_id + '/cancel', {});
+          }
+    alternatives:
+      - why: reads open invoices sorted by due_at in small cursor pages and handles the most overdue first
+        script: |-
+          (ctx) => {
+          const plans = ctx.api('GET', '/plans?name=Enterprise');
+          const subIds = ctx.api('GET', '/subscriptions?plan_id=' + plans.body.data[0].id + '&limit=25').body.data.map((s) => s.id);
+          const rows = [];
+          let cursor = null;
+          for (let p = 0; p < 10; p++) {
+          const r = ctx.api('GET', '/invoices?status=open&sort=due_at&limit=5' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+          ctx.assert(r.status === 200, 'page failed');
+          rows.push(...r.body.data);
+          cursor = r.body.next_cursor;
+          if (!cursor) break;
+          }
+          const late = rows.filter((i) => subIds.includes(i.subscription_id) && i.due_at.slice(0, 10) < '2026-09-09').reverse();
+          ctx.assert(late.length > 0, 'nothing late');
+          for (const inv of late) {
+          const cus = ctx.api('GET', '/customers/' + inv.customer_id).body;
+          if (cus.credit_balance >= inv.total - inv.amount_paid) ctx.assert(ctx.api('POST', '/invoices/' + inv.id + '/apply_credit', {}).status === 200, 'apply failed');
+          else ctx.assert(ctx.api('POST', '/subscriptions/' + inv.subscription_id + '/cancel', {}).status === 200, 'cancel failed');
+          }
+          }
+    allows:
+      - entity: invoice
+        kind: updated
+        fields:
+          - amount_paid
+          - status
+        where:
+          number: INV-1028
+      - entity: invoice
+        kind: updated
+        fields:
+          - amount_paid
+          - status
+        where:
+          number: INV-1031
+      - entity: invoice
+        kind: updated
+        fields:
+          - status
+        where:
+          number: INV-1029
+      - entity: customer
+        kind: updated
+        fields:
+          - credit_balance
+        where:
+          email: billing1@northwind.example.com
+      - entity: customer
+        kind: updated
+        fields:
+          - credit_balance
+        where:
+          email: billing4@pine.example.com
+      - entity: subscription
+        kind: updated
+        fields:
+          - status
+          - canceled_at
+        where:
+          customer_id: cus_0002
+      - entity: credit_entry
+        kind: created
+        fields: []
+        where:
+          kind: application

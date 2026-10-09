@@ -1,0 +1,1150 @@
+format: 1
+meta:
+  name: gen_courses
+  description: Students register for course sections in a term. Sections have a seat cap and a bounded waitlist. Prerequisites must be passed first. Terms have add, drop and withdraw deadlines. Dropping or withdrawing frees a seat and promotes the first waitlisted student. A daily job clears waitlists after the add deadline.
+  resembles: University course registration system (Banner / Ellucian-style student information system registration module)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T12:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  term:
+    description: Academic term with add, drop and withdraw deadlines.
+    idPrefix: trm
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 80
+      add_deadline:
+        type: datetime
+        description: Last moment to enroll or join a waitlist. After it the waitlist_expiry job clears waitlists.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      drop_deadline:
+        type: datetime
+        description: Last moment to drop. After it a student can only withdraw.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      withdraw_deadline:
+        type: datetime
+        description: Last moment to withdraw.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  course:
+    description: Catalog course.
+    idPrefix: crs
+    fields:
+      code:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 20
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      credits:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        max: 12
+  prerequisite:
+    description: A course that must be passed with at least a minimum grade before another course can be taken.
+    idPrefix: pre
+    fields:
+      course_id:
+        type: ref
+        description: The course that has the prerequisite.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: course
+        onDelete: cascade
+      required_course_id:
+        type: ref
+        description: The course that must be passed first.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: course
+        onDelete: cascade
+      min_grade:
+        type: enum
+        description: Lowest passing grade, ordered A > B > C > D > F.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - A
+          - B
+          - C
+          - D
+          - F
+  student:
+    description: Enrolled university student.
+    idPrefix: stu
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+  section:
+    description: A course offering in a term with a seat cap and a bounded waitlist. Counts are maintained by the registration actions and the waitlist_expiry job.
+    idPrefix: sec
+    fields:
+      course_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: course
+        onDelete: restrict
+      term_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: term
+        onDelete: restrict
+      section_code:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 10
+      capacity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      waitlist_capacity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      enrolled_count:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      waitlist_count:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+  enrollment:
+    description: A student's registration in a section, with lifecycle status, waitlist position and final grade. Created only by the enroll_student action.
+    idPrefix: enr
+    fields:
+      student_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: student
+        onDelete: restrict
+      section_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: section
+        onDelete: restrict
+      status:
+        type: state
+        description: Registration lifecycle. waitlisted moves to enrolled on promotion or to dropped. enrolled moves to dropped, withdrawn or completed.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - waitlisted
+          - enrolled
+          - dropped
+          - withdrawn
+          - completed
+        initial: waitlisted
+        transitions:
+          waitlisted:
+            - enrolled
+            - dropped
+            - withdrawn
+          enrolled:
+            - dropped
+            - withdrawn
+            - completed
+          dropped: []
+          withdrawn: []
+          completed: []
+      waitlist_position:
+        type: int
+        description: 1-based place on the section waitlist, null unless waitlisted.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        min: 1
+      grade:
+        type: enum
+        description: Final grade, set by record_grade.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        values:
+          - A
+          - B
+          - C
+          - D
+          - F
+routes:
+  list_terms:
+    op: list
+    entity: term
+    filters: []
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /terms
+  get_term:
+    op: get
+    entity: term
+    method: GET
+    path: /terms/{id}
+  create_term:
+    op: create
+    entity: term
+    method: POST
+    path: /terms
+  list_courses:
+    op: list
+    entity: course
+    filters:
+      - credits
+    search:
+      - code
+      - title
+    sort:
+      - code
+    pageSize: 25
+    method: GET
+    path: /courses
+  get_course:
+    op: get
+    entity: course
+    method: GET
+    path: /courses/{id}
+  create_course:
+    op: create
+    entity: course
+    method: POST
+    path: /courses
+  list_prerequisites:
+    op: list
+    entity: prerequisite
+    filters:
+      - course_id
+      - required_course_id
+      - min_grade
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /prerequisites
+  create_prerequisite:
+    op: create
+    entity: prerequisite
+    method: POST
+    path: /prerequisites
+  list_students:
+    op: list
+    entity: student
+    filters: []
+    search:
+      - name
+      - email
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /students
+  get_student:
+    op: get
+    entity: student
+    method: GET
+    path: /students/{id}
+  create_student:
+    op: create
+    entity: student
+    method: POST
+    path: /students
+  list_sections:
+    op: list
+    entity: section
+    filters:
+      - term_id
+      - course_id
+      - section_code
+    search: []
+    sort:
+      - section_code
+    pageSize: 25
+    method: GET
+    path: /sections
+  get_section:
+    op: get
+    entity: section
+    method: GET
+    path: /sections/{id}
+  create_section:
+    op: create
+    entity: section
+    method: POST
+    path: /sections
+  update_section:
+    op: update
+    entity: section
+    method: PATCH
+    path: /sections/{id}
+  list_enrollments:
+    op: list
+    entity: enrollment
+    filters:
+      - student_id
+      - section_id
+      - status
+      - grade
+    search: []
+    sort:
+      - waitlist_position
+    pageSize: 25
+    method: GET
+    path: /enrollments
+  get_enrollment:
+    op: get
+    entity: enrollment
+    method: GET
+    path: /enrollments/{id}
+actions:
+  enroll_student:
+    method: POST
+    path: /sections/{id}/enroll
+    description: "Enroll a student in a section: takes a seat, else joins the waitlist, else 409 waitlist_full. Checks add deadline, duplicates and prerequisites."
+    input:
+      student_id:
+        type: ref
+        description: The student to register.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: student
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const sec = ctx.db.get('section', ctx.params.id);
+        if (sec === null) ctx.fail(404, 'not_found', 'section ' + ctx.params.id + ' not found');
+        const stu = ctx.db.get('student', ctx.body.student_id);
+        if (stu === null) ctx.fail(404, 'not_found', 'student ' + ctx.body.student_id + ' not found');
+        const term = ctx.db.get('term', sec.term_id);
+        const now = ctx.now();
+        if (ctx.time.minutesBetween(term.add_deadline, now) > 0) ctx.fail(409, 'add_deadline_passed', 'the add deadline ' + term.add_deadline + ' for ' + term.name + ' has passed');
+        const mine = ctx.db.list('enrollment', { where: { student_id: stu.id } });
+        if (mine.some((e) => e.section_id === sec.id && (e.status === 'enrolled' || e.status === 'waitlisted'))) ctx.fail(409, 'already_registered', 'student ' + stu.id + ' already has an active enrollment in section ' + sec.id);
+        const rank = { A: 4, B: 3, C: 2, D: 1, F: 0 };
+        const prereqs = ctx.db.list('prerequisite', { where: { course_id: sec.course_id } });
+        for (const p of prereqs) {
+          const ok = mine.some((e) => {
+            if (e.status !== 'completed' || e.grade === null || e.grade === 'F') return false;
+            const s = ctx.db.get('section', e.section_id);
+            return s !== null && s.course_id === p.required_course_id && rank[e.grade] >= rank[p.min_grade];
+          });
+          if (!ok) {
+            const rc = ctx.db.get('course', p.required_course_id);
+            ctx.fail(409, 'prerequisite_not_met', 'prerequisite ' + (rc ? rc.code : p.required_course_id) + ' with at least grade ' + p.min_grade + ' not met');
+          }
+        }
+        if (sec.enrolled_count < sec.capacity) {
+          const e = ctx.db.create('enrollment', { student_id: stu.id, section_id: sec.id, waitlist_position: null });
+          ctx.db.update('enrollment', e.id, { status: 'enrolled' });
+          ctx.db.update('section', sec.id, { enrolled_count: sec.enrolled_count + 1 });
+          return { status: 201, body: ctx.db.get('enrollment', e.id) };
+        }
+        if (sec.waitlist_count < sec.waitlist_capacity) {
+          const e = ctx.db.create('enrollment', { student_id: stu.id, section_id: sec.id, waitlist_position: sec.waitlist_count + 1 });
+          ctx.db.update('section', sec.id, { waitlist_count: sec.waitlist_count + 1 });
+          return { status: 201, body: ctx.db.get('enrollment', e.id) };
+        }
+        ctx.fail(409, 'waitlist_full', 'section ' + sec.id + ' is full and its waitlist is full');
+      }
+  drop_enrollment:
+    method: POST
+    path: /enrollments/{id}/drop
+    description: Drop an enrolled or waitlisted enrollment on or before the term drop deadline. Frees the seat and promotes the first waitlisted student.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const enr = ctx.db.get('enrollment', ctx.params.id);
+        if (enr === null) ctx.fail(404, 'not_found', 'enrollment ' + ctx.params.id + ' not found');
+        if (enr.status !== 'enrolled' && enr.status !== 'waitlisted') ctx.fail(409, 'invalid_state', 'enrollment ' + enr.id + ' is ' + enr.status + '. Only enrolled and waitlisted enrollments can be dropped.');
+        const sec = ctx.db.get('section', enr.section_id);
+        const term = ctx.db.get('term', sec.term_id);
+        if (ctx.time.minutesBetween(term.drop_deadline, ctx.now()) > 0) ctx.fail(409, 'drop_deadline_passed', 'the drop deadline ' + term.drop_deadline + ' has passed. Withdraw instead.');
+        ctx.db.update('enrollment', enr.id, { status: 'dropped', waitlist_position: null });
+        const waiting = ctx.db.list('enrollment', { where: { section_id: sec.id, status: 'waitlisted' } }).sort((a, b) => a.waitlist_position - b.waitlist_position);
+        let enrolled = ctx.db.list('enrollment', { where: { section_id: sec.id, status: 'enrolled' } }).length;
+        let pos = 0;
+        for (const w of waiting) {
+          if (enrolled < sec.capacity) {
+            ctx.db.update('enrollment', w.id, { status: 'enrolled', waitlist_position: null });
+            enrolled += 1;
+          } else {
+            pos += 1;
+            if (w.waitlist_position !== pos) ctx.db.update('enrollment', w.id, { waitlist_position: pos });
+          }
+        }
+        ctx.db.update('section', sec.id, { enrolled_count: enrolled, waitlist_count: pos });
+        return { status: 200, body: ctx.db.get('enrollment', enr.id) };
+      }
+  withdraw_enrollment:
+    method: POST
+    path: /enrollments/{id}/withdraw
+    description: Withdraw an enrolled or waitlisted enrollment on or before the term withdraw deadline. Frees the seat and promotes the first waitlisted student.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const enr = ctx.db.get('enrollment', ctx.params.id);
+        if (enr === null) ctx.fail(404, 'not_found', 'enrollment ' + ctx.params.id + ' not found');
+        if (enr.status !== 'enrolled' && enr.status !== 'waitlisted') ctx.fail(409, 'invalid_state', 'enrollment ' + enr.id + ' is ' + enr.status + '. Only enrolled and waitlisted enrollments can be withdrawn.');
+        const sec = ctx.db.get('section', enr.section_id);
+        const term = ctx.db.get('term', sec.term_id);
+        if (ctx.time.minutesBetween(term.withdraw_deadline, ctx.now()) > 0) ctx.fail(409, 'withdraw_deadline_passed', 'the withdraw deadline ' + term.withdraw_deadline + ' has passed');
+        ctx.db.update('enrollment', enr.id, { status: 'withdrawn', waitlist_position: null });
+        const waiting = ctx.db.list('enrollment', { where: { section_id: sec.id, status: 'waitlisted' } }).sort((a, b) => a.waitlist_position - b.waitlist_position);
+        let enrolled = ctx.db.list('enrollment', { where: { section_id: sec.id, status: 'enrolled' } }).length;
+        let pos = 0;
+        for (const w of waiting) {
+          if (enrolled < sec.capacity) {
+            ctx.db.update('enrollment', w.id, { status: 'enrolled', waitlist_position: null });
+            enrolled += 1;
+          } else {
+            pos += 1;
+            if (w.waitlist_position !== pos) ctx.db.update('enrollment', w.id, { waitlist_position: pos });
+          }
+        }
+        ctx.db.update('section', sec.id, { enrolled_count: enrolled, waitlist_count: pos });
+        return { status: 200, body: ctx.db.get('enrollment', enr.id) };
+      }
+  record_grade:
+    method: POST
+    path: /enrollments/{id}/grade
+    description: Record a final grade for an enrolled enrollment and complete it.
+    input:
+      grade:
+        type: enum
+        description: Final grade.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - A
+          - B
+          - C
+          - D
+          - F
+    handler: |-
+      (ctx) => {
+        const enr = ctx.db.get('enrollment', ctx.params.id);
+        if (enr === null) ctx.fail(404, 'not_found', 'enrollment ' + ctx.params.id + ' not found');
+        if (enr.status !== 'enrolled') ctx.fail(409, 'invalid_state', 'enrollment ' + enr.id + ' is ' + enr.status + '. Only enrolled enrollments can be graded.');
+        const updated = ctx.db.update('enrollment', enr.id, { status: 'completed', grade: ctx.body.grade });
+        const sec = ctx.db.get('section', enr.section_id);
+        ctx.db.update('section', sec.id, { enrolled_count: Math.max(0, sec.enrolled_count - 1) });
+        return { status: 200, body: updated };
+      }
+jobs:
+  waitlist_expiry:
+    description: Daily. Drops waitlisted enrollments whose term add deadline has passed and resets the section waitlist counts.
+    every: 1d
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        const touched = new Set();
+        for (const e of ctx.db.list('enrollment', { where: { status: 'waitlisted' } })) {
+          const sec = ctx.db.get('section', e.section_id);
+          const term = ctx.db.get('term', sec.term_id);
+          if (ctx.time.minutesBetween(term.add_deadline, now) > 0) {
+            ctx.db.update('enrollment', e.id, { status: 'dropped', waitlist_position: null });
+            touched.add(sec.id);
+          }
+        }
+        for (const id of touched) ctx.db.update('section', id, { waitlist_count: 0 });
+      }
+fixtures: {}
+seed:
+  term: |-
+    (ctx) => [
+      { name: 'Spring 2026', add_deadline: '2026-01-20T23:59:00.000Z', drop_deadline: '2026-02-03T23:59:00.000Z', withdraw_deadline: '2026-03-20T23:59:00.000Z', created_at: '2025-10-01T09:00:00.000Z', updated_at: '2025-10-01T09:00:00.000Z' },
+      { name: 'Fall 2026', add_deadline: '2026-10-16T23:59:00.000Z', drop_deadline: '2026-10-30T23:59:00.000Z', withdraw_deadline: '2026-11-20T23:59:00.000Z', created_at: '2026-03-01T09:00:00.000Z', updated_at: '2026-03-01T09:00:00.000Z' },
+      { name: 'Spring 2027', add_deadline: '2027-01-19T23:59:00.000Z', drop_deadline: '2027-02-02T23:59:00.000Z', withdraw_deadline: '2027-03-19T23:59:00.000Z', created_at: '2026-06-01T09:00:00.000Z', updated_at: '2026-06-01T09:00:00.000Z' },
+    ]
+  course: |-
+    (ctx) => [
+      ['CS 101', 'Introduction to Programming', 4], ['CS 201', 'Data Structures', 4], ['CS 310', 'Algorithms', 3], ['CS 120', 'Computing for Everyone', 3],
+      ['MATH 101', 'Calculus I', 4], ['MATH 201', 'Calculus II', 4], ['ENG 101', 'College Writing', 3], ['PHYS 101', 'General Physics I', 4],
+      ['HIST 110', 'World History to 1500', 3], ['BIO 101', 'Principles of Biology', 4], ['CHEM 101', 'General Chemistry I', 4], ['ECON 101', 'Principles of Microeconomics', 3],
+      ['STAT 200', 'Applied Statistics', 3], ['PSY 101', 'Introduction to Psychology', 3], ['ART 100', 'Drawing Fundamentals', 2], ['CS 220', 'Systems Programming', 3],
+    ].map(([code, title, credits]) => ({ code, title, credits, created_at: '2024-08-01T09:00:00.000Z', updated_at: '2024-08-01T09:00:00.000Z' }))
+  prerequisite: |-
+    (ctx) => {
+      const id = {};
+      for (const c of ctx.rows('course')) id[c.code] = c.id;
+      return [
+        ['CS 201', 'CS 101', 'C'], ['CS 310', 'CS 201', 'C'], ['CS 220', 'CS 101', 'B'], ['MATH 201', 'MATH 101', 'C'], ['STAT 200', 'MATH 101', 'D'],
+        ['CS 310', 'MATH 201', 'D'], ['CS 220', 'CS 120', 'C'], ['PHYS 101', 'MATH 101', 'D'], ['BIO 101', 'CHEM 101', 'C'], ['ECON 101', 'MATH 101', 'D'],
+      ].map(([c, r, g]) => ({ course_id: id[c], required_course_id: id[r], min_grade: g, created_at: '2024-08-02T09:00:00.000Z', updated_at: '2024-08-02T09:00:00.000Z' }));
+    }
+  student: |-
+    (ctx) => {
+      const firsts = ['Aiden', 'Priya', 'Lena', 'Marcus', 'Sofia', 'Kenji', 'Grace', 'Lucas', 'Aisha', 'Tom', 'Elena', 'Noah', 'Zara', 'Diego'];
+      const lasts = ['Okafor', 'Raman', 'Fischer', 'Bell', 'Alvarez', 'Watanabe', 'Mwangi', 'Moreau', 'Khan', 'Reyes', 'Novak', 'Lindqvist'];
+      const rows = [
+        { name: 'Maya Chen', email: 'maya.chen@students.example' },
+        { name: 'Omar Haddad', email: 'omar.haddad@students.example' },
+        { name: 'Omar Haddadi', email: 'omar.haddadi@students.example' },
+      ];
+      for (let i = 0; i < 42; i++) {
+        const f = firsts[i % 14];
+        const l = lasts[(i * 5 + Math.floor(i / 14)) % 12];
+        rows.push({ name: f + ' ' + l, email: f.toLowerCase() + '.' + l.toLowerCase() + (i + 4) + '@students.example' });
+      }
+      return rows.map((r, i) => {
+        const t = ctx.time.plus('2025-08-15T09:00:00.000Z', i + 'd');
+        return { ...r, created_at: t, updated_at: t };
+      });
+    }
+  section: |-
+    (ctx) => {
+      const id = {};
+      for (const c of ctx.rows('course')) id[c.code] = c.id;
+      const tid = {};
+      for (const t of ctx.rows('term')) tid[t.name] = t.id;
+      const S = 'Spring 2026', F = 'Fall 2026', N = 'Spring 2027';
+      // [course, term, section_code, capacity, waitlist_capacity, enrolled_count, waitlist_count]
+      const specs = [
+        ['CS 101', S, '01', 30, 5, 0, 0], ['CS 201', S, '01', 25, 5, 0, 0], ['MATH 101', S, '01', 30, 5, 0, 0], ['MATH 201', S, '01', 20, 5, 0, 0],
+        ['ENG 101', S, '01', 25, 5, 0, 0], ['CHEM 101', S, '01', 20, 5, 0, 0], ['PHYS 101', S, '01', 20, 5, 0, 0], ['ECON 101', S, '01', 25, 5, 0, 0],
+        ['CS 101', F, '01', 6, 3, 6, 2], ['CS 201', F, '01', 6, 2, 4, 0], ['CS 310', F, '01', 4, 3, 4, 3], ['CS 120', F, '01', 5, 2, 5, 0],
+        ['CS 120', F, '02', 5, 2, 2, 0], ['CS 120', F, '03', 3, 2, 2, 0], ['MATH 101', F, '01', 4, 3, 4, 2], ['MATH 201', F, '01', 3, 2, 3, 2],
+        ['ENG 101', F, '01', 5, 2, 3, 0], ['PHYS 101', F, '01', 3, 3, 3, 2], ['BIO 101', F, '01', 4, 2, 2, 0], ['CS 220', F, '01', 2, 2, 2, 1],
+        ['CS 201', N, '01', 25, 5, 0, 0], ['CS 101', N, '01', 30, 5, 0, 0], ['MATH 101', N, '01', 30, 5, 0, 0], ['STAT 200', N, '01', 25, 5, 0, 0],
+      ];
+      return specs.map(([c, t, sc, cap, wcap, en, wl]) => {
+        const at = t === S ? '2025-11-15T09:00:00.000Z' : t === F ? '2026-07-01T09:00:00.000Z' : '2026-09-01T09:00:00.000Z';
+        return { course_id: id[c], term_id: tid[t], section_code: sc, capacity: cap, waitlist_capacity: wcap, enrolled_count: en, waitlist_count: wl, created_at: at, updated_at: at };
+      });
+    }
+  enrollment: |-
+    (ctx) => {
+      const secs = ctx.rows('section');
+      const stu = ctx.rows('student');
+      const n = stu.length;
+      const plan = {
+        1: { s: 0, c: 8 }, 2: { s: 8, c: 5 }, 3: { s: 13, c: 6 }, 4: { s: 19, c: 3 }, 5: { s: 25, c: 4 }, 6: { s: 30, c: 3 }, 7: { s: 34, c: 3 },
+        8: { s: 38, d: 2, x: 3 }, 9: { s: 5, d: 2 }, 10: { s: 20 }, 11: { s: 1, d: 1, x: 1 }, 12: { s: 14, d: 1 }, 13: { s: 26, x: 1 }, 14: { s: 32 },
+        15: { s: 20, d: 2, x: 1 }, 16: { s: 10, d: 1 }, 17: { s: 30 }, 18: { s: 35, d: 1 }, 19: { s: 6 }, 20: { s: 40 },
+      };
+      const grades = ['B', 'A', 'C', 'B', 'A', 'D', 'C', 'F'];
+      const rows = [];
+      for (let si = 1; si <= 20; si++) {
+        const sec = secs[si - 1];
+        const p = plan[si];
+        const spring = si <= 8;
+        let k = 0;
+        const add = (status, extra) => {
+          const student = stu[(p.s + k) % n];
+          const created = spring
+            ? ctx.time.plus('2026-01-05T09:00:00.000Z', ((k + si) % 10) + 'd')
+            : ctx.time.plus('2026-08-20T09:00:00.000Z', ((si * 5 + k * 3) % 45) + 'd');
+          let updated = created;
+          if (status === 'completed') updated = '2026-05-12T10:00:00.000Z';
+          else if (status === 'dropped' || status === 'withdrawn') updated = spring ? ctx.time.plus(created, '3d') : ctx.time.plus(created, '1h');
+          rows.push({ student_id: student.id, section_id: sec.id, status, waitlist_position: null, grade: null, ...extra, created_at: created, updated_at: updated });
+          k++;
+        };
+        for (let i = 0; i < sec.enrolled_count; i++) add('enrolled', {});
+        for (let i = 0; i < sec.waitlist_count; i++) add('waitlisted', { waitlist_position: i + 1 });
+        for (let i = 0; i < (p.d || 0); i++) add('dropped', {});
+        for (let i = 0; i < (p.x || 0); i++) add('withdrawn', {});
+        for (let i = 0; i < (p.c || 0); i++) {
+          const g = si === 1 && i === 0 ? 'B' : grades[(i + si * 3) % 8];
+          add('completed', { grade: g });
+        }
+      }
+      return rows;
+    }
+tests:
+  seat_cap_and_waitlist:
+    description: "Section with capacity 1 and waitlist 1: first student enrolled, second waitlisted at position 1, third refused with waitlist_full, a repeat registration refused with already_registered."
+    script: |-
+      (ctx) => {
+        const term = ctx.api('POST','/terms',{name:'T-seat',add_deadline:'2026-10-20T00:00:00.000Z',drop_deadline:'2026-10-25T00:00:00.000Z',withdraw_deadline:'2026-11-20T00:00:00.000Z'});
+        ctx.assert(term.status===201,'term '+JSON.stringify(term.body));
+        const course = ctx.api('POST','/courses',{code:'TST101',title:'Seat test',credits:3}).body;
+        const sec = ctx.api('POST','/sections',{course_id:course.id,term_id:term.body.id,section_code:'01',capacity:1,waitlist_capacity:1});
+        ctx.assert(sec.status===201,'section '+JSON.stringify(sec.body));
+        const s = [1,2,3].map((i)=>ctx.api('POST','/students',{name:'Seat Tester '+i,email:'seat'+i+'@test.example'}).body);
+        const e1 = ctx.api('POST','/sections/'+sec.body.id+'/enroll',{student_id:s[0].id});
+        ctx.assert(e1.status===201 && e1.body.status==='enrolled','first enrolled '+JSON.stringify(e1.body));
+        const e2 = ctx.api('POST','/sections/'+sec.body.id+'/enroll',{student_id:s[1].id});
+        ctx.assert(e2.status===201 && e2.body.status==='waitlisted' && e2.body.waitlist_position===1,'second waitlisted '+JSON.stringify(e2.body));
+        const e3 = ctx.api('POST','/sections/'+sec.body.id+'/enroll',{student_id:s[2].id});
+        ctx.assert(e3.status===409 && e3.body.error.code==='waitlist_full','third '+JSON.stringify(e3.body));
+        const dup = ctx.api('POST','/sections/'+sec.body.id+'/enroll',{student_id:s[0].id});
+        ctx.assert(dup.status===409 && dup.body.error.code==='already_registered','dup '+JSON.stringify(dup.body));
+        const after = ctx.api('GET','/sections/'+sec.body.id).body;
+        ctx.assert(after.enrolled_count===1 && after.waitlist_count===1,'counts '+JSON.stringify(after));
+      }
+  prerequisite_check:
+    description: Course B requires course A with at least a C. A student without A, or with a D, is refused with prerequisite_not_met. A student with a B in A may enroll.
+    script: |-
+      (ctx) => {
+        const term = ctx.api('POST','/terms',{name:'T-prereq',add_deadline:'2026-10-20T00:00:00.000Z',drop_deadline:'2026-10-25T00:00:00.000Z',withdraw_deadline:'2026-11-20T00:00:00.000Z'}).body;
+        const a = ctx.api('POST','/courses',{code:'TST201',title:'Prereq A',credits:3}).body;
+        const b = ctx.api('POST','/courses',{code:'TST202',title:'Prereq B',credits:3}).body;
+        const p = ctx.api('POST','/prerequisites',{course_id:b.id,required_course_id:a.id,min_grade:'C'});
+        ctx.assert(p.status===201,'prereq '+JSON.stringify(p.body));
+        const sa = ctx.api('POST','/sections',{course_id:a.id,term_id:term.id,section_code:'01',capacity:5,waitlist_capacity:2}).body;
+        const sb = ctx.api('POST','/sections',{course_id:b.id,term_id:term.id,section_code:'01',capacity:5,waitlist_capacity:2}).body;
+        const s1 = ctx.api('POST','/students',{name:'Prereq One',email:'prereq1@test.example'}).body;
+        const s2 = ctx.api('POST','/students',{name:'Prereq Two',email:'prereq2@test.example'}).body;
+        const none = ctx.api('POST','/sections/'+sb.id+'/enroll',{student_id:s1.id});
+        ctx.assert(none.status===409 && none.body.error.code==='prerequisite_not_met','no A '+JSON.stringify(none.body));
+        const e1 = ctx.api('POST','/sections/'+sa.id+'/enroll',{student_id:s1.id}).body;
+        const e2 = ctx.api('POST','/sections/'+sa.id+'/enroll',{student_id:s2.id}).body;
+        const still = ctx.api('POST','/sections/'+sb.id+'/enroll',{student_id:s1.id});
+        ctx.assert(still.status===409 && still.body.error.code==='prerequisite_not_met','in progress is not passed '+JSON.stringify(still.body));
+        const g1 = ctx.api('POST','/enrollments/'+e1.id+'/grade',{grade:'D'});
+        ctx.assert(g1.status===200 && g1.body.status==='completed' && g1.body.grade==='D','grade D '+JSON.stringify(g1.body));
+        const g2 = ctx.api('POST','/enrollments/'+e2.id+'/grade',{grade:'B'});
+        ctx.assert(g2.status===200 && g2.body.status==='completed','grade B '+JSON.stringify(g2.body));
+        const low = ctx.api('POST','/sections/'+sb.id+'/enroll',{student_id:s1.id});
+        ctx.assert(low.status===409 && low.body.error.code==='prerequisite_not_met','D below C '+JSON.stringify(low.body));
+        const ok = ctx.api('POST','/sections/'+sb.id+'/enroll',{student_id:s2.id});
+        ctx.assert(ok.status===201 && ok.body.status==='enrolled','B allowed '+JSON.stringify(ok.body));
+      }
+  drop_promotes_waitlist:
+    description: Capacity 1 with two waitlisted students. Dropping the enrolled student promotes the first waitlisted student and moves the second to position 1.
+    script: |-
+      (ctx) => {
+        const term = ctx.api('POST','/terms',{name:'T-drop',add_deadline:'2026-10-20T00:00:00.000Z',drop_deadline:'2026-10-25T00:00:00.000Z',withdraw_deadline:'2026-11-20T00:00:00.000Z'}).body;
+        const c = ctx.api('POST','/courses',{code:'TST301',title:'Drop test',credits:3}).body;
+        const sec = ctx.api('POST','/sections',{course_id:c.id,term_id:term.id,section_code:'01',capacity:1,waitlist_capacity:2}).body;
+        const s = [1,2,3].map((i)=>ctx.api('POST','/students',{name:'Drop Tester '+i,email:'drop'+i+'@test.example'}).body);
+        const e = s.map((st)=>ctx.api('POST','/sections/'+sec.id+'/enroll',{student_id:st.id}).body);
+        ctx.assert(e[1].status==='waitlisted' && e[2].status==='waitlisted' && e[2].waitlist_position===2,'setup '+JSON.stringify(e));
+        const d = ctx.api('POST','/enrollments/'+e[0].id+'/drop',{});
+        ctx.assert(d.status===200 && d.body.status==='dropped','drop '+JSON.stringify(d.body));
+        const g2 = ctx.api('GET','/enrollments/'+e[1].id).body;
+        const g3 = ctx.api('GET','/enrollments/'+e[2].id).body;
+        ctx.assert(g2.status==='enrolled','promoted '+JSON.stringify(g2));
+        ctx.assert(g3.status==='waitlisted' && g3.waitlist_position===1,'renumbered '+JSON.stringify(g3));
+        const after = ctx.api('GET','/sections/'+sec.id).body;
+        ctx.assert(after.enrolled_count===1 && after.waitlist_count===1,'counts '+JSON.stringify(after));
+        const again = ctx.api('POST','/enrollments/'+e[0].id+'/drop',{});
+        ctx.assert(again.status===409 && again.body.error.code==='invalid_state','second drop '+JSON.stringify(again.body));
+      }
+  deadlines_enforced:
+    description: Enrolling after the add deadline is refused. After the drop deadline a drop is refused but a withdraw works. After the withdraw deadline a withdraw is refused.
+    script: |-
+      (ctx) => {
+        const late = ctx.api('POST','/terms',{name:'T-late',add_deadline:'2026-10-01T00:00:00.000Z',drop_deadline:'2026-10-05T00:00:00.000Z',withdraw_deadline:'2026-11-20T00:00:00.000Z'}).body;
+        const term = ctx.api('POST','/terms',{name:'T-deadlines',add_deadline:'2026-10-20T00:00:00.000Z',drop_deadline:'2026-10-25T00:00:00.000Z',withdraw_deadline:'2026-11-20T00:00:00.000Z'}).body;
+        const c = ctx.api('POST','/courses',{code:'TST401',title:'Deadline test',credits:3}).body;
+        const lateSec = ctx.api('POST','/sections',{course_id:c.id,term_id:late.id,section_code:'01',capacity:5,waitlist_capacity:1}).body;
+        const sec = ctx.api('POST','/sections',{course_id:c.id,term_id:term.id,section_code:'02',capacity:5,waitlist_capacity:1}).body;
+        const s1 = ctx.api('POST','/students',{name:'Deadline One',email:'deadline1@test.example'}).body;
+        const s2 = ctx.api('POST','/students',{name:'Deadline Two',email:'deadline2@test.example'}).body;
+        const r = ctx.api('POST','/sections/'+lateSec.id+'/enroll',{student_id:s1.id});
+        ctx.assert(r.status===409 && r.body.error.code==='add_deadline_passed','late add '+JSON.stringify(r.body));
+        const e1 = ctx.api('POST','/sections/'+sec.id+'/enroll',{student_id:s1.id});
+        const e2 = ctx.api('POST','/sections/'+sec.id+'/enroll',{student_id:s2.id});
+        ctx.assert(e1.status===201 && e2.status===201,'enrolled before deadline');
+        ctx.advance('17d');
+        const d = ctx.api('POST','/enrollments/'+e1.body.id+'/drop',{});
+        ctx.assert(d.status===409 && d.body.error.code==='drop_deadline_passed','late drop '+JSON.stringify(d.body));
+        const w = ctx.api('POST','/enrollments/'+e1.body.id+'/withdraw',{});
+        ctx.assert(w.status===200 && w.body.status==='withdrawn','withdraw '+JSON.stringify(w.body));
+        ctx.advance('30d');
+        const w2 = ctx.api('POST','/enrollments/'+e2.body.id+'/withdraw',{});
+        ctx.assert(w2.status===409 && w2.body.error.code==='withdraw_deadline_passed','late withdraw '+JSON.stringify(w2.body));
+      }
+  waitlist_expiry_job:
+    description: A waitlisted student is dropped by the waitlist_expiry job once the add deadline has passed. The enrolled student is untouched.
+    script: |-
+      (ctx) => {
+        const term = ctx.api('POST','/terms',{name:'T-expiry',add_deadline:'2026-10-20T00:00:00.000Z',drop_deadline:'2026-10-25T00:00:00.000Z',withdraw_deadline:'2026-11-20T00:00:00.000Z'}).body;
+        const c = ctx.api('POST','/courses',{code:'TST501',title:'Expiry test',credits:3}).body;
+        const sec = ctx.api('POST','/sections',{course_id:c.id,term_id:term.id,section_code:'01',capacity:1,waitlist_capacity:1}).body;
+        const s1 = ctx.api('POST','/students',{name:'Expiry One',email:'expiry1@test.example'}).body;
+        const s2 = ctx.api('POST','/students',{name:'Expiry Two',email:'expiry2@test.example'}).body;
+        const e1 = ctx.api('POST','/sections/'+sec.id+'/enroll',{student_id:s1.id}).body;
+        const e2 = ctx.api('POST','/sections/'+sec.id+'/enroll',{student_id:s2.id}).body;
+        ctx.assert(e2.status==='waitlisted','setup '+JSON.stringify(e2));
+        const r = ctx.advance('12d');
+        ctx.assert(r.jobsFired.includes('waitlist_expiry'),'job fired '+JSON.stringify(r));
+        const g2 = ctx.api('GET','/enrollments/'+e2.id).body;
+        const g1 = ctx.api('GET','/enrollments/'+e1.id).body;
+        ctx.assert(g2.status==='dropped','waitlisted dropped '+JSON.stringify(g2));
+        ctx.assert(g1.status==='enrolled','enrolled kept '+JSON.stringify(g1));
+        const after = ctx.api('GET','/sections/'+sec.id).body;
+        ctx.assert(after.waitlist_count===0 && after.enrolled_count===1,'counts '+JSON.stringify(after));
+      }
+tasks:
+  enroll_maya_cs201:
+    difficulty: easy
+    instruction: Register the student Maya Chen for the CS 201 section offered in the Fall 2026 term. Change nothing else.
+    grader: |-
+      (ctx) => {
+        const maya = ctx.seed.list('student', { where: { name: 'Maya Chen' } })[0];
+        const course = ctx.seed.list('course', { where: { code: 'CS 201' } })[0];
+        const term = ctx.seed.list('term', { where: { name: 'Fall 2026' } })[0];
+        if (!maya || !course || !term) return 0;
+        const sec = ctx.seed.list('section', { where: { course_id: course.id, term_id: term.id } })[0];
+        if (!sec) return 0;
+        const mine = ctx.db.list('enrollment', { where: { student_id: maya.id, section_id: sec.id } })
+          .filter((e) => ctx.seed.get('enrollment', e.id) === null);
+        ctx.guardChanges('only the new enrollment and the section seat count changed', [
+          ...mine.map((e) => ({ entity: 'enrollment', id: e.id, kind: 'created', fields: ['student_id', 'section_id', 'status', 'waitlist_position', 'grade'] })),
+          { entity: 'section', id: sec.id, kind: 'updated', fields: ['enrolled_count', 'waitlist_count'] },
+        ]);
+        const okRow = mine.length === 1 && mine[0].status === 'enrolled' && mine[0].waitlist_position === null;
+        ctx.goal(0.7, 'Maya is enrolled in the Fall 2026 CS 201 section', okRow);
+        const end = ctx.db.get('section', sec.id);
+        ctx.goal(0.3, 'the section seat count went up by one', okRow && end.enrolled_count === sec.enrolled_count + 1);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const get = (p) => { const r = ctx.api('GET', p); ctx.assert(r.status === 200, 'GET ' + p + ' failed: ' + JSON.stringify(r.body)); return r.body; };
+        const maya = get('/students?q=Maya+Chen').data.find((s) => s.name === 'Maya Chen');
+        ctx.assert(maya, 'student Maya Chen not found');
+        const course = get('/courses?q=CS+201').data.find((c) => c.code === 'CS 201');
+        ctx.assert(course, 'course CS 201 not found');
+        const term = get('/terms?q=Fall+2026').data.find((t) => t.name === 'Fall 2026');
+        ctx.assert(term, 'term Fall 2026 not found');
+        const sec = get('/sections?course_id=' + course.id + '&term_id=' + term.id).data[0];
+        ctx.assert(sec, 'no CS 201 section in Fall 2026');
+        ctx.assert(sec.enrolled_count < sec.capacity, 'section has no free seat');
+        const r = ctx.api('POST', '/sections/' + sec.id + '/enroll', { student_id: maya.id });
+        ctx.assert(r.status === 201 && r.body.status === 'enrolled', 'enroll failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: enrolls Maya in the Spring 2027 CS 201 section instead of the Fall 2026 one
+        script: |-
+          (ctx) => {
+            const maya = ctx.api('GET', '/students?q=Maya+Chen').body.data.find((s) => s.name === 'Maya Chen');
+            const course = ctx.api('GET', '/courses?q=CS+201').body.data.find((c) => c.code === 'CS 201');
+            const term = ctx.api('GET', '/terms?q=Spring+2027').body.data.find((t) => t.name === 'Spring 2027');
+            const sec = ctx.api('GET', '/sections?course_id=' + course.id + '&term_id=' + term.id).body.data[0];
+            ctx.api('POST', '/sections/' + sec.id + '/enroll', { student_id: maya.id });
+          }
+    alternatives:
+      - why: lists every CS 201 section and picks the Fall 2026 one by term id instead of filtering by term
+        script: |-
+          (ctx) => {
+            const maya = ctx.api('GET', '/students?q=Maya+Chen').body.data.find((s) => s.name === 'Maya Chen');
+            const course = ctx.api('GET', '/courses?q=CS+201').body.data.find((c) => c.code === 'CS 201');
+            const term = ctx.api('GET', '/terms?q=Fall+2026').body.data.find((t) => t.name === 'Fall 2026');
+            const sec = ctx.api('GET', '/sections?course_id=' + course.id).body.data.find((s) => s.term_id === term.id);
+            ctx.assert(sec, 'section not found');
+            const r = ctx.api('POST', '/sections/' + sec.id + '/enroll', { student_id: maya.id });
+            ctx.assert(r.status === 201, 'enroll failed: ' + JSON.stringify(r.body));
+          }
+    allows:
+      - entity: enrollment
+        kind: created
+        fields: []
+        where:
+          status: enrolled
+      - entity: section
+        kind: updated
+        fields:
+          - enrolled_count
+          - waitlist_count
+        where:
+          capacity: 6
+          enrolled_count: 4
+          section_code: "01"
+  drop_omar_promote:
+    difficulty: medium
+    instruction: The student Omar Haddad (not Omar Haddadi) wants out of CS 310 in the Fall 2026 term. Drop his enrollment in that section with a normal drop, so the freed seat goes to the first student on the waitlist. Do not change any other enrollment yourself.
+    grader: |-
+      (ctx) => {
+        const stu = ctx.seed.list('student', { where: { name: 'Omar Haddad' } })[0];
+        const course = ctx.seed.list('course', { where: { code: 'CS 310' } })[0];
+        const term = ctx.seed.list('term', { where: { name: 'Fall 2026' } })[0];
+        if (!stu || !course || !term) return 0;
+        const sec = ctx.seed.list('section', { where: { course_id: course.id, term_id: term.id } })[0];
+        if (!sec) return 0;
+        const target = ctx.seed.list('enrollment', { where: { student_id: stu.id, section_id: sec.id, status: 'enrolled' } })[0];
+        if (!target) return 0;
+        const waiting = ctx.seed.list('enrollment', { where: { section_id: sec.id, status: 'waitlisted' } })
+          .sort((a, b) => a.waitlist_position - b.waitlist_position);
+        if (waiting.length === 0) return 0;
+        ctx.guardChanges('only Omar Haddad enrollment, the section waitlist and the section counts changed', [
+          { entity: 'enrollment', id: target.id, kind: 'updated', fields: ['status', 'waitlist_position'] },
+          ...waiting.map((w) => ({ entity: 'enrollment', id: w.id, kind: 'updated', fields: ['status', 'waitlist_position'] })),
+          { entity: 'section', id: sec.id, kind: 'updated', fields: ['enrolled_count', 'waitlist_count'] },
+        ]);
+        const end = ctx.db.get('enrollment', target.id);
+        ctx.goal(0.4, 'Omar Haddad enrollment is dropped', end.status === 'dropped');
+        const first = ctx.db.get('enrollment', waiting[0].id);
+        ctx.goal(0.3, 'the first waitlisted student is enrolled', first.status === 'enrolled' && first.waitlist_position === null);
+        ctx.goal(0.2, 'the rest of the waitlist is renumbered from 1', waiting.slice(1).every((w, i) => {
+          const x = ctx.db.get('enrollment', w.id);
+          return x.status === 'waitlisted' && x.waitlist_position === i + 1;
+        }));
+        const s = ctx.db.get('section', sec.id);
+        ctx.goal(0.1, 'section counts match', s.enrolled_count === sec.enrolled_count && s.waitlist_count === waiting.length - 1);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const get = (p) => { const r = ctx.api('GET', p); ctx.assert(r.status === 200, 'GET ' + p + ' failed: ' + JSON.stringify(r.body)); return r.body; };
+        const omars = get('/students?q=Omar+Haddad').data.filter((s) => s.name === 'Omar Haddad');
+        ctx.assert(omars.length === 1, 'expected exactly one student named Omar Haddad');
+        const course = get('/courses?q=CS+310').data.find((c) => c.code === 'CS 310');
+        ctx.assert(course, 'course CS 310 not found');
+        const term = get('/terms?q=Fall+2026').data.find((t) => t.name === 'Fall 2026');
+        ctx.assert(term, 'term Fall 2026 not found');
+        const sec = get('/sections?course_id=' + course.id + '&term_id=' + term.id).data[0];
+        ctx.assert(sec, 'no CS 310 section in Fall 2026');
+        const enrolled = get('/enrollments?section_id=' + sec.id + '&status=enrolled').data;
+        const mine = enrolled.filter((e) => e.student_id === omars[0].id);
+        ctx.assert(mine.length === 1, 'Omar Haddad has no enrolled enrollment in the section');
+        const d = ctx.api('POST', '/enrollments/' + mine[0].id + '/drop', {});
+        ctx.assert(d.status === 200 && d.body.status === 'dropped', 'drop failed: ' + JSON.stringify(d.body));
+      }
+    decoys:
+      - why: withdraws Omar Haddad instead of dropping him, so the seat is freed and the waitlist moves but his enrollment ends withdrawn, not dropped
+        script: |-
+          (ctx) => {
+            const omar = ctx.api('GET', '/students?q=Omar+Haddad').body.data.find((s) => s.name === 'Omar Haddad');
+            const course = ctx.api('GET', '/courses?q=CS+310').body.data.find((c) => c.code === 'CS 310');
+            const term = ctx.api('GET', '/terms?q=Fall+2026').body.data.find((t) => t.name === 'Fall 2026');
+            const sec = ctx.api('GET', '/sections?course_id=' + course.id + '&term_id=' + term.id).body.data[0];
+            const mine = ctx.api('GET', '/enrollments?section_id=' + sec.id + '&status=enrolled').body.data.find((e) => e.student_id === omar.id);
+            ctx.api('POST', '/enrollments/' + mine.id + '/withdraw', {});
+          }
+      - why: drops the near-duplicate student Omar Haddadi instead of Omar Haddad
+        script: |-
+          (ctx) => {
+            const omar = ctx.api('GET', '/students?q=Omar+Haddad').body.data.find((s) => s.name === 'Omar Haddadi');
+            const course = ctx.api('GET', '/courses?q=CS+310').body.data.find((c) => c.code === 'CS 310');
+            const term = ctx.api('GET', '/terms?q=Fall+2026').body.data.find((t) => t.name === 'Fall 2026');
+            const sec = ctx.api('GET', '/sections?course_id=' + course.id + '&term_id=' + term.id).body.data[0];
+            const mine = ctx.api('GET', '/enrollments?section_id=' + sec.id + '&status=enrolled').body.data.find((e) => e.student_id === omar.id);
+            ctx.api('POST', '/enrollments/' + mine.id + '/drop', {});
+          }
+    alternatives:
+      - why: finds Omar's enrollment by his student id and the enrolled status, then checks the section, instead of listing the section first
+        script: |-
+          (ctx) => {
+            const get = (p) => { const r = ctx.api('GET', p); ctx.assert(r.status === 200, 'GET ' + p + ' failed'); return r.body; };
+            const omar = get('/students?q=Omar+Haddad').data.find((s) => s.name === 'Omar Haddad');
+            ctx.assert(omar, 'Omar Haddad not found');
+            const course = get('/courses?q=CS+310').data.find((c) => c.code === 'CS 310');
+            const term = get('/terms?q=Fall+2026').data.find((t) => t.name === 'Fall 2026');
+            const sec = get('/sections?course_id=' + course.id + '&term_id=' + term.id).data[0];
+            const mine = get('/enrollments?student_id=' + omar.id + '&status=enrolled').data.find((e) => e.section_id === sec.id);
+            ctx.assert(mine, 'enrollment not found');
+            const others = get('/enrollments?section_id=' + sec.id + '&status=enrolled').data.filter((e) => e.id !== mine.id);
+            ctx.assert(others.length > 0, 'expected other enrolled students in the section');
+            const d = ctx.api('POST', '/enrollments/' + mine.id + '/drop', {});
+            ctx.assert(d.status === 200, 'drop failed: ' + JSON.stringify(d.body));
+          }
+    allows:
+      - entity: enrollment
+        kind: updated
+        fields:
+          - status
+          - waitlist_position
+        where:
+          status: enrolled
+      - entity: enrollment
+        kind: updated
+        fields:
+          - status
+          - waitlist_position
+        where:
+          status: waitlisted
+      - entity: section
+        kind: updated
+        fields:
+          - enrolled_count
+          - waitlist_count
+        where:
+          capacity: 4
+          waitlist_capacity: 3
+          enrolled_count: 4
+          waitlist_count: 3
+  cancel_cs120_section_01:
+    difficulty: hard
+    instruction: "CS 120 section 01 in the Fall 2026 term is being cancelled. Move each of its enrolled students into section 02 or section 03 of CS 120 in the same term, whichever has a free seat: register the student in the new section and drop them from section 01. A student who cannot be placed because both sections are full must stay enrolled in section 01, unchanged. Never put a moved student on a waitlist."
+    grader: |-
+      (ctx) => {
+        const course = ctx.seed.list('course', { where: { code: 'CS 120' } })[0];
+        const term = ctx.seed.list('term', { where: { name: 'Fall 2026' } })[0];
+        if (!course || !term) return 0;
+        const secs = ctx.seed.list('section', { where: { course_id: course.id, term_id: term.id } });
+        const s1 = secs.find((s) => s.section_code === '01');
+        const s2 = secs.find((s) => s.section_code === '02');
+        const s3 = secs.find((s) => s.section_code === '03');
+        if (!s1 || !s2 || !s3) return 0;
+        const targets = ctx.seed.list('enrollment', { where: { section_id: s1.id, status: 'enrolled' } });
+        if (targets.length === 0) return 0;
+        const fresh = (sid) => ctx.db.list('enrollment', { where: { section_id: sid } }).filter((e) => ctx.seed.get('enrollment', e.id) === null);
+        const created = [...fresh(s2.id), ...fresh(s3.id)];
+        const placed = created.filter((e) => e.status === 'enrolled');
+        const moved = [];
+        const stayed = [];
+        for (const t of targets) {
+          const end = ctx.db.get('enrollment', t.id);
+          const dest = placed.find((e) => e.student_id === t.student_id);
+          if (end.status === 'dropped' && dest) moved.push({ t, dest });
+          else if (end.status === 'enrolled' && !dest) stayed.push(t);
+        }
+        ctx.guardChanges('only moved students changed: dropped from 01 and enrolled in 02 or 03, nobody waitlisted', [
+          ...moved.map((m) => ({ entity: 'enrollment', id: m.t.id, kind: 'updated', fields: ['status', 'waitlist_position'] })),
+          ...moved.map((m) => ({ entity: 'enrollment', id: m.dest.id, kind: 'created', fields: ['student_id', 'section_id', 'status', 'waitlist_position', 'grade'] })),
+          { entity: 'section', id: s1.id, kind: 'updated', fields: ['enrolled_count', 'waitlist_count'] },
+          { entity: 'section', id: s2.id, kind: 'updated', fields: ['enrolled_count', 'waitlist_count'] },
+          { entity: 'section', id: s3.id, kind: 'updated', fields: ['enrolled_count', 'waitlist_count'] },
+        ]);
+        const e2 = ctx.db.get('section', s2.id);
+        const e3 = ctx.db.get('section', s3.id);
+        const waitlisted = ctx.db.list('enrollment', { where: { section_id: s2.id, status: 'waitlisted' } }).length + ctx.db.list('enrollment', { where: { section_id: s3.id, status: 'waitlisted' } }).length;
+        ctx.goal(0.4, 'four students moved', moved.length === 4);
+        ctx.goal(0.2, 'exactly one student stays enrolled in section 01 unchanged', stayed.length === 1 && moved.length + stayed.length === targets.length);
+        ctx.goal(0.3, 'sections 02 and 03 are exactly full', e2.enrolled_count === e2.capacity && e3.enrolled_count === e3.capacity);
+        ctx.goal(0.1, 'nobody was waitlisted', moved.length > 0 && waitlisted === 0 && created.every((e) => e.status === 'enrolled'));
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const get = (p) => { const r = ctx.api('GET', p); ctx.assert(r.status === 200, 'GET ' + p + ' failed: ' + JSON.stringify(r.body)); return r.body; };
+        const course = get('/courses?q=CS+120').data.find((c) => c.code === 'CS 120');
+        ctx.assert(course, 'course CS 120 not found');
+        const term = get('/terms?q=Fall+2026').data.find((t) => t.name === 'Fall 2026');
+        ctx.assert(term, 'term Fall 2026 not found');
+        const secs = get('/sections?course_id=' + course.id + '&term_id=' + term.id).data;
+        const s1 = secs.find((s) => s.section_code === '01');
+        const s2 = secs.find((s) => s.section_code === '02');
+        const s3 = secs.find((s) => s.section_code === '03');
+        ctx.assert(s1 && s2 && s3, 'sections 01, 02 and 03 not found');
+        const enrolled = get('/enrollments?section_id=' + s1.id + '&status=enrolled').data;
+        ctx.assert(enrolled.length > 0, 'no enrolled students in section 01');
+        for (const e of enrolled) {
+          let dest = null;
+          for (const s of [s2, s3]) {
+            const cur = get('/sections/' + s.id);
+            if (cur.enrolled_count < cur.capacity) { dest = cur; break; }
+          }
+          if (dest === null) continue;
+          const r = ctx.api('POST', '/sections/' + dest.id + '/enroll', { student_id: e.student_id });
+          ctx.assert(r.status === 201 && r.body.status === 'enrolled', 'enroll failed: ' + JSON.stringify(r.body));
+          const d = ctx.api('POST', '/enrollments/' + e.id + '/drop', {});
+          ctx.assert(d.status === 200 && d.body.status === 'dropped', 'drop failed: ' + JSON.stringify(d.body));
+        }
+      }
+    decoys:
+      - why: only looks at section 02 and never uses the free seat in section 03, so it moves three students and leaves two in section 01
+        script: |-
+          (ctx) => {
+            const course = ctx.api('GET', '/courses?q=CS+120').body.data.find((c) => c.code === 'CS 120');
+            const term = ctx.api('GET', '/terms?q=Fall+2026').body.data.find((t) => t.name === 'Fall 2026');
+            const secs = ctx.api('GET', '/sections?course_id=' + course.id + '&term_id=' + term.id).body.data;
+            const s1 = secs.find((s) => s.section_code === '01');
+            const s2 = secs.find((s) => s.section_code === '02');
+            const enrolled = ctx.api('GET', '/enrollments?section_id=' + s1.id + '&status=enrolled').body.data;
+            for (const e of enrolled) {
+              const cur = ctx.api('GET', '/sections/' + s2.id).body;
+              if (cur.enrolled_count >= cur.capacity) continue;
+              ctx.api('POST', '/sections/' + s2.id + '/enroll', { student_id: e.student_id });
+              ctx.api('POST', '/enrollments/' + e.id + '/drop', {});
+            }
+          }
+      - why: drops every student from section 01 first and enrolls them afterwards, so the one student without a free seat ends on a waitlist and is no longer enrolled in section 01
+        script: |-
+          (ctx) => {
+            const course = ctx.api('GET', '/courses?q=CS+120').body.data.find((c) => c.code === 'CS 120');
+            const term = ctx.api('GET', '/terms?q=Fall+2026').body.data.find((t) => t.name === 'Fall 2026');
+            const secs = ctx.api('GET', '/sections?course_id=' + course.id + '&term_id=' + term.id).body.data;
+            const s1 = secs.find((s) => s.section_code === '01');
+            const s2 = secs.find((s) => s.section_code === '02');
+            const s3 = secs.find((s) => s.section_code === '03');
+            const enrolled = ctx.api('GET', '/enrollments?section_id=' + s1.id + '&status=enrolled').body.data;
+            for (const e of enrolled) ctx.api('POST', '/enrollments/' + e.id + '/drop', {});
+            for (const e of enrolled) {
+              const cur = ctx.api('GET', '/sections/' + s2.id).body;
+              const dest = cur.enrolled_count < cur.capacity ? s2 : s3;
+              ctx.api('POST', '/sections/' + dest.id + '/enroll', { student_id: e.student_id });
+            }
+          }
+    alternatives:
+      - why: registers every student who fits in the new sections first and drops them from section 01 only afterwards
+        script: |-
+          (ctx) => {
+            const get = (p) => { const r = ctx.api('GET', p); ctx.assert(r.status === 200, 'GET ' + p + ' failed'); return r.body; };
+            const course = get('/courses?q=CS+120').data.find((c) => c.code === 'CS 120');
+            const term = get('/terms?q=Fall+2026').data.find((t) => t.name === 'Fall 2026');
+            const secs = get('/sections?course_id=' + course.id + '&term_id=' + term.id).data;
+            const s1 = secs.find((s) => s.section_code === '01');
+            const s2 = secs.find((s) => s.section_code === '02');
+            const s3 = secs.find((s) => s.section_code === '03');
+            const enrolled = get('/enrollments?section_id=' + s1.id + '&status=enrolled').data;
+            const placed = [];
+            for (const e of enrolled) {
+              let dest = null;
+              for (const s of [s2, s3]) {
+                const cur = get('/sections/' + s.id);
+                if (cur.enrolled_count < cur.capacity) { dest = cur; break; }
+              }
+              if (dest === null) continue;
+              const r = ctx.api('POST', '/sections/' + dest.id + '/enroll', { student_id: e.student_id });
+              ctx.assert(r.status === 201 && r.body.status === 'enrolled', 'enroll failed: ' + JSON.stringify(r.body));
+              placed.push(e.id);
+            }
+            for (const id of placed) {
+              const d = ctx.api('POST', '/enrollments/' + id + '/drop', {});
+              ctx.assert(d.status === 200, 'drop failed: ' + JSON.stringify(d.body));
+            }
+          }
+      - why: fills section 03 first and walks the students in reverse order, so a different student is left in section 01
+        script: |-
+          (ctx) => {
+            const get = (p) => { const r = ctx.api('GET', p); ctx.assert(r.status === 200, 'GET ' + p + ' failed'); return r.body; };
+            const course = get('/courses?q=CS+120').data.find((c) => c.code === 'CS 120');
+            const term = get('/terms?q=Fall+2026').data.find((t) => t.name === 'Fall 2026');
+            const secs = get('/sections?course_id=' + course.id + '&term_id=' + term.id).data;
+            const s1 = secs.find((s) => s.section_code === '01');
+            const s2 = secs.find((s) => s.section_code === '02');
+            const s3 = secs.find((s) => s.section_code === '03');
+            const enrolled = get('/enrollments?section_id=' + s1.id + '&status=enrolled').data.reverse();
+            for (const e of enrolled) {
+              let dest = null;
+              for (const s of [s3, s2]) {
+                const cur = get('/sections/' + s.id);
+                if (cur.enrolled_count < cur.capacity) { dest = cur; break; }
+              }
+              if (dest === null) continue;
+              const r = ctx.api('POST', '/sections/' + dest.id + '/enroll', { student_id: e.student_id });
+              ctx.assert(r.status === 201 && r.body.status === 'enrolled', 'enroll failed: ' + JSON.stringify(r.body));
+              const d = ctx.api('POST', '/enrollments/' + e.id + '/drop', {});
+              ctx.assert(d.status === 200, 'drop failed: ' + JSON.stringify(d.body));
+            }
+          }
+    allows:
+      - entity: enrollment
+        kind: created
+        fields: []
+        where:
+          status: enrolled
+      - entity: enrollment
+        kind: updated
+        fields:
+          - status
+          - waitlist_position
+        where:
+          status: enrolled
+      - entity: section
+        kind: updated
+        fields:
+          - enrolled_count
+          - waitlist_count
+        where:
+          capacity: 5
+          enrolled_count: 5
+      - entity: section
+        kind: updated
+        fields:
+          - enrolled_count
+          - waitlist_count
+        where:
+          capacity: 5
+          enrolled_count: 2
+      - entity: section
+        kind: updated
+        fields:
+          - enrolled_count
+          - waitlist_count
+        where:
+          capacity: 3
+          enrolled_count: 2
+          waitlist_capacity: 2

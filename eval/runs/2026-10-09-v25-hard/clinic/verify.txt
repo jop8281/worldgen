@@ -1,0 +1,5 @@
+world.yaml:544: warning seed.too_few_rows_for_paging seed.doctor: expected more than 25 doctor rows, found 6 rows. 6 rows fit on one page. Paging never matters.
+cancel_patient_upcoming easy solution 1.000 noop 0.000 decoys [0.000, 0.600] prefix 0.600 mutants 5/8 probed (not probed: extra_action, extra_delete, perturb) checks 4/4 flipped
+move_to_other_doctor medium solution 1.000 noop 0.000 decoys [0.400, 0.400, 0.000] prefix - mutants 5/8 probed (not probed: target_field, other_row, extra_delete) checks 4/4 flipped
+settle_backlog hard solution 1.000 noop 0.000 decoys [0.500, 0.500, 0.500, 0.000] prefix 0.500 mutants 4/8 probed (not probed: target_field, extra_action, extra_delete, perturb) checks 4/5 flipped (not flipped: guard new fees belong only to the no-show appointments)
+total: checks 12/13 flipped, mutants 14/24 probed, 3 tasks

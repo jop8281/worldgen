@@ -62,7 +62,9 @@ export type TaskVerdict = {
   readonly solutionLaterPageEntities: readonly string[];
   /** Entities the solution changed rows of, where its filtered list calls also returned a row it left unchanged, sorted: near-duplicate distractors it had to tell apart (YOS-180). */
   readonly solutionDistractorEntities: readonly string[];
-  /** Workflow actions (world.actions keys) a successful solution call reached, sorted. WorldGen checks them against the plan (A-398). */
+  /** Entities the solution changed rows of, sorted. Only these can hold a distractor: a lookup row competes with no target (A-230, A-406). */
+  readonly solutionChangedEntities: readonly string[];
+  /** Workflow actions (world.actions keys) a successful solution call that changed a row reached, sorted. WorldGen checks them against the plan (A-398, A-411). */
   readonly solutionActions: readonly string[];
   /** Every engine mutant kind, in order: the call it graded and its score, or nulls when no candidate committed a visible change, so the kind was not probed. */
   readonly collateral: readonly MutantProbe[];
@@ -1139,9 +1141,14 @@ function pagedEntities(world: World, log: readonly CallRecord[]): readonly strin
   return [...out].sort();
 }
 
-/** The workflow actions a log's successful calls reached, sorted: the call's routeId when it names an action. */
+/**
+ * The workflow actions a log's successful calls changed a row through, sorted: the call's routeId when it names an
+ * action. A call whose only writes are updates that changed no field does not count, as in A-387's changesSince, so a
+ * reference cannot claim an action with a no-op call (A-411).
+ */
 function actionsCalled(world: World, log: readonly CallRecord[]): readonly string[] {
-  const ids = log.filter(succeeded).map((c) => c.routeId).filter((id): id is string => id !== null && Object.hasOwn(world.actions, id));
+  const changed = (c: CallRecord): boolean => c.writes.some((w) => w.op !== 'updated' || w.fields.length > 0);
+  const ids = log.filter((c) => succeeded(c) && changed(c)).map((c) => c.routeId).filter((id): id is string => id !== null && Object.hasOwn(world.actions, id));
   return [...new Set(ids)].sort();
 }
 
@@ -1152,7 +1159,7 @@ function actionsCalled(world: World, log: readonly CallRecord[]): readonly strin
  * list call with at least one of its route's filters returned a row the solution did not change, among
  * entities it changed rows of.
  */
-function traceCoverage(world: World, log: readonly CallRecord[]): { solutionRowsChanged: number; solutionLaterPageEntities: readonly string[]; solutionDistractorEntities: readonly string[] } {
+function traceCoverage(world: World, log: readonly CallRecord[]): { solutionRowsChanged: number; solutionLaterPageEntities: readonly string[]; solutionDistractorEntities: readonly string[]; solutionChangedEntities: readonly string[] } {
   const list = world.meta.api.list;
   const pageParams = [list.cursorParam, list.startingAfterParam, list.endingBeforeParam];
   const seen = { first: new Set<string>(), later: new Set<string>(), filtered: new Set<string>() };
@@ -1179,7 +1186,10 @@ function traceCoverage(world: World, log: readonly CallRecord[]): { solutionRows
   // Only an entity the solution changed rows of has near-duplicates: an unchanged lookup row (the customer that scopes a ticket search) competes with no target.
   const targeted = new Set([...changed].map((k) => k.slice(0, k.indexOf('/'))));
   const distractors = [...seen.filtered].filter((k) => !changed.has(k)).map((k) => k.slice(0, k.indexOf('/'))).filter((e) => targeted.has(e));
-  return { solutionRowsChanged: changed.size, solutionLaterPageEntities: [...new Set(later)].sort(), solutionDistractorEntities: [...new Set(distractors)].sort() };
+  return {
+    solutionRowsChanged: changed.size, solutionLaterPageEntities: [...new Set(later)].sort(), solutionDistractorEntities: [...new Set(distractors)].sort(),
+    solutionChangedEntities: [...targeted].sort(),
+  };
 }
 
 export function verifyTask(

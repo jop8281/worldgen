@@ -1,0 +1,187 @@
+{
+  "runId": "v25-hard-insurance",
+  "models": [
+    "claude-haiku-5-5"
+  ],
+  "episodesPerCell": 3,
+  "budgetUsd": 3,
+  "episodeBudgetUsd": 0.5,
+  "spentUsd": 0.052387,
+  "stop": {
+    "kind": "complete"
+  },
+  "tasks": [
+    {
+      "world": "gen-insurance",
+      "task": "review_holder_claims",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    },
+    {
+      "world": "gen-insurance",
+      "task": "find_and_confirm_fraud",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    }
+  ],
+  "cells": [
+    {
+      "world": "gen-insurance",
+      "task": "review_holder_claims",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.041757,
+      "usdPerPass": 0.013919,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    },
+    {
+      "world": "gen-insurance",
+      "task": "find_and_confirm_fraud",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.010629,
+      "usdPerPass": 0.003543,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    }
+  ],
+  "episodes": [
+    {
+      "world": "gen-insurance",
+      "task": "review_holder_claims",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 1,
+      "runId": "v25-hard-insurance.1",
+      "episodeId": "v25-hard-insurance.1__review_holder_claims__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0168998,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.0169
+    },
+    {
+      "world": "gen-insurance",
+      "task": "find_and_confirm_fraud",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 1,
+      "runId": "v25-hard-insurance.2",
+      "episodeId": "v25-hard-insurance.2__find_and_confirm_fraud__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.00391714,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.003917
+    },
+    {
+      "world": "gen-insurance",
+      "task": "review_holder_claims",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 2,
+      "runId": "v25-hard-insurance.3",
+      "episodeId": "v25-hard-insurance.3__review_holder_claims__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.01269211,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.012692
+    },
+    {
+      "world": "gen-insurance",
+      "task": "find_and_confirm_fraud",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 2,
+      "runId": "v25-hard-insurance.4",
+      "episodeId": "v25-hard-insurance.4__find_and_confirm_fraud__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.00359205,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.003592
+    },
+    {
+      "world": "gen-insurance",
+      "task": "review_holder_claims",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 3,
+      "runId": "v25-hard-insurance.5",
+      "episodeId": "v25-hard-insurance.5__review_holder_claims__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0121655,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.012166
+    },
+    {
+      "world": "gen-insurance",
+      "task": "find_and_confirm_fraud",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 3,
+      "runId": "v25-hard-insurance.6",
+      "episodeId": "v25-hard-insurance.6__find_and_confirm_fraud__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0031202,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.00312
+    }
+  ]
+}

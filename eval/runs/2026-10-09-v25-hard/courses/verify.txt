@@ -1,0 +1,8 @@
+world.yaml:550: warning seed.too_few_rows_for_paging seed.term: expected more than 25 term rows, found 3 rows. 3 rows fit on one page. Paging never matters.
+world.yaml:556: warning seed.too_few_rows_for_paging seed.course: expected more than 25 course rows, found 16 rows. 16 rows fit on one page. Paging never matters.
+world.yaml:563: warning seed.too_few_rows_for_paging seed.prerequisite: expected more than 25 prerequisite rows, found 10 rows. 10 rows fit on one page. Paging never matters.
+world.yaml:591: warning seed.too_few_rows_for_paging seed.section: expected more than 25 section rows, found 24 rows. 24 rows fit on one page. Paging never matters.
+enroll_maya_cs201 easy solution 1.000 noop 0.000 decoys [0.000] prefix - mutants 7/8 probed (not probed: extra_delete) checks 4/4 flipped
+drop_omar_promote medium solution 1.000 noop 0.000 decoys [0.600, 0.000] prefix - mutants 4/8 probed (not probed: other_row, extra_delete, retarget, perturb) checks 6/6 flipped
+cancel_cs120_section_01 hard solution 1.000 noop 0.000 decoys [0.100, 0.000] prefix 0.100 mutants 5/8 probed (not probed: other_row, extra_delete, retarget) checks 6/6 flipped
+total: checks 16/16 flipped, mutants 16/24 probed, 3 tasks

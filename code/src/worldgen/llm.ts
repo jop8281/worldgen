@@ -11,7 +11,7 @@ import { z } from 'zod';
 import type { SpendEvent } from '../costs/ledger.ts';
 import type { CostBasis } from '../costs/basis.ts';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BUILTIN_PRICES, DEFAULT_CLAUDE_BIN, EFFORTS, isClaudeModelId, type Config, type Effort } from './config.ts';
@@ -19,6 +19,12 @@ import { BUILTIN_PRICES, DEFAULT_CLAUDE_BIN, EFFORTS, isClaudeModelId, type Conf
 export type ProposeRequest = {
   readonly system: string;
   readonly prompt: string;
+  /**
+   * The prompt as append-only text blocks of one user message, oldest first; `prompt` is their join. A caller whose
+   * next prompt only adds blocks sets it, and the transports send each block separately, so a call reads the cache the
+   * previous call wrote and writes only the new blocks (A-400). Absent means one text prompt.
+   */
+  readonly blocks?: readonly string[] | undefined;
   /** The tool the model is told to call (tool_choice auto: forcing is rejected by the default model). Its input schema comes from editJsonSchema or planSchema, never written by hand. */
   readonly tool: { readonly name: string; readonly description: string; readonly inputSchema: object };
   /** The model for this call (config `stepModels`). Absent means `config.model`. */
@@ -286,7 +292,7 @@ export function anthropicModel(config: Config, opts: AnthropicOptions): Model {
         model,
         max_tokens: config.maxOutputTokens,
         system: `${req.system}\n\nRespond by calling the tool "${req.tool.name}" exactly once with your answer as its input.`,
-        messages: [{ role: 'user', content: req.prompt }],
+        messages: [{ role: 'user', content: contentOf(req) }],
         tools: [{ name: req.tool.name, description: req.tool.description, input_schema: req.tool.inputSchema }],
         tool_choice: { type: 'auto', disable_parallel_tool_use: true },
         ...(req.effort === undefined ? {} : { output_config: { effort: req.effort } }),
@@ -358,7 +364,11 @@ export function anthropicModel(config: Config, opts: AnthropicOptions): Model {
 }
 
 /** `timeoutMs`: the call's whole step share. `idleMs`: the longest the CLI may go without writing to stdout. */
-export type SpawnLimits = { readonly timeoutMs: number; readonly idleMs: number; readonly signal?: AbortSignal };
+/**
+ * `cwd` is the empty directory the CLI runs in. Never the OS temp dir: the CLI lists its working directory's files on
+ * every call, and the macOS temp dir holds so many that each call spent seconds of CPU on it (A-412).
+ */
+export type SpawnLimits = { readonly cwd: string; readonly timeoutMs: number; readonly idleMs: number; readonly signal?: AbortSignal };
 /**
  * What one run of the claude CLI produced. `code` is null when a signal ended the process. `killed` says why this side
  * ended it, null when it did not: `share` when `timeoutMs` ran out, `stall` when stdout was silent for `idleMs`,
@@ -421,7 +431,7 @@ export async function stopLiveClaudes(graceMs = KILL_GRACE_MS): Promise<number> 
 export function spawnClaude(bin: string, args: readonly string[], stdin: string, limits: SpawnLimits, killGraceMs = KILL_GRACE_MS): Promise<SpawnResult> {
   return new Promise((resolvePromise, reject) => {
     limits.signal?.throwIfAborted();
-    const child = spawn(bin, [...args], { cwd: tmpdir(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(bin, [...args], { cwd: limits.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     LIVE.add(child);
     let started = false;
     child.once('spawn', () => { started = true; });
@@ -521,12 +531,26 @@ spawnClaude satisfies SpawnClaude;
  * `--strict-mcp-config` and `--disable-slash-commands` leave the model no tools, MCP servers,
  * skills, hooks or CLAUDE.md. `--bare` is not used: it ignores the logged-in session.
  */
+/** The user message content: the prompt text, or with `blocks` one text block each, the cache breakpoint on the last (A-400). */
+function contentOf(req: ProposeRequest): string | { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }[] {
+  const blocks = req.blocks;
+  if (blocks === undefined) return req.prompt;
+  return blocks.map((text, i) => (i === blocks.length - 1 ? { type: 'text', text, cache_control: { type: 'ephemeral' } } : { type: 'text', text }));
+}
+
+/** What a claude -p call reads on stdin: the prompt text, or with `blocks` one stream-json user message holding them (A-400). */
+export function cliInput(req: ProposeRequest): string {
+  if (req.blocks === undefined) return req.prompt;
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: req.blocks.map((text) => ({ type: 'text', text })) } })}\n`;
+}
+
 export function claudeArgs(model: string, req: ProposeRequest, systemFile: string): string[] {
   if (req.maxCostUsd !== undefined && (!Number.isFinite(req.maxCostUsd) || req.maxCostUsd <= 0)) throw new ModelError('model cost budget must be a positive finite number of USD', undefined, { kind: 'not_started' });
   // The CLI's validator has no draft 2020-12 meta-schema, and z.toJSONSchema always declares it.
   const { $schema: _, ...schema }: { $schema?: unknown } = req.tool.inputSchema;
   return [
     '-p',
+    ...(req.blocks === undefined ? [] : ['--input-format', 'stream-json']),
     '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--model', model,
     ...(req.maxCostUsd === undefined ? [] : ['--max-budget-usd', String(req.maxCostUsd)]),
@@ -659,13 +683,16 @@ function cliUsage(u: unknown): Usage {
 }
 
 /** Writes one call's system prompt to a new private temp dir (0700, the file 0600), for `--system-prompt-file`. */
-function systemFileOf(system: string): { readonly dir: string; readonly file: string } {
+function systemFileOf(system: string): { readonly dir: string; readonly file: string; readonly cwd: string } {
   let dir: string | undefined;
   try {
     dir = mkdtempSync(join(tmpdir(), 'worldgen-claude-'));
     const file = join(dir, 'system.md');
     writeFileSync(file, system, { mode: 0o600 });
-    return { dir, file };
+    // The call's working directory: empty, inside the call's own private dir, and removed with it (A-412).
+    const cwd = join(dir, 'cwd');
+    mkdirSync(cwd, { mode: 0o700 });
+    return { dir, file, cwd };
   } catch (e) {
     if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
     throw new ModelError(`cannot write the system prompt file for claude -p: ${e instanceof Error ? e.message : String(e)}`, undefined, { kind: 'not_started' });
@@ -697,7 +724,7 @@ export function claudeCliModel(config: Config, spawnCli: SpawnClaude = spawnClau
         const over = args.findIndex((a) => Buffer.byteLength(a) >= MAX_ARG_BYTES);
         if (over >= 0) throw new ModelError(`claude -p argument ${args[over - 1] ?? ''} is ${Buffer.byteLength(args[over] ?? '')} bytes, and Linux refuses one of ${MAX_ARG_BYTES} or more`, undefined, { kind: 'not_started' });
         try {
-          out = await spawnCli(bin, args, req.prompt, { timeoutMs: shareMs, idleMs: STALL_MS, ...(req.signal === undefined ? {} : { signal: req.signal }) });
+          out = await spawnCli(bin, args, cliInput(req), { cwd: system.cwd, timeoutMs: shareMs, idleMs: STALL_MS, ...(req.signal === undefined ? {} : { signal: req.signal }) });
         } catch (e) {
           const notStarted = notStartedFailureSchema.safeParse(e).success;
           throw new ModelError(`cannot run the claude CLI "${bin}": ${e instanceof Error ? e.message : String(e)}. Set claudeBin in worldgen.config.json to the real binary`, undefined, notStarted ? { kind: 'not_started' } : { kind: 'unknown' });

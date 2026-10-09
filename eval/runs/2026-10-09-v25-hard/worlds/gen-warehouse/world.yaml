@@ -1,0 +1,1181 @@
+format: 1
+meta:
+  name: gen_warehouse
+  description: A warehouse where products are stocked in inventory items by location, supplier purchase orders are submitted and received into stock, cycle counts reconcile shelf quantities, and damaged or lost goods are written off through an approval step.
+  resembles: Warehouse management system (NetSuite/Fishbowl-style inventory with purchase orders, cycle counts and write-offs)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  product:
+    description: A stockable SKU with a unit cost.
+    idPrefix: prd
+    fields:
+      sku:
+        type: string
+        description: Unique stock keeping unit code.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 40
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      unit_cost:
+        type: money
+        description: Cost of one unit in cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+  supplier:
+    description: A vendor purchase orders are placed with.
+    idPrefix: sup
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      contact_email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        format: email
+  inventory_item:
+    description: Stock of one product at one warehouse location. The location prefix encodes the zone, such as A-03.
+    idPrefix: inv
+    fields:
+      product_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: product
+        onDelete: restrict
+      location:
+        type: string
+        description: Warehouse location such as A-03; the letter before the dash is the zone.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 40
+      quantity_on_hand:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      reorder_point:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+  purchase_order:
+    description: An order to a supplier. Its status moves only through the purchase order actions.
+    idPrefix: po
+    fields:
+      supplier_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: supplier
+        onDelete: restrict
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - draft
+          - submitted
+          - partially_received
+          - received
+          - cancelled
+        initial: draft
+        transitions:
+          draft:
+            - submitted
+            - cancelled
+          submitted:
+            - partially_received
+            - received
+            - cancelled
+          partially_received:
+            - received
+          received: []
+          cancelled: []
+      notes:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  purchase_order_line:
+    description: A product, ordered quantity and received quantity on a purchase order.
+    idPrefix: pol
+    fields:
+      purchase_order_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: purchase_order
+        onDelete: restrict
+      product_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: product
+        onDelete: restrict
+      quantity_ordered:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      quantity_received:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      unit_cost:
+        type: money
+        description: Agreed cost of one unit in cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+  cycle_count:
+    description: A count of an inventory item compared with the quantity expected when the count was scheduled.
+    idPrefix: cc
+    fields:
+      inventory_item_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: inventory_item
+        onDelete: restrict
+      expected_quantity:
+        type: int
+        description: On-hand quantity captured when the count was scheduled.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+      counted_quantity:
+        type: int
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        min: 0
+      variance:
+        type: int
+        description: Counted minus expected.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - scheduled
+          - counted
+          - approved
+        initial: scheduled
+        transitions:
+          scheduled:
+            - counted
+          counted:
+            - approved
+          approved: []
+      notes:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  write_off:
+    description: A request to remove damaged, expired or lost stock, valued at unit cost. Approval is final and deducts stock.
+    idPrefix: wo
+    fields:
+      inventory_item_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: inventory_item
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      reason:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - damaged
+          - expired
+          - lost
+      value:
+        type: money
+        description: Quantity times product unit cost, in cents.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - pending
+          - approved
+          - rejected
+        initial: pending
+        transitions:
+          pending:
+            - approved
+            - rejected
+          approved: []
+          rejected: []
+routes:
+  list_products:
+    op: list
+    entity: product
+    filters:
+      - sku
+    search:
+      - name
+      - sku
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /products
+    description: List products, filter by sku.
+  get_product:
+    op: get
+    entity: product
+    method: GET
+    path: /products/{id}
+    description: Get a product.
+  create_product:
+    op: create
+    entity: product
+    method: POST
+    path: /products
+    description: Create a product.
+  list_suppliers:
+    op: list
+    entity: supplier
+    filters: []
+    search:
+      - name
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /suppliers
+    description: List suppliers.
+  create_supplier:
+    op: create
+    entity: supplier
+    method: POST
+    path: /suppliers
+    description: Create a supplier.
+  list_inventory_items:
+    op: list
+    entity: inventory_item
+    filters:
+      - product_id
+      - location
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /inventory_items
+    description: List inventory, filter by product_id and location.
+  get_inventory_item:
+    op: get
+    entity: inventory_item
+    method: GET
+    path: /inventory_items/{id}
+    description: Get an inventory item.
+  create_inventory_item:
+    op: create
+    entity: inventory_item
+    method: POST
+    path: /inventory_items
+    description: Create an inventory item.
+  list_purchase_orders:
+    op: list
+    entity: purchase_order
+    filters:
+      - status
+      - supplier_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /purchase_orders
+    description: List purchase orders, filter by status and supplier_id.
+  get_purchase_order:
+    op: get
+    entity: purchase_order
+    method: GET
+    path: /purchase_orders/{id}
+    description: Get a purchase order.
+  create_purchase_order:
+    op: create
+    entity: purchase_order
+    method: POST
+    path: /purchase_orders
+    description: Create a draft purchase order.
+  list_purchase_order_lines:
+    op: list
+    entity: purchase_order_line
+    filters:
+      - purchase_order_id
+      - product_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /purchase_order_lines
+    description: List purchase order lines, filter by purchase_order_id.
+  get_purchase_order_line:
+    op: get
+    entity: purchase_order_line
+    method: GET
+    path: /purchase_order_lines/{id}
+    description: Get a purchase order line.
+  create_purchase_order_line:
+    op: create
+    entity: purchase_order_line
+    method: POST
+    path: /purchase_order_lines
+    description: Add a line to a purchase order.
+  list_cycle_counts:
+    op: list
+    entity: cycle_count
+    filters:
+      - status
+      - inventory_item_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /cycle_counts
+    description: List cycle counts, filter by status and inventory_item_id.
+  get_cycle_count:
+    op: get
+    entity: cycle_count
+    method: GET
+    path: /cycle_counts/{id}
+    description: Get a cycle count.
+  list_write_offs:
+    op: list
+    entity: write_off
+    filters:
+      - status
+      - reason
+      - inventory_item_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /write_offs
+    description: List write-offs, filter by status, reason and inventory_item_id.
+  get_write_off:
+    op: get
+    entity: write_off
+    method: GET
+    path: /write_offs/{id}
+    description: Get a write-off.
+actions:
+  submit_purchase_order:
+    method: POST
+    path: /purchase_orders/{id}/submit
+    description: Submit a draft purchase order that has at least one line.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const po = ctx.db.get('purchase_order', ctx.params.id);
+      if (po === null) ctx.fail(404, 'not_found', 'purchase order ' + ctx.params.id + ' not found');
+      if (po.status !== 'draft') ctx.fail(409, 'invalid_state', 'purchase order is ' + po.status + '. Only draft orders can be submitted.');
+      const lines = ctx.db.list('purchase_order_line', { where: { purchase_order_id: po.id } });
+      if (lines.length === 0) ctx.fail(409, 'empty_order', 'purchase order has no lines');
+      return { status: 200, body: ctx.db.update('purchase_order', po.id, { status: 'submitted' }) };
+      }
+  cancel_purchase_order:
+    method: POST
+    path: /purchase_orders/{id}/cancel
+    description: Cancel a draft or submitted purchase order.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const po = ctx.db.get('purchase_order', ctx.params.id);
+      if (po === null) ctx.fail(404, 'not_found', 'purchase order ' + ctx.params.id + ' not found');
+      if (po.status !== 'draft' && po.status !== 'submitted') ctx.fail(409, 'invalid_state', 'purchase order is ' + po.status + '. Only draft or submitted orders can be cancelled.');
+      return { status: 200, body: ctx.db.update('purchase_order', po.id, { status: 'cancelled' }) };
+      }
+  receive_purchase_order_line:
+    method: POST
+    path: /purchase_order_lines/{id}/receive
+    description: Receive units of a line into an inventory item of the same product.
+    input:
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      inventory_item_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const line = ctx.db.get('purchase_order_line', ctx.params.id);
+      if (line === null) ctx.fail(404, 'not_found', 'line ' + ctx.params.id + ' not found');
+      const po = ctx.db.get('purchase_order', line.purchase_order_id);
+      if (po.status !== 'submitted' && po.status !== 'partially_received') ctx.fail(409, 'invalid_state', 'purchase order is ' + po.status + '. Only submitted or partially received orders can receive.');
+      const qty = ctx.body.quantity;
+      if (line.quantity_received + qty > line.quantity_ordered) ctx.fail(409, 'over_receipt', 'cannot receive more than the ordered quantity');
+      const inv = ctx.db.get('inventory_item', ctx.body.inventory_item_id);
+      if (inv === null) ctx.fail(404, 'not_found', 'inventory item ' + ctx.body.inventory_item_id + ' not found');
+      if (inv.product_id !== line.product_id) ctx.fail(422, 'wrong_product', 'inventory item holds a different product');
+      const updated = ctx.db.update('purchase_order_line', line.id, { quantity_received: line.quantity_received + qty });
+      ctx.db.update('inventory_item', inv.id, { quantity_on_hand: inv.quantity_on_hand + qty });
+      const lines = ctx.db.list('purchase_order_line', { where: { purchase_order_id: po.id } });
+      const done = lines.every((l) => l.quantity_received >= l.quantity_ordered);
+      const next = done ? 'received' : 'partially_received';
+      if (next !== po.status) ctx.db.update('purchase_order', po.id, { status: next });
+      return { status: 200, body: updated };
+      }
+  schedule_cycle_count:
+    method: POST
+    path: /cycle_counts/schedule
+    description: Schedule a count capturing the current on-hand quantity as expected.
+    input:
+      inventory_item_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      notes:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const inv = ctx.db.get('inventory_item', ctx.body.inventory_item_id);
+      if (inv === null) ctx.fail(404, 'not_found', 'inventory item ' + ctx.body.inventory_item_id + ' not found');
+      const row = ctx.db.create('cycle_count', { inventory_item_id: inv.id, expected_quantity: inv.quantity_on_hand, counted_quantity: null, variance: null, status: 'scheduled', notes: ctx.body.notes === undefined ? null : ctx.body.notes });
+      return { status: 201, body: row };
+      }
+  record_cycle_count:
+    method: POST
+    path: /cycle_counts/{id}/record
+    description: Record the counted quantity of a scheduled count.
+    input:
+      counted_quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+    handler: |-
+      (ctx) => {
+      const c = ctx.db.get('cycle_count', ctx.params.id);
+      if (c === null) ctx.fail(404, 'not_found', 'cycle count ' + ctx.params.id + ' not found');
+      if (c.status !== 'scheduled') ctx.fail(409, 'invalid_state', 'cycle count is ' + c.status + '. Only scheduled counts can be recorded.');
+      const n = ctx.body.counted_quantity;
+      return { status: 200, body: ctx.db.update('cycle_count', c.id, { counted_quantity: n, variance: n - c.expected_quantity, status: 'counted' }) };
+      }
+  approve_cycle_count:
+    method: POST
+    path: /cycle_counts/{id}/approve
+    description: Approve a counted count and set stock to the counted quantity.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const c = ctx.db.get('cycle_count', ctx.params.id);
+      if (c === null) ctx.fail(404, 'not_found', 'cycle count ' + ctx.params.id + ' not found');
+      if (c.status !== 'counted') ctx.fail(409, 'invalid_state', 'cycle count is ' + c.status + '. Only counted counts can be approved.');
+      ctx.db.update('inventory_item', c.inventory_item_id, { quantity_on_hand: c.counted_quantity });
+      return { status: 200, body: ctx.db.update('cycle_count', c.id, { status: 'approved' }) };
+      }
+  request_write_off:
+    method: POST
+    path: /write_offs/request
+    description: Request a write-off of stock, valued at unit cost.
+    input:
+      inventory_item_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      reason:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - damaged
+          - expired
+          - lost
+    handler: |-
+      (ctx) => {
+      const inv = ctx.db.get('inventory_item', ctx.body.inventory_item_id);
+      if (inv === null) ctx.fail(404, 'not_found', 'inventory item ' + ctx.body.inventory_item_id + ' not found');
+      const qty = ctx.body.quantity;
+      if (qty > inv.quantity_on_hand) ctx.fail(409, 'insufficient_stock', 'only ' + inv.quantity_on_hand + ' units on hand');
+      const p = ctx.db.get('product', inv.product_id);
+      const row = ctx.db.create('write_off', { inventory_item_id: inv.id, quantity: qty, reason: ctx.body.reason, value: qty * p.unit_cost, status: 'pending' });
+      return { status: 201, body: row };
+      }
+  approve_write_off:
+    method: POST
+    path: /write_offs/{id}/approve
+    description: Approve a pending write-off and deduct the units from stock.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const w = ctx.db.get('write_off', ctx.params.id);
+      if (w === null) ctx.fail(404, 'not_found', 'write-off ' + ctx.params.id + ' not found');
+      if (w.status !== 'pending') ctx.fail(409, 'invalid_state', 'write-off is ' + w.status + '. Only pending write-offs can be approved.');
+      const inv = ctx.db.get('inventory_item', w.inventory_item_id);
+      if (w.quantity > inv.quantity_on_hand) ctx.fail(409, 'insufficient_stock', 'only ' + inv.quantity_on_hand + ' units on hand');
+      ctx.db.update('inventory_item', inv.id, { quantity_on_hand: inv.quantity_on_hand - w.quantity });
+      return { status: 200, body: ctx.db.update('write_off', w.id, { status: 'approved' }) };
+      }
+  reject_write_off:
+    method: POST
+    path: /write_offs/{id}/reject
+    description: Reject a pending write-off.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const w = ctx.db.get('write_off', ctx.params.id);
+      if (w === null) ctx.fail(404, 'not_found', 'write-off ' + ctx.params.id + ' not found');
+      if (w.status !== 'pending') ctx.fail(409, 'invalid_state', 'write-off is ' + w.status + '. Only pending write-offs can be rejected.');
+      return { status: 200, body: ctx.db.update('write_off', w.id, { status: 'rejected' }) };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  product: |-
+    (ctx) => {
+    const bases = ['Pallet Wrap','Box Cutter','Packing Tape','Label Roll','Shipping Carton','Safety Gloves','Bubble Mailer','Strapping Band','Foam Insert','Hand Truck Wheel'];
+    const grades = ['Standard','Heavy Duty','Bulk'];
+    const special = { 10: 5000, 11: 4950, 12: 5100, 13: 6700, 14: 3300 };
+    return Array.from({ length: 30 }, (_, i) => ({
+      sku: 'SKU-' + (1001 + i),
+      name: bases[i % 10] + ' ' + grades[Math.floor(i / 10)],
+      unit_cost: special[i] !== undefined ? special[i] : 500 + ((i * 370) % 4000),
+    }));
+    }
+  supplier: |-
+    (ctx) => {
+    const names = ['Northwind Packaging','Atlas Industrial Supply','Keystone Materials','Harbor Logistics Goods','Summit Fasteners','Redwood Paper Co'];
+    const slugs = ['northwind','atlas','keystone','harbor','summit','redwood'];
+    return names.map((name, i) => ({ name, contact_email: 'orders@' + slugs[i] + '-supply.example.com' }));
+    }
+  inventory_item: |-
+    (ctx) => {
+    const prods = ctx.rows('product');
+    const pad = (n) => (n < 10 ? '0' + n : '' + n);
+    return prods.map((p, i) => {
+      let zone = 'A', n = i + 1;
+      if (i >= 24) { zone = 'D'; n = i - 23; }
+      else if (i >= 18) { zone = 'C'; n = i - 17; }
+      else if (i >= 10) { zone = 'B'; n = i - 9; }
+      return { product_id: p.id, location: zone + '-' + pad(n), quantity_on_hand: 40 + ((i * 13) % 50), reorder_point: 10 };
+    });
+    }
+  purchase_order: |-
+    (ctx) => {
+    const sup = ctx.rows('supplier');
+    const st = ['draft','draft','submitted','submitted','submitted','submitted','partially_received','partially_received','received','received','cancelled','cancelled'];
+    return st.map((status, j) => ({ supplier_id: sup[j % sup.length].id, status, notes: j % 3 === 0 ? 'Restock for peak season' : null }));
+    }
+  purchase_order_line: |-
+    (ctx) => {
+    const pos = ctx.rows('purchase_order');
+    const prods = ctx.rows('product');
+    const out = [];
+    for (let j = 0; j < 12; j++) {
+      const count = j < 6 ? 3 : 2;
+      for (let k = 0; k < count; k++) {
+        const p = prods[(j * 2 + k * 5) % 30];
+        const ordered = 10 + (((j + k) * 7) % 40);
+        const status = pos[j].status;
+        let received = 0;
+        if (status === 'received') received = ordered;
+        else if (status === 'partially_received') received = k === 0 ? Math.floor(ordered / 2) : 0;
+        out.push({ purchase_order_id: pos[j].id, product_id: p.id, quantity_ordered: ordered, quantity_received: received, unit_cost: p.unit_cost });
+      }
+    }
+    return out;
+    }
+  cycle_count: |-
+    (ctx) => {
+    const inv = ctx.rows('inventory_item');
+    const counted = [1,3,4,6,9,12,15,18,22,25,27];
+    const scheduled = [0,2,7,10,13,16,20,23];
+    const deltas = [-1,-2,-10,0,2,-3,-15,-1,-8,1,-20];
+    const notes = [null,'Recount confirmed','already approved by manager',null,null,'Shelf partially blocked','already approved by manager',null,'Damaged cartons found',null,'already approved by manager'];
+    const out = [];
+    for (let i = 0; i < 28; i++) {
+      const itemIdx = i < 25 ? i : (i === 25 ? 2 : 5);
+      const item = inv[itemIdx];
+      const expected = item.quantity_on_hand;
+      const ci = counted.indexOf(i);
+      if (ci >= 0) {
+        const c = Math.max(0, expected + deltas[ci]);
+        out.push({ inventory_item_id: item.id, expected_quantity: expected, counted_quantity: c, variance: c - expected, status: 'counted', notes: notes[ci] });
+      } else if (scheduled.indexOf(i) >= 0) {
+        out.push({ inventory_item_id: item.id, expected_quantity: expected, counted_quantity: null, variance: null, status: 'scheduled', notes: null });
+      } else {
+        const c = expected - (i % 3);
+        out.push({ inventory_item_id: item.id, expected_quantity: expected, counted_quantity: c, variance: c - expected, status: 'approved', notes: i % 2 === 0 ? 'Approved after recount' : null });
+      }
+    }
+    return out;
+    }
+  write_off: |-
+    (ctx) => {
+    const inv = ctx.rows('inventory_item');
+    const prods = ctx.rows('product');
+    const spec = [
+      [10, 4, 'damaged', 'pending'],
+      [11, 4, 'damaged', 'pending'],
+      [12, 4, 'damaged', 'pending'],
+      [13, 3, 'damaged', 'pending'],
+      [15, 2, 'expired', 'pending'],
+      [16, 3, 'lost', 'pending'],
+      [17, 2, 'damaged', 'approved'],
+      [18, 5, 'expired', 'approved'],
+      [19, 1, 'lost', 'approved'],
+      [20, 3, 'damaged', 'approved'],
+      [21, 4, 'expired', 'approved'],
+      [22, 2, 'lost', 'rejected'],
+      [23, 3, 'damaged', 'rejected'],
+      [24, 2, 'expired', 'rejected'],
+    ];
+    return spec.map(([idx, quantity, reason, status]) => ({ inventory_item_id: inv[idx].id, quantity, reason, value: quantity * prods[idx].unit_cost, status }));
+    }
+tests:
+  t_submit:
+    description: An empty draft cannot be submitted; with a line it becomes submitted; a second submit is refused.
+    script: |-
+      (ctx) => {
+      const p = ctx.api('POST','/products',{sku:'ACC-S1',name:'Acc Submit Widget',unit_cost:500});
+      const s = ctx.api('POST','/suppliers',{name:'Acc Supplier S1'});
+      const po = ctx.api('POST','/purchase_orders',{supplier_id:s.body.id});
+      ctx.assert(po.status===201 && po.body.status==='draft','po create '+JSON.stringify(po.body));
+      const e = ctx.api('POST','/purchase_orders/'+po.body.id+'/submit',{});
+      ctx.assert(e.status===409 && e.body.error.code==='empty_order','empty submit '+JSON.stringify(e.body));
+      const l = ctx.api('POST','/purchase_order_lines',{purchase_order_id:po.body.id,product_id:p.body.id,quantity_ordered:5,unit_cost:500});
+      ctx.assert(l.status===201,'line create');
+      const ok = ctx.api('POST','/purchase_orders/'+po.body.id+'/submit',{});
+      ctx.assert(ok.status===200 && ok.body.status==='submitted','submit '+JSON.stringify(ok.body));
+      const again = ctx.api('POST','/purchase_orders/'+po.body.id+'/submit',{});
+      ctx.assert(again.status===409 && again.body.error.code==='invalid_state','second submit '+JSON.stringify(again.body));
+      }
+  t_cancel:
+    description: A draft order can be cancelled, a second cancel is refused, and a submitted order can be cancelled too.
+    script: |-
+      (ctx) => {
+      const p = ctx.api('POST','/products',{sku:'ACC-X1',name:'Acc Cancel Widget',unit_cost:500});
+      const s = ctx.api('POST','/suppliers',{name:'Acc Supplier X1'});
+      const po = ctx.api('POST','/purchase_orders',{supplier_id:s.body.id});
+      const c = ctx.api('POST','/purchase_orders/'+po.body.id+'/cancel',{});
+      ctx.assert(c.status===200 && c.body.status==='cancelled','cancel draft '+JSON.stringify(c.body));
+      const again = ctx.api('POST','/purchase_orders/'+po.body.id+'/cancel',{});
+      ctx.assert(again.status===409 && again.body.error.code==='invalid_state','second cancel '+JSON.stringify(again.body));
+      const po2 = ctx.api('POST','/purchase_orders',{supplier_id:s.body.id});
+      ctx.api('POST','/purchase_order_lines',{purchase_order_id:po2.body.id,product_id:p.body.id,quantity_ordered:3,unit_cost:500});
+      ctx.assert(ctx.api('POST','/purchase_orders/'+po2.body.id+'/submit',{}).status===200,'submit');
+      const c2 = ctx.api('POST','/purchase_orders/'+po2.body.id+'/cancel',{});
+      ctx.assert(c2.status===200 && c2.body.status==='cancelled','cancel submitted '+JSON.stringify(c2.body));
+      }
+  t_receive_limit:
+    description: Receiving on a draft order or beyond the ordered quantity is refused.
+    script: |-
+      (ctx) => {
+      const p = ctx.api('POST','/products',{sku:'ACC-R1',name:'Acc Receive Widget',unit_cost:500});
+      const s = ctx.api('POST','/suppliers',{name:'Acc Supplier R1'});
+      const inv = ctx.api('POST','/inventory_items',{product_id:p.body.id,location:'ACC-A1',quantity_on_hand:0});
+      ctx.assert(inv.status===201,'inv create '+JSON.stringify(inv.body));
+      const po = ctx.api('POST','/purchase_orders',{supplier_id:s.body.id});
+      const l = ctx.api('POST','/purchase_order_lines',{purchase_order_id:po.body.id,product_id:p.body.id,quantity_ordered:10,unit_cost:500});
+      const early = ctx.api('POST','/purchase_order_lines/'+l.body.id+'/receive',{quantity:1,inventory_item_id:inv.body.id});
+      ctx.assert(early.status===409 && early.body.error.code==='invalid_state','draft receive '+JSON.stringify(early.body));
+      ctx.assert(ctx.api('POST','/purchase_orders/'+po.body.id+'/submit',{}).status===200,'submit');
+      const over = ctx.api('POST','/purchase_order_lines/'+l.body.id+'/receive',{quantity:11,inventory_item_id:inv.body.id});
+      ctx.assert(over.status===409 && over.body.error.code==='over_receipt','over receipt '+JSON.stringify(over.body));
+      const inv2 = ctx.api('GET','/inventory_items/'+inv.body.id);
+      ctx.assert(inv2.body.quantity_on_hand===0,'stock unchanged');
+      }
+  t_receive_stock:
+    description: A partial receipt makes the order partially_received and adds stock; completing it makes it received.
+    script: |-
+      (ctx) => {
+      const p = ctx.api('POST','/products',{sku:'ACC-R2',name:'Acc Stock Widget',unit_cost:300});
+      const s = ctx.api('POST','/suppliers',{name:'Acc Supplier R2'});
+      const inv = ctx.api('POST','/inventory_items',{product_id:p.body.id,location:'ACC-A2',quantity_on_hand:2});
+      const po = ctx.api('POST','/purchase_orders',{supplier_id:s.body.id});
+      const l = ctx.api('POST','/purchase_order_lines',{purchase_order_id:po.body.id,product_id:p.body.id,quantity_ordered:10,unit_cost:300});
+      ctx.api('POST','/purchase_orders/'+po.body.id+'/submit',{});
+      const r1 = ctx.api('POST','/purchase_order_lines/'+l.body.id+'/receive',{quantity:4,inventory_item_id:inv.body.id});
+      ctx.assert(r1.status===200,'receive 1 '+JSON.stringify(r1.body));
+      ctx.assert(ctx.api('GET','/purchase_orders/'+po.body.id).body.status==='partially_received','partial status');
+      ctx.assert(ctx.api('GET','/inventory_items/'+inv.body.id).body.quantity_on_hand===6,'stock 6');
+      const r2 = ctx.api('POST','/purchase_order_lines/'+l.body.id+'/receive',{quantity:6,inventory_item_id:inv.body.id});
+      ctx.assert(r2.status===200,'receive 2 '+JSON.stringify(r2.body));
+      ctx.assert(ctx.api('GET','/purchase_orders/'+po.body.id).body.status==='received','received status');
+      ctx.assert(ctx.api('GET','/inventory_items/'+inv.body.id).body.quantity_on_hand===12,'stock 12');
+      ctx.assert(ctx.api('GET','/purchase_order_lines/'+l.body.id).body.quantity_received===10,'line received 10');
+      }
+  t_count_approve:
+    description: A count captures expected quantity, records variance and on approval sets stock to the counted quantity.
+    script: |-
+      (ctx) => {
+      const p = ctx.api('POST','/products',{sku:'ACC-C1',name:'Acc Count Widget',unit_cost:200});
+      const inv = ctx.api('POST','/inventory_items',{product_id:p.body.id,location:'ACC-C1',quantity_on_hand:10});
+      const c = ctx.api('POST','/cycle_counts/schedule',{inventory_item_id:inv.body.id});
+      ctx.assert(c.status<300 && c.body.status==='scheduled' && c.body.expected_quantity===10,'schedule '+JSON.stringify(c.body));
+      const early = ctx.api('POST','/cycle_counts/'+c.body.id+'/approve',{});
+      ctx.assert(early.status===409 && early.body.error.code==='invalid_state','early approve '+JSON.stringify(early.body));
+      const r = ctx.api('POST','/cycle_counts/'+c.body.id+'/record',{counted_quantity:8});
+      ctx.assert(r.status===200 && r.body.status==='counted' && r.body.variance===-2,'record '+JSON.stringify(r.body));
+      const a = ctx.api('POST','/cycle_counts/'+c.body.id+'/approve',{});
+      ctx.assert(a.status===200 && a.body.status==='approved','approve '+JSON.stringify(a.body));
+      ctx.assert(ctx.api('GET','/inventory_items/'+inv.body.id).body.quantity_on_hand===8,'stock set to 8');
+      }
+  t_writeoff_limit:
+    description: Requesting more than on hand is refused; a valid request is pending and valued at unit cost.
+    script: |-
+      (ctx) => {
+      const p = ctx.api('POST','/products',{sku:'ACC-W1',name:'Acc Writeoff Widget',unit_cost:500});
+      const inv = ctx.api('POST','/inventory_items',{product_id:p.body.id,location:'ACC-W1',quantity_on_hand:5});
+      const bad = ctx.api('POST','/write_offs/request',{inventory_item_id:inv.body.id,quantity:6,reason:'damaged'});
+      ctx.assert(bad.status===409 && bad.body.error.code==='insufficient_stock','over request '+JSON.stringify(bad.body));
+      const ok = ctx.api('POST','/write_offs/request',{inventory_item_id:inv.body.id,quantity:2,reason:'damaged'});
+      ctx.assert(ok.status<300 && ok.body.status==='pending' && ok.body.value===1000,'request '+JSON.stringify(ok.body));
+      ctx.assert(ctx.api('GET','/inventory_items/'+inv.body.id).body.quantity_on_hand===5,'stock unchanged until approval');
+      }
+  t_writeoff_approve:
+    description: Approving deducts stock, is final, and a decided write-off cannot be rejected.
+    script: |-
+      (ctx) => {
+      const p = ctx.api('POST','/products',{sku:'ACC-W2',name:'Acc Approve Widget',unit_cost:100});
+      const inv = ctx.api('POST','/inventory_items',{product_id:p.body.id,location:'ACC-W2',quantity_on_hand:10});
+      const w = ctx.api('POST','/write_offs/request',{inventory_item_id:inv.body.id,quantity:3,reason:'expired'});
+      const a = ctx.api('POST','/write_offs/'+w.body.id+'/approve',{});
+      ctx.assert(a.status===200 && a.body.status==='approved','approve '+JSON.stringify(a.body));
+      ctx.assert(ctx.api('GET','/inventory_items/'+inv.body.id).body.quantity_on_hand===7,'stock 7');
+      const again = ctx.api('POST','/write_offs/'+w.body.id+'/approve',{});
+      ctx.assert(again.status===409 && again.body.error.code==='invalid_state','second approve '+JSON.stringify(again.body));
+      const rej = ctx.api('POST','/write_offs/'+w.body.id+'/reject',{});
+      ctx.assert(rej.status===409 && rej.body.error.code==='invalid_state','reject after approve');
+      const w2 = ctx.api('POST','/write_offs/request',{inventory_item_id:inv.body.id,quantity:1,reason:'lost'});
+      const r2 = ctx.api('POST','/write_offs/'+w2.body.id+'/reject',{});
+      ctx.assert(r2.status===200 && r2.body.status==='rejected','reject '+JSON.stringify(r2.body));
+      ctx.assert(ctx.api('GET','/inventory_items/'+inv.body.id).body.quantity_on_hand===7,'stock unchanged by reject');
+      }
+tasks:
+  receive_partial_delivery:
+    difficulty: easy
+    instruction: Keystone Materials has delivered 12 units of Shipping Carton Standard against its submitted purchase order. Receive 12 units on the line for that product on that order, into the stock location A-05.
+    grader: |-
+      (ctx) => {
+      const sup = ctx.seed.list('supplier', { where: { name: 'Keystone Materials' } })[0];
+      const po = ctx.seed.list('purchase_order', { where: { supplier_id: sup.id, status: 'submitted' } })[0];
+      const prod = ctx.seed.list('product', { where: { name: 'Shipping Carton Standard' } })[0];
+      const line = ctx.seed.list('purchase_order_line', { where: { purchase_order_id: po.id, product_id: prod.id } })[0];
+      const inv = ctx.seed.list('inventory_item', { where: { product_id: prod.id, location: 'A-05' } })[0];
+      ctx.guardChanges('only the line, its stock and the order status changed', [
+        { entity: 'purchase_order_line', id: line.id, kind: 'updated', fields: ['quantity_received'] },
+        { entity: 'inventory_item', id: inv.id, kind: 'updated', fields: ['quantity_on_hand'] },
+        { entity: 'purchase_order', id: po.id, kind: 'updated', fields: ['status'] },
+      ]);
+      const endLine = ctx.db.get('purchase_order_line', line.id);
+      const endInv = ctx.db.get('inventory_item', inv.id);
+      const endPo = ctx.db.get('purchase_order', po.id);
+      ctx.goal(0.4, 'the line shows 12 more units received', endLine.quantity_received === line.quantity_received + 12);
+      ctx.goal(0.4, 'the A-05 stock grew by 12', endInv.quantity_on_hand === inv.quantity_on_hand + 12);
+      ctx.goal(0.2, 'the order is partially received', endPo.status === 'partially_received');
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const sups = ctx.api('GET', '/suppliers').body.data;
+      const sup = sups.find((s) => s.name === 'Keystone Materials');
+      ctx.assert(sup, 'supplier not found');
+      const pos = ctx.api('GET', '/purchase_orders?supplier_id=' + sup.id + '&status=submitted').body.data;
+      ctx.assert(pos.length === 1, 'expected one submitted order, found ' + pos.length);
+      const prods = ctx.api('GET', '/products?q=Shipping+Carton+Standard').body.data;
+      const prod = prods.find((p) => p.name === 'Shipping Carton Standard');
+      ctx.assert(prod, 'product not found');
+      const lines = ctx.api('GET', '/purchase_order_lines?purchase_order_id=' + pos[0].id).body.data;
+      const line = lines.find((l) => l.product_id === prod.id);
+      ctx.assert(line, 'line not found');
+      const invs = ctx.api('GET', '/inventory_items?product_id=' + prod.id + '&location=A-05').body.data;
+      ctx.assert(invs.length === 1, 'expected one inventory item at A-05');
+      const r = ctx.api('POST', '/purchase_order_lines/' + line.id + '/receive', { quantity: 12, inventory_item_id: invs[0].id });
+      ctx.assert(r.status === 200, 'receive failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: receives the full ordered quantity of the line instead of the 12 units delivered
+        script: |-
+          (ctx) => {
+          const sups = ctx.api('GET', '/suppliers').body.data;
+          const sup = sups.find((s) => s.name === 'Keystone Materials');
+          const pos = ctx.api('GET', '/purchase_orders?supplier_id=' + sup.id + '&status=submitted').body.data;
+          const prods = ctx.api('GET', '/products?q=Shipping+Carton+Standard').body.data;
+          const prod = prods.find((p) => p.name === 'Shipping Carton Standard');
+          const lines = ctx.api('GET', '/purchase_order_lines?purchase_order_id=' + pos[0].id).body.data;
+          const line = lines.find((l) => l.product_id === prod.id);
+          const invs = ctx.api('GET', '/inventory_items?product_id=' + prod.id + '&location=A-05').body.data;
+          ctx.api('POST', '/purchase_order_lines/' + line.id + '/receive', { quantity: line.quantity_ordered, inventory_item_id: invs[0].id });
+          }
+    alternatives: []
+    allows:
+      - entity: purchase_order_line
+        kind: updated
+        fields:
+          - quantity_received
+        where:
+          purchase_order_id: po_0003
+          product_id: prd_0005
+      - entity: inventory_item
+        kind: updated
+        fields:
+          - quantity_on_hand
+        where:
+          product_id: prd_0005
+          location: A-05
+      - entity: purchase_order
+        kind: updated
+        fields:
+          - status
+        where:
+          supplier_id: sup_0003
+          status: submitted
+  settle_damaged_writeoffs:
+    difficulty: medium
+    instruction: Review the pending write-offs. Approve every pending write-off with reason damaged whose value is $200.00 or less, and reject every pending damaged write-off valued above $200.00. Leave pending write-offs with any other reason (expired or lost) untouched, and do not touch write-offs that are already decided.
+    grader: |-
+      (ctx) => {
+      const pend = ctx.seed.list('write_off', { where: { status: 'pending', reason: 'damaged' } });
+      const approve = pend.filter((w) => w.value <= 20000);
+      const reject = pend.filter((w) => w.value > 20000);
+      if (approve.length !== 2 || reject.length !== 2) return 0;
+      const allowed = [];
+      for (const w of pend) allowed.push({ entity: 'write_off', id: w.id, kind: 'updated', fields: ['status'] });
+      for (const w of approve) allowed.push({ entity: 'inventory_item', id: w.inventory_item_id, kind: 'updated', fields: ['quantity_on_hand'] });
+      ctx.guardChanges('only the pending damaged write-offs and the stock of approved ones changed', allowed);
+      for (const w of approve) ctx.goal(0.2, 'write-off ' + w.id + ' is approved', ctx.db.get('write_off', w.id).status === 'approved');
+      for (const w of reject) ctx.goal(0.2, 'write-off ' + w.id + ' is rejected', ctx.db.get('write_off', w.id).status === 'rejected');
+      ctx.goal(0.2, 'approved write-offs deducted their units from stock', approve.every((w) => ctx.db.get('inventory_item', w.inventory_item_id).quantity_on_hand === ctx.seed.get('inventory_item', w.inventory_item_id).quantity_on_hand - w.quantity));
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      let rows = [];
+      let cur = null;
+      for (let n = 0; n < 10; n++) {
+        const r = ctx.api('GET', '/write_offs?status=pending&limit=25' + (cur ? '&cursor=' + encodeURIComponent(cur) : ''));
+        ctx.assert(r.status === 200, 'list failed: ' + JSON.stringify(r.body));
+        rows = rows.concat(r.body.data);
+        cur = r.body.next_cursor;
+        if (!cur) break;
+      }
+      const damaged = rows.filter((w) => w.reason === 'damaged');
+      ctx.assert(damaged.length > 0, 'no pending damaged write-offs');
+      for (const w of damaged) {
+        const x = ctx.api('POST', '/write_offs/' + w.id + (w.value <= 20000 ? '/approve' : '/reject'), {});
+        ctx.assert(x.status === 200, 'decision failed: ' + JSON.stringify(x.body));
+      }
+      }
+    decoys:
+      - why: approves the damaged write-offs valued at $200 or less but never rejects the larger ones
+        script: |-
+          (ctx) => {
+          const rows = ctx.api('GET', '/write_offs?status=pending&limit=25').body.data;
+          for (const w of rows.filter((x) => x.reason === 'damaged' && x.value <= 20000)) {
+            ctx.api('POST', '/write_offs/' + w.id + '/approve', {});
+          }
+          }
+      - why: rejects every pending damaged write-off without checking the $200 threshold
+        script: |-
+          (ctx) => {
+          const rows = ctx.api('GET', '/write_offs?status=pending&limit=25').body.data;
+          for (const w of rows.filter((x) => x.reason === 'damaged')) {
+            ctx.api('POST', '/write_offs/' + w.id + '/reject', {});
+          }
+          }
+      - why: approves every pending write-off regardless of reason or value
+        script: |-
+          (ctx) => {
+          const rows = ctx.api('GET', '/write_offs?status=pending&limit=25').body.data;
+          for (const w of rows) {
+            ctx.api('POST', '/write_offs/' + w.id + '/approve', {});
+          }
+          }
+    alternatives: []
+    allows:
+      - entity: write_off
+        kind: updated
+        fields:
+          - status
+        where:
+          status: pending
+          reason: damaged
+      - entity: inventory_item
+        kind: updated
+        fields:
+          - quantity_on_hand
+        where:
+          location: B-01
+      - entity: inventory_item
+        kind: updated
+        fields:
+          - quantity_on_hand
+        where:
+          location: B-02
+  reconcile_zone_counts:
+    difficulty: hard
+    instruction: "Reconcile the cycle counts of zone A (inventory locations starting with A-). For every count in zone A that has been counted but not yet approved: if its variance is within 5% of the expected quantity (over or under), approve it. If it is short by more than 5% of the expected quantity, do not approve it; instead request a write-off with reason lost for the shortfall quantity on that inventory item. Go by the quantities, not by the notes on the counts. Leave counts in other zones alone."
+    grader: |-
+      (ctx) => {
+      const counts = ctx.seed.list('cycle_count', {}).slice().sort((a, b) => (a.id < b.id ? -1 : 1));
+      const pageOne = new Set(counts.slice(0, 25).map((c) => c.id));
+      const zoneA = counts.filter((c) => c.status === 'counted' && ctx.seed.get('inventory_item', c.inventory_item_id).location.indexOf('A-') === 0);
+      const fine = zoneA.filter((c) => Math.abs(c.variance) * 100 <= 5 * c.expected_quantity);
+      const short = zoneA.filter((c) => c.variance < 0 && Math.abs(c.variance) * 100 > 5 * c.expected_quantity);
+      if (fine.length !== 5 || short.length !== 2) return 0;
+      const seedWo = new Set(ctx.seed.list('write_off', {}).map((w) => w.id));
+      const created = ctx.db.list('write_off', {}).filter((w) => !seedWo.has(w.id));
+      const allowed = [];
+      for (const c of fine) {
+        allowed.push({ entity: 'cycle_count', id: c.id, kind: 'updated', fields: ['status'] });
+        allowed.push({ entity: 'inventory_item', id: c.inventory_item_id, kind: 'updated', fields: ['quantity_on_hand'] });
+      }
+      for (const ch of ctx.changes()) {
+        if (ch.entity === 'write_off' && ch.kind === 'created') allowed.push({ entity: 'write_off', id: ch.id, kind: 'created', fields: ch.fields });
+      }
+      ctx.guardChanges('only the in-tolerance counts, their stock and the shortfall write-offs changed', allowed);
+      ctx.guard('every new write-off is a pending lost request for the shortfall of a short count', created.every((w) => w.reason === 'lost' && w.status === 'pending' && short.some((c) => c.inventory_item_id === w.inventory_item_id && w.quantity === -c.variance)));
+      const endStatus = (c) => ctx.db.get('cycle_count', c.id).status;
+      const hasWriteOff = (c) => created.some((w) => w.inventory_item_id === c.inventory_item_id && w.quantity === -c.variance && w.reason === 'lost');
+      ctx.goal(0.3, 'in-tolerance counts on the first page are approved', fine.filter((c) => pageOne.has(c.id)).every((c) => endStatus(c) === 'approved'));
+      ctx.goal(0.2, 'the in-tolerance count on the later page is approved', fine.filter((c) => !pageOne.has(c.id)).every((c) => endStatus(c) === 'approved'));
+      ctx.goal(0.2, 'the first-page shortage has a lost write-off for its shortfall', short.filter((c) => pageOne.has(c.id)).every(hasWriteOff));
+      ctx.goal(0.2, 'the later-page shortage has a lost write-off for its shortfall', short.filter((c) => !pageOne.has(c.id)).every(hasWriteOff));
+      ctx.goal(0.1, 'approved counts set stock to the counted quantity and shortage counts stay counted', fine.every((c) => endStatus(c) === 'approved' && ctx.db.get('inventory_item', c.inventory_item_id).quantity_on_hand === c.counted_quantity) && short.every((c) => endStatus(c) === 'counted'));
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const rows = [];
+      let cur = null;
+      for (let n = 0; n < 10; n++) {
+        const r = ctx.api('GET', '/cycle_counts?limit=25' + (cur ? '&cursor=' + encodeURIComponent(cur) : ''));
+        ctx.assert(r.status === 200, 'list failed: ' + JSON.stringify(r.body));
+        for (const c of r.body.data) rows.push(c);
+        cur = r.body.next_cursor;
+        if (!cur) break;
+      }
+      const counted = rows.filter((c) => c.status === 'counted');
+      ctx.assert(counted.length > 0, 'no counted counts');
+      for (const c of counted) {
+        const inv = ctx.api('GET', '/inventory_items/' + c.inventory_item_id).body;
+        if (inv.location.indexOf('A-') !== 0) continue;
+        if (Math.abs(c.variance) * 100 <= 5 * c.expected_quantity) {
+          const a = ctx.api('POST', '/cycle_counts/' + c.id + '/approve', {});
+          ctx.assert(a.status === 200, 'approve failed: ' + JSON.stringify(a.body));
+        } else if (c.variance < 0) {
+          const w = ctx.api('POST', '/write_offs/request', { inventory_item_id: c.inventory_item_id, quantity: -c.variance, reason: 'lost' });
+          ctx.assert(w.status === 201, 'write-off failed: ' + JSON.stringify(w.body));
+        }
+      }
+      const left = ctx.api('GET', '/cycle_counts?status=counted');
+      ctx.assert(left.status === 200 && left.body.data.length > 0, 'expected the short counts to stay counted');
+      }
+    decoys:
+      - why: only reads the first page of cycle counts, so the counts on the later page are never handled
+        script: |-
+          (ctx) => {
+          const r = ctx.api('GET', '/cycle_counts?limit=25');
+          const counted = r.body.data.filter((c) => c.status === 'counted');
+          for (const c of counted) {
+            const inv = ctx.api('GET', '/inventory_items/' + c.inventory_item_id).body;
+            if (inv.location.indexOf('A-') !== 0) continue;
+            if (Math.abs(c.variance) * 100 <= 5 * c.expected_quantity) {
+              ctx.api('POST', '/cycle_counts/' + c.id + '/approve', {});
+            } else if (c.variance < 0) {
+              ctx.api('POST', '/write_offs/request', { inventory_item_id: c.inventory_item_id, quantity: -c.variance, reason: 'lost' });
+            }
+          }
+          }
+      - why: approves the in-tolerance zone A counts on every page but ignores the large shortages, requesting no write-offs
+        script: |-
+          (ctx) => {
+          const rows = [];
+          let cur = null;
+          for (let n = 0; n < 10; n++) {
+            const r = ctx.api('GET', '/cycle_counts?limit=25' + (cur ? '&cursor=' + encodeURIComponent(cur) : ''));
+            for (const c of r.body.data) rows.push(c);
+            cur = r.body.next_cursor;
+            if (!cur) break;
+          }
+          for (const c of rows.filter((x) => x.status === 'counted')) {
+            const inv = ctx.api('GET', '/inventory_items/' + c.inventory_item_id).body;
+            if (inv.location.indexOf('A-') !== 0) continue;
+            if (Math.abs(c.variance) * 100 <= 5 * c.expected_quantity) ctx.api('POST', '/cycle_counts/' + c.id + '/approve', {});
+          }
+          }
+      - why: approves every counted zone A count, including the large shortages, instead of writing them off
+        script: |-
+          (ctx) => {
+          const rows = [];
+          let cur = null;
+          for (let n = 0; n < 10; n++) {
+            const r = ctx.api('GET', '/cycle_counts?limit=25' + (cur ? '&cursor=' + encodeURIComponent(cur) : ''));
+            for (const c of r.body.data) rows.push(c);
+            cur = r.body.next_cursor;
+            if (!cur) break;
+          }
+          for (const c of rows.filter((x) => x.status === 'counted')) {
+            const inv = ctx.api('GET', '/inventory_items/' + c.inventory_item_id).body;
+            if (inv.location.indexOf('A-') !== 0) continue;
+            ctx.api('POST', '/cycle_counts/' + c.id + '/approve', {});
+          }
+          }
+    alternatives: []
+    allows:
+      - entity: cycle_count
+        kind: updated
+        fields:
+          - status
+        where:
+          status: counted
+      - entity: inventory_item
+        kind: updated
+        fields:
+          - quantity_on_hand
+        where:
+          location: A-02
+      - entity: inventory_item
+        kind: updated
+        fields:
+          - quantity_on_hand
+        where:
+          location: A-03
+      - entity: inventory_item
+        kind: updated
+        fields:
+          - quantity_on_hand
+        where:
+          location: A-04
+      - entity: inventory_item
+        kind: updated
+        fields:
+          - quantity_on_hand
+        where:
+          location: A-07
+      - entity: inventory_item
+        kind: updated
+        fields:
+          - quantity_on_hand
+        where:
+          location: A-10
+      - entity: write_off
+        kind: created
+        fields: []
+        where:
+          reason: lost
+          status: pending

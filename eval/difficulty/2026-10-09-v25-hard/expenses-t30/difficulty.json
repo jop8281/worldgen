@@ -1,0 +1,103 @@
+{
+  "runId": "v25-hard-expenses-t30",
+  "models": [
+    "claude-haiku-5-5"
+  ],
+  "episodesPerCell": 3,
+  "budgetUsd": 2,
+  "episodeBudgetUsd": 0.5,
+  "spentUsd": 0.09859,
+  "stop": {
+    "kind": "complete"
+  },
+  "tasks": [
+    {
+      "world": "gen-expenses",
+      "task": "finance_clear_over_limit_queue",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    }
+  ],
+  "cells": [
+    {
+      "world": "gen-expenses",
+      "task": "finance_clear_over_limit_queue",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.09859,
+      "usdPerPass": 0.032863,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    }
+  ],
+  "episodes": [
+    {
+      "world": "gen-expenses",
+      "task": "finance_clear_over_limit_queue",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 1,
+      "runId": "v25-hard-expenses-t30.1",
+      "episodeId": "v25-hard-expenses-t30.1__finance_clear_over_limit_queue__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.03270312,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.032703
+    },
+    {
+      "world": "gen-expenses",
+      "task": "finance_clear_over_limit_queue",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 2,
+      "runId": "v25-hard-expenses-t30.2",
+      "episodeId": "v25-hard-expenses-t30.2__finance_clear_over_limit_queue__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.03336859,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.033369
+    },
+    {
+      "world": "gen-expenses",
+      "task": "finance_clear_over_limit_queue",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 3,
+      "runId": "v25-hard-expenses-t30.3",
+      "episodeId": "v25-hard-expenses-t30.3__finance_clear_over_limit_queue__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.03251844,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.032518
+    }
+  ]
+}

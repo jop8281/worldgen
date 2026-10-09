@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { describe, it } from 'node:test';
 import { BUILTIN_PRICES, configSchema, isPriced, loadConfig } from '../src/worldgen/config.ts';
@@ -363,6 +363,13 @@ describe('anthropicModel per-request model and effort', () => {
     );
   });
 
+  it('sends append-only blocks as text blocks, the cache breakpoint on the last (A-400)', async () => {
+    const seen: Record<string, unknown>[] = [];
+    const client = fakeClient(ok([{ type: 'tool_use', name: 'submit_plan', input: {} }]), seen);
+    await anthropicModel(twoModels, { apiKey: FAKE_KEY, client, now: ticker() }).propose({ ...req, prompt: 'Task\n\nturn 1', blocks: ['Task', 'turn 1'] });
+    assert.deepEqual(seen[0]?.['messages'], [{ role: 'user', content: [{ type: 'text', text: 'Task' }, { type: 'text', text: 'turn 1', cache_control: { type: 'ephemeral' } }] }]);
+  });
+
   it('sends exactly these request params, with output_config only when an effort is set', async () => {
     const seen: Record<string, unknown>[] = [];
     const client = fakeClient(ok([{ type: 'tool_use', name: 'submit_plan', input: {} }]), seen);
@@ -410,7 +417,14 @@ const CLI_RETRIES_EXHAUSTED = {
   errors: ['Failed to provide valid structured output after 5 attempts'],
 };
 
-type SpawnCall = { bin: string; args: readonly string[]; stdin: string; limits: { timeoutMs: number; idleMs: number } };
+type SpawnCall = { bin: string; args: readonly string[]; stdin: string; limits: { cwd: string; timeoutMs: number; idleMs: number } };
+/** An empty directory for the direct spawnClaude tests to run in (A-412). */
+const EMPTY_CWD = mkdtempSync(join(tmpdir(), 'llm-test-cwd-'));
+const withoutCwd = (limits: { cwd: string; timeoutMs: number; idleMs: number } | undefined) => {
+  if (limits === undefined) return undefined;
+  const { cwd: _, ...rest } = limits;
+  return rest;
+};
 function fakeSpawn(reply: SpawnResult | Error, seen: SpawnCall[] = []): SpawnClaude {
   return async (bin, args, stdin, limits) => {
     seen.push({ bin, args, stdin, limits });
@@ -513,7 +527,7 @@ describe('per-call timeout', () => {
   it('passes the request timeoutMs to the claude spawn instead of maxMinutes, with the 120 s stall limit', async () => {
     const seen: SpawnCall[] = [];
     await claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker()).propose({ ...req, timeoutMs: 42_000 });
-    assert.deepEqual(seen[0]?.limits, { timeoutMs: 42_000, idleMs: 120_000 });
+    assert.deepEqual(withoutCwd(seen[0]?.limits), { timeoutMs: 42_000, idleMs: 120_000 });
   });
 });
 
@@ -546,6 +560,34 @@ describe('claudeArgs', () => {
 });
 
 describe('claudeCliModel', () => {
+  it('runs each call in its own empty directory, not the OS temp dir, and removes it after (A-412)', async () => {
+    const cwds: string[] = [];
+    const spawn: SpawnClaude = async (_bin, _args, _stdin, limits) => {
+      cwds.push(limits.cwd);
+      assert.notEqual(realpathSync(limits.cwd), realpathSync(tmpdir()));
+      assert.deepEqual(readdirSync(limits.cwd), []);
+      return exit0(CLI_SUCCESS);
+    };
+    const model = claudeCliModel(cliConfig, spawn, ticker());
+    await model.propose(req);
+    await model.propose(req);
+    assert.equal(cwds.length, 2);
+    assert.notEqual(cwds[0], cwds[1]);
+    assert.deepEqual(cwds.map((d) => existsSync(d)), [false, false]);
+  });
+
+  it('sends append-only blocks as one stream-json user message on stdin, so each call reads the cache the last one wrote (A-400)', async () => {
+    const seen: SpawnCall[] = [];
+    const model = claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker());
+    await model.propose({ ...req, prompt: 'Task\n\nturn 1', blocks: ['Task', 'turn 1'] });
+    await model.propose(req);
+    assert.equal(seen[0]?.stdin, '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Task"},{"type":"text","text":"turn 1"}]}}\n');
+    const args = seen[0]?.args ?? [];
+    assert.equal(args[args.indexOf('--input-format') + 1], 'stream-json');
+    assert.equal(seen[1]?.stdin, 'make a world');
+    assert.equal(seen[1]?.args.includes('--input-format'), false);
+  });
+
   it('sends the prompt on stdin and returns structured_output, usage, total_cost_usd and wall ms', async () => {
     const seen: SpawnCall[] = [];
     const p = await claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker()).propose({ ...req, effort: 'low' });
@@ -560,7 +602,7 @@ describe('claudeCliModel', () => {
     assert.equal(seen.length, 1);
     assert.equal(seen[0]?.bin, 'claude');
     assert.equal(seen[0]?.stdin, 'make a world');
-    assert.deepEqual(seen[0]?.limits, { timeoutMs: 120_000, idleMs: 120_000 });
+    assert.deepEqual(withoutCwd(seen[0]?.limits), { timeoutMs: 120_000, idleMs: 120_000 });
     const args = seen[0]?.args ?? [];
     const systemFile = args[args.indexOf('--system-prompt-file') + 1] ?? '';
     assert.deepEqual(args, claudeArgs('claude-sonnet-5-5', { ...req, effort: 'low', maxCostUsd: cliConfig.maxCostUsd }, systemFile));
@@ -879,23 +921,23 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
     assert.deepEqual([existsSync(got.file), existsSync(dirname(got.file))], [false, false]);
   });
 
-  it('runs the CLI from the OS temp dir, not the repo', async () => {
+  it('runs the CLI in the empty directory it is given, not the OS temp dir or the repo (A-412)', async () => {
     const pwd = bin('claude-pwd', "process.stdout.write(JSON.stringify({ structured_output: { cwd: process.cwd() }, total_cost_usd: 0 }));");
-    const r = await spawnClaude(pwd, [], '', { timeoutMs: 5000, idleMs: 60_000 });
+    const r = await spawnClaude(pwd, [], '', { cwd: EMPTY_CWD, timeoutMs: 5000, idleMs: 60_000 });
     assert.equal(r.code, 0);
-    assert.equal(JSON.parse(r.stdout).structured_output.cwd.startsWith(resolve(import.meta.dirname, '..')), false);
+    assert.equal(realpathSync(JSON.parse(r.stdout).structured_output.cwd), realpathSync(EMPTY_CWD));
   });
 
   it('kills a hung CLI after the timeout with SIGTERM', async () => {
     const hang = bin('claude-hang', 'setTimeout(() => {}, 30000);');
-    const r = await spawnClaude(hang, [], '', { timeoutMs: 300, idleMs: 60_000 });
+    const r = await spawnClaude(hang, [], '', { cwd: EMPTY_CWD, timeoutMs: 300, idleMs: 60_000 });
     assert.deepEqual({ code: r.code, signal: r.signal, killed: r.killed }, { code: null, signal: 'SIGTERM', killed: 'share' });
   });
 
   it('kills a CLI that prints nothing for idleMs as stalled, long before its share', async () => {
     const silent = sh('claude-silent', 'exec sleep 30');
     const t0 = Date.now();
-    const r = await spawnClaude(silent, [], '', { timeoutMs: 60_000, idleMs: 300 });
+    const r = await spawnClaude(silent, [], '', { cwd: EMPTY_CWD, timeoutMs: 60_000, idleMs: 300 });
     const ms = Date.now() - t0;
     assert.deepEqual({ code: r.code, signal: r.signal, killed: r.killed, stdout: r.stdout }, { code: null, signal: 'SIGTERM', killed: 'stall', stdout: '' });
     assert.ok(ms >= 300 && ms < 3000, `settled after ${ms} ms`);
@@ -904,7 +946,7 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
   it('does not call a CLI stalled while it keeps printing, and kills it at its share', async () => {
     const ticking = sh('claude-ticking', 'while :; do echo tick; sleep 0.1; done');
     const t0 = Date.now();
-    const r = await spawnClaude(ticking, [], '', { timeoutMs: 3000, idleMs: 2000 });
+    const r = await spawnClaude(ticking, [], '', { cwd: EMPTY_CWD, timeoutMs: 3000, idleMs: 2000 });
     const ms = Date.now() - t0;
     assert.equal(r.killed, 'share');
     assert.ok(r.stdout.split('\n').filter((l) => l === 'tick').length >= 5, r.stdout);
@@ -915,7 +957,7 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
     // The pid is printed only after the trap is set, so the stall clock (reset by that line) cannot beat the trap.
     const stubborn = sh('claude-stubborn', 'trap "" TERM; echo $$; exec sleep 30');
     const t0 = Date.now();
-    const r = await spawnClaude(stubborn, [], '', { timeoutMs: 60_000, idleMs: 1500 }, 300);
+    const r = await spawnClaude(stubborn, [], '', { cwd: EMPTY_CWD, timeoutMs: 60_000, idleMs: 1500 }, 300);
     const ms = Date.now() - t0;
     assert.deepEqual({ code: r.code, signal: r.signal, killed: r.killed }, { code: null, signal: 'SIGKILL', killed: 'stall' });
     assert.ok(ms >= 1800 && ms < 8000, `settled after ${ms} ms`);
@@ -926,7 +968,7 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
   it('ends a CLI that printed its result and then lingers, without waiting out the stall limit, and keeps the answer', async () => {
     const lingering = sh('claude-linger', `echo '{"type":"system"}'; echo '${JSON.stringify({ ...CLI_SUCCESS, total_cost_usd: 0.42 })}'; echo $$ >&2; exec sleep 30`);
     const t0 = Date.now();
-    const r = await spawnClaude(lingering, [], '', { timeoutMs: 60_000, idleMs: 60_000 }, 300);
+    const r = await spawnClaude(lingering, [], '', { cwd: EMPTY_CWD, timeoutMs: 60_000, idleMs: 60_000 }, 300);
     const ms = Date.now() - t0;
     assert.deepEqual({ code: r.code, signal: r.signal, killed: r.killed }, { code: null, signal: 'SIGTERM', killed: 'answered' });
     assert.ok(ms >= 300 && ms < 3000, `settled after ${ms} ms`);
@@ -957,7 +999,7 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
     const ready = join(dir, 'ignore-term-ready');
     const stubborn = bin('claude-ignore-term', `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`);
     const controller = new AbortController();
-    const pending = spawnClaude(stubborn, [], '', { timeoutMs: 30000, idleMs: 60000, signal: controller.signal });
+    const pending = spawnClaude(stubborn, [], '', { cwd: EMPTY_CWD, timeoutMs: 30000, idleMs: 60000, signal: controller.signal });
     const startupDeadline = Date.now() + 5000;
     try {
       while (!existsSync(ready) && Date.now() < startupDeadline) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -976,11 +1018,11 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
   it('does not spawn an already cancelled CLI request', async () => {
     const controller = new AbortController();
     controller.abort();
-    await assert.rejects(spawnClaude(join(dir, 'missing'), [], '', { timeoutMs: 1000, idleMs: 60000, signal: controller.signal }), { name: 'AbortError' });
+    await assert.rejects(spawnClaude(join(dir, 'missing'), [], '', { cwd: EMPTY_CWD, timeoutMs: 1000, idleMs: 60000, signal: controller.signal }), { name: 'AbortError' });
   });
 
   it('rejects when the binary does not exist', async () => {
-    await assert.rejects(spawnClaude(join(dir, 'missing'), [], '', { timeoutMs: 1000, idleMs: 60_000 }), (e: unknown) => (e as { code?: unknown }).code === 'ENOENT');
+    await assert.rejects(spawnClaude(join(dir, 'missing'), [], '', { cwd: EMPTY_CWD, timeoutMs: 1000, idleMs: 60_000 }), (e: unknown) => (e as { code?: unknown }).code === 'ENOENT');
   });
 
   it('resolves when the CLI exits but a grandchild keeps its stdout open', async () => {
@@ -996,7 +1038,7 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
     const late = new Promise<never>((_, rej) => { guard = setTimeout(() => rej(new Error('spawnClaude did not settle within 5 s')), 5000); });
     let r: Awaited<ReturnType<typeof spawnClaude>> | undefined;
     try {
-      r = await Promise.race([spawnClaude(leaky, [], '', { timeoutMs: 60_000, idleMs: 60_000 }), late]);
+      r = await Promise.race([spawnClaude(leaky, [], '', { cwd: EMPTY_CWD, timeoutMs: 60_000, idleMs: 60_000 }), late]);
     } finally {
       clearTimeout(guard);
       if (existsSync(pidFile)) process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
@@ -1008,7 +1050,7 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
 
   it('keeps stdout and stderr apart', async () => {
     const both = bin('claude-both', "process.stderr.write('oops'); process.stdout.write('{}');");
-    const r = await spawnClaude(both, [], '', { timeoutMs: 5000, idleMs: 60_000 });
+    const r = await spawnClaude(both, [], '', { cwd: EMPTY_CWD, timeoutMs: 5000, idleMs: 60_000 });
     assert.deepEqual(r, { code: 0, signal: null, killed: null, stdout: '{}', stderr: 'oops' });
   });
 
@@ -1022,7 +1064,7 @@ describe('spawnClaude with a stand-in binary (no model, no network)', () => {
       'setInterval(() => {}, 1000);',
     ].join('\n'));
     const controller = new AbortController();
-    const pending = spawnClaude(stubborn, [], '', { timeoutMs: 30000, idleMs: 60000, signal: controller.signal });
+    const pending = spawnClaude(stubborn, [], '', { cwd: EMPTY_CWD, timeoutMs: 30000, idleMs: 60000, signal: controller.signal });
     let guard: ReturnType<typeof setTimeout> | undefined;
     let result: Awaited<ReturnType<typeof spawnClaude>> | undefined;
     try {

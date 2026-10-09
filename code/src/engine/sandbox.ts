@@ -211,8 +211,10 @@ process.on('unhandledRejection', () => {});
 
 function busy(on) {
   const token = Atomics.load(state, 0);
-  // Lost to the watchdog: it is reporting this stretch and ending the process.
-  if (Atomics.compareExchange(state, 0, token, token + 1) !== token) for (;;) Atomics.wait(state, 0, -1);
+  // Lost to the watchdog: it is reporting this stretch and ending the process. A token of -1 is its claim, read here
+  // after it was made; swapping -1 would succeed, and this run's answer would then follow its dead frame onto the lane,
+  // where the next request on the pooled process would read one of the two.
+  if (token === -1 || Atomics.compareExchange(state, 0, token, token + 1) !== token) for (;;) Atomics.wait(state, 0, -1);
 }
 /** One frame: a 4-byte little-endian length, then the v8-serialized message. Built whole before any write. */
 function sendFrame(body) {

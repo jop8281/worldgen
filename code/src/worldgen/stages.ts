@@ -12,7 +12,7 @@
 import { ENGINE_ERROR_CODES, OP_SUCCESS_STATUS, issue, machineOf, routeKey, type CheckIssue, type CheckReport, type Difficulty, type IssueCode, type Section, type World, type WorldStats } from '#engine';
 import { assertNever } from '#lib/never';
 import { fixtureFed } from './input-coverage.ts';
-import { HARD_TASK_ACTIONS, MIX_WITHIN, actionKey, actionRouteIds, planCoverage, plannedItems, pressurePlanIssues, pressureUnreachable, seedPlanIssues, taskKindLines, type Plan, type PlanList } from './plan.ts';
+import { HARD_TASK_ACTIONS, HARD_TASK_KINDS, MIX_WITHIN, actionKey, actionRouteIds, planCoverage, plannedItems, pressurePlanIssues, pressureUnreachable, seedPlanIssues, taskKindLines, type Plan, type PlanList } from './plan.ts';
 
 export const STAGE_IDS = ['model', 'workflow', 'seed', 'tasks'] as const;
 export type StageId = (typeof STAGE_IDS)[number];
@@ -41,6 +41,13 @@ const TEST_RUN_CODES: ReadonlySet<IssueCode> = new Set(['test.failed', 'snippet.
  */
 export function isTestRun(i: CheckIssue): boolean {
   return i.path[0] === 'tests' && TEST_RUN_CODES.has(i.code);
+}
+
+/** `isTestRun` for one entry of an issue-set key, `code@path: found` (policy.ts `issueSetKey`). */
+export function isTestRunEntry(entry: string): boolean {
+  const at = entry.indexOf('@');
+  const code = entry.slice(0, at);
+  return at > 0 && [...TEST_RUN_CODES].some((c) => c === code) && /^tests(?:[/:]|$)/.test(entry.slice(at + 1));
 }
 
 export type Stage = {
@@ -105,8 +112,8 @@ export type PressureCheck = {
   readonly need: string;
   readonly met: boolean;
   readonly exempt: string | null;
-  /** Where a miss is repaired: the seed when it lacks the rows, else the task. */
-  readonly path: readonly ['seed' | 'tasks', string];
+  /** Where a miss is repaired: the seed when it lacks the rows, the plan when it pressed what no reference can show, else the task. */
+  readonly path: readonly ['seed' | 'tasks', string] | readonly ['plan', 'tasks', number, 'pressure', 'distractors'];
   /** What the trace and the seed show, with the numbers a repair needs. */
   readonly found: string;
 };
@@ -215,6 +222,7 @@ export function seedNeedIssues(plan: Plan, world: World, stats: Pick<WorldStats,
 export function pressureChecks(report: OkReport, plan: Plan): readonly PressureCheck[] {
   const fed = fixtureFed(report.world);
   const planned = new Map(plan.tasks.map((t) => [t.id, t]));
+  const planIndex = new Map(plan.tasks.map((t, i) => [t.id, i]));
   const out: PressureCheck[] = [];
   for (const v of Object.values(report.verdicts)) {
     if (v.difficulty === 'hard') {
@@ -241,13 +249,20 @@ export function pressureChecks(report: OkReport, plan: Plan): readonly PressureC
       const rows = report.stats.rows[e] ?? 0;
       // With two rows the seed can hold a near-duplicate, so a miss is the reference's filter to change, not the seed's (A-317).
       const seeded = rows >= 2;
+      // A distractor counts only on an entity the reference changes rows of (A-230). A claim on one the task only looks up,
+      // as the agent of a ticket assignment, no seed or reference can meet, so it is the plan's to fix (A-406). When a
+      // planned action of the task acts on the entity, the reference left out a write it owes, so the task repairs it.
+      const plannedOn = (planned.get(v.taskId)?.actions ?? []).some((a) => plan.workflows.some((w) => w.entity === e && w.actions.some((wa) => actionKey(wa) === actionKey(a))));
+      const lookup = !v.solutionChangedEntities.includes(e) && !plannedOn;
       out.push({
         task: v.taskId, need: `distractors: a filtered ${e} list returns a row the reference leaves unchanged`, met: v.solutionDistractorEntities.includes(e),
         exempt: fed.has(e) ? `${e} is imported; the input decides which near-duplicate rows exist, and none were fabricated` : null,
-        path: seeded ? ['tasks', v.taskId] : ['seed', e],
-        found: seeded
-          ? `${rows} ${e} rows seeded, and no filtered ${e} list in the reference returned a row it left unchanged`
-          : `${rows} ${e} rows seeded; seed at least 2 that one filtered list returns`,
+        path: lookup ? ['plan', 'tasks', planIndex.get(v.taskId) ?? 0, 'pressure', 'distractors'] : seeded ? ['tasks', v.taskId] : ['seed', e],
+        found: lookup
+          ? `the reference changes no ${e} row, so no ${e} row can be a distractor: a distractor is a near-duplicate of a row the task changes`
+          : seeded
+            ? `${rows} ${e} rows seeded, and no filtered ${e} list in the reference returned a row it left unchanged`
+            : `${rows} ${e} rows seeded; seed at least 2 that one filtered list returns`,
       });
     }
     for (const es of (p?.states ?? []).filter((pressed) => !pressureUnreachable(plan, pressed))) {
@@ -297,7 +312,7 @@ export const PLAN_BRIEF =
   "Decide feasibility first by asking what the request's core value is: it is feasible only when that value is stateful records an agent reads and changes through an API, with actions it performs on them, such as a job queue or an order desk; if the core value is the computation itself, such as encoding media, rendering, training a model, or a user interface, or if the request is harmful, refuse with verdict refuse, why naming the reason, feasibleIf naming a request about records that would be feasible, and empty workflows and tasks, and never reinterpret the request as a management or control-plane service for the thing it names, since a request named for the thing wants the thing. " +
 
   'Name the real software it mirrors, then list its entities, workflows with their actions, jobs, routes (for an OpenAPI input, every operation in scope by method and path, one that a workflow action builds taking that action\'s name as its id), acceptanceTests, a small seed (rowsPerEntity just over one list page on the main entity and a handful elsewhere, except that an imported CSV table keeps exactly its rows and values: its rowsPerEntity is the CSV row count, every value of its status column is a workflow state, and generated rows go only to entities with no fixture, with a mix that spreads every state and a stateMix giving, per workflow entity whose states a state field holds, the percent of its rows in each state, and none for an entity whose every workflow declares a removal or descriptive lifecycle), and at least three tasks graded easy, medium and hard that differ in shape, not only in size: at least one hard task lists in its actions ' +
-  `${HARD_TASK_ACTIONS} or more distinct workflow actions its reference solution calls in turn, such as assigning a row and then resolving it, and at least one task has a task kind (one of ${taskKindLines().join('; ')});` +
+  `${HARD_TASK_ACTIONS} or more distinct workflow actions its reference solution calls in turn, such as assigning a row and then resolving it, and every hard task has a hard task kind (${HARD_TASK_KINDS.join(', ')}), with seed.mix naming the rows that kind needs, such as rows on either side of a cutoff, a misleading note or near-miss rows past the first page (task kinds: ${taskKindLines().join('; ')});` +
   ' write a rule enforced by actions or jobs as { rule, by, test }, by naming the enforcing action or job keys and test naming the id of the acceptance test that exercises the rule through that enforcement, each acceptance test bound by at most one rule and, when by names actions, its bound test exercising one of them; write a rule only the data model enforces as { rule, schema } with the reason the schema enforces it; keep plain text only for context neither enforces. ' +
   'Declare lifecycle: { representation: descriptive or removal, reason } on a workflow whose states no state field holds, such as a derived flag or deletion by removal, because a state-named workflow with no machine and no declaration is rejected. ' +
   'Set clock.start and clock.tick explicitly, choosing deterministic time after imported historical events, distinguish future scheduled events, and record the clock choice in assumptions. ' +
@@ -383,7 +398,7 @@ export const STAGES = {
     reads: ['entities', 'routes', 'actions', 'jobs', 'seed'],
     brief:
       'Write the tasks section with every task in the plan, at least three covering easy, medium and hard. ' +
-      'Each task has an instruction, a grader, a solution that uses the public API and calls through ctx.api each action the plan lists for the task, and decoys on medium and hard tasks, and a task the plan gives a task kind is built as that task kind says (' +
+      'Each task has an instruction, a grader, a solution that uses the public API and calls through ctx.api each action the plan lists for the task, and decoys on medium and hard tasks, and a task the plan gives a task kind is built as that task kind says, so that an agent that skims, trusts the first plausible row or follows planted text fails a hard one (' +
       `${taskKindLines().join('; ')}). ` +
       'Give each medium and hard task at least one decoy that does part of the work and scores above 0 but below 1, such as one that fixes only the first page of matches, and make each decoy script do exactly what its why says: Stripe-mode lists are newest first, so a list read right after a write (for example GET /v1/refunds?limit=1) returns the row the script just created, and a decoy that edits that row scores 1 like the solution. ' +
       'In every grader, call ctx.guardChanges with each row the task may change, its kind and its exact fields, and give the task an allows list taken from its instruction, not from what the solution writes (each entity, kind, exact update fields, and a where of field values that picks the target rows), so any collateral write scores 0. ' +
