@@ -1,0 +1,523 @@
+{
+  "runId": "j163-pilot",
+  "models": [
+    "claude-sonnet-5-5"
+  ],
+  "episodesPerCell": 3,
+  "budgetUsd": 13.96,
+  "episodeBudgetUsd": 0.75,
+  "spentUsd": 2.187461,
+  "stop": {
+    "kind": "complete"
+  },
+  "tasks": [
+    {
+      "world": "helpdesk",
+      "task": "assign_newest_acme_ticket",
+      "labeled": "easy",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": true
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_printer_ticket",
+      "labeled": "medium",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_enterprise_tickets",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "ship_ada_paid_order",
+      "labeled": "easy",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": true
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "cancel_customer_unpaid_orders",
+      "labeled": "medium",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "refund_large_gb_pro_orders",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    }
+  ],
+  "cells": [
+    {
+      "world": "helpdesk",
+      "task": "assign_newest_acme_ticket",
+      "labeled": "easy",
+      "model": "claude-sonnet-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.254977,
+      "usdPerPass": 0.084992,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_printer_ticket",
+      "labeled": "medium",
+      "model": "claude-sonnet-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.110846,
+      "usdPerPass": 0.036949,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_enterprise_tickets",
+      "labeled": "hard",
+      "model": "claude-sonnet-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 1.346338,
+      "usdPerPass": 0.448779,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "ship_ada_paid_order",
+      "labeled": "easy",
+      "model": "claude-sonnet-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.148812,
+      "usdPerPass": 0.049604,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "cancel_customer_unpaid_orders",
+      "labeled": "medium",
+      "model": "claude-sonnet-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.120916,
+      "usdPerPass": 0.040305,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "refund_large_gb_pro_orders",
+      "labeled": "hard",
+      "model": "claude-sonnet-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.205573,
+      "usdPerPass": 0.068524,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    }
+  ],
+  "episodes": [
+    {
+      "world": "helpdesk",
+      "task": "assign_newest_acme_ticket",
+      "labeled": "easy",
+      "model": "claude-sonnet-5-5",
+      "index": 1,
+      "runId": "j163-pilot.1",
+      "episodeId": "j163-pilot.1__assign_newest_acme_ticket__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.1456218,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.145622
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_printer_ticket",
+      "labeled": "medium",
+      "model": "claude-sonnet-5-5",
+      "index": 1,
+      "runId": "j163-pilot.2",
+      "episodeId": "j163-pilot.2__escalate_breached_printer_ticket__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0435052,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.043505
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_enterprise_tickets",
+      "labeled": "hard",
+      "model": "claude-sonnet-5-5",
+      "index": 1,
+      "runId": "j163-pilot.3",
+      "episodeId": "j163-pilot.3__escalate_breached_enterprise_tickets__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.4901222,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.490122
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "ship_ada_paid_order",
+      "labeled": "easy",
+      "model": "claude-sonnet-5-5",
+      "index": 1,
+      "runId": "j163-pilot.4",
+      "episodeId": "j163-pilot.4__ship_ada_paid_order__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0934286,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.093429
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "cancel_customer_unpaid_orders",
+      "labeled": "medium",
+      "model": "claude-sonnet-5-5",
+      "index": 1,
+      "runId": "j163-pilot.5",
+      "episodeId": "j163-pilot.5__cancel_customer_unpaid_orders__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.052213,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.052213
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "refund_large_gb_pro_orders",
+      "labeled": "hard",
+      "model": "claude-sonnet-5-5",
+      "index": 1,
+      "runId": "j163-pilot.6",
+      "episodeId": "j163-pilot.6__refund_large_gb_pro_orders__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.1029814,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.102981
+    },
+    {
+      "world": "helpdesk",
+      "task": "assign_newest_acme_ticket",
+      "labeled": "easy",
+      "model": "claude-sonnet-5-5",
+      "index": 2,
+      "runId": "j163-pilot.7",
+      "episodeId": "j163-pilot.7__assign_newest_acme_ticket__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0482704,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.04827
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_printer_ticket",
+      "labeled": "medium",
+      "model": "claude-sonnet-5-5",
+      "index": 2,
+      "runId": "j163-pilot.8",
+      "episodeId": "j163-pilot.8__escalate_breached_printer_ticket__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.034198,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.034198
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_enterprise_tickets",
+      "labeled": "hard",
+      "model": "claude-sonnet-5-5",
+      "index": 2,
+      "runId": "j163-pilot.9",
+      "episodeId": "j163-pilot.9__escalate_breached_enterprise_tickets__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.4547786,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.454779
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "ship_ada_paid_order",
+      "labeled": "easy",
+      "model": "claude-sonnet-5-5",
+      "index": 2,
+      "runId": "j163-pilot.10",
+      "episodeId": "j163-pilot.10__ship_ada_paid_order__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0281198,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.02812
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "cancel_customer_unpaid_orders",
+      "labeled": "medium",
+      "model": "claude-sonnet-5-5",
+      "index": 2,
+      "runId": "j163-pilot.11",
+      "episodeId": "j163-pilot.11__cancel_customer_unpaid_orders__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0298474,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.029847
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "refund_large_gb_pro_orders",
+      "labeled": "hard",
+      "model": "claude-sonnet-5-5",
+      "index": 2,
+      "runId": "j163-pilot.12",
+      "episodeId": "j163-pilot.12__refund_large_gb_pro_orders__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0521462,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.052146
+    },
+    {
+      "world": "helpdesk",
+      "task": "assign_newest_acme_ticket",
+      "labeled": "easy",
+      "model": "claude-sonnet-5-5",
+      "index": 3,
+      "runId": "j163-pilot.13",
+      "episodeId": "j163-pilot.13__assign_newest_acme_ticket__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0610852,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.061085
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_printer_ticket",
+      "labeled": "medium",
+      "model": "claude-sonnet-5-5",
+      "index": 3,
+      "runId": "j163-pilot.14",
+      "episodeId": "j163-pilot.14__escalate_breached_printer_ticket__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0331426,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.033143
+    },
+    {
+      "world": "helpdesk",
+      "task": "escalate_breached_enterprise_tickets",
+      "labeled": "hard",
+      "model": "claude-sonnet-5-5",
+      "index": 3,
+      "runId": "j163-pilot.15",
+      "episodeId": "j163-pilot.15__escalate_breached_enterprise_tickets__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.4014374,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.401437
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "ship_ada_paid_order",
+      "labeled": "easy",
+      "model": "claude-sonnet-5-5",
+      "index": 3,
+      "runId": "j163-pilot.16",
+      "episodeId": "j163-pilot.16__ship_ada_paid_order__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0272638,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.027264
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "cancel_customer_unpaid_orders",
+      "labeled": "medium",
+      "model": "claude-sonnet-5-5",
+      "index": 3,
+      "runId": "j163-pilot.17",
+      "episodeId": "j163-pilot.17__cancel_customer_unpaid_orders__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0388554,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.038855
+    },
+    {
+      "world": "gen-orders-customers",
+      "task": "refund_large_gb_pro_orders",
+      "labeled": "hard",
+      "model": "claude-sonnet-5-5",
+      "index": 3,
+      "runId": "j163-pilot.18",
+      "episodeId": "j163-pilot.18__refund_large_gb_pro_orders__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.0504452,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.050445
+    }
+  ]
+}
