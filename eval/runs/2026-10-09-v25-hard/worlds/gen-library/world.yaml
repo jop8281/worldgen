@@ -1,0 +1,732 @@
+format: 1
+meta:
+  name: gen_library
+  description: "A public library circulation desk: patrons borrow copies of books, return them, renew them, place and fulfil holds on a title, and pay or waive the overdue and lost-item fines that returns and losses create. Copies are items, titles are books, and each loan, hold and fine has its own status workflow."
+  resembles: Koha-style public library circulation API
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  patron:
+    description: A library cardholder who borrows items and owes fines.
+    idPrefix: pat
+    fields:
+      first_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      last_name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      card_number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      category:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - adult
+          - child
+          - senior
+        default: adult
+  book:
+    description: A title in the catalogue. Copies of a title are items.
+    idPrefix: bok
+    fields:
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      author:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      isbn:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  item:
+    description: One physical copy of a book, with a barcode, a replacement cost and a circulation status.
+    idPrefix: itm
+    fields:
+      book_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: book
+        onDelete: restrict
+      barcode:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      replacement_cost:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - available
+          - on_loan
+          - lost
+        initial: available
+        transitions:
+          available:
+            - on_loan
+            - lost
+          on_loan:
+            - available
+            - lost
+          lost: []
+  loan:
+    description: A checkout of one item by one patron, with loaned_at, due_at, returned_at, renewals and a status.
+    idPrefix: lon
+    fields:
+      item_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: item
+        onDelete: restrict
+      patron_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: patron
+        onDelete: restrict
+      loaned_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      due_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      returned_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      renewals:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - active
+          - returned
+          - lost
+        initial: active
+        transitions:
+          active:
+            - returned
+            - lost
+          returned: []
+          lost: []
+  hold:
+    description: A patron's request for the next available copy of a book, with placed_at and a status.
+    idPrefix: hld
+    fields:
+      patron_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: patron
+        onDelete: restrict
+      book_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: book
+        onDelete: restrict
+      placed_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - waiting
+          - fulfilled
+          - cancelled
+        initial: waiting
+        transitions:
+          waiting:
+            - fulfilled
+            - cancelled
+          fulfilled: []
+          cancelled: []
+  fine:
+    description: "A charge on a patron: an overdue fine or a lost-item charge, with an amount in cents and a status."
+    idPrefix: fin
+    fields:
+      patron_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: patron
+        onDelete: restrict
+      loan_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: loan
+        onDelete: restrict
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - overdue
+          - lost_item
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - open
+          - paid
+          - waived
+        initial: open
+        transitions:
+          open:
+            - paid
+            - waived
+          paid: []
+          waived: []
+routes:
+  list_patrons:
+    op: list
+    entity: patron
+    filters:
+      - card_number
+      - email
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /patrons
+    description: Find a patron by card number or email.
+  get_patron:
+    op: get
+    entity: patron
+    method: GET
+    path: /patrons/{id}
+    description: Read one patron.
+  create_patron:
+    op: create
+    entity: patron
+    method: POST
+    path: /patrons
+    description: Register a patron.
+  list_books:
+    op: list
+    entity: book
+    filters: []
+    search:
+      - title
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /books
+    description: Search the catalogue by title.
+  get_book:
+    op: get
+    entity: book
+    method: GET
+    path: /books/{id}
+    description: Read one book.
+  create_book:
+    op: create
+    entity: book
+    method: POST
+    path: /books
+    description: Add a title to the catalogue.
+  list_items:
+    op: list
+    entity: item
+    filters:
+      - book_id
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /items
+    description: List the copies of a book, filtered by status.
+  get_item:
+    op: get
+    entity: item
+    method: GET
+    path: /items/{id}
+    description: Read one copy and its circulation status.
+  create_item:
+    op: create
+    entity: item
+    method: POST
+    path: /items
+    description: Add a copy of a book.
+  list_loans:
+    op: list
+    entity: loan
+    filters:
+      - patron_id
+      - item_id
+      - status
+    search: []
+    sort:
+      - due_at
+    pageSize: 25
+    method: GET
+    path: /loans
+    description: List loans by patron, item or status, soonest due first.
+  get_loan:
+    op: get
+    entity: loan
+    method: GET
+    path: /loans/{id}
+    description: Read one loan.
+  list_holds:
+    op: list
+    entity: hold
+    filters:
+      - patron_id
+      - book_id
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /holds
+    description: List holds by patron, book or status.
+  get_hold:
+    op: get
+    entity: hold
+    method: GET
+    path: /holds/{id}
+    description: Read one hold.
+  list_fines:
+    op: list
+    entity: fine
+    filters:
+      - patron_id
+      - loan_id
+      - kind
+      - status
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /fines
+    description: List fines by patron, loan, kind or status.
+  get_fine:
+    op: get
+    entity: fine
+    method: GET
+    path: /fines/{id}
+    description: Read one fine.
+actions:
+  checkout_item:
+    method: POST
+    path: /checkouts
+    description: Check a copy out to a patron. The copy must be available. The loan runs 14 days from now.
+    input:
+      item_id:
+        type: string
+        description: Id of the item (copy) to check out.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      patron_id:
+        type: string
+        description: Id of the patron borrowing the item.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const item = ctx.db.get('item', ctx.body.item_id); if (item === null) ctx.fail(404, 'not_found', 'item ' + ctx.body.item_id + ' not found'); const patron = ctx.db.get('patron', ctx.body.patron_id); if (patron === null) ctx.fail(404, 'not_found', 'patron ' + ctx.body.patron_id + ' not found'); if (item.status !== 'available') ctx.fail(409, 'item.unavailable', 'item ' + item.barcode + ' is ' + item.status); const now = ctx.now(); const loan = ctx.db.create('loan', { item_id: item.id, patron_id: patron.id, loaned_at: now, due_at: ctx.time.plus(now, '14d'), returned_at: null, renewals: 0, status: 'active' }); ctx.db.update('item', item.id, { status: 'on_loan' }); return { status: 201, body: loan }; }"
+  return_item:
+    method: POST
+    path: /items/{id}/return
+    description: Return a copy. The active loan is marked returned and the copy is available again. A return past due opens an overdue fine of 25 cents per full day late.
+    input: {}
+    handler: "(ctx) => { const item = ctx.db.get('item', ctx.params.id); if (item === null) ctx.fail(404, 'not_found', 'item ' + ctx.params.id + ' not found'); const loans = ctx.db.list('loan', { where: { item_id: item.id, status: 'active' } }); if (loans.length === 0) ctx.fail(409, 'item.not_on_loan', 'item ' + item.barcode + ' is not on loan'); const loan = loans[0]; const now = ctx.now(); let days = 0; while (ctx.time.plus(loan.due_at, (days + 1) + 'd') <= now) days = days + 1; const returned = ctx.db.update('loan', loan.id, { status: 'returned', returned_at: now }); ctx.db.update('item', item.id, { status: 'available' }); if (days > 0) ctx.db.create('fine', { patron_id: loan.patron_id, loan_id: loan.id, kind: 'overdue', amount: days * 25, status: 'open' }); return { status: 200, body: returned }; }"
+  report_lost:
+    method: POST
+    path: /loans/{id}/report_lost
+    description: Report an active loan lost. The loan and its copy become lost and a lost_item fine for the copy's replacement cost is opened.
+    input: {}
+    handler: "(ctx) => { const loan = ctx.db.get('loan', ctx.params.id); if (loan === null) ctx.fail(404, 'not_found', 'loan ' + ctx.params.id + ' not found'); if (loan.status !== 'active') ctx.fail(409, 'loan.not_active', 'loan ' + loan.id + ' is ' + loan.status); const item = ctx.db.get('item', loan.item_id); ctx.db.update('item', item.id, { status: 'lost' }); ctx.db.create('fine', { patron_id: loan.patron_id, loan_id: loan.id, kind: 'lost_item', amount: item.replacement_cost, status: 'open' }); return { status: 200, body: ctx.db.update('loan', loan.id, { status: 'lost' }) }; }"
+  renew_loan:
+    method: POST
+    path: /loans/{id}/renew
+    description: Renew an active loan once, adding 14 days to due_at. Refused while another patron has a waiting hold on the book.
+    input: {}
+    handler: "(ctx) => { const loan = ctx.db.get('loan', ctx.params.id); if (loan === null) ctx.fail(404, 'not_found', 'loan ' + ctx.params.id + ' not found'); if (loan.status !== 'active') ctx.fail(409, 'loan.not_active', 'loan ' + loan.id + ' is ' + loan.status); if (loan.renewals >= 1) ctx.fail(409, 'loan.renew_limit', 'loan ' + loan.id + ' has already been renewed once'); const item = ctx.db.get('item', loan.item_id); const others = ctx.db.list('hold', { where: { book_id: item.book_id, status: 'waiting' } }).filter((h) => h.patron_id !== loan.patron_id); if (others.length > 0) ctx.fail(409, 'loan.renewal_blocked', 'another patron is waiting for this book'); return { status: 200, body: ctx.db.update('loan', loan.id, { due_at: ctx.time.plus(loan.due_at, '14d'), renewals: loan.renewals + 1 }) }; }"
+  place_hold:
+    method: POST
+    path: /holds
+    description: Place a hold on a book for a patron. A patron has at most one waiting hold per book.
+    input:
+      patron_id:
+        type: string
+        description: Id of the patron placing the hold.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      book_id:
+        type: string
+        description: Id of the book (title) to hold.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const patron = ctx.db.get('patron', ctx.body.patron_id); if (patron === null) ctx.fail(404, 'not_found', 'patron ' + ctx.body.patron_id + ' not found'); const book = ctx.db.get('book', ctx.body.book_id); if (book === null) ctx.fail(404, 'not_found', 'book ' + ctx.body.book_id + ' not found'); const dup = ctx.db.list('hold', { where: { patron_id: patron.id, book_id: book.id, status: 'waiting' } }); if (dup.length > 0) ctx.fail(409, 'hold.duplicate', 'patron ' + patron.card_number + ' already has a waiting hold on ' + book.title); return { status: 201, body: ctx.db.create('hold', { patron_id: patron.id, book_id: book.id, placed_at: ctx.now(), status: 'waiting' }) }; }"
+  cancel_hold:
+    method: POST
+    path: /holds/{id}/cancel
+    description: Cancel a waiting hold. Any other status is refused.
+    input: {}
+    handler: "(ctx) => { const h = ctx.db.get('hold', ctx.params.id); if (h === null) ctx.fail(404, 'not_found', 'hold ' + ctx.params.id + ' not found'); if (h.status !== 'waiting') ctx.fail(409, 'hold.not_waiting', 'hold ' + h.id + ' is ' + h.status); return { status: 200, body: ctx.db.update('hold', h.id, { status: 'cancelled' }) }; }"
+  fulfill_hold:
+    method: POST
+    path: /holds/{id}/fulfill
+    description: Fulfil the earliest-placed waiting hold on a book with an available copy of that book. The hold's patron gets a new active loan of the copy.
+    input:
+      item_id:
+        type: string
+        description: Id of the available copy of the held book to give the patron.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const h = ctx.db.get('hold', ctx.params.id); if (h === null) ctx.fail(404, 'not_found', 'hold ' + ctx.params.id + ' not found'); if (h.status !== 'waiting') ctx.fail(409, 'hold.not_waiting', 'hold ' + h.id + ' is ' + h.status); const item = ctx.db.get('item', ctx.body.item_id); if (item === null) ctx.fail(404, 'not_found', 'item ' + ctx.body.item_id + ' not found'); if (item.book_id !== h.book_id) ctx.fail(409, 'item.wrong_book', 'item ' + item.barcode + ' is not a copy of the held book'); if (item.status !== 'available') ctx.fail(409, 'item.unavailable', 'item ' + item.barcode + ' is ' + item.status); const waiting = ctx.db.list('hold', { where: { book_id: h.book_id, status: 'waiting' } }).sort((x, y) => (x.placed_at === y.placed_at ? (x.id < y.id ? -1 : 1) : (x.placed_at < y.placed_at ? -1 : 1))); if (waiting[0].id !== h.id) ctx.fail(409, 'hold.not_earliest', 'hold ' + h.id + ' is not the earliest waiting hold on this book'); const now = ctx.now(); ctx.db.update('item', item.id, { status: 'on_loan' }); ctx.db.create('loan', { item_id: item.id, patron_id: h.patron_id, loaned_at: now, due_at: ctx.time.plus(now, '14d'), returned_at: null, renewals: 0, status: 'active' }); return { status: 200, body: ctx.db.update('hold', h.id, { status: 'fulfilled' }) }; }"
+  pay_fine:
+    method: POST
+    path: /fines/{id}/pay
+    description: Pay an open fine in full. A fine can be paid or waived once.
+    input: {}
+    handler: "(ctx) => { const f = ctx.db.get('fine', ctx.params.id); if (f === null) ctx.fail(404, 'not_found', 'fine ' + ctx.params.id + ' not found'); if (f.status !== 'open') ctx.fail(409, 'fine.not_open', 'fine ' + f.id + ' is ' + f.status); return { status: 200, body: ctx.db.update('fine', f.id, { status: 'paid' }) }; }"
+  waive_fine:
+    method: POST
+    path: /fines/{id}/waive
+    description: Waive an open fine in full. A fine can be paid or waived once.
+    input: {}
+    handler: "(ctx) => { const f = ctx.db.get('fine', ctx.params.id); if (f === null) ctx.fail(404, 'not_found', 'fine ' + ctx.params.id + ' not found'); if (f.status !== 'open') ctx.fail(409, 'fine.not_open', 'fine ' + f.id + ' is ' + f.status); return { status: 200, body: ctx.db.update('fine', f.id, { status: 'waived' }) }; }"
+jobs: {}
+fixtures: {}
+seed:
+  patron: |-
+    (ctx) => {
+    const first = ['Amara','Ben','Clara','Dev','Elena','Felix','Grace','Hiro','Isla','Jonah','Kira','Liam','Maya','Nate','Olivia','Pedro','Quinn','Rosa','Sam','Tara','Uma','Victor','Wen','Xavier','Yusuf','Zara','Ada','Milo'];
+    const last = ['Okafor','Brennan','Moreau','Iyer','Lindqvist','Ortega','Kim','Tanaka','Schmidt','Walsh','Reyes','Dubois','Haddad','Ng','Murphy','Silva','Quincy','Lopez','Park','Ahmed','Berg','Costa','Yang','Foster','Mendez','Shah','Adler','Ruiz'];
+    return first.map((f, i) => ({ first_name: f, last_name: last[i], email: f.toLowerCase() + '.' + last[i].toLowerCase() + '@example.net', card_number: 'LC-' + String(2001 + i), category: i % 5 === 0 ? 'senior' : (i % 4 === 0 ? 'child' : 'adult') }));
+    }
+  book: |-
+    (ctx) => {
+    return [
+    { title: 'The Glass Orchard', author: 'Helen Varga', isbn: '978-0-30-745112-8' },
+    { title: 'Salt and Iron', author: 'Marcus Oyelaran', isbn: null },
+    { title: 'A Field Guide to Night Birds', author: 'Ruth Ashdown', isbn: '978-1-40-882731-4' },
+    { title: 'The Lantern Keeper', author: 'Jun Sato', isbn: '978-0-57-613290-6' },
+    { title: 'Coastal Weather Patterns', author: 'Dana Whitcombe', isbn: null },
+    { title: 'Letters from Ardent Street', author: 'Simon Achebe', isbn: '978-0-22-190457-3' },
+    { title: 'The Quiet Engine', author: 'Lucia Ferraro', isbn: '978-1-93-402288-9' },
+    { title: 'Bread and Brine', author: 'Owen Mballa', isbn: null }
+    ];
+    }
+  item: |-
+    (ctx) => {
+    const books = ctx.rows('book');
+    const costs = [1850, 2400, 3200, 1295, 4500, 2750, 5995, 1600];
+    const rows = [];
+    for (let k = 0; k < 40; k++) {
+    const status = k < 15 ? 'on_loan' : (k < 36 ? 'available' : 'lost');
+    rows.push({ book_id: books[k % 8].id, barcode: 'LIB-' + String(10001 + k), replacement_cost: costs[k % 8], status: status });
+    }
+    return rows;
+    }
+  loan: |-
+    (ctx) => {
+    const items = ctx.rows('item');
+    const patrons = ctx.rows('patron');
+    const now = ctx.now();
+    const ago = (d) => ctx.time.minus(now, d + 'd');
+    const rows = [];
+    for (let j = 0; j < 15; j++) {
+    const loaned = ago(3 + j * 2);
+    const renewals = j % 3 === 0 ? 1 : 0;
+    rows.push({ item_id: items[j].id, patron_id: patrons[j % 6].id, loaned_at: loaned, due_at: ctx.time.plus(loaned, (14 + renewals * 14) + 'd'), returned_at: null, renewals: renewals, status: 'active' });
+    }
+    for (let j = 0; j < 12; j++) {
+    const loaned = ago(40 + j * 2);
+    const retDays = j % 4 === 3 ? 10 : 16 + (j % 4) * 3;
+    rows.push({ item_id: items[15 + j].id, patron_id: patrons[(j * 7 + 3) % 28].id, loaned_at: loaned, due_at: ctx.time.plus(loaned, '14d'), returned_at: ctx.time.plus(loaned, retDays + 'd'), renewals: 0, status: 'returned' });
+    }
+    for (let j = 0; j < 3; j++) {
+    const loaned = ago(50 + j * 5);
+    rows.push({ item_id: items[36 + j].id, patron_id: patrons[(20 + j) % 28].id, loaned_at: loaned, due_at: ctx.time.plus(loaned, '14d'), returned_at: null, renewals: 0, status: 'lost' });
+    }
+    return rows;
+    }
+  hold: |-
+    (ctx) => {
+    const p = ctx.rows('patron');
+    const b = ctx.rows('book');
+    const now = ctx.now();
+    const ago = (d) => ctx.time.minus(now, d + 'd');
+    const h = (pi, bi, days, status) => ({ patron_id: p[pi].id, book_id: b[bi].id, placed_at: ago(days), status: status });
+    return [
+    h(4, 0, 9, 'waiting'),
+    h(9, 0, 7, 'waiting'),
+    h(14, 0, 5, 'waiting'),
+    h(20, 3, 4, 'waiting'),
+    h(22, 5, 2, 'waiting'),
+    h(2, 1, 30, 'fulfilled'),
+    h(7, 2, 25, 'fulfilled'),
+    h(11, 4, 20, 'fulfilled'),
+    h(17, 6, 15, 'cancelled'),
+    h(25, 7, 12, 'cancelled')
+    ];
+    }
+  fine: |-
+    (ctx) => {
+    const loans = ctx.rows('loan');
+    const items = ctx.rows('item');
+    const late = [0, 1, 2, 4, 5, 6, 8, 9, 10];
+    const overdueStatus = ['open', 'open', 'open', 'paid', 'paid', 'paid', 'paid', 'waived', 'waived'];
+    const rows = [];
+    late.forEach((j, n) => {
+    const loan = loans[15 + j];
+    const days = [2, 5, 8][j % 4];
+    rows.push({ patron_id: loan.patron_id, loan_id: loan.id, kind: 'overdue', amount: days * 25, status: overdueStatus[n] });
+    });
+    for (let k = 0; k < 3; k++) {
+    const loan = loans[27 + k];
+    rows.push({ patron_id: loan.patron_id, loan_id: loan.id, kind: 'lost_item', amount: items[36 + k].replacement_cost, status: 'open' });
+    }
+    return rows;
+    }
+tests:
+  t_checkout_and_return:
+    description: Create a patron, book and copy, check the copy out, then return it.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.a1@example.org', card_number: 'TST-A-0001', category: 'adult' }); ctx.assert(p.status === 201, 'create patron: ' + JSON.stringify(p.body)); const b = ctx.api('POST', '/books', { title: 'Test Book A', author: 'Test Author', isbn: null }); ctx.assert(b.status === 201, 'create book: ' + JSON.stringify(b.body)); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-A-ITEM', replacement_cost: 4500 }); ctx.assert(i.status === 201, 'create item: ' + JSON.stringify(i.body)); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201 && c.body.status === 'active', 'checkout: ' + JSON.stringify(c.body)); ctx.assert(typeof c.body.due_at === 'string' && c.body.due_at > c.body.loaned_at, 'due date after loan date'); ctx.assert(ctx.api('GET', '/items/' + i.body.id).body.status === 'on_loan', 'item should be on_loan'); const r = ctx.api('POST', '/items/' + i.body.id + '/return', {}); ctx.assert(r.status === 200 && r.body.status === 'returned', 'return: ' + JSON.stringify(r.body)); ctx.assert(ctx.api('GET', '/items/' + i.body.id).body.status === 'available', 'item should be available'); }"
+  t_checkout_unavailable:
+    description: Check a copy out to one patron, then try to check the same copy out to another; the second answers 409 item.unavailable.
+    script: "(ctx) => { const p1 = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.b1@example.org', card_number: 'TST-B-0001', category: 'adult' }); const p2 = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Other', email: 'test.reader.b2@example.org', card_number: 'TST-B-0002', category: 'adult' }); ctx.assert(p1.status === 201 && p2.status === 201, 'create patrons'); const b = ctx.api('POST', '/books', { title: 'Test Book B', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-B-ITEM', replacement_cost: 4500 }); ctx.assert(i.status === 201, 'create item'); const first = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p1.body.id }); ctx.assert(first.status === 201, 'first checkout'); const second = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p2.body.id }); ctx.assert(second.status === 409 && second.body.error.code === 'item.unavailable', 'second checkout: ' + JSON.stringify(second.body)); }"
+  t_return_overdue_fine:
+    description: Check a copy out, let 16 days pass, return it, and find one open overdue fine of 50 cents.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.c1@example.org', card_number: 'TST-C-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book C', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-C-ITEM', replacement_cost: 4500 }); ctx.assert(p.status === 201 && i.status === 201, 'create rows'); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201, 'checkout'); ctx.advance('16d'); const r = ctx.api('POST', '/items/' + i.body.id + '/return', {}); ctx.assert(r.status === 200, 'return: ' + JSON.stringify(r.body)); const f = ctx.api('GET', '/fines?patron_id=' + p.body.id).body.data; ctx.assert(f.length === 1 && f[0].kind === 'overdue' && f[0].amount === 50 && f[0].status === 'open', 'expected one open overdue fine of 50: ' + JSON.stringify(f)); }"
+  t_lost_charge:
+    description: Check a copy out, report the loan lost, and find a lost_item fine for the replacement cost.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.d1@example.org', card_number: 'TST-D-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book D', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-D-ITEM', replacement_cost: 4500 }); ctx.assert(p.status === 201 && i.status === 201, 'create rows'); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201, 'checkout'); const r = ctx.api('POST', '/loans/' + c.body.id + '/report_lost', {}); ctx.assert(r.status === 200 && r.body.status === 'lost', 'report lost: ' + JSON.stringify(r.body)); ctx.assert(ctx.api('GET', '/items/' + i.body.id).body.status === 'lost', 'item should be lost'); const f = ctx.api('GET', '/fines?patron_id=' + p.body.id + '&kind=lost_item').body.data; ctx.assert(f.length === 1 && f[0].amount === 4500 && f[0].status === 'open' && f[0].loan_id === c.body.id, 'expected one open lost_item fine of 4500: ' + JSON.stringify(f)); }"
+  t_waive_fine:
+    description: Create a lost-item fine, waive it to status waived, then try to waive it again and get 409 fine.not_open.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.e1@example.org', card_number: 'TST-E-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book E', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-E-ITEM', replacement_cost: 4500 }); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201, 'checkout'); ctx.api('POST', '/loans/' + c.body.id + '/report_lost', {}); const f = ctx.api('GET', '/fines?patron_id=' + p.body.id).body.data[0]; const w = ctx.api('POST', '/fines/' + f.id + '/waive', {}); ctx.assert(w.status === 200 && w.body.status === 'waived', 'waive: ' + JSON.stringify(w.body)); const again = ctx.api('POST', '/fines/' + f.id + '/waive', {}); ctx.assert(again.status === 409 && again.body.error.code === 'fine.not_open', 'second waive: ' + JSON.stringify(again.body)); }"
+  t_pay_fine:
+    description: Return a copy one day late to get a 25-cent overdue fine, pay it to status paid, then pay again and get 409 fine.not_open.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.f1@example.org', card_number: 'TST-F-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book F', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-F-ITEM', replacement_cost: 4500 }); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: p.body.id }); ctx.assert(c.status === 201, 'checkout'); ctx.advance('15d'); ctx.api('POST', '/items/' + i.body.id + '/return', {}); const f = ctx.api('GET', '/fines?patron_id=' + p.body.id).body.data[0]; ctx.assert(f && f.amount === 25, 'expected a 25 cent fine: ' + JSON.stringify(f)); const pay = ctx.api('POST', '/fines/' + f.id + '/pay', {}); ctx.assert(pay.status === 200 && pay.body.status === 'paid', 'pay: ' + JSON.stringify(pay.body)); const again = ctx.api('POST', '/fines/' + f.id + '/pay', {}); ctx.assert(again.status === 409 && again.body.error.code === 'fine.not_open', 'second pay: ' + JSON.stringify(again.body)); }"
+  t_hold_duplicate:
+    description: Place a hold, then place a second hold on the same book for the same patron; the second answers 409 hold.duplicate.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.g1@example.org', card_number: 'TST-G-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book G', author: 'Test Author', isbn: null }); ctx.assert(p.status === 201 && b.status === 201, 'create rows'); const h = ctx.api('POST', '/holds', { patron_id: p.body.id, book_id: b.body.id }); ctx.assert(h.status === 201 && h.body.status === 'waiting', 'place hold: ' + JSON.stringify(h.body)); const dup = ctx.api('POST', '/holds', { patron_id: p.body.id, book_id: b.body.id }); ctx.assert(dup.status === 409 && dup.body.error.code === 'hold.duplicate', 'duplicate hold: ' + JSON.stringify(dup.body)); }"
+  t_hold_fulfill:
+    description: Patron A borrows a copy; patron B places a hold on the title; A returns the copy; fulfil B's hold with that copy and check B now has an active loan of it.
+    script: "(ctx) => { const a = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.h1@example.org', card_number: 'TST-H-0001', category: 'adult' }); const bp = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Waiter', email: 'test.reader.h2@example.org', card_number: 'TST-H-0002', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book H', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-H-ITEM', replacement_cost: 4500 }); ctx.assert(a.status === 201 && bp.status === 201 && i.status === 201, 'create rows'); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: a.body.id }); ctx.assert(c.status === 201, 'checkout'); const h = ctx.api('POST', '/holds', { patron_id: bp.body.id, book_id: b.body.id }); ctx.assert(h.status === 201, 'hold'); ctx.assert(ctx.api('POST', '/items/' + i.body.id + '/return', {}).status === 200, 'return'); const f = ctx.api('POST', '/holds/' + h.body.id + '/fulfill', { item_id: i.body.id }); ctx.assert(f.status === 200 && f.body.status === 'fulfilled', 'fulfill: ' + JSON.stringify(f.body)); const loans = ctx.api('GET', '/loans?patron_id=' + bp.body.id).body.data; ctx.assert(loans.length === 1 && loans[0].item_id === i.body.id && loans[0].status === 'active', 'expected an active loan for the waiter: ' + JSON.stringify(loans)); ctx.assert(ctx.api('GET', '/items/' + i.body.id).body.status === 'on_loan', 'item should be on_loan'); }"
+  t_renew_policy:
+    description: With a waiting hold by another patron the renewal answers 409 loan.renewal_blocked; after the hold is cancelled the renewal moves due_at later; a second renewal answers 409 loan.renew_limit.
+    script: "(ctx) => { const a = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.i1@example.org', card_number: 'TST-I-0001', category: 'adult' }); const bp = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Waiter', email: 'test.reader.i2@example.org', card_number: 'TST-I-0002', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book I', author: 'Test Author', isbn: null }); const i = ctx.api('POST', '/items', { book_id: b.body.id, barcode: 'TST-I-ITEM', replacement_cost: 4500 }); const c = ctx.api('POST', '/checkouts', { item_id: i.body.id, patron_id: a.body.id }); ctx.assert(c.status === 201, 'checkout'); const h = ctx.api('POST', '/holds', { patron_id: bp.body.id, book_id: b.body.id }); ctx.assert(h.status === 201, 'hold'); const blocked = ctx.api('POST', '/loans/' + c.body.id + '/renew', {}); ctx.assert(blocked.status === 409 && blocked.body.error.code === 'loan.renewal_blocked', 'renew while held: ' + JSON.stringify(blocked.body)); ctx.assert(ctx.api('POST', '/holds/' + h.body.id + '/cancel', {}).status === 200, 'cancel hold'); const ok = ctx.api('POST', '/loans/' + c.body.id + '/renew', {}); ctx.assert(ok.status === 200 && ok.body.due_at > c.body.due_at, 'renew: ' + JSON.stringify(ok.body)); const again = ctx.api('POST', '/loans/' + c.body.id + '/renew', {}); ctx.assert(again.status === 409 && again.body.error.code === 'loan.renew_limit', 'second renew: ' + JSON.stringify(again.body)); }"
+  t_cancel_hold:
+    description: Place a hold, cancel it to status cancelled, then cancel again and get 409 hold.not_waiting.
+    script: "(ctx) => { const p = ctx.api('POST', '/patrons', { first_name: 'Test', last_name: 'Reader', email: 'test.reader.j1@example.org', card_number: 'TST-J-0001', category: 'adult' }); const b = ctx.api('POST', '/books', { title: 'Test Book J', author: 'Test Author', isbn: null }); const h = ctx.api('POST', '/holds', { patron_id: p.body.id, book_id: b.body.id }); ctx.assert(h.status === 201, 'place hold'); const c = ctx.api('POST', '/holds/' + h.body.id + '/cancel', {}); ctx.assert(c.status === 200 && c.body.status === 'cancelled', 'cancel: ' + JSON.stringify(c.body)); const again = ctx.api('POST', '/holds/' + h.body.id + '/cancel', {}); ctx.assert(again.status === 409 && again.body.error.code === 'hold.not_waiting', 'second cancel: ' + JSON.stringify(again.body)); }"
+tasks:
+  pay_patron_open_fine:
+    difficulty: easy
+    instruction: Dev Iyer (email dev.iyer@example.net) has settled his account at the front desk. Pay the one open fine on his account.
+    grader: "(ctx) => { const p = ctx.seed.list('patron', { where: { email: 'dev.iyer@example.net' } })[0]; if (!p) return 0; const open = ctx.seed.list('fine', { where: { patron_id: p.id, status: 'open' } }); if (open.length !== 1) return 0; ctx.guardChanges('only the open fine of this patron changed, and only its status', [{ entity: 'fine', id: open[0].id, kind: 'updated', fields: ['status'] }]); ctx.goal(1, 'the open fine is paid', ctx.db.get('fine', open[0].id).status === 'paid'); return ctx.score(); }"
+    solution: "(ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const p = ctx.api('GET', '/patrons?email=' + esc('dev.iyer@example.net')).body.data[0]; ctx.assert(p !== undefined, 'patron not found'); const open = ctx.api('GET', '/fines?patron_id=' + p.id + '&status=open').body.data; ctx.assert(open.length === 1, 'expected one open fine, found ' + open.length); const r = ctx.api('POST', '/fines/' + open[0].id + '/pay', {}); ctx.assert(r.status === 200 && r.body.status === 'paid', 'pay: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: waives the open fine instead of paying it, so the status is waived, not paid
+        script: (ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const p = ctx.api('GET', '/patrons?email=' + esc('dev.iyer@example.net')).body.data[0]; const open = ctx.api('GET', '/fines?patron_id=' + p.id + '&status=open').body.data; ctx.api('POST', '/fines/' + open[0].id + '/waive', {}); }
+    alternatives: []
+    allows:
+      - entity: fine
+        kind: updated
+        fields:
+          - status
+        where:
+          status: open
+  renew_only_unheld_loans:
+    difficulty: medium
+    instruction: Clara Moreau (email clara.moreau@example.net) wants to keep the copies she has out. Renew each of her active loans that the library's renewal rules allow, and leave any loan the rules do not allow unchanged.
+    grader: "(ctx) => { const p = ctx.seed.list('patron', { where: { email: 'clara.moreau@example.net' } })[0]; if (!p) return 0; const loanOf = (barcode) => { const it = ctx.seed.list('item', { where: { barcode: barcode } })[0]; return it ? ctx.seed.list('loan', { where: { item_id: it.id, patron_id: p.id, status: 'active' } })[0] : undefined; }; const a = loanOf('LIB-10003'); const b = loanOf('LIB-10015'); const blocked = loanOf('LIB-10009'); if (!a || !b || !blocked) return 0; ctx.guardChanges('only the two renewable loans of this patron changed', [{ entity: 'loan', id: a.id, kind: 'updated', fields: ['due_at', 'renewals'] }, { entity: 'loan', id: b.id, kind: 'updated', fields: ['due_at', 'renewals'] }]); const renewed = (seedLoan) => { const e = ctx.db.get('loan', seedLoan.id); return e.renewals === 1 && e.due_at > seedLoan.due_at; }; ctx.goal(0.5, 'the loan of LIB-10003 is renewed once', renewed(a)); ctx.goal(0.5, 'the loan of LIB-10015 is renewed once', renewed(b)); return ctx.score(); }"
+    solution: "(ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const p = ctx.api('GET', '/patrons?email=' + esc('clara.moreau@example.net')).body.data[0]; ctx.assert(p !== undefined, 'patron not found'); const loans = ctx.api('GET', '/loans?patron_id=' + p.id + '&status=active').body.data; ctx.assert(loans.length === 3, 'expected three active loans, found ' + loans.length); for (const l of loans) { const item = ctx.api('GET', '/items/' + l.item_id).body; const waiting = ctx.api('GET', '/holds?book_id=' + item.book_id + '&status=waiting').body.data; if (waiting.some((h) => h.patron_id !== p.id)) continue; const r = ctx.api('POST', '/loans/' + l.id + '/renew', {}); ctx.assert(r.status === 200, 'renew failed: ' + JSON.stringify(r.body)); } }"
+    decoys:
+      - why: renews only the loan due soonest and stops, so the other renewable loan keeps its old due date
+        script: (ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const p = ctx.api('GET', '/patrons?email=' + esc('clara.moreau@example.net')).body.data[0]; const loans = ctx.api('GET', '/loans?patron_id=' + p.id + '&status=active&sort=due_at').body.data; ctx.api('POST', '/loans/' + loans[0].id + '/renew', {}); }
+    alternatives: []
+    allows:
+      - entity: loan
+        kind: updated
+        fields:
+          - due_at
+          - renewals
+        where:
+          status: active
+  fulfil_earliest_hold:
+    difficulty: medium
+    instruction: Two copies of The Glass Orchard have just been shelved again, barcodes LIB-10017 and LIB-10025. Three patrons have a waiting hold on that title. Give one copy each to the two holds that were placed first, fulfilling those holds with those copies. The third hold stays waiting.
+    grader: "(ctx) => { const book = ctx.seed.list('book', { where: { title: 'The Glass Orchard' } })[0]; if (!book) return 0; const one = (email) => ctx.seed.list('patron', { where: { email: email } })[0]; const elena = one('elena.lindqvist@example.net'); const jonah = one('jonah.walsh@example.net'); const olivia = one('olivia.murphy@example.net'); if (!elena || !jonah || !olivia) return 0; const waitingOf = (p) => ctx.seed.list('hold', { where: { patron_id: p.id, book_id: book.id, status: 'waiting' } })[0]; const he = waitingOf(elena); const hj = waitingOf(jonah); if (!he || !hj) return 0; const c1 = ctx.seed.list('item', { where: { barcode: 'LIB-10017' } })[0]; const c2 = ctx.seed.list('item', { where: { barcode: 'LIB-10025' } })[0]; if (!c1 || !c2) return 0; const allowed = (c) => { if (c.entity === 'hold' && c.kind === 'updated') return (c.id === he.id || c.id === hj.id) && c.fields.every((f) => f === 'status'); if (c.entity === 'item' && c.kind === 'updated') return (c.id === c1.id || c.id === c2.id) && c.fields.every((f) => f === 'status'); if (c.entity === 'loan' && c.kind === 'created') { const l = ctx.db.get('loan', c.id); return l !== null && (l.patron_id === elena.id || l.patron_id === jonah.id) && (l.item_id === c1.id || l.item_id === c2.id); } return false; }; ctx.guard('only the two holds, their two copies and the two new loans changed', ctx.changes().every(allowed)); const onLoanTo = (p) => ctx.db.list('loan', { where: { patron_id: p.id, status: 'active' } }).some((l) => l.item_id === c1.id || l.item_id === c2.id); ctx.goal(0.4, 'the earliest hold, Elena Lindqvist, is fulfilled with one of the two copies', ctx.db.get('hold', he.id).status === 'fulfilled' && onLoanTo(elena)); ctx.goal(0.4, 'the second earliest hold, Jonah Walsh, is fulfilled with the other copy', ctx.db.get('hold', hj.id).status === 'fulfilled' && onLoanTo(jonah)); ctx.goal(0.2, 'both copies are on loan', ctx.db.get('item', c1.id).status === 'on_loan' && ctx.db.get('item', c2.id).status === 'on_loan'); return ctx.score(); }"
+    solution: "(ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const book = ctx.api('GET', '/books?q=' + esc('The Glass Orchard')).body.data[0]; ctx.assert(book !== undefined, 'book not found'); const copies = ctx.api('GET', '/items?book_id=' + book.id + '&status=available').body.data; const copy = (barcode) => { const c = copies.find((x) => x.barcode === barcode); ctx.assert(c !== undefined, 'copy ' + barcode + ' is not on the shelf'); return c; }; const waiting = ctx.api('GET', '/holds?book_id=' + book.id + '&status=waiting').body.data.slice().sort((a, b) => (a.placed_at < b.placed_at ? -1 : 1)); ctx.assert(waiting.length === 3, 'expected three waiting holds, found ' + waiting.length); const r1 = ctx.api('POST', '/holds/' + waiting[0].id + '/fulfill', { item_id: copy('LIB-10017').id }); ctx.assert(r1.status === 200, 'first fulfil: ' + JSON.stringify(r1.body)); const r2 = ctx.api('POST', '/holds/' + waiting[1].id + '/fulfill', { item_id: copy('LIB-10025').id }); ctx.assert(r2.status === 200, 'second fulfil: ' + JSON.stringify(r2.body)); }"
+    decoys:
+      - why: tries the newest hold first, which the engine refuses, then fulfils only the earliest hold with the second copy and stops
+        script: "(ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const book = ctx.api('GET', '/books?q=' + esc('The Glass Orchard')).body.data[0]; const copies = ctx.api('GET', '/items?book_id=' + book.id + '&status=available').body.data; const copy17 = copies.find((x) => x.barcode === 'LIB-10017'); const copy25 = copies.find((x) => x.barcode === 'LIB-10025'); const waiting = ctx.api('GET', '/holds?book_id=' + book.id + '&status=waiting').body.data.slice().sort((a, b) => (a.placed_at < b.placed_at ? -1 : 1)); ctx.api('POST', '/holds/' + waiting[waiting.length - 1].id + '/fulfill', { item_id: copy17.id }); ctx.api('POST', '/holds/' + waiting[0].id + '/fulfill', { item_id: copy25.id }); }"
+    alternatives: []
+    allows:
+      - entity: hold
+        kind: updated
+        fields:
+          - status
+        where:
+          status: waiting
+      - entity: item
+        kind: updated
+        fields:
+          - status
+        where:
+          status: available
+      - entity: loan
+        kind: created
+        fields: []
+        where:
+          status: active
+  waive_lost_charge_of_returned_title:
+    difficulty: hard
+    instruction: Dev Iyer (email dev.iyer@example.net) says he still has a copy of Salt and Iron out and has lost it. Find the loan of that title that he still holds, report it lost, and waive the lost-item charge the report creates.
+    grader: "(ctx) => { const p = ctx.seed.list('patron', { where: { email: 'dev.iyer@example.net' } })[0]; const book = ctx.seed.list('book', { where: { title: 'Salt and Iron' } })[0]; if (!p || !book) return 0; const copyIds = ctx.seed.list('item', { where: { book_id: book.id } }).map((i) => i.id); const target = ctx.seed.list('loan', { where: { patron_id: p.id, status: 'active' } }).filter((l) => copyIds.indexOf(l.item_id) >= 0)[0]; if (!target) return 0; const allowed = (c) => { if (c.entity === 'loan' && c.kind === 'updated') return c.id === target.id && c.fields.every((f) => f === 'status'); if (c.entity === 'item' && c.kind === 'updated') return c.id === target.item_id && c.fields.every((f) => f === 'status'); if (c.entity === 'fine' && c.kind === 'created') { const f = ctx.db.get('fine', c.id); return f !== null && f.loan_id === target.id && f.patron_id === p.id && f.kind === 'lost_item'; } if (c.entity === 'fine' && c.kind === 'updated') { const f = ctx.db.get('fine', c.id); return f !== null && f.loan_id === target.id && c.fields.every((x) => x === 'status'); } return false; }; ctx.guard('only the target loan, its copy and its lost-item charge changed', ctx.changes().every(allowed)); const charges = ctx.db.list('fine', { where: { loan_id: target.id, kind: 'lost_item' } }); ctx.goal(0.35, 'the loan is reported lost', ctx.db.get('loan', target.id).status === 'lost'); ctx.goal(0.2, 'the copy is marked lost', ctx.db.get('item', target.item_id).status === 'lost'); ctx.goal(0.45, 'its lost-item charge is waived', charges.length === 1 && charges[0].status === 'waived'); return ctx.score(); }"
+    solution: "(ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const p = ctx.api('GET', '/patrons?email=' + esc('dev.iyer@example.net')).body.data[0]; ctx.assert(p !== undefined, 'patron not found'); const book = ctx.api('GET', '/books?q=' + esc('Salt and Iron')).body.data[0]; ctx.assert(book !== undefined, 'book not found'); const loans = ctx.api('GET', '/loans?patron_id=' + p.id).body.data; const held = loans.filter((l) => l.status === 'active' && ctx.api('GET', '/items/' + l.item_id).body.book_id === book.id); ctx.assert(held.length === 1, 'expected one active loan of the title, found ' + held.length); const r = ctx.api('POST', '/loans/' + held[0].id + '/report_lost', {}); ctx.assert(r.status === 200 && r.body.status === 'lost', 'report lost: ' + JSON.stringify(r.body)); const fines = ctx.api('GET', '/fines?loan_id=' + held[0].id + '&kind=lost_item&status=open').body.data; ctx.assert(fines.length === 1, 'expected one open lost-item charge, found ' + fines.length); const w = ctx.api('POST', '/fines/' + fines[0].id + '/waive', {}); ctx.assert(w.status === 200 && w.body.status === 'waived', 'waive: ' + JSON.stringify(w.body)); }"
+    decoys:
+      - why: reports the right loan lost and stops, leaving its lost-item charge open
+        script: (ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const p = ctx.api('GET', '/patrons?email=' + esc('dev.iyer@example.net')).body.data[0]; const book = ctx.api('GET', '/books?q=' + esc('Salt and Iron')).body.data[0]; const loans = ctx.api('GET', '/loans?patron_id=' + p.id).body.data; const held = loans.filter((l) => l.status === 'active' && ctx.api('GET', '/items/' + l.item_id).body.book_id === book.id); ctx.api('POST', '/loans/' + held[0].id + '/report_lost', {}); }
+      - why: reports the first loan the patron has, the Lantern Keeper copy, lost and waives the charge it creates
+        script: (ctx) => { const esc = (s) => s.split('#').join('%23').split(' ').join('+'); const p = ctx.api('GET', '/patrons?email=' + esc('dev.iyer@example.net')).body.data[0]; const loans = ctx.api('GET', '/loans?patron_id=' + p.id).body.data; const first = loans[0]; ctx.api('POST', '/loans/' + first.id + '/report_lost', {}); const charges = ctx.api('GET', '/fines?loan_id=' + first.id + '&kind=lost_item').body.data; if (charges.length === 1) ctx.api('POST', '/fines/' + charges[0].id + '/waive', {}); }
+    alternatives: []
+    allows:
+      - entity: loan
+        kind: updated
+        fields:
+          - status
+        where:
+          status: active
+      - entity: item
+        kind: updated
+        fields:
+          - status
+        where:
+          status: on_loan
+      - entity: fine
+        kind: created
+        fields: []
+        where:
+          kind: lost_item
+      - entity: fine
+        kind: updated
+        fields:
+          - status

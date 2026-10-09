@@ -1,0 +1,6 @@
+world.yaml:541: warning seed.too_few_rows_for_paging seed.employee: expected more than 25 employee rows, found 9 rows. 9 rows fit on one page. Paging never matters.
+world.yaml:555: warning seed.too_few_rows_for_paging seed.category: expected more than 25 category rows, found 5 rows. 5 rows fit on one page. Paging never matters.
+approve_team_report easy solution 1.000 noop 0.000 decoys [0.500, 0.000] prefix - mutants 4/8 probed (not probed: target_field, extra_action, extra_delete, undone_write) checks 4/4 flipped
+fix_and_submit_draft medium solution 1.000 noop 0.000 decoys [0.600, 0.000, 0.000] prefix 0.600 mutants 3/8 probed (not probed: target_field, extra_action, extra_delete, undone_write, perturb) checks 5/5 flipped
+finance_clear_over_limit_queue hard solution 1.000 noop 0.000 decoys [0.750, 0.000, 0.000] prefix 0.750 mutants 4/8 probed (not probed: target_field, extra_action, extra_delete, undone_write) checks 6/6 flipped
+total: checks 15/15 flipped, mutants 11/24 probed, 3 tasks

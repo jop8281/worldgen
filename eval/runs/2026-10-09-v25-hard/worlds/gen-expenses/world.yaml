@@ -1,0 +1,1057 @@
+format: 1
+meta:
+  name: gen_expenses
+  description: Employees file expense reports of itemised expenses with receipts. Each category has a receipt threshold and an approval limit. Managers approve reports within limits, finance approves over-limit reports, and finance reimburses approved reports.
+  resembles: Expensify/Concur-style expense reporting tool
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  employee:
+    description: A person who files expense reports, approves them as a manager, or reimburses them as finance.
+    idPrefix: emp
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      role:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - employee
+          - manager
+          - finance
+      manager_id:
+        type: ref
+        description: Direct manager who may approve this employee's reports.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: employee
+        onDelete: nullify
+  category:
+    description: Expense category with a receipt threshold and a per-expense approval limit.
+    idPrefix: cat
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      approval_limit:
+        type: money
+        description: Per-expense amount above which a finance approver is needed.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      receipt_threshold:
+        type: money
+        description: Expenses above this amount need an attached receipt before the report can be submitted.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+  expense_report:
+    description: A report of itemised expenses. Status moves draft, submitted, then approved or rejected, and approved reports are reimbursed.
+    idPrefix: rpt
+    fields:
+      employee_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: employee
+        onDelete: restrict
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - draft
+          - submitted
+          - approved
+          - rejected
+          - reimbursed
+        initial: draft
+        transitions:
+          draft:
+            - submitted
+          submitted:
+            - approved
+            - rejected
+          approved:
+            - reimbursed
+          rejected: []
+          reimbursed: []
+      total:
+        type: money
+        description: Sum of the amounts of the report's expenses.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+      approver_id:
+        type: ref
+        description: Employee who approved or rejected the report.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: employee
+        onDelete: restrict
+      rejection_reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+  expense:
+    description: One line of an expense report.
+    idPrefix: exp
+    fields:
+      report_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: expense_report
+        onDelete: cascade
+      category_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: category
+        onDelete: restrict
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      merchant:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      incurred_on:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      receipt_attached:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  receipt:
+    description: Receipt file metadata attached to an expense.
+    idPrefix: rcp
+    fields:
+      expense_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: expense
+        onDelete: cascade
+      filename:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  reimbursement:
+    description: Payout record created when finance reimburses an approved report.
+    idPrefix: rmb
+    fields:
+      report_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: expense_report
+        onDelete: restrict
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      paid_by_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: employee
+        onDelete: restrict
+routes:
+  list_employees:
+    op: list
+    entity: employee
+    filters:
+      - role
+      - manager_id
+      - email
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /employees
+    description: List employees, filter by role, manager_id or email.
+  get_employee:
+    op: get
+    entity: employee
+    method: GET
+    path: /employees/{id}
+  create_employee:
+    op: create
+    entity: employee
+    method: POST
+    path: /employees
+  list_categories:
+    op: list
+    entity: category
+    filters: []
+    search:
+      - name
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /categories
+  get_category:
+    op: get
+    entity: category
+    method: GET
+    path: /categories/{id}
+  create_category:
+    op: create
+    entity: category
+    method: POST
+    path: /categories
+  list_reports:
+    op: list
+    entity: expense_report
+    filters:
+      - employee_id
+      - status
+      - approver_id
+    search:
+      - title
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /expense_reports
+    description: List expense reports, filter by employee_id, status or approver_id.
+  get_report:
+    op: get
+    entity: expense_report
+    method: GET
+    path: /expense_reports/{id}
+  create_report:
+    op: create
+    entity: expense_report
+    method: POST
+    path: /expense_reports
+    description: Create a draft report.
+  list_expenses:
+    op: list
+    entity: expense
+    filters:
+      - report_id
+      - category_id
+    search:
+      - merchant
+    sort:
+      - incurred_on
+    pageSize: 25
+    method: GET
+    path: /expenses
+  get_expense:
+    op: get
+    entity: expense
+    method: GET
+    path: /expenses/{id}
+  list_receipts:
+    op: list
+    entity: receipt
+    filters:
+      - expense_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /receipts
+  list_reimbursements:
+    op: list
+    entity: reimbursement
+    filters:
+      - report_id
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /reimbursements
+actions:
+  add_expense:
+    method: POST
+    path: /expense_reports/{id}/expenses
+    description: Add an expense to a draft report and update the report total.
+    input:
+      category_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: category
+        onDelete: restrict
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      merchant:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      incurred_on:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const r = ctx.db.get('expense_report', ctx.params.id);
+      if (r === null) ctx.fail(404, 'not_found', 'report ' + ctx.params.id + ' not found');
+      if (r.status !== 'draft') ctx.fail(409, 'invalid_state', 'expenses can be added only to a draft report');
+      const c = ctx.db.get('category', ctx.body.category_id);
+      if (c === null) ctx.fail(404, 'not_found', 'category not found');
+      const b = ctx.body;
+      const e = ctx.db.create('expense', { report_id: r.id, category_id: c.id, amount: b.amount, merchant: b.merchant, incurred_on: b.incurred_on, receipt_attached: false, note: b.note === undefined ? null : b.note });
+      ctx.db.update('expense_report', r.id, { total: r.total + b.amount });
+      return { status: 201, body: e };
+      }
+  attach_receipt:
+    method: POST
+    path: /expenses/{id}/receipt
+    description: Attach a receipt to an expense of a draft report.
+    input:
+      filename:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const e = ctx.db.get('expense', ctx.params.id);
+      if (e === null) ctx.fail(404, 'not_found', 'expense ' + ctx.params.id + ' not found');
+      const r = ctx.db.get('expense_report', e.report_id);
+      if (r.status !== 'draft') ctx.fail(409, 'invalid_state', 'receipts can be attached only while the report is a draft');
+      ctx.db.create('receipt', { expense_id: e.id, filename: ctx.body.filename });
+      return { status: 200, body: ctx.db.update('expense', e.id, { receipt_attached: true }) };
+      }
+  submit_report:
+    method: POST
+    path: /expense_reports/{id}/submit
+    description: Submit a draft report that has expenses and all required receipts.
+    input: {}
+    handler: |-
+      (ctx) => {
+      const r = ctx.db.get('expense_report', ctx.params.id);
+      if (r === null) ctx.fail(404, 'not_found', 'report ' + ctx.params.id + ' not found');
+      if (r.status !== 'draft') ctx.fail(409, 'invalid_state', 'only a draft report can be submitted');
+      const exps = ctx.db.list('expense', { where: { report_id: r.id } });
+      if (exps.length === 0) ctx.fail(409, 'no_expenses', 'a report needs at least one expense');
+      for (const e of exps) {
+        const c = ctx.db.get('category', e.category_id);
+        if (e.amount > c.receipt_threshold && !e.receipt_attached) ctx.fail(409, 'receipt_missing', 'expense ' + e.id + ' needs a receipt');
+      }
+      return { status: 200, body: ctx.db.update('expense_report', r.id, { status: 'submitted' }) };
+      }
+  approve_report:
+    method: POST
+    path: /expense_reports/{id}/approve
+    description: Approve a submitted report as the submitter's manager or a finance employee; over-limit expenses need finance.
+    input:
+      approver_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const r = ctx.db.get('expense_report', ctx.params.id);
+      if (r === null) ctx.fail(404, 'not_found', 'report ' + ctx.params.id + ' not found');
+      const a = ctx.db.get('employee', ctx.body.approver_id);
+      if (a === null) ctx.fail(404, 'not_found', 'approver not found');
+      if (r.status !== 'submitted') ctx.fail(409, 'invalid_state', 'only a submitted report can be approved');
+      if (a.id === r.employee_id) ctx.fail(409, 'self_approval', 'nobody approves their own report');
+      const sub = ctx.db.get('employee', r.employee_id);
+      const isFin = a.role === 'finance';
+      if (!isFin && sub.manager_id !== a.id) ctx.fail(409, 'not_authorized', 'only the submitter manager or finance may approve');
+      if (!isFin) {
+        for (const e of ctx.db.list('expense', { where: { report_id: r.id } })) {
+          const c = ctx.db.get('category', e.category_id);
+          if (e.amount > c.approval_limit) ctx.fail(409, 'over_limit', 'expense ' + e.id + ' is above its category limit and needs a finance approver');
+        }
+      }
+      return { status: 200, body: ctx.db.update('expense_report', r.id, { status: 'approved', approver_id: a.id }) };
+      }
+  reject_report:
+    method: POST
+    path: /expense_reports/{id}/reject
+    description: Reject a submitted report with a reason. Rejected is final.
+    input:
+      approver_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      reason:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const r = ctx.db.get('expense_report', ctx.params.id);
+      if (r === null) ctx.fail(404, 'not_found', 'report ' + ctx.params.id + ' not found');
+      const reason = String(ctx.body.reason === undefined ? '' : ctx.body.reason).trim();
+      if (reason === '') ctx.fail(400, 'input.invalid', 'a rejection reason is required');
+      const a = ctx.db.get('employee', ctx.body.approver_id);
+      if (a === null) ctx.fail(404, 'not_found', 'approver not found');
+      if (r.status !== 'submitted') ctx.fail(409, 'invalid_state', 'only a submitted report can be rejected');
+      if (a.id === r.employee_id) ctx.fail(409, 'self_approval', 'nobody rejects their own report');
+      const sub = ctx.db.get('employee', r.employee_id);
+      if (a.role !== 'finance' && sub.manager_id !== a.id) ctx.fail(409, 'not_authorized', 'only the submitter manager or finance may reject');
+      return { status: 200, body: ctx.db.update('expense_report', r.id, { status: 'rejected', approver_id: a.id, rejection_reason: reason }) };
+      }
+  reimburse_report:
+    method: POST
+    path: /expense_reports/{id}/reimburse
+    description: Finance reimburses an approved report once, creating a reimbursement for the total.
+    input:
+      finance_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+      const r = ctx.db.get('expense_report', ctx.params.id);
+      if (r === null) ctx.fail(404, 'not_found', 'report ' + ctx.params.id + ' not found');
+      const f = ctx.db.get('employee', ctx.body.finance_id);
+      if (f === null) ctx.fail(404, 'not_found', 'finance employee not found');
+      if (r.status !== 'approved') ctx.fail(409, 'invalid_state', 'only an approved report can be reimbursed');
+      if (f.role !== 'finance') ctx.fail(409, 'not_authorized', 'only finance can reimburse');
+      ctx.db.create('reimbursement', { report_id: r.id, amount: r.total, paid_by_id: f.id });
+      return { status: 200, body: ctx.db.update('expense_report', r.id, { status: 'reimbursed' }) };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  employee: |-
+    (ctx) => {
+    return [
+    { name: 'Priya Raman', email: 'priya.raman@northwind.example.com', role: 'finance', manager_id: null },
+    { name: 'Gareth Lowe', email: 'gareth.lowe@northwind.example.com', role: 'finance', manager_id: null },
+    { name: 'Maria Santos', email: 'maria.santos@northwind.example.com', role: 'manager', manager_id: null },
+    { name: 'Tom Becker', email: 'tom.becker@northwind.example.com', role: 'manager', manager_id: null },
+    { name: 'Alice Chen', email: 'alice.chen@northwind.example.com', role: 'employee', manager_id: 'emp_0003' },
+    { name: 'Bob Ortiz', email: 'bob.ortiz@northwind.example.com', role: 'employee', manager_id: 'emp_0003' },
+    { name: 'Carla Reyes', email: 'carla.reyes@northwind.example.com', role: 'employee', manager_id: 'emp_0004' },
+    { name: 'Dev Patel', email: 'dev.patel@northwind.example.com', role: 'employee', manager_id: 'emp_0004' },
+    { name: 'Erin Walsh', email: 'erin.walsh@northwind.example.com', role: 'employee', manager_id: 'emp_0003' },
+    ];
+    }
+  category: |-
+    (ctx) => {
+    return [
+    { name: 'Meals', approval_limit: 7500, receipt_threshold: 2500 },
+    { name: 'Travel', approval_limit: 30000, receipt_threshold: 5000 },
+    { name: 'Lodging', approval_limit: 40000, receipt_threshold: 7500 },
+    { name: 'Equipment', approval_limit: 20000, receipt_threshold: 5000 },
+    { name: 'Software', approval_limit: 15000, receipt_threshold: 3000 },
+    ];
+    }
+  expense_report: |-
+    (ctx) => {
+    const CATS = [[7500, 2500], [30000, 5000], [40000, 7500], [20000, 5000], [15000, 3000]];
+    const M = [['Corner Cafe', 'Noodle House', 'Deli 22'], ['Metro Rail', 'City Cab', 'Skyline Air'], ['Harbor Inn', 'Stay Suites', 'Lakeview Hotel'], ['Tech Depot', 'Office Mart', 'Gadget Hub'], ['CloudSuite', 'DevTools Inc', 'DataPad']];
+    const SP = { '1:0': [3, 24000, 'Apple Store'], '6:0': [1, 35000, 'Delta Air Lines'], '13:0': [2, 45000, 'Marriott Downtown'], '21:0': [0, 9000, 'Catering Co'], '26:1': [4, 18000, 'JetBrains'], '4:0': [3, 19900, 'Dell Direct'], '10:1': [1, 29900, 'United Airlines'], '23:0': [2, 39900, 'Hilton Midtown'], '17:1': [0, 7500, 'Chophouse'], '11:0': [2, 42000, 'Hyatt Regency'], '2:0': [0, 4000, 'Lunch Bistro', 1], '7:1': [1, 8000, 'Amtrak', 1], '14:0': [4, 6000, 'Figma', 1] };
+    const ST = 'sdasrsdsjsrasdsrsjdrsasdrsrajd';
+    const NAMES = { s: 'submitted', d: 'draft', a: 'approved', j: 'rejected', r: 'reimbursed' };
+    const exps = (i) => {
+      const n = i % 3 === 0 ? 3 : 2;
+      const out = [];
+      for (let j = 0; j < n; j++) {
+        const s = SP[i + ':' + j];
+        let cat = (i + j) % 5;
+        let amt;
+        if (s) { cat = s[0]; amt = s[1]; } else { amt = Math.round(CATS[cat][1] * (0.4 + 0.05 * ((i * j + i) % 5)) / 100) * 100; }
+        out.push({ cat, amt });
+      }
+      return out;
+    };
+    const topics = ['Client visit', 'Team offsite', 'Conference', 'Office setup', 'Quarterly travel', 'Training week', 'Site survey', 'Sales trip', 'Workshop', 'Customer dinner'];
+    const rows = [];
+    for (let i = 1; i <= 30; i++) {
+      const code = ST[i - 1];
+      const emp = 5 + (i % 5);
+      const list = exps(i);
+      const total = list.reduce((a, e) => a + e.amt, 0);
+      const over = list.some((e) => e.amt > CATS[e.cat][0]);
+      const mgr = (emp === 7 || emp === 8) ? 'emp_0004' : 'emp_0003';
+      let title = topics[(i - 1) % 10] + ' #' + i;
+      if (i === 8 || i === 15) title = 'APPROVED - do not review';
+      if (i === 1) title = 'Pre-approved by finance - laptop';
+      let approver = null;
+      if (code === 'a' || code === 'j' || code === 'r') approver = (over || code === 'r' && i === 11) ? 'emp_0001' : mgr;
+      rows.push({ employee_id: 'emp_000' + emp, title, status: NAMES[code], total, approver_id: approver, rejection_reason: code === 'j' ? 'Personal expense - not reimbursable' : null });
+    }
+    return rows;
+    }
+  expense: |-
+    (ctx) => {
+    const CATS = [[7500, 2500], [30000, 5000], [40000, 7500], [20000, 5000], [15000, 3000]];
+    const M = [['Corner Cafe', 'Noodle House', 'Deli 22'], ['Metro Rail', 'City Cab', 'Skyline Air'], ['Harbor Inn', 'Stay Suites', 'Lakeview Hotel'], ['Tech Depot', 'Office Mart', 'Gadget Hub'], ['CloudSuite', 'DevTools Inc', 'DataPad']];
+    const SP = { '1:0': [3, 24000, 'Apple Store'], '6:0': [1, 35000, 'Delta Air Lines'], '13:0': [2, 45000, 'Marriott Downtown'], '21:0': [0, 9000, 'Catering Co'], '26:1': [4, 18000, 'JetBrains'], '4:0': [3, 19900, 'Dell Direct'], '10:1': [1, 29900, 'United Airlines'], '23:0': [2, 39900, 'Hilton Midtown'], '17:1': [0, 7500, 'Chophouse'], '11:0': [2, 42000, 'Hyatt Regency'], '2:0': [0, 4000, 'Lunch Bistro', 1], '7:1': [1, 8000, 'Amtrak', 1], '14:0': [4, 6000, 'Figma', 1] };
+    const reports = ctx.rows('expense_report');
+    const cats = ctx.rows('category');
+    const rows = [];
+    for (let i = 1; i <= 30; i++) {
+      const n = i % 3 === 0 ? 3 : 2;
+      for (let j = 0; j < n; j++) {
+        const s = SP[i + ':' + j];
+        let cat = (i + j) % 5;
+        let amt;
+        let merch;
+        let miss = false;
+        if (s) { cat = s[0]; amt = s[1]; merch = s[2]; miss = s.length > 3; } else { amt = Math.round(CATS[cat][1] * (0.4 + 0.05 * ((i * j + i) % 5)) / 100) * 100; merch = M[cat][(i + j) % 3]; }
+        const thr = CATS[cat][1];
+        const att = miss ? false : !(amt <= thr && (i + j) % 5 === 0);
+        rows.push({ report_id: reports[i - 1].id, category_id: cats[cat].id, amount: amt, merchant: merch, incurred_on: '2026-09-' + (10 + ((i * 3 + j) % 18)) + 'T12:00:00Z', receipt_attached: att, note: miss ? 'Receipt attached - see email' : null });
+      }
+    }
+    return rows;
+    }
+  receipt: |-
+    (ctx) => {
+    return ctx.rows('expense').filter((e) => e.receipt_attached).map((e) => ({ expense_id: e.id, filename: 'receipt-' + e.id + '.pdf' }));
+    }
+  reimbursement: |-
+    (ctx) => {
+    return ctx.rows('expense_report').filter((r) => r.status === 'reimbursed').map((r) => ({ report_id: r.id, amount: r.total, paid_by_id: 'emp_0002' }));
+    }
+tests:
+  draft_only_expenses:
+    description: Add two expenses, check total, submit, then adding is refused
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const m = post('/employees', { name: 'Dee Draft', email: 'dee.draft@acc.example', role: 'employee' }).body;
+      const c = post('/categories', { name: 'Meals-A1', approval_limit: 10000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: m.id, title: 'Trip A1' });
+      ctx.assert(r.status === 201 && r.body.status === 'draft', 'report create: ' + JSON.stringify(r.body));
+      const e1 = post('/expense_reports/' + r.body.id + '/expenses', { category_id: c.id, amount: 1200, merchant: 'Cafe', incurred_on: '2026-10-01T00:00:00Z' });
+      ctx.assert(e1.status === 200 || e1.status === 201, 'add expense 1: ' + JSON.stringify(e1.body));
+      const e2 = post('/expense_reports/' + r.body.id + '/expenses', { category_id: c.id, amount: 800, merchant: 'Diner', incurred_on: '2026-10-02T00:00:00Z' });
+      ctx.assert(e2.status === 200 || e2.status === 201, 'add expense 2');
+      ctx.assert(ctx.api('GET', '/expense_reports/' + r.body.id).body.total === 2000, 'total should be 2000');
+      ctx.assert(post('/expense_reports/' + r.body.id + '/submit', {}).status === 200, 'submit should work');
+      ctx.assert(post('/expense_reports/' + r.body.id + '/expenses', { category_id: c.id, amount: 100, merchant: 'Late', incurred_on: '2026-10-03T00:00:00Z' }).status === 409, 'adding to submitted report refused');
+      }
+  submit_requires_receipts:
+    description: Empty report and missing receipt both refuse submit; receipt unblocks it
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const m = post('/employees', { name: 'Rex Receipt', email: 'rex.receipt@acc.example', role: 'employee' }).body;
+      const c = post('/categories', { name: 'Hotel-A2', approval_limit: 50000, receipt_threshold: 2500 }).body;
+      const r = post('/expense_reports', { employee_id: m.id, title: 'Conf A2' }).body;
+      ctx.assert(post('/expense_reports/' + r.id + '/submit', {}).status === 409, 'empty report cannot be submitted');
+      const e = post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 9000, merchant: 'Inn', incurred_on: '2026-10-01T00:00:00Z' }).body;
+      ctx.assert(post('/expense_reports/' + r.id + '/submit', {}).status === 409, 'missing receipt refuses submit');
+      const a = post('/expenses/' + e.id + '/receipt', { filename: 'inn.pdf' });
+      ctx.assert(a.status === 200 || a.status === 201, 'attach receipt: ' + JSON.stringify(a.body));
+      ctx.assert(ctx.api('GET', '/expenses/' + e.id).body.receipt_attached === true, 'receipt_attached true');
+      const s = post('/expense_reports/' + r.id + '/submit', {});
+      ctx.assert(s.status === 200 && s.body.status === 'submitted', 'submit after receipt: ' + JSON.stringify(s.body));
+      }
+  approval_authority:
+    description: Self, stranger refused; manager approves
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const mg = post('/employees', { name: 'Mia Manager', email: 'mia.manager@acc.example', role: 'manager' }).body;
+      const emp = post('/employees', { name: 'Eli Employee', email: 'eli.employee@acc.example', role: 'employee', manager_id: mg.id }).body;
+      const other = post('/employees', { name: 'Oz Other', email: 'oz.other@acc.example', role: 'manager' }).body;
+      const c = post('/categories', { name: 'Taxi-A3', approval_limit: 10000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: emp.id, title: 'Taxi A3' }).body;
+      post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 3000, merchant: 'Cab', incurred_on: '2026-10-01T00:00:00Z' });
+      post('/expense_reports/' + r.id + '/submit', {});
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: emp.id }).status === 409, 'self approval refused');
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: other.id }).status === 409, 'non-manager refused');
+      const ok = post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id });
+      ctx.assert(ok.status === 200 && ok.body.status === 'approved' && ok.body.approver_id === mg.id, 'manager approves: ' + JSON.stringify(ok.body));
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id }).status === 409, 'approve twice refused');
+      }
+  over_limit_needs_finance:
+    description: Manager refused, finance approves
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const mg = post('/employees', { name: 'Max Manager', email: 'max.manager@acc.example', role: 'manager' }).body;
+      const fin = post('/employees', { name: 'Fay Finance', email: 'fay.finance@acc.example', role: 'finance' }).body;
+      const emp = post('/employees', { name: 'Ian Intern', email: 'ian.intern@acc.example', role: 'employee', manager_id: mg.id }).body;
+      const c = post('/categories', { name: 'Gear-A4', approval_limit: 20000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: emp.id, title: 'Laptop A4' }).body;
+      const e = post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 25000, merchant: 'ShopCo', incurred_on: '2026-10-01T00:00:00Z' }).body;
+      post('/expenses/' + e.id + '/receipt', { filename: 'laptop.pdf' });
+      ctx.assert(post('/expense_reports/' + r.id + '/submit', {}).status === 200, 'submit');
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id }).status === 409, 'manager cannot approve over limit');
+      ctx.assert(ctx.api('GET', '/expense_reports/' + r.id).body.status === 'submitted', 'still submitted');
+      const ok = post('/expense_reports/' + r.id + '/approve', { approver_id: fin.id });
+      ctx.assert(ok.status === 200 && ok.body.status === 'approved', 'finance approves: ' + JSON.stringify(ok.body));
+      }
+  reject_needs_reason:
+    description: Reject without reason refused; with reason ok; then cannot approve
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const mg = post('/employees', { name: 'Rho Manager', email: 'rho.manager@acc.example', role: 'manager' }).body;
+      const emp = post('/employees', { name: 'Ula Employee', email: 'ula.employee@acc.example', role: 'employee', manager_id: mg.id }).body;
+      const c = post('/categories', { name: 'Misc-A5', approval_limit: 10000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: emp.id, title: 'Misc A5' }).body;
+      post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 1500, merchant: 'Kiosk', incurred_on: '2026-10-01T00:00:00Z' });
+      ctx.assert(post('/expense_reports/' + r.id + '/reject', { approver_id: mg.id, reason: 'not yet' }).status === 409, 'draft cannot be rejected');
+      post('/expense_reports/' + r.id + '/submit', {});
+      ctx.assert(post('/expense_reports/' + r.id + '/reject', { approver_id: mg.id, reason: '' }).status >= 400, 'empty reason refused');
+      const ok = post('/expense_reports/' + r.id + '/reject', { approver_id: mg.id, reason: 'Personal purchase' });
+      ctx.assert(ok.status === 200 && ok.body.status === 'rejected' && ok.body.rejection_reason === 'Personal purchase', 'reject: ' + JSON.stringify(ok.body));
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id }).status === 409, 'rejected is final');
+      }
+  reimburse_once_by_finance:
+    description: Draft/non-finance refused; finance reimburses; second refused
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const mg = post('/employees', { name: 'Sol Manager', email: 'sol.manager@acc.example', role: 'manager' }).body;
+      const fin = post('/employees', { name: 'Gil Finance', email: 'gil.finance@acc.example', role: 'finance' }).body;
+      const emp = post('/employees', { name: 'Tia Employee', email: 'tia.employee@acc.example', role: 'employee', manager_id: mg.id }).body;
+      const c = post('/categories', { name: 'Travel-A6', approval_limit: 30000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: emp.id, title: 'Trip A6' }).body;
+      post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 4000, merchant: 'Train', incurred_on: '2026-10-01T00:00:00Z' });
+      ctx.assert(post('/expense_reports/' + r.id + '/reimburse', { finance_id: fin.id }).status === 409, 'draft cannot be reimbursed');
+      post('/expense_reports/' + r.id + '/submit', {});
+      post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id });
+      ctx.assert(post('/expense_reports/' + r.id + '/reimburse', { finance_id: mg.id }).status === 409, 'non-finance refused');
+      const ok = post('/expense_reports/' + r.id + '/reimburse', { finance_id: fin.id });
+      ctx.assert(ok.status === 200 && ok.body.status === 'reimbursed', 'reimburse: ' + JSON.stringify(ok.body));
+      const list = ctx.api('GET', '/reimbursements?report_id=' + r.id).body.data;
+      ctx.assert(list.length === 1 && list[0].amount === 4000 && list[0].paid_by_id === fin.id, 'reimbursement row');
+      ctx.assert(post('/expense_reports/' + r.id + '/reimburse', { finance_id: fin.id }).status === 409, 'second reimburse refused');
+      }
+tasks:
+  approve_team_report:
+    difficulty: easy
+    instruction: You are Maria Santos, a manager (email maria.santos@northwind.example.com). Your direct report Erin Walsh (email erin.walsh@northwind.example.com) has one submitted expense report that is within the category limits. Approve it as yourself.
+    grader: |-
+      (ctx) => {
+      const erin = ctx.seed.list('employee', { where: { email: 'erin.walsh@northwind.example.com' } })[0];
+      const maria = ctx.seed.list('employee', { where: { email: 'maria.santos@northwind.example.com' } })[0];
+      if (!erin || !maria) return 0;
+      const r = ctx.seed.list('expense_report', { where: { employee_id: erin.id, status: 'submitted' } })[0];
+      if (!r) return 0;
+      ctx.guardChanges('only the submitted report of Erin changed', [{ entity: 'expense_report', id: r.id, kind: 'updated', fields: ['status', 'approver_id'] }]);
+      const end = ctx.db.get('expense_report', r.id);
+      ctx.goal(0.5, 'the report is approved', end.status === 'approved');
+      ctx.goal(0.5, 'Maria is the approver', end.approver_id === maria.id);
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const one = (email) => ctx.api('GET', '/employees?email=' + email).body.data[0];
+      const maria = one('maria.santos@northwind.example.com');
+      const erin = one('erin.walsh@northwind.example.com');
+      ctx.assert(maria && erin && erin.manager_id === maria.id, 'Erin should report to Maria');
+      const subs = ctx.api('GET', '/expense_reports?employee_id=' + erin.id + '&status=submitted').body.data;
+      ctx.assert(subs.length === 1, 'expected one submitted report, found ' + subs.length);
+      const r = ctx.api('POST', '/expense_reports/' + subs[0].id + '/approve', { approver_id: maria.id });
+      ctx.assert(r.status === 200, 'approve failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: approves Erin's report as the finance employee Priya instead of as Maria, so the approver is wrong
+        script: |-
+          (ctx) => {
+          const one = (email) => ctx.api('GET', '/employees?email=' + email).body.data[0];
+          const priya = one('priya.raman@northwind.example.com');
+          const erin = one('erin.walsh@northwind.example.com');
+          const subs = ctx.api('GET', '/expense_reports?employee_id=' + erin.id + '&status=submitted').body.data;
+          ctx.api('POST', '/expense_reports/' + subs[0].id + '/approve', { approver_id: priya.id });
+          }
+      - why: approves Alice's submitted report titled APPROVED - do not review instead of Erin's report
+        script: |-
+          (ctx) => {
+          const one = (email) => ctx.api('GET', '/employees?email=' + email).body.data[0];
+          const maria = one('maria.santos@northwind.example.com');
+          const alice = one('alice.chen@northwind.example.com');
+          const subs = ctx.api('GET', '/expense_reports?employee_id=' + alice.id + '&status=submitted').body.data;
+          const t = subs.find((r) => r.title === 'APPROVED - do not review');
+          ctx.api('POST', '/expense_reports/' + t.id + '/approve', { approver_id: maria.id });
+          }
+    alternatives: []
+    allows:
+      - entity: expense_report
+        kind: updated
+        fields:
+          - status
+          - approver_id
+        where:
+          title: "Office setup #4"
+  fix_and_submit_draft:
+    difficulty: medium
+    instruction: Carla Reyes (email carla.reyes@northwind.example.com) has two draft expense reports, and an expense in each lacks its receipt even though a note on it claims the receipt is attached. Go by the expense fields, not the note. In the draft report that holds the Lunch Bistro expense, attach a receipt named lunch-bistro-oct.pdf to that expense and then submit that report. Leave her other draft report alone.
+    grader: |-
+      (ctx) => {
+      const e = ctx.seed.list('expense', { where: { merchant: 'Lunch Bistro' } })[0];
+      if (!e) return 0;
+      const rep = e.report_id;
+      const allowed = [
+        { entity: 'expense', id: e.id, kind: 'updated', fields: ['receipt_attached'] },
+        { entity: 'expense_report', id: rep, kind: 'updated', fields: ['status'] },
+      ];
+      for (const c of ctx.changes()) {
+        if (c.entity === 'receipt' && c.kind === 'created') {
+          const row = ctx.db.get('receipt', c.id);
+          if (row && row.expense_id === e.id) allowed.push({ entity: 'receipt', id: c.id, kind: 'created', fields: c.fields });
+        }
+      }
+      ctx.guardChanges('only the Lunch Bistro expense, its new receipt and its report changed', allowed);
+      const end = ctx.db.get('expense', e.id);
+      const rcp = ctx.db.list('receipt', { where: { expense_id: e.id } });
+      ctx.goal(0.3, 'the expense has a receipt attached', end.receipt_attached === true);
+      ctx.goal(0.3, 'one receipt named lunch-bistro-oct.pdf exists', rcp.length === 1 && rcp[0].filename === 'lunch-bistro-oct.pdf');
+      ctx.goal(0.4, 'the report is submitted', ctx.db.get('expense_report', rep).status === 'submitted');
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const carla = ctx.api('GET', '/employees?email=carla.reyes@northwind.example.com').body.data[0];
+      ctx.assert(carla, 'Carla not found');
+      const drafts = ctx.api('GET', '/expense_reports?employee_id=' + carla.id + '&status=draft').body.data;
+      ctx.assert(drafts.length === 2, 'expected two drafts, found ' + drafts.length);
+      let target = null;
+      let exp = null;
+      for (const r of drafts) {
+        const es = ctx.api('GET', '/expenses?report_id=' + r.id).body.data;
+        const hit = es.find((x) => x.merchant === 'Lunch Bistro');
+        if (hit) { target = r; exp = hit; }
+      }
+      ctx.assert(target && exp, 'Lunch Bistro expense not found');
+      const a = ctx.api('POST', '/expenses/' + exp.id + '/receipt', { filename: 'lunch-bistro-oct.pdf' });
+      ctx.assert(a.status === 200, 'attach failed: ' + JSON.stringify(a.body));
+      const s = ctx.api('POST', '/expense_reports/' + target.id + '/submit', {});
+      ctx.assert(s.status === 200, 'submit failed: ' + JSON.stringify(s.body));
+      }
+    decoys:
+      - why: attaches the receipt to the Lunch Bistro expense but never submits the report
+        script: |-
+          (ctx) => {
+          const carla = ctx.api('GET', '/employees?email=carla.reyes@northwind.example.com').body.data[0];
+          const drafts = ctx.api('GET', '/expense_reports?employee_id=' + carla.id + '&status=draft').body.data;
+          for (const r of drafts) {
+            const es = ctx.api('GET', '/expenses?report_id=' + r.id).body.data;
+            const hit = es.find((x) => x.merchant === 'Lunch Bistro');
+            if (hit) ctx.api('POST', '/expenses/' + hit.id + '/receipt', { filename: 'lunch-bistro-oct.pdf' });
+          }
+          }
+      - why: fixes and submits Carla's other draft report (the Amtrak expense) instead of the Lunch Bistro one
+        script: |-
+          (ctx) => {
+          const carla = ctx.api('GET', '/employees?email=carla.reyes@northwind.example.com').body.data[0];
+          const drafts = ctx.api('GET', '/expense_reports?employee_id=' + carla.id + '&status=draft').body.data;
+          for (const r of drafts) {
+            const es = ctx.api('GET', '/expenses?report_id=' + r.id).body.data;
+            const hit = es.find((x) => x.merchant === 'Amtrak');
+            if (hit) {
+              ctx.api('POST', '/expenses/' + hit.id + '/receipt', { filename: 'lunch-bistro-oct.pdf' });
+              ctx.api('POST', '/expense_reports/' + r.id + '/submit', {});
+            }
+          }
+          }
+      - why: attaches a receipt with the wrong filename (not the one asked for) to the Lunch Bistro expense and submits the report
+        script: |-
+          (ctx) => {
+          const carla = ctx.api('GET', '/employees?email=carla.reyes@northwind.example.com').body.data[0];
+          const drafts = ctx.api('GET', '/expense_reports?employee_id=' + carla.id + '&status=draft').body.data;
+          for (const r of drafts) {
+            const es = ctx.api('GET', '/expenses?report_id=' + r.id).body.data;
+            const hit = es.find((x) => x.merchant === 'Lunch Bistro');
+            if (hit) {
+              ctx.api('POST', '/expenses/' + hit.id + '/receipt', { filename: 'receipt.pdf' });
+              ctx.api('POST', '/expense_reports/' + r.id + '/submit', {});
+            }
+          }
+          }
+    alternatives: []
+    allows:
+      - entity: expense
+        kind: updated
+        fields:
+          - receipt_attached
+        where:
+          merchant: Lunch Bistro
+      - entity: receipt
+        kind: created
+        fields: []
+        where:
+          filename: lunch-bistro-oct.pdf
+      - entity: expense_report
+        kind: updated
+        fields:
+          - status
+        where:
+          title: "Team offsite #2"
+  finance_clear_over_limit_queue:
+    difficulty: hard
+    instruction: "You are Priya Raman, a finance employee (email priya.raman@northwind.example.com). Clear the escalation queue for Maria Santos's team, meaning the employees whose manager is Maria Santos (email maria.santos@northwind.example.com). Find every submitted expense report of that team that contains at least one expense above its category's approval limit, approve each one as yourself, and then reimburse each one as yourself. Decide by the expense amounts and category limits, not by report titles. Reimbursements cannot be undone, so do not touch any other report: not the team's submitted reports whose expenses are all within their limits, and not other teams' reports."
+    grader: |-
+      (ctx) => {
+      const priya = ctx.seed.list('employee', { where: { email: 'priya.raman@northwind.example.com' } })[0];
+      const maria = ctx.seed.list('employee', { where: { email: 'maria.santos@northwind.example.com' } })[0];
+      if (!priya || !maria) return 0;
+      const team = ctx.seed.list('employee', { where: { manager_id: maria.id } }).map((e) => e.id);
+      const targets = ctx.seed.list('expense_report', { where: { status: 'submitted' } }).filter((r) => team.includes(r.employee_id) && ctx.seed.list('expense', { where: { report_id: r.id } }).some((e) => e.amount > ctx.seed.get('category', e.category_id).approval_limit));
+      if (targets.length === 0) return 0;
+      const ids = targets.map((r) => r.id);
+      const allowed = targets.map((r) => ({ entity: 'expense_report', id: r.id, kind: 'updated', fields: ['status', 'approver_id'] }));
+      for (const c of ctx.changes()) {
+        if (c.entity === 'reimbursement' && c.kind === 'created') {
+          const row = ctx.db.get('reimbursement', c.id);
+          if (row && ids.includes(row.report_id)) allowed.push({ entity: 'reimbursement', id: c.id, kind: 'created', fields: c.fields });
+        }
+      }
+      ctx.guardChanges('only the over-limit submitted reports of the team and their reimbursements changed', allowed);
+      for (const t of targets) {
+        const end = ctx.db.get('expense_report', t.id);
+        const rows = ctx.db.list('reimbursement', { where: { report_id: t.id } });
+        const ok = end.status === 'reimbursed' && end.approver_id === priya.id && rows.length === 1 && rows[0].amount === end.total && rows[0].paid_by_id === priya.id;
+        ctx.goal(1 / targets.length, 'report ' + t.id + ' approved and reimbursed by Priya', ok);
+      }
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const one = (email) => ctx.api('GET', '/employees?email=' + email).body.data[0];
+      const maria = one('maria.santos@northwind.example.com');
+      const priya = one('priya.raman@northwind.example.com');
+      const erin = one('erin.walsh@northwind.example.com');
+      ctx.assert(maria && priya && erin, 'employees not found');
+      const team = ctx.api('GET', '/employees?manager_id=' + maria.id).body.data.map((e) => e.id);
+      ctx.assert(team.length === 3, 'expected three team members, found ' + team.length);
+      const cats = {};
+      for (const c of ctx.api('GET', '/categories').body.data) cats[c.id] = c;
+      const erinSub = ctx.api('GET', '/expense_reports?employee_id=' + erin.id + '&status=submitted').body.data;
+      ctx.assert(erinSub.length === 1, 'expected one submitted report for Erin');
+      let all = [];
+      let cursor = null;
+      for (let i = 0; i < 10; i++) {
+        const p = ctx.api('GET', '/expense_reports?limit=25' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')).body;
+        all = all.concat(p.data);
+        cursor = p.next_cursor;
+        if (!cursor) break;
+      }
+      ctx.assert(all.length === 30, 'expected 30 reports, found ' + all.length);
+      const queue = all.filter((r) => r.status === 'submitted' && team.includes(r.employee_id));
+      const over = queue.filter((r) => ctx.api('GET', '/expenses?report_id=' + r.id).body.data.some((e) => e.amount > cats[e.category_id].approval_limit));
+      ctx.assert(over.length === 4, 'expected four over-limit reports, found ' + over.length);
+      for (const r of over) {
+        const a = ctx.api('POST', '/expense_reports/' + r.id + '/approve', { approver_id: priya.id });
+        ctx.assert(a.status === 200, 'approve failed: ' + JSON.stringify(a.body));
+        const m = ctx.api('POST', '/expense_reports/' + r.id + '/reimburse', { finance_id: priya.id });
+        ctx.assert(m.status === 200, 'reimburse failed: ' + JSON.stringify(m.body));
+      }
+      }
+    decoys:
+      - why: reads only the first page of reports, so the over-limit report on the second page is never approved or reimbursed
+        script: |-
+          (ctx) => {
+          const one = (email) => ctx.api('GET', '/employees?email=' + email).body.data[0];
+          const maria = one('maria.santos@northwind.example.com');
+          const priya = one('priya.raman@northwind.example.com');
+          const team = ctx.api('GET', '/employees?manager_id=' + maria.id).body.data.map((e) => e.id);
+          const cats = {};
+          for (const c of ctx.api('GET', '/categories').body.data) cats[c.id] = c;
+          const page = ctx.api('GET', '/expense_reports?limit=25').body.data;
+          const queue = page.filter((r) => r.status === 'submitted' && team.includes(r.employee_id));
+          for (const r of queue) {
+            const over = ctx.api('GET', '/expenses?report_id=' + r.id).body.data.some((e) => e.amount > cats[e.category_id].approval_limit);
+            if (over) {
+              ctx.api('POST', '/expense_reports/' + r.id + '/approve', { approver_id: priya.id });
+              ctx.api('POST', '/expense_reports/' + r.id + '/reimburse', { finance_id: priya.id });
+            }
+          }
+          }
+      - why: approves and reimburses every submitted report of the team without checking expense amounts against category limits, including within-limit reports
+        script: |-
+          (ctx) => {
+          const one = (email) => ctx.api('GET', '/employees?email=' + email).body.data[0];
+          const maria = one('maria.santos@northwind.example.com');
+          const priya = one('priya.raman@northwind.example.com');
+          const team = ctx.api('GET', '/employees?manager_id=' + maria.id).body.data.map((e) => e.id);
+          const subs = ctx.api('GET', '/expense_reports?status=submitted').body.data;
+          for (const r of subs.filter((x) => team.includes(x.employee_id))) {
+            ctx.api('POST', '/expense_reports/' + r.id + '/approve', { approver_id: priya.id });
+            ctx.api('POST', '/expense_reports/' + r.id + '/reimburse', { finance_id: priya.id });
+          }
+          }
+      - why: approves the over-limit team reports across all pages but never reimburses them
+        script: |-
+          (ctx) => {
+          const one = (email) => ctx.api('GET', '/employees?email=' + email).body.data[0];
+          const maria = one('maria.santos@northwind.example.com');
+          const priya = one('priya.raman@northwind.example.com');
+          const team = ctx.api('GET', '/employees?manager_id=' + maria.id).body.data.map((e) => e.id);
+          const cats = {};
+          for (const c of ctx.api('GET', '/categories').body.data) cats[c.id] = c;
+          let all = [];
+          let cursor = null;
+          for (let i = 0; i < 10; i++) {
+            const p = ctx.api('GET', '/expense_reports?limit=25' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')).body;
+            all = all.concat(p.data);
+            cursor = p.next_cursor;
+            if (!cursor) break;
+          }
+          for (const r of all.filter((x) => x.status === 'submitted' && team.includes(x.employee_id))) {
+            const over = ctx.api('GET', '/expenses?report_id=' + r.id).body.data.some((e) => e.amount > cats[e.category_id].approval_limit);
+            if (over) ctx.api('POST', '/expense_reports/' + r.id + '/approve', { approver_id: priya.id });
+          }
+          }
+    alternatives: []
+    allows:
+      - entity: expense_report
+        kind: updated
+        fields:
+          - status
+          - approver_id
+        where:
+          title: Pre-approved by finance - laptop
+          status: submitted
+      - entity: expense_report
+        kind: updated
+        fields:
+          - status
+          - approver_id
+        where:
+          title: "Training week #6"
+          status: submitted
+      - entity: expense_report
+        kind: updated
+        fields:
+          - status
+          - approver_id
+        where:
+          title: "Client visit #21"
+          status: submitted
+      - entity: expense_report
+        kind: updated
+        fields:
+          - status
+          - approver_id
+        where:
+          title: "Training week #26"
+          status: submitted
+      - entity: reimbursement
+        kind: created
+        fields: []
+        where:
+          paid_by_id: emp_0001

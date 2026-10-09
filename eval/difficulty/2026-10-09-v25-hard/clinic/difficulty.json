@@ -1,0 +1,103 @@
+{
+  "runId": "v25-hard-clinic",
+  "models": [
+    "claude-haiku-5-5"
+  ],
+  "episodesPerCell": 3,
+  "budgetUsd": 2,
+  "episodeBudgetUsd": 0.5,
+  "spentUsd": 0.109752,
+  "stop": {
+    "kind": "complete"
+  },
+  "tasks": [
+    {
+      "world": "gen-clinic",
+      "task": "settle_backlog",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    }
+  ],
+  "cells": [
+    {
+      "world": "gen-clinic",
+      "task": "settle_backlog",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.109752,
+      "usdPerPass": 0.036584,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    }
+  ],
+  "episodes": [
+    {
+      "world": "gen-clinic",
+      "task": "settle_backlog",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 1,
+      "runId": "v25-hard-clinic.1",
+      "episodeId": "v25-hard-clinic.1__settle_backlog__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.03621732,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.036217
+    },
+    {
+      "world": "gen-clinic",
+      "task": "settle_backlog",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 2,
+      "runId": "v25-hard-clinic.2",
+      "episodeId": "v25-hard-clinic.2__settle_backlog__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.04300386,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.043004
+    },
+    {
+      "world": "gen-clinic",
+      "task": "settle_backlog",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 3,
+      "runId": "v25-hard-clinic.3",
+      "episodeId": "v25-hard-clinic.3__settle_backlog__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.03053052,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.030531
+    }
+  ]
+}

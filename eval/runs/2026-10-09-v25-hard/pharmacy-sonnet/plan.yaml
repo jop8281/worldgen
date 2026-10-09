@@ -1,0 +1,536 @@
+revision: 1
+software: 'Retail pharmacy management system (PioneerRx / QS/1-style): prescriptions, refills, fills, controlled-substance pharmacist verification and lot-level stock with expiry'
+summary: A pharmacy world. Patients hold prescriptions for medications. Each fill or refill is a fill record. Fills of controlled medications wait in pharmacist review before they can be dispensed. Dispensing draws stock from the earliest-expiring usable lot. Daily jobs expire stock lots and prescriptions that are past their dates. A lot can be quarantined for a recall.
+clock:
+  start: 2026-10-09T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: patient
+    purpose: A person the pharmacy dispenses to.
+    keyFields:
+      - name
+      - date_of_birth
+  - name: medication
+    purpose: A drug product with strength and schedule (otc, rx, controlled).
+    keyFields:
+      - name
+      - strength
+      - schedule
+  - name: pharmacist
+    purpose: Staff member; only role pharmacist may verify controlled fills.
+    keyFields:
+      - name
+      - license_number
+      - role
+  - name: stock_lot
+    purpose: A received batch of one medication with quantity on hand and an expiry date.
+    keyFields:
+      - medication_id
+      - lot_number
+      - quantity
+      - expires_on
+      - status
+  - name: prescription
+    purpose: A prescriber's order for a patient and medication with a refill allowance and expiry.
+    keyFields:
+      - patient_id
+      - medication_id
+      - refills_allowed
+      - fills_made
+      - expires_on
+      - status
+  - name: fill
+    purpose: One dispensing event (first fill or refill) of a prescription.
+    keyFields:
+      - prescription_id
+      - fill_number
+      - status
+      - approved_by
+      - lot_id
+workflows:
+  - name: prescription_lifecycle
+    entity: prescription
+    states:
+      - active
+      - completed
+      - cancelled
+      - expired
+    rules:
+      - rule: A prescription allows at most refills_allowed + 1 fills; the next request answers 409 refill_limit_reached.
+        by:
+          - request_fill
+        test: t_refill_limit
+      - rule: Cancelling an active prescription rejects its open fills; cancelled or expired prescriptions accept no new fills (409 prescription_not_active).
+        by:
+          - cancel_prescription
+          - request_fill
+        test: t_cancel_rx
+      - rule: The expire_prescriptions job marks active prescriptions past expires_on as expired.
+        by:
+          - expire_prescriptions
+        test: t_expire_rx_job
+      - Dispensing the last allowed fill completes the prescription.
+    actions:
+      - request_fill
+      - cancel_prescription
+  - name: fill_lifecycle
+    entity: fill
+    states:
+      - pending_review
+      - ready
+      - dispensed
+      - rejected
+    rules:
+      - rule: Controlled fills start in pending_review, need approval by a pharmacist-role staff member before they can be dispensed (409 fill_not_ready, 422 not_pharmacist).
+        by:
+          - approve_fill
+          - dispense_fill
+        test: t_controlled_approval
+      - rule: A fill cannot be approved once its prescription has passed expires_on (409 prescription_expired), whatever the prescription status says.
+        by:
+          - approve_fill
+        test: t_expired_rx_approval
+      - rule: Rejecting an open fill needs a pharmacist and a reason, and gives the fill back to the prescription's refill count; dispensed or rejected fills cannot be rejected.
+        by:
+          - reject_fill
+        test: t_reject_fill
+      - rule: Dispensing takes stock from the earliest-expiring available lot that is not expired and holds enough quantity; otherwise 409 insufficient_stock.
+        by:
+          - dispense_fill
+        test: t_fefo_dispense
+    actions:
+      - approve_fill
+      - reject_fill
+      - dispense_fill
+  - name: stock_lot_lifecycle
+    entity: stock_lot
+    states:
+      - available
+      - quarantined
+      - expired
+    rules:
+      - rule: Quarantined lots are never used for dispensing; only available lots can be quarantined.
+        by:
+          - quarantine_lot
+          - dispense_fill
+        test: t_quarantine
+      - rule: The expire_lots job marks lots past expires_on as expired, and an expired lot cannot supply a fill.
+        by:
+          - expire_lots
+        test: t_expire_lots
+      - rule: Lot quantity cannot go below zero.
+        schema: stock_lot.quantity has min 0, so the engine refuses any write below it.
+    actions:
+      - quarantine_lot
+jobs:
+  - name: expire_lots
+    every: 1d
+    rule: Mark every available or quarantined stock lot whose expires_on is at or before now as expired.
+  - name: expire_prescriptions
+    every: 1d
+    rule: Mark every active prescription whose expires_on is at or before now as expired.
+acceptanceTests:
+  - id: t_refill_limit
+    intent: Fills stop after refills_allowed + 1 requests.
+    actions:
+      - request_fill
+    description: A prescription with 1 refill allows two fills and refuses the third.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT Refill Patient', date_of_birth: '1980-01-01' });
+        const med = mk('/medications', { name: 'ZZT Refill Med', strength: '10mg', schedule: 'rx' });
+        mk('/lots', { medication_id: med.id, lot_number: 'ZZT-RF-1', quantity: 100, expires_on: '2027-06-01T00:00:00.000Z' });
+        const rx = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 1, expires_on: '2027-09-01T00:00:00.000Z' });
+        ctx.assert(rx.status === 'active' && rx.fills_made === 0, 'new rx active with 0 fills: ' + JSON.stringify(rx));
+        const f1 = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(f1.status === 201 && f1.body.status === 'ready' && f1.body.fill_number === 1, 'first fill ready: ' + JSON.stringify(f1));
+        const f2 = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(f2.status === 201 && f2.body.fill_number === 2, 'refill: ' + JSON.stringify(f2));
+        const f3 = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(f3.status === 409 && f3.body.error.code === 'refill_limit_reached', 'third fill refused: ' + JSON.stringify(f3));
+        const g = ctx.api('GET', '/prescriptions/' + rx.id);
+        ctx.assert(g.body.fills_made === 2, 'fills_made is 2, got ' + g.body.fills_made);
+      }
+  - id: t_cancel_rx
+    intent: Cancelling rejects open fills and blocks new ones.
+    actions:
+      - cancel_prescription
+      - request_fill
+    description: Cancel an active prescription with a ready fill; the fill is rejected and new fills are refused.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT Cancel Patient', date_of_birth: '1975-05-05' });
+        const med = mk('/medications', { name: 'ZZT Cancel Med', strength: '20mg', schedule: 'rx' });
+        const rx = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 2, expires_on: '2027-09-01T00:00:00.000Z' });
+        const f = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(f.status === 201 && f.body.status === 'ready', 'fill ready: ' + JSON.stringify(f));
+        const c = ctx.api('POST', '/prescriptions/' + rx.id + '/cancel', {});
+        ctx.assert(c.status === 200 && c.body.status === 'cancelled', 'cancel: ' + JSON.stringify(c));
+        const g = ctx.api('GET', '/fills/' + f.body.id);
+        ctx.assert(g.body.status === 'rejected', 'open fill rejected, got ' + g.body.status);
+        const n = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(n.status === 409 && n.body.error.code === 'prescription_not_active', 'no fill on cancelled rx: ' + JSON.stringify(n));
+        const again = ctx.api('POST', '/prescriptions/' + rx.id + '/cancel', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second cancel: ' + JSON.stringify(again));
+      }
+  - id: t_expire_rx_job
+    intent: The daily job expires prescriptions past their date and blocks new fills.
+    actions:
+      - request_fill
+    description: After two days, an rx expiring tomorrow is expired and refuses fills; a long-dated rx stays active.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT ExpRx Patient', date_of_birth: '1990-02-02' });
+        const med = mk('/medications', { name: 'ZZT ExpRx Med', strength: '5mg', schedule: 'rx' });
+        const soon = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 1, expires_on: '2026-10-10T00:00:00.000Z' });
+        const later = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 1, expires_on: '2027-10-01T00:00:00.000Z' });
+        const run = ctx.advance('2d');
+        ctx.assert(run.jobsFired.includes('expire_prescriptions'), 'job fired: ' + JSON.stringify(run));
+        ctx.assert(ctx.api('GET', '/prescriptions/' + soon.id).body.status === 'expired', 'soon rx expired');
+        ctx.assert(ctx.api('GET', '/prescriptions/' + later.id).body.status === 'active', 'later rx still active');
+        const f = ctx.api('POST', '/prescriptions/' + soon.id + '/fills', {});
+        ctx.assert(f.status === 409 && f.body.error.code === 'prescription_not_active', 'expired rx refuses fill: ' + JSON.stringify(f));
+      }
+  - id: t_controlled_approval
+    intent: Controlled fills need a pharmacist's approval before dispensing.
+    actions:
+      - request_fill
+      - approve_fill
+      - dispense_fill
+    description: A controlled fill starts pending_review, cannot be dispensed, a technician cannot approve, a pharmacist can, then it dispenses.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT Ctrl Patient', date_of_birth: '1968-08-08' });
+        const med = mk('/medications', { name: 'ZZT Ctrl Med', strength: '5mg', schedule: 'controlled' });
+        mk('/lots', { medication_id: med.id, lot_number: 'ZZT-CT-1', quantity: 100, expires_on: '2027-06-01T00:00:00.000Z' });
+        const tech = mk('/pharmacists', { name: 'ZZT Tech', license_number: 'ZZT-T-1', role: 'technician' });
+        const ph = mk('/pharmacists', { name: 'ZZT Pharmacist', license_number: 'ZZT-P-1', role: 'pharmacist' });
+        const rx = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 0, expires_on: '2027-09-01T00:00:00.000Z' });
+        const f = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(f.status === 201 && f.body.status === 'pending_review', 'controlled fill pending_review: ' + JSON.stringify(f));
+        const d0 = ctx.api('POST', '/fills/' + f.body.id + '/dispense', {});
+        ctx.assert(d0.status === 409 && d0.body.error.code === 'fill_not_ready', 'unapproved dispense refused: ' + JSON.stringify(d0));
+        const a0 = ctx.api('POST', '/fills/' + f.body.id + '/approve', { pharmacist_id: tech.id });
+        ctx.assert(a0.status === 422 && a0.body.error.code === 'not_pharmacist', 'technician cannot approve: ' + JSON.stringify(a0));
+        const a1 = ctx.api('POST', '/fills/' + f.body.id + '/approve', { pharmacist_id: ph.id });
+        ctx.assert(a1.status === 200 && a1.body.status === 'ready' && a1.body.approved_by === ph.id, 'pharmacist approves: ' + JSON.stringify(a1));
+        const d1 = ctx.api('POST', '/fills/' + f.body.id + '/dispense', {});
+        ctx.assert(d1.status === 200 && d1.body.status === 'dispensed', 'dispense: ' + JSON.stringify(d1));
+        const a2 = ctx.api('POST', '/fills/' + f.body.id + '/approve', { pharmacist_id: ph.id });
+        ctx.assert(a2.status === 409 && a2.body.error.code === 'invalid_state', 'approve again: ' + JSON.stringify(a2));
+      }
+  - id: t_expired_rx_approval
+    intent: A fill cannot be approved after its prescription's expiry date.
+    actions:
+      - request_fill
+      - approve_fill
+    description: A pending controlled fill whose prescription passes its expiry date cannot be approved.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT ExpAp Patient', date_of_birth: '1971-01-01' });
+        const med = mk('/medications', { name: 'ZZT ExpAp Med', strength: '5mg', schedule: 'controlled' });
+        mk('/lots', { medication_id: med.id, lot_number: 'ZZT-EA-1', quantity: 100, expires_on: '2027-06-01T00:00:00.000Z' });
+        const ph = mk('/pharmacists', { name: 'ZZT ExpAp Pharmacist', license_number: 'ZZT-P-2', role: 'pharmacist' });
+        const rx = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 0, expires_on: '2026-10-20T00:00:00.000Z' });
+        const f = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(f.status === 201 && f.body.status === 'pending_review', 'pending: ' + JSON.stringify(f));
+        ctx.advance('15d');
+        const a = ctx.api('POST', '/fills/' + f.body.id + '/approve', { pharmacist_id: ph.id });
+        ctx.assert(a.status === 409 && a.body.error.code === 'prescription_expired', 'expired rx approval refused: ' + JSON.stringify(a));
+        ctx.assert(ctx.api('GET', '/fills/' + f.body.id).body.status === 'pending_review', 'fill unchanged');
+      }
+  - id: t_reject_fill
+    intent: Rejecting an open fill needs a pharmacist and restores the refill count.
+    actions:
+      - request_fill
+      - reject_fill
+    description: A pharmacist rejects a pending fill with a reason; fills_made drops back; a second reject is refused.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT Rej Patient', date_of_birth: '1985-09-09' });
+        const med = mk('/medications', { name: 'ZZT Rej Med', strength: '5mg', schedule: 'controlled' });
+        const tech = mk('/pharmacists', { name: 'ZZT Rej Tech', license_number: 'ZZT-T-3', role: 'technician' });
+        const ph = mk('/pharmacists', { name: 'ZZT Rej Pharmacist', license_number: 'ZZT-P-3', role: 'pharmacist' });
+        const rx = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 1, expires_on: '2027-09-01T00:00:00.000Z' });
+        const f = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(f.status === 201, 'fill: ' + JSON.stringify(f));
+        ctx.assert(ctx.api('GET', '/prescriptions/' + rx.id).body.fills_made === 1, 'fills_made 1');
+        const t = ctx.api('POST', '/fills/' + f.body.id + '/reject', { pharmacist_id: tech.id, reason: 'Technician attempt' });
+        ctx.assert(t.status === 422 && t.body.error.code === 'not_pharmacist', 'technician cannot reject: ' + JSON.stringify(t));
+        const r = ctx.api('POST', '/fills/' + f.body.id + '/reject', { pharmacist_id: ph.id, reason: 'Suspected forged prescription' });
+        ctx.assert(r.status === 200 && r.body.status === 'rejected' && r.body.rejection_reason === 'Suspected forged prescription', 'rejected: ' + JSON.stringify(r));
+        ctx.assert(ctx.api('GET', '/prescriptions/' + rx.id).body.fills_made === 0, 'fills_made restored');
+        const again = ctx.api('POST', '/fills/' + f.body.id + '/reject', { pharmacist_id: ph.id, reason: 'again' });
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second reject: ' + JSON.stringify(again));
+      }
+  - id: t_fefo_dispense
+    intent: Dispensing uses the earliest-expiring usable lot with enough stock.
+    actions:
+      - request_fill
+      - dispense_fill
+    description: Skips a date-expired lot and a too-small lot, uses lots in expiry order, and refuses when no lot has enough stock.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT Fefo Patient', date_of_birth: '1992-04-04' });
+        const med = mk('/medications', { name: 'ZZT Fefo Med', strength: '50mg', schedule: 'rx' });
+        const lotC = mk('/lots', { medication_id: med.id, lot_number: 'ZZT-FF-C', quantity: 100, expires_on: '2026-10-01T00:00:00.000Z' });
+        const lotB = mk('/lots', { medication_id: med.id, lot_number: 'ZZT-FF-B', quantity: 100, expires_on: '2027-06-01T00:00:00.000Z' });
+        const lotA = mk('/lots', { medication_id: med.id, lot_number: 'ZZT-FF-A', quantity: 40, expires_on: '2026-12-01T00:00:00.000Z' });
+        const rx = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 30, refills_allowed: 3, expires_on: '2027-09-01T00:00:00.000Z' });
+        const f1 = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        const d1 = ctx.api('POST', '/fills/' + f1.body.id + '/dispense', {});
+        ctx.assert(d1.status === 200 && d1.body.status === 'dispensed' && d1.body.lot_id === lotA.id, 'first fill from lot A: ' + JSON.stringify(d1));
+        ctx.assert(ctx.api('GET', '/lots/' + lotA.id).body.quantity === 10, 'lot A down to 10');
+        const f2 = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        const d2 = ctx.api('POST', '/fills/' + f2.body.id + '/dispense', {});
+        ctx.assert(d2.status === 200 && d2.body.lot_id === lotB.id, 'second fill from lot B: ' + JSON.stringify(d2));
+        ctx.assert(ctx.api('GET', '/lots/' + lotB.id).body.quantity === 70, 'lot B down to 70');
+        ctx.assert(ctx.api('GET', '/lots/' + lotC.id).body.quantity === 100, 'date-expired lot untouched');
+        const big = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 500, refills_allowed: 0, expires_on: '2027-09-01T00:00:00.000Z' });
+        const f3 = ctx.api('POST', '/prescriptions/' + big.id + '/fills', {});
+        const d3 = ctx.api('POST', '/fills/' + f3.body.id + '/dispense', {});
+        ctx.assert(d3.status === 409 && d3.body.error.code === 'insufficient_stock', 'no lot big enough: ' + JSON.stringify(d3));
+        ctx.assert(ctx.api('GET', '/fills/' + f3.body.id).body.status === 'ready', 'fill still ready');
+      }
+  - id: t_quarantine
+    intent: Quarantined lots are excluded from dispensing.
+    actions:
+      - quarantine_lot
+      - request_fill
+      - dispense_fill
+    description: Quarantine a lot; a second quarantine is refused and a fill cannot be dispensed from it.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT Quar Patient', date_of_birth: '1960-06-06' });
+        const med = mk('/medications', { name: 'ZZT Quar Med', strength: '25mg', schedule: 'rx' });
+        const lot = mk('/lots', { medication_id: med.id, lot_number: 'ZZT-QR-1', quantity: 100, expires_on: '2027-06-01T00:00:00.000Z' });
+        const q = ctx.api('POST', '/lots/' + lot.id + '/quarantine', {});
+        ctx.assert(q.status === 200 && q.body.status === 'quarantined', 'quarantine: ' + JSON.stringify(q));
+        const q2 = ctx.api('POST', '/lots/' + lot.id + '/quarantine', {});
+        ctx.assert(q2.status === 409 && q2.body.error.code === 'invalid_state', 'second quarantine: ' + JSON.stringify(q2));
+        const rx = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 0, expires_on: '2027-09-01T00:00:00.000Z' });
+        const f = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        const d = ctx.api('POST', '/fills/' + f.body.id + '/dispense', {});
+        ctx.assert(d.status === 409 && d.body.error.code === 'insufficient_stock', 'quarantined lot not used: ' + JSON.stringify(d));
+        ctx.assert(ctx.api('GET', '/lots/' + lot.id).body.quantity === 100, 'quantity unchanged');
+      }
+  - id: t_expire_lots
+    intent: The daily job expires lots past their date and expired lots cannot supply fills.
+    actions:
+      - request_fill
+      - dispense_fill
+    description: A lot expiring tomorrow is marked expired after two days, a long-dated lot stays available, and the expired lot cannot supply a fill.
+    script: |-
+      (ctx) => {
+        const mk = (p, b) => { const r = ctx.api('POST', p, b); ctx.assert(r.status === 201, p + ': ' + JSON.stringify(r.body)); return r.body; };
+        const pt = mk('/patients', { name: 'ZZT ExpLot Patient', date_of_birth: '1999-09-19' });
+        const med = mk('/medications', { name: 'ZZT ExpLot Med', strength: '15mg', schedule: 'rx' });
+        const soon = mk('/lots', { medication_id: med.id, lot_number: 'ZZT-EL-1', quantity: 100, expires_on: '2026-10-10T00:00:00.000Z' });
+        const med2 = mk('/medications', { name: 'ZZT ExpLot Med Two', strength: '15mg', schedule: 'rx' });
+        const far = mk('/lots', { medication_id: med2.id, lot_number: 'ZZT-EL-2', quantity: 100, expires_on: '2027-06-01T00:00:00.000Z' });
+        const rx = mk('/prescriptions', { patient_id: pt.id, medication_id: med.id, prescriber_name: 'Dr. ZZT', quantity: 10, refills_allowed: 0, expires_on: '2027-09-01T00:00:00.000Z' });
+        const f = ctx.api('POST', '/prescriptions/' + rx.id + '/fills', {});
+        ctx.assert(f.status === 201, 'fill: ' + JSON.stringify(f));
+        const run = ctx.advance('2d');
+        ctx.assert(run.jobsFired.includes('expire_lots'), 'job fired: ' + JSON.stringify(run));
+        ctx.assert(ctx.api('GET', '/lots/' + soon.id).body.status === 'expired', 'soon lot expired');
+        ctx.assert(ctx.api('GET', '/lots/' + far.id).body.status === 'available', 'far lot available');
+        const d = ctx.api('POST', '/fills/' + f.body.id + '/dispense', {});
+        ctx.assert(d.status === 409 && d.body.error.code === 'insufficient_stock', 'expired lot cannot supply: ' + JSON.stringify(d));
+      }
+routes:
+  - id: list_patients
+    method: GET
+    path: /patients
+    purpose: List patients, search by name.
+  - id: get_patient
+    method: GET
+    path: /patients/{id}
+    purpose: Fetch a patient.
+  - id: create_patient
+    method: POST
+    path: /patients
+    purpose: Register a patient.
+  - id: list_medications
+    method: GET
+    path: /medications
+    purpose: List medications, filter by schedule.
+  - id: get_medication
+    method: GET
+    path: /medications/{id}
+    purpose: Fetch a medication.
+  - id: create_medication
+    method: POST
+    path: /medications
+    purpose: Add a medication.
+  - id: list_pharmacists
+    method: GET
+    path: /pharmacists
+    purpose: List staff, filter by role.
+  - id: get_pharmacist
+    method: GET
+    path: /pharmacists/{id}
+    purpose: Fetch a staff member.
+  - id: create_pharmacist
+    method: POST
+    path: /pharmacists
+    purpose: Add a staff member.
+  - id: list_lots
+    method: GET
+    path: /lots
+    purpose: List stock lots, filter by medication_id and status, sort by expires_on.
+  - id: get_lot
+    method: GET
+    path: /lots/{id}
+    purpose: Fetch a lot.
+  - id: create_lot
+    method: POST
+    path: /lots
+    purpose: Receive a new lot into stock.
+  - id: list_prescriptions
+    method: GET
+    path: /prescriptions
+    purpose: List prescriptions, filter by patient_id, medication_id, status.
+  - id: get_prescription
+    method: GET
+    path: /prescriptions/{id}
+    purpose: Fetch a prescription.
+  - id: create_prescription
+    method: POST
+    path: /prescriptions
+    purpose: Enter a new prescription (status starts active).
+  - id: list_fills
+    method: GET
+    path: /fills
+    purpose: List fills, filter by status, prescription_id, medication_id, patient_id; sort by created_at.
+  - id: get_fill
+    method: GET
+    path: /fills/{id}
+    purpose: Fetch a fill.
+  - id: request_fill
+    method: POST
+    path: /prescriptions/{id}/fills
+    purpose: 'Action: request a fill or refill.'
+  - id: cancel_prescription
+    method: POST
+    path: /prescriptions/{id}/cancel
+    purpose: 'Action: cancel a prescription.'
+  - id: approve_fill
+    method: POST
+    path: /fills/{id}/approve
+    purpose: 'Action: pharmacist verifies a controlled fill.'
+  - id: reject_fill
+    method: POST
+    path: /fills/{id}/reject
+    purpose: 'Action: reject an open fill.'
+  - id: dispense_fill
+    method: POST
+    path: /fills/{id}/dispense
+    purpose: 'Action: dispense a ready fill from stock.'
+  - id: quarantine_lot
+    method: POST
+    path: /lots/{id}/quarantine
+    purpose: 'Action: quarantine a lot for recall.'
+seed:
+  rowsPerEntity:
+    patient: 14
+    medication: 14
+    pharmacist: 5
+    stock_lot: 32
+    prescription: 40
+    fill: 48
+  mix: Controlled medications are about a third of the catalogue. Fills in pending_review are for controlled prescriptions, 12 of them. Of those prescriptions, 4 have expires_on just before the clock start (2026-10-08 to 2026-10-09T08:00) but are still status active because the daily job has not run, and 4 expire just after (2026-10-10 or later); the rest are far in the future. Two near-duplicate patients, Maria Lopez and Maria Lopes with different dates of birth, each have a ready fill. Pharmacists include 3 pharmacists and 2 technicians. Stock lots include several available lots of the same medication with different expiry dates, 3 quarantined and 10 expired lots. Prescription notes include misleading text such as 'already approved by phone' on rows whose fill status says otherwise. Prescriptions include completed ones with all refills used and cancelled ones.
+  stateMix:
+    prescription:
+      active: 60
+      completed: 15
+      cancelled: 15
+      expired: 10
+    fill:
+      pending_review: 25
+      ready: 30
+      dispensed: 35
+      rejected: 10
+    stock_lot:
+      available: 59
+      quarantined: 9
+      expired: 32
+tasks:
+  - id: approve_pending_controlled_fill
+    difficulty: easy
+    kind: permissions
+    intent: Approve the pending-review controlled fill for one named patient using a named pharmacist.
+    decoyIdea: Approves a pending fill for a different patient, or uses a technician's id.
+  - id: dispense_ready_fill_for_maria_lopez
+    difficulty: medium
+    kind: misleading_text
+    intent: Dispense the ready fill for Maria Lopez (identified by date of birth) without touching the near-duplicate patient Maria Lopes.
+    actions:
+      - dispense_fill
+    decoyIdea: Dispenses Maria Lopes' ready fill, or both fills.
+    pressure:
+      states:
+        - fill.ready
+      distractors: patient
+  - id: process_controlled_review_queue
+    difficulty: hard
+    kind: time_sensitive
+    intent: Process the controlled-substance review queue at the current date. Approve and dispense each pending_review fill whose prescription has not passed expires_on. Reject, with a reason, those whose prescription expiry date has passed, even though their status is still active.
+    actions:
+      - approve_fill
+      - dispense_fill
+      - reject_fill
+    decoyIdea: Approves and dispenses every pending fill, trusting status active, or only approves without dispensing.
+    pressure:
+      states:
+        - fill.pending_review
+        - prescription.active
+      distractors: prescription
+open_questions:
+  - question: Should technicians be allowed to dispense controlled fills once a pharmacist has approved them?
+    default_answer: Yes. Dispensing needs no staff input; only approval and rejection need a pharmacist.
+  - question: Do pending fills count against the refill allowance?
+    default_answer: Yes, every non-rejected fill request counts.
+  - question: Can a fill be split across lots?
+    default_answer: No. One lot must hold the whole fill quantity.
+  - question: Do expired or cancelled prescriptions auto-reject open fills?
+    default_answer: Cancelling rejects open fills. Expiry does not; a pharmacist must reject them.
+assumptions:
+  - decision: Clock starts 2026-10-09T09:00:00Z with tick 0s; seeded history is before this and prescription and lot expiry dates lie on both sides of it.
+    why: Time is explicit and deterministic; expiry-sensitive tasks need rows just before and after the cutoff.
+  - decision: A prescription allows refills_allowed + 1 fills in total. fills_made counts non-rejected fill requests, and rejecting a fill gives the count back.
+    why: Matches the real first-fill-plus-refills model and keeps the rule checkable.
+  - decision: Controlled fills start as pending_review; otc and rx fills start as ready. Approval moves pending_review to ready and records approved_by.
+    why: Keeps a single fill state machine with the pharmacist gate on controlled substances only.
+  - decision: Only a pharmacist with role pharmacist and active=true may approve or reject. Technicians get 422 not_pharmacist.
+    why: Models the permission rule for controlled substances.
+  - decision: Dispensing picks the available lot with the earliest expires_on that is still in the future and has enough quantity, takes the fill quantity from it, and records lot_id. Otherwise it answers 409 insufficient_stock.
+    why: First-expiring-first-out is the standard pharmacy practice, and it keeps expired stock from reaching patients.
+  - decision: Daily jobs mark lots and prescriptions expired once past expires_on. The approve and dispense actions check the dates themselves and do not trust the status flag.
+    why: Status can lag by up to a day, which creates the near-cutoff traps.
+  - decision: Dispensing the last allowed fill of a prescription moves it to completed.
+    why: Gives prescriptions a natural end state.
+  - decision: Standard create routes may create lots with past expiry dates.
+    why: This lets receiving and test flows work; dispense and the job guard against expired stock.
+  - decision: 'State mix: prescriptions 60% active, 15% completed, 15% cancelled, 10% expired; fills 25% pending_review, 30% ready, 35% dispensed, 10% rejected; lots 59% available, 9% quarantined, 32% expired.'
+    why: Spreads every state with none above 70% while matching the seed counts described.
+outOfScope:
+  - what: Insurance claims, pricing and payments
+    why: The core value is the stock and approval workflow, not billing.
+  - what: DEA/state controlled-substance reporting and drug-interaction checks
+    why: External integrations and clinical decision support are not record workflows here.
+  - what: Authentication and user sessions
+    why: The acting pharmacist is passed as an action input.
+  - what: Purchase orders and supplier management
+    why: Lots arrive through the create route only.
+changes: []

@@ -1,0 +1,103 @@
+{
+  "runId": "v25-hard-courses-t30",
+  "models": [
+    "claude-haiku-5-5"
+  ],
+  "episodesPerCell": 3,
+  "budgetUsd": 2,
+  "episodeBudgetUsd": 0.5,
+  "spentUsd": 0.085071,
+  "stop": {
+    "kind": "complete"
+  },
+  "tasks": [
+    {
+      "world": "gen-courses",
+      "task": "cancel_cs120_section_01",
+      "labeled": "hard",
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "agrees": false
+    }
+  ],
+  "cells": [
+    {
+      "world": "gen-courses",
+      "task": "cancel_cs120_section_01",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "episodes": 3,
+      "trials": 3,
+      "passes": 3,
+      "passRate": 1,
+      "interval": [
+        0.439,
+        1
+      ],
+      "measured": "easy",
+      "costUsd": 0.085071,
+      "usdPerPass": 0.028357,
+      "unaccountedCalls": 0,
+      "stops": {
+        "done": 3
+      },
+      "refused": 0
+    }
+  ],
+  "episodes": [
+    {
+      "world": "gen-courses",
+      "task": "cancel_cs120_section_01",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 1,
+      "runId": "v25-hard-courses-t30.1",
+      "episodeId": "v25-hard-courses-t30.1__cancel_cs120_section_01__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.03541278,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.035413
+    },
+    {
+      "world": "gen-courses",
+      "task": "cancel_cs120_section_01",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 2,
+      "runId": "v25-hard-courses-t30.2",
+      "episodeId": "v25-hard-courses-t30.2__cancel_cs120_section_01__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.02386831,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.023868
+    },
+    {
+      "world": "gen-courses",
+      "task": "cancel_cs120_section_01",
+      "labeled": "hard",
+      "model": "claude-haiku-5-5",
+      "index": 3,
+      "runId": "v25-hard-courses-t30.3",
+      "episodeId": "v25-hard-courses-t30.3__cancel_cs120_section_01__1",
+      "score": 1,
+      "stopReason": "done",
+      "costUsd": 0.02578963,
+      "unaccountedCalls": 0,
+      "refusal": null,
+      "budgetTooSmall": false,
+      "chargedUsd": 0.02579
+    }
+  ]
+}

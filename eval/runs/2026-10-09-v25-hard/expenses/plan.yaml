@@ -1,0 +1,398 @@
+revision: 1
+software: Expensify/Concur-style expense reporting tool
+summary: Employees file expense reports of itemised expenses with receipts. Each category has a receipt threshold and an approval limit. Managers approve reports within limits, finance approves over-limit reports, and finance reimburses approved reports.
+clock:
+  start: 2026-10-09T09:00:00Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: employee
+    purpose: Person who files or approves expenses; role employee, manager or finance; optional manager_id
+    keyFields:
+      - name
+      - email
+      - role
+      - manager_id
+  - name: category
+    purpose: Expense category with receipt threshold and per-expense approval limit
+    keyFields:
+      - name
+      - approval_limit
+      - receipt_threshold
+  - name: expense_report
+    purpose: A report of expenses with a status machine draft/submitted/approved/rejected/reimbursed
+    keyFields:
+      - employee_id
+      - title
+      - status
+      - total
+      - approver_id
+      - rejection_reason
+  - name: expense
+    purpose: One line of a report
+    keyFields:
+      - report_id
+      - category_id
+      - amount
+      - merchant
+      - incurred_on
+      - receipt_attached
+  - name: receipt
+    purpose: Receipt file attached to an expense
+    keyFields:
+      - expense_id
+      - filename
+  - name: reimbursement
+    purpose: Payout record created when finance reimburses an approved report
+    keyFields:
+      - report_id
+      - amount
+      - paid_by_id
+workflows:
+  - name: expense_report_lifecycle
+    entity: expense_report
+    states:
+      - draft
+      - submitted
+      - approved
+      - rejected
+      - reimbursed
+    rules:
+      - rule: Expenses can be added only to a draft report and the report total is the sum of its expenses
+        by:
+          - add_expense
+        test: draft_only_expenses
+      - rule: Submitting needs at least one expense and a receipt on every expense above its category receipt threshold
+        by:
+          - submit_report
+          - attach_receipt
+        test: submit_requires_receipts
+      - rule: Only the submitter's manager or a finance employee may approve, never the submitter; an expense above its category approval limit needs a finance approver
+        by:
+          - approve_report
+        test: approval_authority
+      - rule: A finance employee can approve an over-limit report that a manager could not
+        by:
+          - approve_report
+        test: over_limit_needs_finance
+      - rule: Rejecting needs a reason and an approver with authority, and a rejected report is final
+        by:
+          - reject_report
+        test: reject_needs_reason
+      - rule: Only finance reimburses, only approved reports, once; this creates a reimbursement for the report total
+        by:
+          - reimburse_report
+        test: reimburse_once_by_finance
+      - rule: Report status moves only along draft->submitted->approved|rejected, approved->reimbursed
+        schema: state machine on expense_report.status
+    actions:
+      - add_expense
+      - attach_receipt
+      - submit_report
+      - approve_report
+      - reject_report
+      - reimburse_report
+jobs: []
+acceptanceTests:
+  - id: draft_only_expenses
+    intent: Expenses can only be added to draft reports and totals accumulate
+    actions:
+      - add_expense
+      - submit_report
+      - attach_receipt
+    description: Add two expenses, check total, submit, then adding is refused
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const m = post('/employees', { name: 'Dee Draft', email: 'dee.draft@acc.example', role: 'employee' }).body;
+      const c = post('/categories', { name: 'Meals-A1', approval_limit: 10000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: m.id, title: 'Trip A1' });
+      ctx.assert(r.status === 201 && r.body.status === 'draft', 'report create: ' + JSON.stringify(r.body));
+      const e1 = post('/expense_reports/' + r.body.id + '/expenses', { category_id: c.id, amount: 1200, merchant: 'Cafe', incurred_on: '2026-10-01T00:00:00Z' });
+      ctx.assert(e1.status === 200 || e1.status === 201, 'add expense 1: ' + JSON.stringify(e1.body));
+      const e2 = post('/expense_reports/' + r.body.id + '/expenses', { category_id: c.id, amount: 800, merchant: 'Diner', incurred_on: '2026-10-02T00:00:00Z' });
+      ctx.assert(e2.status === 200 || e2.status === 201, 'add expense 2');
+      ctx.assert(ctx.api('GET', '/expense_reports/' + r.body.id).body.total === 2000, 'total should be 2000');
+      ctx.assert(post('/expense_reports/' + r.body.id + '/submit', {}).status === 200, 'submit should work');
+      ctx.assert(post('/expense_reports/' + r.body.id + '/expenses', { category_id: c.id, amount: 100, merchant: 'Late', incurred_on: '2026-10-03T00:00:00Z' }).status === 409, 'adding to submitted report refused');
+      }
+  - id: submit_requires_receipts
+    intent: Submit is refused without required receipts and works after attaching one
+    actions:
+      - add_expense
+      - attach_receipt
+      - submit_report
+    description: Empty report and missing receipt both refuse submit; receipt unblocks it
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const m = post('/employees', { name: 'Rex Receipt', email: 'rex.receipt@acc.example', role: 'employee' }).body;
+      const c = post('/categories', { name: 'Hotel-A2', approval_limit: 50000, receipt_threshold: 2500 }).body;
+      const r = post('/expense_reports', { employee_id: m.id, title: 'Conf A2' }).body;
+      ctx.assert(post('/expense_reports/' + r.id + '/submit', {}).status === 409, 'empty report cannot be submitted');
+      const e = post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 9000, merchant: 'Inn', incurred_on: '2026-10-01T00:00:00Z' }).body;
+      ctx.assert(post('/expense_reports/' + r.id + '/submit', {}).status === 409, 'missing receipt refuses submit');
+      const a = post('/expenses/' + e.id + '/receipt', { filename: 'inn.pdf' });
+      ctx.assert(a.status === 200 || a.status === 201, 'attach receipt: ' + JSON.stringify(a.body));
+      ctx.assert(ctx.api('GET', '/expenses/' + e.id).body.receipt_attached === true, 'receipt_attached true');
+      const s = post('/expense_reports/' + r.id + '/submit', {});
+      ctx.assert(s.status === 200 && s.body.status === 'submitted', 'submit after receipt: ' + JSON.stringify(s.body));
+      }
+  - id: approval_authority
+    intent: Only the submitter's manager or finance can approve; not self, not another employee
+    actions:
+      - add_expense
+      - submit_report
+      - approve_report
+    description: Self, stranger refused; manager approves
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const mg = post('/employees', { name: 'Mia Manager', email: 'mia.manager@acc.example', role: 'manager' }).body;
+      const emp = post('/employees', { name: 'Eli Employee', email: 'eli.employee@acc.example', role: 'employee', manager_id: mg.id }).body;
+      const other = post('/employees', { name: 'Oz Other', email: 'oz.other@acc.example', role: 'manager' }).body;
+      const c = post('/categories', { name: 'Taxi-A3', approval_limit: 10000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: emp.id, title: 'Taxi A3' }).body;
+      post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 3000, merchant: 'Cab', incurred_on: '2026-10-01T00:00:00Z' });
+      post('/expense_reports/' + r.id + '/submit', {});
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: emp.id }).status === 409, 'self approval refused');
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: other.id }).status === 409, 'non-manager refused');
+      const ok = post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id });
+      ctx.assert(ok.status === 200 && ok.body.status === 'approved' && ok.body.approver_id === mg.id, 'manager approves: ' + JSON.stringify(ok.body));
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id }).status === 409, 'approve twice refused');
+      }
+  - id: over_limit_needs_finance
+    intent: A report with an over-limit expense is refused for a manager but approved by finance
+    actions:
+      - add_expense
+      - attach_receipt
+      - submit_report
+      - approve_report
+    description: Manager refused, finance approves
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const mg = post('/employees', { name: 'Max Manager', email: 'max.manager@acc.example', role: 'manager' }).body;
+      const fin = post('/employees', { name: 'Fay Finance', email: 'fay.finance@acc.example', role: 'finance' }).body;
+      const emp = post('/employees', { name: 'Ian Intern', email: 'ian.intern@acc.example', role: 'employee', manager_id: mg.id }).body;
+      const c = post('/categories', { name: 'Gear-A4', approval_limit: 20000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: emp.id, title: 'Laptop A4' }).body;
+      const e = post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 25000, merchant: 'ShopCo', incurred_on: '2026-10-01T00:00:00Z' }).body;
+      post('/expenses/' + e.id + '/receipt', { filename: 'laptop.pdf' });
+      ctx.assert(post('/expense_reports/' + r.id + '/submit', {}).status === 200, 'submit');
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id }).status === 409, 'manager cannot approve over limit');
+      ctx.assert(ctx.api('GET', '/expense_reports/' + r.id).body.status === 'submitted', 'still submitted');
+      const ok = post('/expense_reports/' + r.id + '/approve', { approver_id: fin.id });
+      ctx.assert(ok.status === 200 && ok.body.status === 'approved', 'finance approves: ' + JSON.stringify(ok.body));
+      }
+  - id: reject_needs_reason
+    intent: Reject needs a reason and authority and is final
+    actions:
+      - add_expense
+      - submit_report
+      - reject_report
+      - approve_report
+    description: Reject without reason refused; with reason ok; then cannot approve
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const mg = post('/employees', { name: 'Rho Manager', email: 'rho.manager@acc.example', role: 'manager' }).body;
+      const emp = post('/employees', { name: 'Ula Employee', email: 'ula.employee@acc.example', role: 'employee', manager_id: mg.id }).body;
+      const c = post('/categories', { name: 'Misc-A5', approval_limit: 10000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: emp.id, title: 'Misc A5' }).body;
+      post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 1500, merchant: 'Kiosk', incurred_on: '2026-10-01T00:00:00Z' });
+      ctx.assert(post('/expense_reports/' + r.id + '/reject', { approver_id: mg.id, reason: 'not yet' }).status === 409, 'draft cannot be rejected');
+      post('/expense_reports/' + r.id + '/submit', {});
+      ctx.assert(post('/expense_reports/' + r.id + '/reject', { approver_id: mg.id, reason: '' }).status >= 400, 'empty reason refused');
+      const ok = post('/expense_reports/' + r.id + '/reject', { approver_id: mg.id, reason: 'Personal purchase' });
+      ctx.assert(ok.status === 200 && ok.body.status === 'rejected' && ok.body.rejection_reason === 'Personal purchase', 'reject: ' + JSON.stringify(ok.body));
+      ctx.assert(post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id }).status === 409, 'rejected is final');
+      }
+  - id: reimburse_once_by_finance
+    intent: Only finance reimburses an approved report, once, creating a reimbursement
+    actions:
+      - add_expense
+      - submit_report
+      - approve_report
+      - reimburse_report
+    description: Draft/non-finance refused; finance reimburses; second refused
+    script: |-
+      (ctx) => {
+      const post = (p, b) => ctx.api('POST', p, b);
+      const mg = post('/employees', { name: 'Sol Manager', email: 'sol.manager@acc.example', role: 'manager' }).body;
+      const fin = post('/employees', { name: 'Gil Finance', email: 'gil.finance@acc.example', role: 'finance' }).body;
+      const emp = post('/employees', { name: 'Tia Employee', email: 'tia.employee@acc.example', role: 'employee', manager_id: mg.id }).body;
+      const c = post('/categories', { name: 'Travel-A6', approval_limit: 30000, receipt_threshold: 5000 }).body;
+      const r = post('/expense_reports', { employee_id: emp.id, title: 'Trip A6' }).body;
+      post('/expense_reports/' + r.id + '/expenses', { category_id: c.id, amount: 4000, merchant: 'Train', incurred_on: '2026-10-01T00:00:00Z' });
+      ctx.assert(post('/expense_reports/' + r.id + '/reimburse', { finance_id: fin.id }).status === 409, 'draft cannot be reimbursed');
+      post('/expense_reports/' + r.id + '/submit', {});
+      post('/expense_reports/' + r.id + '/approve', { approver_id: mg.id });
+      ctx.assert(post('/expense_reports/' + r.id + '/reimburse', { finance_id: mg.id }).status === 409, 'non-finance refused');
+      const ok = post('/expense_reports/' + r.id + '/reimburse', { finance_id: fin.id });
+      ctx.assert(ok.status === 200 && ok.body.status === 'reimbursed', 'reimburse: ' + JSON.stringify(ok.body));
+      const list = ctx.api('GET', '/reimbursements?report_id=' + r.id).body.data;
+      ctx.assert(list.length === 1 && list[0].amount === 4000 && list[0].paid_by_id === fin.id, 'reimbursement row');
+      ctx.assert(post('/expense_reports/' + r.id + '/reimburse', { finance_id: fin.id }).status === 409, 'second reimburse refused');
+      }
+routes:
+  - id: list_employees
+    method: GET
+    path: /employees
+    purpose: List employees, filter by role, manager_id, email
+  - id: get_employee
+    method: GET
+    path: /employees/{id}
+    purpose: Get employee
+  - id: create_employee
+    method: POST
+    path: /employees
+    purpose: Create employee
+  - id: list_categories
+    method: GET
+    path: /categories
+    purpose: List categories
+  - id: get_category
+    method: GET
+    path: /categories/{id}
+    purpose: Get category
+  - id: create_category
+    method: POST
+    path: /categories
+    purpose: Create category
+  - id: list_reports
+    method: GET
+    path: /expense_reports
+    purpose: List reports, filter by employee_id, status, approver_id
+  - id: get_report
+    method: GET
+    path: /expense_reports/{id}
+    purpose: Get report
+  - id: create_report
+    method: POST
+    path: /expense_reports
+    purpose: Create draft report
+  - id: list_expenses
+    method: GET
+    path: /expenses
+    purpose: List expenses, filter by report_id, category_id
+  - id: get_expense
+    method: GET
+    path: /expenses/{id}
+    purpose: Get expense
+  - id: list_receipts
+    method: GET
+    path: /receipts
+    purpose: List receipts, filter by expense_id
+  - id: list_reimbursements
+    method: GET
+    path: /reimbursements
+    purpose: List reimbursements, filter by report_id
+  - id: add_expense
+    method: POST
+    path: /expense_reports/{id}/expenses
+    purpose: 'Action: add expense to draft report'
+  - id: attach_receipt
+    method: POST
+    path: /expenses/{id}/receipt
+    purpose: 'Action: attach receipt'
+  - id: submit_report
+    method: POST
+    path: /expense_reports/{id}/submit
+    purpose: 'Action: submit'
+  - id: approve_report
+    method: POST
+    path: /expense_reports/{id}/approve
+    purpose: 'Action: approve'
+  - id: reject_report
+    method: POST
+    path: /expense_reports/{id}/reject
+    purpose: 'Action: reject'
+  - id: reimburse_report
+    method: POST
+    path: /expense_reports/{id}/reimburse
+    purpose: 'Action: reimburse'
+seed:
+  rowsPerEntity:
+    employee: 9
+    category: 5
+    expense_report: 30
+    expense: 70
+    receipt: 50
+    reimbursement: 6
+  mix: 30 reports across all statuses with some submitted reports containing an expense above its category approval limit (needing finance) and near-miss reports just under the limit; drafts with expenses lacking required receipts; misleading report titles such as 'APPROVED - do not review' on submitted reports; one employee with several reports so listing must page past 25.
+  stateMix:
+    expense_report:
+      draft: 20
+      submitted: 35
+      approved: 15
+      rejected: 10
+      reimbursed: 20
+tasks:
+  - id: approve_team_report
+    difficulty: easy
+    kind: permissions
+    intent: As a named manager, approve the one submitted report of a named direct report that is within limits.
+    actions:
+      - approve_report
+    decoyIdea: Approves a different submitted report with a similar title or one from another team.
+    pressure:
+      states:
+        - expense_report.submitted
+  - id: fix_and_submit_draft
+    difficulty: medium
+    kind: misleading_text
+    intent: An employee's draft has an expense above the receipt threshold with no receipt (a note says 'receipt attached'); attach the receipt filename given and submit the report.
+    actions:
+      - attach_receipt
+      - submit_report
+    decoyIdea: Trusts the note and submits without attaching, or attaches to the wrong expense.
+    pressure:
+      states:
+        - expense_report.draft
+      distractors: expense
+  - id: finance_clear_over_limit_queue
+    difficulty: hard
+    kind: irreversible
+    intent: As the named finance employee, find the submitted reports of one department's employees that contain an over-limit expense (reading past the first page of reports), approve them, and reimburse them; leave under-limit and other-department reports untouched.
+    actions:
+      - approve_report
+      - reimburse_report
+    decoyIdea: Stops at first page, reimburses the near-miss report just under the limit, or approves everything submitted.
+    pressure:
+      paging: expense_report
+      states:
+        - expense_report.submitted
+        - expense_report.approved
+      distractors: expense_report
+open_questions:
+  - question: Is the approval limit per expense or per report total?
+    default_answer: Per expense.
+  - question: Who approves over-limit reports?
+    default_answer: A finance-role employee.
+  - question: Can rejected reports be resubmitted?
+    default_answer: No, rejected is final.
+assumptions:
+  - decision: Clock starts 2026-10-09T09:00:00Z with tick 0s; all seeded history is before it
+    why: Deterministic time after historical events; no task needs future events
+  - decision: Approval limit is per expense, not per report total
+    why: Per-category limits are naturally per line
+  - decision: Over-limit reports must be approved by a finance-role employee; others by the submitter's direct manager (or finance)
+    why: Manager sign-off plus escalation
+  - decision: Finance may approve any report except their own; nobody approves own report
+    why: Segregation of duties
+  - decision: Expense amounts above the category receipt_threshold need an attached receipt to submit
+    why: Typical policy
+  - decision: Rejected reports are terminal; employee files a new report
+    why: Keeps the state machine small
+  - decision: Single currency USD, receipts are metadata only
+    why: Simplicity
+  - decision: Report total is maintained by add_expense
+    why: Avoids stale totals
+  - decision: No jobs
+    why: No time-driven rule requested
+outOfScope:
+  - what: File upload, OCR, multi-currency, mileage/per-diem, accounting export, notifications
+    why: Not records-and-actions core
+changes: []

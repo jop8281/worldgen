@@ -1,0 +1,6 @@
+world.yaml:658: warning seed.too_few_rows_for_paging seed.supplier: expected more than 25 supplier rows, found 6 rows. 6 rows fit on one page. Paging never matters.
+world.yaml:676: warning seed.too_few_rows_for_paging seed.purchase_order: expected more than 25 purchase_order rows, found 12 rows. 12 rows fit on one page. Paging never matters.
+receive_partial_delivery easy solution 1.000 noop 0.000 decoys [0.200] prefix - mutants 1/8 probed (not probed: target_field, other_row, extra_action, extra_delete, undone_write, retarget, perturb) checks 4/5 flipped (not flipped: goal the order is partially received)
+settle_damaged_writeoffs medium solution 1.000 noop 0.000 decoys [0.600, 0.400, 0.000] prefix 0.800 mutants 3/8 probed (not probed: target_field, extra_action, extra_delete, undone_write, perturb) checks 7/7 flipped
+reconcile_zone_counts hard solution 1.000 noop 0.000 decoys [0.500, 0.600, 0.000] prefix 0.800 mutants 4/8 probed (not probed: target_field, extra_action, extra_delete, undone_write) checks 8/8 flipped
+total: checks 19/20 flipped, mutants 8/24 probed, 3 tasks

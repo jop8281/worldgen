@@ -87,9 +87,15 @@ export const TASK_KINDS = {
   scarce_resource: 'a limited supply, such as seats, stock, rooms, slots or budget, that competing requests draw on, so the task allocates within capacity and a decoy overbooks or serves the wrong request',
   two_actors: 'two parties act on the same records in turn, such as a requester and an approver, so the task makes both sides\' calls in order and a decoy makes only one side\'s',
   irreversible: 'a step that cannot be undone, such as a refund, a cancellation or a deletion, so the task checks its preconditions before acting and a decoy acts on the wrong row or before checking',
+  time_sensitive: 'which rows to act on depends on the current time, which the instruction states, against seeded due dates, deadlines or expiries with rows just before and just after the cutoff; the reference compares them with ctx.now(), and a decoy goes by creation order, a status flag or the wrong side of the cutoff',
+  policy_conflict: 'the request collides with a world rule or a policy the instruction states for some of the rows, so for those the correct move is to refuse, leaving them unchanged, or to escalate them through an action; the grader rewards changing only the allowed rows, and a decoy carries out the whole request',
+  investigation: 'the target is found only by combining facts from several entities and reading past the first list page, with near-miss rows that match all facts but one; the reference pages and cross-checks, and a decoy stops at the first page, trusts one entity or takes a near miss',
+  misleading_text: 'seeded rows carry misleading text, such as a note saying already refunded or ignore the limit on a row whose fields say otherwise, or a near-duplicate name; the instruction says what to go by, the reference follows the fields and the rule, and a decoy follows the text',
 } as const;
 export type TaskKind = keyof typeof TASK_KINDS;
 const TASK_KIND_IDS = Object.keys(TASK_KINDS) as [TaskKind, ...TaskKind[]];
+/** The kinds a hard task must have (A-405): each fails an agent that skims, trusts the first plausible row or follows planted text. */
+export const HARD_TASK_KINDS = ['time_sensitive', 'policy_conflict', 'investigation', 'misleading_text', 'irreversible'] as const satisfies readonly TaskKind[];
 /** Each kind with its meaning, for prompts and messages. */
 export const taskKindLines = (): string[] => TASK_KIND_IDS.map((k) => `${k}: ${TASK_KINDS[k]}`);
 /** The fewest distinct workflow actions a plan's multi-action hard task names (A-390). */
@@ -224,10 +230,11 @@ const multiActionHard = (t: Plan['tasks'][number], known: ReadonlySet<string>): 
   t.difficulty === 'hard' && new Set((t.actions ?? []).map(actionKey).filter((k) => known.has(k))).size >= HARD_TASK_ACTIONS;
 
 /**
- * Task variety in a proposed plan (A-390). A task's actions must name workflow actions the plan declares. When `owed`,
- * as on create, at least one hard task names two or more distinct actions its reference solution calls, and at least
- * one task has a kind; an iterate plan instead keeps each existing task's kind and actions (`iteratePlanSchema`). Only
- * the proposal schemas apply it, like jobActionIssues, so `parsePlanYaml` still loads a plan written before it.
+ * Task variety in a proposed plan (A-390, A-405). A task's actions must name workflow actions the plan declares. When
+ * `owed`, as on create, at least one hard task names two or more distinct actions its reference solution calls, and
+ * every hard task has a hard kind; an iterate plan instead keeps each existing task's kind and actions
+ * (`iteratePlanSchema`). Only the proposal schemas apply it, like jobActionIssues, so `parsePlanYaml` still loads a plan
+ * written before it.
  */
 export function taskVarietyIssues(plan: Plan, ctx: z.RefinementCtx, owed: boolean): void {
   const known = declaredActions(plan);
@@ -239,9 +246,11 @@ export function taskVarietyIssues(plan: Plan, ctx: z.RefinementCtx, owed: boolea
   if (!plan.tasks.some((t) => multiActionHard(t, known))) {
     ctx.addIssue({ code: 'custom', path: ['tasks'], message: `a plan to build needs at least one hard task whose actions name ${HARD_TASK_ACTIONS} or more distinct workflow actions its reference solution calls, such as one that assigns a row and then resolves it` });
   }
-  if (!plan.tasks.some((t) => t.kind !== undefined)) {
-    ctx.addIssue({ code: 'custom', path: ['tasks'], message: `a plan to build needs at least one task with a kind, one of ${taskKindLines().join('; ')}` });
-  }
+  const hardKinds: readonly TaskKind[] = HARD_TASK_KINDS;
+  plan.tasks.forEach((t, ti) => {
+    if (t.difficulty !== 'hard' || (t.kind !== undefined && hardKinds.includes(t.kind))) return;
+    ctx.addIssue({ code: 'custom', path: ['tasks', ti, 'kind'], message: `hard task ${t.id} needs a hard kind, one of ${HARD_TASK_KINDS.join(', ')}: a hard task is hard for what it asks an agent to notice, not for its size` });
+  });
 }
 
 /**
