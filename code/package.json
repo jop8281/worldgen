@@ -20,6 +20,7 @@
     "dataset": "bun src/cli/dataset.ts",
     "difficulty": "bun src/cli/difficulty.ts",
     "episode": "bun src/cli/episode.ts",
+    "evidence": "bun src/cli/evidence.ts",
     "studio": "bun src/cli/studio.ts",
     "scenario": "bun src/cli/scenario.ts",
     "studio-watch": "bun src/cli/studio-watch.ts",

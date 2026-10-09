@@ -3,7 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { checkWorld, createRuntime, loadWorld, type CheckedWorld, type Runtime } from '#engine';
+import { checkWorld, createRuntime, loadWorld, publicWorldOf, renderWorldYaml, type CheckedWorld, type Runtime } from '#engine';
 import { parsePlanYaml } from '../src/worldgen/plan.ts';
 
 const WORLDS = fileURLToPath(new URL('../../prod/worlds/', import.meta.url));
@@ -45,15 +45,33 @@ describe('prod worlds', async () => {
     assert.ok(dirs.includes('helpdesk'), `found ${dirs.join(', ')}`);
   });
 
+  /** Each world as the check above accepted it, so the public-form check below reuses it instead of checking again. */
+  const accepted = new Map<string, CheckedWorld>();
   for (const name of dirs) {
     it(`${name} loads and passes checkWorld`, async () => {
       const loaded = await loadWorld(path.join(WORLDS, name));
       assert.ok(loaded.ok, loaded.ok ? '' : JSON.stringify(loaded.error, null, 2));
       const report = checkWorld(loaded.value);
       assert.equal(report.ok, true, report.ok ? '' : `reached ${report.reached}:\n${JSON.stringify(report.issues, null, 2)}`);
+      if (report.ok) accepted.set(name, report.world);
       const planText = await readFile(path.join(WORLDS, name, 'plan.yaml'), 'utf8').catch(() => null);
       const plan = planText === null ? null : parsePlanYaml(planText);
       if (report.ok && plan !== null) assert.deepEqual(plan.clock, report.world.meta.clock, `${name}: plan.yaml clock differs from world.yaml`);
+    });
+  }
+
+  for (const name of dirs) {
+    it(`${name}/public/world.yaml is its public form, with no grader, solution or decoy (A-392)`, async () => {
+      const world = accepted.get(name);
+      if (world === undefined) assert.fail(`${name} did not check, so its public form cannot be derived`);
+      const pub = checkWorld(publicWorldOf(world));
+      if (!pub.ok) assert.fail(`${name}'s public form failed check at ${pub.reached}:\n${JSON.stringify(pub.issues, null, 2)}`);
+      const text = await readFile(path.join(WORLDS, name, 'public', 'world.yaml'), 'utf8').catch(() => null);
+      assert.equal(text, renderWorldYaml(pub.world), `${name}/public/world.yaml is missing or stale: run \`bun scripts/render-public-worlds.ts\` from code/ and commit it`);
+      for (const [id, task] of Object.entries(pub.world.tasks)) {
+        assert.deepEqual(Object.keys(task).sort(), ['alternatives', 'decoys', 'difficulty', 'instruction'], `${name} task ${id}`);
+        assert.deepEqual([task.decoys, task.alternatives], [[], []], `${name} task ${id}`);
+      }
     });
   }
 

@@ -265,7 +265,7 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
 });
 
 /** The docs an evaluator follows (YOS-201). Every command in them, fenced or inline, is checked. */
-const EVALUATOR_DOCS = ['README.md', 'prod/README.md', 'prod/prompts/README.md', 'research/live-run-runbook.md', 'research/studio-demo-runbook.md'];
+const EVALUATOR_DOCS = ['README.md', 'prod/README.md', 'prod/evidence/README.md', 'prod/prompts/README.md', 'research/live-run-runbook.md', 'research/studio-demo-runbook.md'];
 
 /**
  * One documented command: a package.json script (`bun run x`, `npm run x`), a repo script (`scripts/x.sh`, from the repo
@@ -356,6 +356,10 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
       'scripts/boat-ci.sh', 'scripts/live.sh', 'scripts/solve-demo.sh',
     ]);
     assert.deepEqual(heads('research/studio-demo-runbook.md'), ['bun run studio', 'bun scripts/studio-rehearse.ts', 'scripts/studio-deploy.sh']);
+    assert.deepEqual(heads('prod/evidence/README.md'), [
+      '../scripts/demo-all.sh', 'bun run evidence', 'bun run live', 'bun run worldplay',
+      'bun scripts/analyze-eval.ts', 'bun scripts/freeze-export-world.ts', 'bun scripts/render-public-worlds.ts',
+    ]);
   });
 
   it('names a package.json script for every `bun run` and `npm run`, and each CLI answers --help with 0', () => {

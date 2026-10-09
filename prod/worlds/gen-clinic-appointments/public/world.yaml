@@ -1,0 +1,735 @@
+format: 1
+meta:
+  name: world
+  description: A single-clinic scheduling system. Doctors publish time slots. Patients book one open slot at a time, so a slot can never be double booked. A booked appointment can be cancelled only if the visit starts at least 24 hours from now, and cancelling frees the slot. After the visit time the front desk checks patients in and completes them, or marks them as no-show. No-shows are counted per patient, and 3 of them block further booking. Time-based jobs auto-close expired open slots and auto-mark no-shows. The clock moves only through jobs and explicit advances.
+  resembles: Jane App / Zocdoc-style clinic appointment scheduling API
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-06T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  doctor:
+    description: A clinician who owns time slots. Inactive doctors (on leave or left the clinic) cannot take new bookings.
+    idPrefix: doc
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      specialty:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - general_practice
+          - cardiology
+          - dermatology
+          - pediatrics
+          - orthopedics
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      active:
+        type: bool
+        description: false when the doctor is on leave or has left. Inactive doctors cannot be booked.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  patient:
+    description: A person who books visits. Tracks no-show history and a booking block set by the workflow.
+    idPrefix: pat
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      phone:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 40
+      no_show_count:
+        type: int
+        description: Number of this patient's appointments recorded as no_show. Incremented by the no-show action and job.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      booking_blocked:
+        type: bool
+        description: true once no_show_count reaches 3. A blocked patient cannot book.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+  slot:
+    description: A bookable time window [starts_at, ends_at) on one doctor's calendar. The slot's own status is what prevents double booking.
+    idPrefix: slt
+    fields:
+      doctor_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: doctor
+        onDelete: restrict
+      starts_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      ends_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: open can be booked or closed. booked returns to open only through cancel. closed is final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - open
+          - booked
+          - closed
+        initial: open
+        transitions:
+          open:
+            - booked
+            - closed
+          booked:
+            - open
+          closed: []
+  appointment:
+    description: A patient's claim on one slot, with its visit outcome. Created only by book_appointment and changed only by actions and jobs.
+    idPrefix: apt
+    fields:
+      slot_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: slot
+        onDelete: restrict
+      patient_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: patient
+        onDelete: restrict
+      doctor_id:
+        type: ref
+        description: Copied from the slot at booking.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: doctor
+        onDelete: restrict
+      starts_at:
+        type: datetime
+        description: Copied from the slot at booking.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      status:
+        type: state
+        description: booked can go to checked_in, cancelled or no_show. checked_in can go to completed. completed, cancelled and no_show are final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - booked
+          - checked_in
+          - completed
+          - cancelled
+          - no_show
+        initial: booked
+        transitions:
+          booked:
+            - checked_in
+            - cancelled
+            - no_show
+          checked_in:
+            - completed
+          completed: []
+          cancelled: []
+          no_show: []
+      reason:
+        type: text
+        description: Why the patient is visiting.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      cancel_reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      cancelled_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      checked_in_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_doctors:
+    op: list
+    entity: doctor
+    filters:
+      - specialty
+      - active
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /doctors
+  get_doctor:
+    op: get
+    entity: doctor
+    method: GET
+    path: /doctors/{id}
+  create_doctor:
+    op: create
+    entity: doctor
+    method: POST
+    path: /doctors
+  update_doctor:
+    op: update
+    entity: doctor
+    method: PATCH
+    path: /doctors/{id}
+  list_patients:
+    op: list
+    entity: patient
+    filters:
+      - booking_blocked
+    search:
+      - name
+      - email
+    sort:
+      - no_show_count
+      - name
+    pageSize: 25
+    method: GET
+    path: /patients
+  get_patient:
+    op: get
+    entity: patient
+    method: GET
+    path: /patients/{id}
+  create_patient:
+    op: create
+    entity: patient
+    method: POST
+    path: /patients
+  update_patient:
+    op: update
+    entity: patient
+    method: PATCH
+    path: /patients/{id}
+  list_slots:
+    op: list
+    entity: slot
+    filters:
+      - doctor_id
+      - status
+    search: []
+    sort:
+      - starts_at
+    pageSize: 25
+    method: GET
+    path: /slots
+  get_slot:
+    op: get
+    entity: slot
+    method: GET
+    path: /slots/{id}
+  create_slot:
+    op: create
+    entity: slot
+    method: POST
+    path: /slots
+  update_slot:
+    op: update
+    entity: slot
+    method: PATCH
+    path: /slots/{id}
+  list_appointments:
+    op: list
+    entity: appointment
+    filters:
+      - status
+      - patient_id
+      - doctor_id
+      - slot_id
+    search: []
+    sort:
+      - starts_at
+    pageSize: 25
+    method: GET
+    path: /appointments
+  get_appointment:
+    op: get
+    entity: appointment
+    method: GET
+    path: /appointments/{id}
+  list_patient_appointments:
+    op: list
+    entity: appointment
+    filters:
+      - status
+      - doctor_id
+    search: []
+    sort:
+      - starts_at
+    pageSize: 25
+    method: GET
+    path: /patients/{patient_id}/appointments
+actions:
+  book_appointment:
+    method: POST
+    path: /slots/{id}/book
+    description: Book an open slot for a patient. Refused with 409 slot_taken unless the slot is open, slot_in_past unless it starts after now, doctor_inactive, patient_blocked, and patient_conflict when the patient holds a booked or checked_in appointment that overlaps. Copies doctor_id and starts_at onto the new appointment and sets the slot to booked.
+    input:
+      patient_id:
+        type: ref
+        description: The patient who books the slot.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: patient
+        onDelete: restrict
+      reason:
+        type: text
+        description: Why the patient is visiting. Must not be blank.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const id = ctx.params.id;
+       const slot = ctx.db.get('slot', id);
+       if (slot === null) ctx.fail(404, 'not_found', 'slot ' + id + ' not found');
+       const reason = ctx.body.reason.trim();
+       if (reason === '') ctx.fail(400, 'input.invalid', 'Invalid input for book_appointment: reason expected a non-blank text');
+       const patient = ctx.db.get('patient', ctx.body.patient_id);
+       if (patient === null) ctx.fail(422, 'unknown_patient', 'patient ' + ctx.body.patient_id + ' not found. List patients with GET /patients.');
+       if (slot.status !== 'open') ctx.fail(409, 'slot_taken', 'slot ' + id + ' is ' + slot.status + ' and cannot be booked. List open slots with GET /slots?status=open.');
+       const now = ctx.now();
+       if (ctx.time.minutesBetween(now, slot.starts_at) <= 0) ctx.fail(409, 'slot_in_past', 'slot ' + id + ' starts at ' + slot.starts_at + ', which is not after ' + now + '.');
+       const doctor = ctx.db.get('doctor', slot.doctor_id);
+       if (doctor === null || !doctor.active) ctx.fail(409, 'doctor_inactive', 'doctor ' + slot.doctor_id + ' is inactive and cannot take bookings.');
+       if (patient.booking_blocked) ctx.fail(409, 'patient_blocked', 'patient ' + patient.id + ' is blocked from booking after ' + patient.no_show_count + ' no-shows.');
+       for (const a of ctx.db.list('appointment', { where: { patient_id: patient.id } })) {
+        if (a.status !== 'booked' && a.status !== 'checked_in') continue;
+        const other = ctx.db.get('slot', a.slot_id);
+        if (other === null) continue;
+        if (ctx.time.minutesBetween(other.starts_at, slot.ends_at) > 0 && ctx.time.minutesBetween(slot.starts_at, other.ends_at) > 0) ctx.fail(409, 'patient_conflict', 'patient ' + patient.id + ' already holds appointment ' + a.id + ' at ' + other.starts_at + ', which overlaps this slot.');
+       }
+       const apt = ctx.db.create('appointment', { slot_id: slot.id, patient_id: patient.id, doctor_id: slot.doctor_id, starts_at: slot.starts_at, reason });
+       ctx.db.update('slot', slot.id, { status: 'booked' });
+       return { status: 201, body: apt };
+      }
+  cancel_appointment:
+    method: POST
+    path: /appointments/{id}/cancel
+    description: Cancel a booked appointment whose visit starts at least 24 hours from now (exactly 24h is allowed). Stores cancel_reason, sets cancelled_at and returns the slot to open. Otherwise 409 cancellation_window_closed.
+    input:
+      cancel_reason:
+        type: text
+        description: Why the appointment is cancelled. Must not be blank.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const id = ctx.params.id;
+       const a = ctx.db.get('appointment', id);
+       if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+       const why = ctx.body.cancel_reason.trim();
+       if (why === '') ctx.fail(400, 'input.invalid', 'Invalid input for cancel_appointment: cancel_reason expected a non-blank text');
+       if (a.status !== 'booked') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only booked appointments can be cancelled.');
+       const slot = ctx.db.get('slot', a.slot_id);
+       const now = ctx.now();
+       if (ctx.time.minutesBetween(now, slot.starts_at) < 1440) ctx.fail(409, 'cancellation_window_closed', 'appointment ' + id + ' starts at ' + slot.starts_at + ', less than 24 hours from ' + now + '. It can no longer be cancelled.');
+       const updated = ctx.db.update('appointment', id, { status: 'cancelled', cancel_reason: why, cancelled_at: now });
+       ctx.db.update('slot', slot.id, { status: 'open' });
+       return { status: 200, body: updated };
+      }
+  check_in_appointment:
+    method: POST
+    path: /appointments/{id}/check_in
+    description: Check in a booked appointment. Allowed from 30 minutes before the slot starts until the slot ends. 409 too_early or too_late otherwise.
+    input: {}
+    handler: |-
+      (ctx) => {
+       const id = ctx.params.id;
+       const a = ctx.db.get('appointment', id);
+       if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+       if (a.status !== 'booked') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only booked appointments can be checked in.');
+       const slot = ctx.db.get('slot', a.slot_id);
+       const now = ctx.now();
+       if (ctx.time.minutesBetween(now, slot.starts_at) > 30) ctx.fail(409, 'too_early', 'check-in opens 30 minutes before ' + slot.starts_at + '.');
+       if (ctx.time.minutesBetween(slot.ends_at, now) > 0) ctx.fail(409, 'too_late', 'the visit ended at ' + slot.ends_at + '. Check-in is closed.');
+       const updated = ctx.db.update('appointment', id, { status: 'checked_in', checked_in_at: now });
+       return { status: 200, body: updated };
+      }
+  complete_appointment:
+    method: POST
+    path: /appointments/{id}/complete
+    description: Complete a checked_in appointment.
+    input: {}
+    handler: |-
+      (ctx) => {
+       const id = ctx.params.id;
+       const a = ctx.db.get('appointment', id);
+       if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+       if (a.status !== 'checked_in') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only checked_in appointments can be completed.');
+       const updated = ctx.db.update('appointment', id, { status: 'completed' });
+       return { status: 200, body: updated };
+      }
+  mark_no_show:
+    method: POST
+    path: /appointments/{id}/no_show
+    description: Record a booked appointment as no_show once the slot has started. Increments the patient's no_show_count and blocks booking at 3. The slot stays booked.
+    input: {}
+    handler: |-
+      (ctx) => {
+       const id = ctx.params.id;
+       const a = ctx.db.get('appointment', id);
+       if (a === null) ctx.fail(404, 'not_found', 'appointment ' + id + ' not found');
+       if (a.status !== 'booked') ctx.fail(409, 'invalid_state', 'appointment ' + id + ' is ' + a.status + '. Only booked appointments can be marked no-show.');
+       const slot = ctx.db.get('slot', a.slot_id);
+       const now = ctx.now();
+       if (ctx.time.minutesBetween(slot.starts_at, now) < 0) ctx.fail(409, 'too_early', 'appointment ' + id + ' starts at ' + slot.starts_at + '. A no-show can be recorded once the visit time has come.');
+       const updated = ctx.db.update('appointment', id, { status: 'no_show' });
+       const p = ctx.db.get('patient', a.patient_id);
+       const count = p.no_show_count + 1;
+       ctx.db.update('patient', p.id, { no_show_count: count, booking_blocked: count >= 3 ? true : p.booking_blocked });
+       return { status: 200, body: updated };
+      }
+jobs:
+  close_expired_slots:
+    description: Every hour. An open slot whose starts_at has passed becomes closed.
+    every: 1h
+    run: |-
+      (ctx) => {
+       const now = ctx.now();
+       for (const s of ctx.db.list('slot', { where: { status: 'open' } })) {
+        if (ctx.time.minutesBetween(s.starts_at, now) < 0) continue;
+        ctx.db.update('slot', s.id, { status: 'closed' });
+       }
+      }
+  auto_no_show:
+    description: Every 30 minutes. A booked appointment whose slot ended more than 30 minutes ago becomes no_show, with the same patient counter and 3-strike block as mark_no_show.
+    every: 30m
+    run: |-
+      (ctx) => {
+       const now = ctx.now();
+       for (const a of ctx.db.list('appointment', { where: { status: 'booked' } })) {
+        const slot = ctx.db.get('slot', a.slot_id);
+        if (slot === null || ctx.time.minutesBetween(slot.ends_at, now) <= 30) continue;
+        ctx.db.update('appointment', a.id, { status: 'no_show' });
+        const p = ctx.db.get('patient', a.patient_id);
+        const count = p.no_show_count + 1;
+        ctx.db.update('patient', p.id, { no_show_count: count, booking_blocked: count >= 3 ? true : p.booking_blocked });
+       }
+      }
+fixtures: {}
+seed:
+  doctor: "(ctx) => [['Priya Patel','general_practice',true,'priya.patel'],['Elena Vasquez','cardiology',false,'elena.vasquez'],['Marcus Chen','cardiology',true,'marcus.chen'],['Samuel Adeyemi','dermatology',true,'samuel.adeyemi'],['Hannah Brooks','pediatrics',true,'hannah.brooks'],['Rahul Mehta','orthopedics',true,'rahul.mehta'],['Lucia Fontaine','pediatrics',true,'lucia.fontaine'],['James Whitfield','general_practice',true,'james.whitfield']].map(([name, specialty, active, mail], i) => { const c = ctx.time.plus('2024-09-02T09:00:00.000Z', (i * 40 + 5) + 'd'); return { name: 'Dr. ' + name, specialty, email: mail + '@clinic.example', active, created_at: c, updated_at: c }; })"
+  patient: "(ctx) => { const firsts = ['Aiden','Beatrice','Carlos','Dina','Ethan','Fatima','Gabriel','Hana','Isaac','Julia','Kofi','Laura','Mateo','Nadia','Oliver','Parisa','Quentin','Rosa','Simon','Tamsin','Umar','Vera','Wesley','Yuki']; const lasts = ['Anderson','Bianchi','Castillo','Dubois','Evans','Farouk','Gupta','Hoffman','Ivanov','Jensen','Kowalski','Lindqvist','Moreau','Nguyen','Ortega','Petrov','Quinn','Rossi','Schmidt','Tanaka','Underwood','Vargas','Walker','Zhang']; const rows = []; for (let i = 0; i < 60; i++) { const name = i === 0 ? 'Maria Lopez' : i === 1 ? 'Daniel Okoye' : firsts[i % 24] + ' ' + lasts[(i * 5 + 3) % 24]; const count = i >= 2 && i <= 4 ? 3 : i >= 5 && i <= 10 ? 2 : i >= 11 && i <= 15 ? 1 : 0; const c = ctx.time.plus('2025-02-03T09:00:00.000Z', (i * 5 + 3) + 'd'); rows.push({ name, email: name.toLowerCase().replace(/[^a-z]+/g, '.') + (i > 1 ? String(i) : '') + '@mail.example', phone: i % 9 === 4 ? null : '555-' + String(1000 + (i * 137) % 9000), no_show_count: count, booking_blocked: count >= 3, created_at: c, updated_at: c }); } return rows; }"
+  slot: "(ctx) => { const now = ctx.now(); const P = (iso, m) => { const dc = (y, mo, d) => { y -= mo <= 2 ? 1 : 0; const era = Math.floor(y / 400); const yoe = y - era * 400; const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; }; const n = dc(+iso.slice(0, 4), +iso.slice(5, 7), +iso.slice(8, 10)) * 1440 + (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16)) + m; const days = Math.floor(n / 1440); const rem = n - days * 1440; const z = days + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const mo = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (mo <= 2 ? 1 : 0); const p = (x, w) => String(x).padStart(w, '0'); return p(y, 4) + '-' + p(mo, 2) + '-' + p(d, 2) + 'T' + p(Math.floor(rem / 60), 2) + ':' + p(rem % 60, 2) + iso.slice(16); }; const M0 = now.slice(0, 10) + 'T00:00:00.000Z'; const weekday = iso => { const year = +iso.slice(0,4), month = +iso.slice(5,7), day = +iso.slice(8,10); const a = Math.floor((14-month)/12), y = year-a, m = month+12*a-2; return (day+y+Math.floor(y/4)-Math.floor(y/100)+Math.floor(y/400)+Math.floor(31*m/12))%7; }; const businessStart = (days,hour) => { let at=P(M0,days*1440+hour*60); while(weekday(at)===0||weekday(at)===6) at=P(at,1440); return at; }; const docs = ctx.rows('doctor'); const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = ctx.int(0, i); const x = a[i]; a[i] = a[j]; a[j] = x; } return a; }; const mins = (st) => ctx.time.minutesBetween(now, st); const items = []; for (let d = 0; d < docs.length; d++) { for (let o = -14; o <= 21; o++) { const day=weekday(P(M0,o*1440)); if(day===0||day===6) continue; let n = 0; if (o === -1 || o === 0) n = 6; else if (o < -1) n = (o + 14 + d) % 4 === 0 ? 4 : 0; else n = ((o + d) % 3 === 0 || (d === 0 && o <= 7)) ? 4 : 0; for (let k = 0; k < n; k++) { const start = P(M0, o * 1440 + 540 + 30 * k); items.push({ d, o, k, start, end: P(start, 30), status: null }); } } } const inWin = (it) => it.o === 0 && mins(it.start) >= -29 && mins(it.start) <= 30; const win = items.filter(inWin); const cand = win.filter((it) => it.d !== 0 && it.d !== 1 && it.d !== 2).sort((a, b) => a.k - b.k || a.d - b.d).slice(0, 9); for (const it of win) it.status = cand.includes(it) ? 'booked' : (mins(it.start) <= 0 ? 'closed' : 'open'); const rest = items.filter((it) => !inWin(it)); const yest = shuffle(rest.filter((it) => it.o === -1)); yest.forEach((it, i) => { it.status = i < 40 ? 'booked' : 'closed'; }); const older = shuffle(rest.filter((it) => it.o < -1)); const nb = Math.ceil(older.length * 0.74); older.forEach((it, i) => { it.status = i < nb ? 'booked' : 'closed'; }); for (const it of rest.filter((x) => x.o === 0 && mins(x.start) <= 0)) it.status = 'closed'; const future = rest.filter((it) => it.o >= 0 && mins(it.start) > 0); const forced = { '0:2': 1, '0:3': 1, '0:4': 1, '1:0': 1, '1:1': 1, '2:0': 1, '2:2': 1, '3:1': 1, '5:0': 1, '5:3': 1, '7:2': 1 }; let mc = 0; const regular = []; for (const it of future) { if (it.d === 0) it.status = forced[it.o + ':' + it.k] ? 'booked' : 'open'; else if (it.d === 2 && mc < 3) { it.status = 'open'; mc++; } else regular.push(it); } shuffle(regular); const rb = Math.round(regular.length * 0.17); const rc = Math.round(regular.length * 0.03); regular.forEach((it, i) => { it.status = i < rb ? 'booked' : i < rb + rc ? 'closed' : 'open'; }); const nearStart = businessStart(0, 16); const farStart = businessStart(4, 14); items.push({ d: 3, o: 99, k: 0, start: nearStart, end: P(nearStart, 30), status: 'booked' }); items.push({ d: 4, o: 99, k: 0, start: farStart, end: P(farStart, 30), status: 'booked' }); return items.map((it) => { const status = it.status || 'open'; const created = P(M0, -(ctx.int(16, 60) * 1440) + ctx.int(0, 600)); const updated = status === 'open' ? created : P(created, ctx.int(1, 10) * 1440 + ctx.int(0, 600)); return { doctor_id: docs[it.d].id, starts_at: it.start, ends_at: it.end, status, created_at: created, updated_at: updated }; }); }"
+  appointment: "(ctx) => { const now = ctx.now(); const P = (iso, m) => { const dc = (y, mo, d) => { y -= mo <= 2 ? 1 : 0; const era = Math.floor(y / 400); const yoe = y - era * 400; const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; }; const n = dc(+iso.slice(0, 4), +iso.slice(5, 7), +iso.slice(8, 10)) * 1440 + (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16)) + m; const days = Math.floor(n / 1440); const rem = n - days * 1440; const z = days + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const mo = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (mo <= 2 ? 1 : 0); const p = (x, w) => String(x).padStart(w, '0'); return p(y, 4) + '-' + p(mo, 2) + '-' + p(d, 2) + 'T' + p(Math.floor(rem / 60), 2) + ':' + p(rem % 60, 2) + iso.slice(16); }; const M0 = now.slice(0, 10) + 'T00:00:00.000Z'; const weekday = iso => { const year = +iso.slice(0,4), month = +iso.slice(5,7), day = +iso.slice(8,10); const a = Math.floor((14-month)/12), y = year-a, m = month+12*a-2; return (day+y+Math.floor(y/4)-Math.floor(y/100)+Math.floor(y/400)+Math.floor(31*m/12))%7; }; const businessStart = (days,hour) => { let at=P(M0,days*1440+hour*60); while(weekday(at)===0||weekday(at)===6) at=P(at,1440); return at; }; const slots = ctx.rows('slot'); const patients = ctx.rows('patient'); const docs = ctx.rows('doctor'); const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = ctx.int(0, i); const x = a[i]; a[i] = a[j]; a[j] = x; } return a; }; const mins = (st) => ctx.time.minutesBetween(now, st); const maria = patients[0]; const daniel = patients[1]; const pool = patients.slice(2); const busy = {}; const isFree = (p, s) => !(busy[p.id] && busy[p.id][s.starts_at]); const hold = (p, s) => { if (!busy[p.id]) busy[p.id] = {}; busy[p.id][s.starts_at] = true; }; const assign = (s, allowBlocked) => { for (let t = 0; t < 500; t++) { const p = pool[ctx.int(0, pool.length - 1)]; if (p.booking_blocked && !allowBlocked) continue; if (!isFree(p, s)) continue; hold(p, s); return p; } throw new Error('no free patient for ' + s.id); }; const reasons = ['Annual physical exam', 'Follow-up on blood test results', 'Persistent cough for two weeks', 'Skin rash on forearm', 'Lower back pain', 'Blood pressure check', 'Child vaccination review', 'Knee pain after running', 'Chest tightness during exercise', 'Medication review', 'Migraine headaches', 'Mole check', 'Ear infection', 'Sports injury assessment']; const cancelReasons = ['Patient has a work conflict', 'Feeling better, no longer needs the visit', 'Travelling that week', 'Booked a closer clinic', 'Family emergency', 'Child is sick, need to reschedule']; const rows = []; const live = {}; const add = (s, p, status, x) => { if (status !== 'cancelled') live[s.id] = p.id; rows.push(Object.assign({ slot_id: s.id, patient_id: p.id, doctor_id: s.doctor_id, starts_at: s.starts_at, status, reason: ctx.pick(reasons), cancel_reason: null, cancelled_at: null, checked_in_at: null }, x)); }; const booked = slots.filter((s) => s.status === 'booked'); const nearStart = businessStart(0, 16); const farStart = businessStart(4, 14); const near = booked.find((s) => s.doctor_id === docs[3].id && s.starts_at === nearStart); const far = booked.find((s) => s.doctor_id === docs[4].id && s.starts_at === farStart); for (const s of [far, near]) { hold(maria, s); const c = P(now, -ctx.int(3000, 9000)); add(s, maria, 'booked', { created_at: c, updated_at: c }); } const isAnchor = (s) => s === near || s === far; const inWin = (s) => s.starts_at >= M0 && mins(s.starts_at) >= -29 && mins(s.starts_at) <= 30; for (const s of booked.filter((x) => !isAnchor(x) && inWin(x))) { const p = assign(s, false); const c = P(now, -ctx.int(1500, 9000)); const ci = P(now, -ctx.int(2, 25)); add(s, p, 'checked_in', { checked_in_at: ci, created_at: c, updated_at: ci }); } const rest = booked.filter((s) => !isAnchor(s) && !inWin(s)); const future = rest.filter((s) => mins(s.starts_at) > 0); const past = rest.filter((s) => mins(s.starts_at) <= 0); for (const s of future) { const p = assign(s, false); const c = P(now, -ctx.int(60, 12000)); add(s, p, 'booked', { created_at: c, updated_at: c }); } const yStart = P(M0, -1440); const yest = shuffle(past.filter((s) => s.starts_at >= yStart)); const older = shuffle(past.filter((s) => s.starts_at < yStart)); const recentOld = older.slice().sort((a,b) => a.starts_at > b.starts_at ? -1 : a.starts_at < b.starts_at ? 1 : 0); const dist = recentOld.slice(0, 4); let R = older.filter((s) => !dist.includes(s)); const queue = []; for (const p of patients) for (let i = 0; i < p.no_show_count; i++) queue.push(p); shuffle(queue); for (const p of queue) { const idx = R.findIndex((s) => isFree(p, s)); if (idx < 0) throw new Error('no slot for no-show of ' + p.id); const s = R.splice(idx, 1)[0]; hold(p, s); const c = P(s.starts_at, -(ctx.int(1, 10) * 1440 + ctx.int(0, 600))); add(s, p, 'no_show', { created_at: c, updated_at: P(s.starts_at, ctx.int(95, 300)) }); } const done = R.concat(yest.slice(30)); let spec = 0; for (const s of done) { let p = null; if (spec === 0 && isFree(maria, s)) { p = maria; hold(p, s); spec = 1; } else if (spec === 1 && isFree(daniel, s)) { p = daniel; hold(p, s); spec = 2; } else p = assign(s, true); const c = P(s.starts_at, -(ctx.int(1, 10) * 1440 + ctx.int(0, 600))); add(s, p, 'completed', { created_at: c, updated_at: P(s.starts_at, ctx.int(35, 110)) }); } for (const s of dist.concat(yest.slice(0, 30))) { const p = assign(s, false); const c = P(s.starts_at, -(ctx.int(1, 10) * 1440 + ctx.int(0, 600))); add(s, p, 'booked', { created_at: c, updated_at: c }); } const priya = docs[0].id; const openFuture = shuffle(slots.filter((s) => s.status === 'open' && mins(s.starts_at) > 0 && s.doctor_id !== priya)); const rebooked = shuffle(future.filter((s) => s.doctor_id !== priya)); const targets = openFuture.slice(0, 20).concat(rebooked.slice(0, 5)); for (const s of targets) { let p = pool[ctx.int(0, pool.length - 1)]; while (p.id === live[s.id]) p = pool[ctx.int(0, pool.length - 1)]; const a = P(now, -60); const b = P(s.starts_at, -1440); const latest = a < b ? a : b; const at = P(latest, -ctx.int(0, 3000)); const c = P(at, -ctx.int(300, 6000)); add(s, p, 'cancelled', { cancel_reason: ctx.pick(cancelReasons), cancelled_at: at, created_at: c, updated_at: at }); } rows.sort((x, y) => (x.starts_at < y.starts_at ? -1 : x.starts_at > y.starts_at ? 1 : 0)); return rows; }"
+tests:
+  book_appointment_rules:
+    description: book_appointment books an open slot, copies doctor and start onto the appointment, and refuses a taken slot, blank or missing reason, unknown slot or patient, a slot starting now, an inactive doctor and an overlapping patient booking. Adjacent slots are fine.
+    script: |-
+      (ctx) => {
+       const t0 = ctx.now();
+       const plus = (iso, m) => { const dc = (y, mo, d) => { y -= mo <= 2 ? 1 : 0; const era = Math.floor(y / 400); const yoe = y - era * 400; const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; }; const n = dc(+iso.slice(0, 4), +iso.slice(5, 7), +iso.slice(8, 10)) * 1440 + (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16)) + m; const days = Math.floor(n / 1440); const rem = n - days * 1440; const z = days + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const mo = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (mo <= 2 ? 1 : 0); const p = (x, w) => String(x).padStart(w, '0'); return p(y, 4) + '-' + p(mo, 2) + '-' + p(d, 2) + 'T' + p(Math.floor(rem / 60), 2) + ':' + p(rem % 60, 2) + iso.slice(16); };
+       const at = (m) => plus(t0, m);
+       const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+       const doc = (n) => { const r = ctx.api('POST', '/doctors', { name: 'Dr ' + n, specialty: 'cardiology', email: n + '@clinic.example' }); ok(r, 'create doctor'); return r.body; };
+       const pat = (n) => { const r = ctx.api('POST', '/patients', { name: 'Pat ' + n, email: n + '@mail.example', phone: '555-0100' }); ok(r, 'create patient'); return r.body; };
+       const slot = (d, s, e) => { const r = ctx.api('POST', '/slots', { doctor_id: d.id, starts_at: at(s), ends_at: at(e) }); ok(r, 'create slot'); return r.body; };
+       const book = (s, p, reason) => ctx.api('POST', '/slots/' + s.id + '/book', { patient_id: p.id, reason });
+       const code = (r) => (r.body && r.body.error ? r.body.error.code : null);
+       const d1 = doc('amy'); const d2 = doc('ben'); const d4 = doc('fox'); const p1 = pat('cara'); const p2 = pat('dev');
+       const s1 = slot(d1, 2880, 2910);
+       const r = book(s1, p1, '  follow-up consultation  ');
+       ctx.assert(r.status === 201, 'book returned ' + r.status + ' ' + JSON.stringify(r.body));
+       ctx.assert(r.body.status === 'booked' && r.body.slot_id === s1.id && r.body.patient_id === p1.id && r.body.doctor_id === d1.id && r.body.starts_at === s1.starts_at && r.body.reason === 'follow-up consultation', 'appointment fields: ' + JSON.stringify(r.body));
+       ctx.assert(ctx.api('GET', '/slots/' + s1.id).body.status === 'booked', 'slot is booked');
+       const taken = book(s1, p2, 'checkup');
+       ctx.assert(taken.status === 409 && code(taken) === 'slot_taken', 'double booking: ' + JSON.stringify(taken));
+       ctx.assert(ctx.api('GET', '/appointments?slot_id=' + s1.id).body.data.length === 1, 'one appointment on the slot');
+       const blank = book(s1, p2, '   ');
+       ctx.assert(blank.status === 400 && code(blank) === 'input.invalid', 'blank reason: ' + JSON.stringify(blank));
+       const none = ctx.api('POST', '/slots/' + s1.id + '/book', { patient_id: p2.id });
+       ctx.assert(none.status === 400 && code(none) === 'input.invalid', 'missing reason: ' + JSON.stringify(none));
+       const nos = book({ id: 'slt_9999' }, p2, 'checkup');
+       ctx.assert(nos.status === 404 && code(nos) === 'not_found', 'unknown slot: ' + JSON.stringify(nos));
+       const s2 = slot(d2, 4000, 4030);
+       const nop = ctx.api('POST', '/slots/' + s2.id + '/book', { patient_id: 'pat_9999', reason: 'checkup' });
+       ctx.assert(nop.status >= 400 && nop.status < 500, 'unknown patient: ' + JSON.stringify(nop));
+       const s0 = slot(d2, 0, 30);
+       const past = book(s0, p2, 'checkup');
+       ctx.assert(past.status === 409 && code(past) === 'slot_in_past', 'slot starting now: ' + JSON.stringify(past));
+       const d3 = doc('eve');
+       ok(ctx.api('PATCH', '/doctors/' + d3.id, { active: false }), 'deactivate doctor');
+       const s3 = slot(d3, 2880, 2910);
+       const inactive = book(s3, p2, 'checkup');
+       ctx.assert(inactive.status === 409 && code(inactive) === 'doctor_inactive', 'inactive doctor: ' + JSON.stringify(inactive));
+       ctx.assert(ctx.api('GET', '/slots/' + s3.id).body.status === 'open', 'refused booking leaves the slot open');
+       const s4 = slot(d4, 2895, 2925);
+       const conflict = book(s4, p1, 'checkup');
+       ctx.assert(conflict.status === 409 && code(conflict) === 'patient_conflict', 'overlap: ' + JSON.stringify(conflict));
+       const s5 = slot(d2, 2910, 2940);
+       ctx.assert(book(s5, p1, 'checkup').status === 201, 'adjacent slot books');
+       ctx.assert(book(s4, p2, 'checkup').status === 201, 'another patient books the overlapping slot');
+      }
+  cancel_appointment_window:
+    description: cancel_appointment allows a visit exactly 24h away, stores the reason and reopens the slot (which can be rebooked). A visit 23h59m away is refused with cancellation_window_closed. Missing reason, repeat cancel and unknown id are refused.
+    script: |-
+      (ctx) => {
+       const t0 = ctx.now();
+       const plus = (iso, m) => { const dc = (y, mo, d) => { y -= mo <= 2 ? 1 : 0; const era = Math.floor(y / 400); const yoe = y - era * 400; const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; }; const n = dc(+iso.slice(0, 4), +iso.slice(5, 7), +iso.slice(8, 10)) * 1440 + (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16)) + m; const days = Math.floor(n / 1440); const rem = n - days * 1440; const z = days + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const mo = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (mo <= 2 ? 1 : 0); const p = (x, w) => String(x).padStart(w, '0'); return p(y, 4) + '-' + p(mo, 2) + '-' + p(d, 2) + 'T' + p(Math.floor(rem / 60), 2) + ':' + p(rem % 60, 2) + iso.slice(16); };
+       const at = (m) => plus(t0, m);
+       const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+       const doc = (n) => { const r = ctx.api('POST', '/doctors', { name: 'Dr ' + n, specialty: 'dermatology', email: n + '@clinic.example' }); ok(r, 'create doctor'); return r.body; };
+       const pat = (n) => { const r = ctx.api('POST', '/patients', { name: 'Pat ' + n, email: n + '@mail.example' }); ok(r, 'create patient'); return r.body; };
+       const slot = (d, s, e) => { const r = ctx.api('POST', '/slots', { doctor_id: d.id, starts_at: at(s), ends_at: at(e) }); ok(r, 'create slot'); return r.body; };
+       const book = (s, p) => { const r = ctx.api('POST', '/slots/' + s.id + '/book', { patient_id: p.id, reason: 'skin check' }); ctx.assert(r.status === 201, 'book: ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; };
+       const code = (r) => (r.body && r.body.error ? r.body.error.code : null);
+       const d1 = doc('fay'); const d2 = doc('gus'); const p1 = pat('hal'); const p2 = pat('ida'); const p3 = pat('jon');
+       const sa = slot(d1, 1440, 1470);
+       const a1 = book(sa, p1);
+       const r = ctx.api('POST', '/appointments/' + a1.id + '/cancel', { cancel_reason: 'Patient is travelling' });
+       ctx.assert(r.status === 200, 'cancel at exactly 24h: ' + r.status + ' ' + JSON.stringify(r.body));
+       ctx.assert(r.body.status === 'cancelled' && r.body.cancel_reason === 'Patient is travelling' && r.body.cancelled_at === t0, 'cancelled fields: ' + JSON.stringify(r.body));
+       ctx.assert(ctx.api('GET', '/slots/' + sa.id).body.status === 'open', 'slot is open again');
+       ctx.assert(ctx.api('POST', '/slots/' + sa.id + '/book', { patient_id: p2.id, reason: 'skin check' }).status === 201, 'freed slot can be rebooked');
+       const again = ctx.api('POST', '/appointments/' + a1.id + '/cancel', { cancel_reason: 'again' });
+       ctx.assert(again.status === 409 && code(again) === 'invalid_state', 'cancel twice: ' + JSON.stringify(again));
+       const sb = slot(d2, 1439, 1469);
+       const a3 = book(sb, p3);
+       const late = ctx.api('POST', '/appointments/' + a3.id + '/cancel', { cancel_reason: 'Changed my mind' });
+       ctx.assert(late.status === 409 && code(late) === 'cancellation_window_closed', 'inside 24h: ' + JSON.stringify(late));
+       const after = ctx.api('GET', '/appointments/' + a3.id).body;
+       ctx.assert(after.status === 'booked' && after.cancelled_at === null && after.cancel_reason === null, 'refused cancel changed nothing: ' + JSON.stringify(after));
+       ctx.assert(ctx.api('GET', '/slots/' + sb.id).body.status === 'booked', 'slot stays booked');
+       const none = ctx.api('POST', '/appointments/' + a3.id + '/cancel', {});
+       ctx.assert(none.status === 400 && code(none) === 'input.invalid', 'missing reason: ' + JSON.stringify(none));
+       const nf = ctx.api('POST', '/appointments/apt_9999/cancel', { cancel_reason: 'x' });
+       ctx.assert(nf.status === 404 && code(nf) === 'not_found', 'unknown appointment: ' + JSON.stringify(nf));
+      }
+  check_in_and_complete_flow:
+    description: check_in_appointment is refused more than 30 minutes before the start and after the slot ends. A checked-in appointment can be completed once. Complete needs checked_in and cancel is refused after check-in.
+    script: |-
+      (ctx) => {
+       const t0 = ctx.now();
+       const plus = (iso, m) => { const dc = (y, mo, d) => { y -= mo <= 2 ? 1 : 0; const era = Math.floor(y / 400); const yoe = y - era * 400; const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; }; const n = dc(+iso.slice(0, 4), +iso.slice(5, 7), +iso.slice(8, 10)) * 1440 + (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16)) + m; const days = Math.floor(n / 1440); const rem = n - days * 1440; const z = days + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const mo = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (mo <= 2 ? 1 : 0); const p = (x, w) => String(x).padStart(w, '0'); return p(y, 4) + '-' + p(mo, 2) + '-' + p(d, 2) + 'T' + p(Math.floor(rem / 60), 2) + ':' + p(rem % 60, 2) + iso.slice(16); };
+       const at = (m) => plus(t0, m);
+       const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+       const doc = (n) => { const r = ctx.api('POST', '/doctors', { name: 'Dr ' + n, specialty: 'pediatrics', email: n + '@clinic.example' }); ok(r, 'create doctor'); return r.body; };
+       const pat = (n) => { const r = ctx.api('POST', '/patients', { name: 'Pat ' + n, email: n + '@mail.example' }); ok(r, 'create patient'); return r.body; };
+       const slot = (d, s, e) => { const r = ctx.api('POST', '/slots', { doctor_id: d.id, starts_at: at(s), ends_at: at(e) }); ok(r, 'create slot'); return r.body; };
+       const book = (s, p) => { const r = ctx.api('POST', '/slots/' + s.id + '/book', { patient_id: p.id, reason: 'annual checkup' }); ctx.assert(r.status === 201, 'book: ' + r.status + ' ' + JSON.stringify(r.body)); return r.body; };
+       const code = (r) => (r.body && r.body.error ? r.body.error.code : null);
+       const d1 = doc('kim'); const d2 = doc('lee'); const p1 = pat('mo'); const p2 = pat('ned');
+       const a1 = book(slot(d1, 120, 150), p1);
+       const a2 = book(slot(d2, 120, 150), p2);
+       const early = ctx.api('POST', '/appointments/' + a1.id + '/check_in', {});
+       ctx.assert(early.status === 409 && code(early) === 'too_early', 'check-in 2h before: ' + JSON.stringify(early));
+       const notYet = ctx.api('POST', '/appointments/' + a1.id + '/complete', {});
+       ctx.assert(notYet.status === 409 && code(notYet) === 'invalid_state', 'complete a booked appointment: ' + JSON.stringify(notYet));
+       ctx.advance('90m');
+       const c = ctx.api('POST', '/appointments/' + a1.id + '/check_in', {});
+       ctx.assert(c.status === 200 && c.body.status === 'checked_in' && c.body.checked_in_at === ctx.now(), 'check-in 30m before: ' + JSON.stringify(c));
+       const cancel = ctx.api('POST', '/appointments/' + a1.id + '/cancel', { cancel_reason: 'x' });
+       ctx.assert(cancel.status === 409 && code(cancel) === 'invalid_state', 'cancel after check-in: ' + JSON.stringify(cancel));
+       const done = ctx.api('POST', '/appointments/' + a1.id + '/complete', {});
+       ctx.assert(done.status === 200 && done.body.status === 'completed', 'complete: ' + JSON.stringify(done));
+       const twice = ctx.api('POST', '/appointments/' + a1.id + '/complete', {});
+       ctx.assert(twice.status === 409 && code(twice) === 'invalid_state', 'complete twice: ' + JSON.stringify(twice));
+       ctx.advance('61m');
+       const late = ctx.api('POST', '/appointments/' + a2.id + '/check_in', {});
+       ctx.assert(late.status === 409 && code(late) === 'too_late', 'check-in after the slot ended: ' + JSON.stringify(late));
+       ctx.assert(ctx.api('GET', '/appointments/' + a2.id).body.status === 'booked', 'late check-in changed nothing');
+       const nf = ctx.api('POST', '/appointments/apt_9999/check_in', {});
+       ctx.assert(nf.status === 404, 'unknown appointment: ' + nf.status);
+       const nf2 = ctx.api('POST', '/appointments/apt_9999/complete', {});
+       ctx.assert(nf2.status === 404, 'unknown appointment on complete: ' + nf2.status);
+      }
+  mark_no_show_three_strikes:
+    description: mark_no_show is refused before the visit starts, increments the patient's no_show_count, keeps the slot booked, and at 3 blocks the patient from booking.
+    script: |-
+      (ctx) => {
+       const t0 = ctx.now();
+       const plus = (iso, m) => { const dc = (y, mo, d) => { y -= mo <= 2 ? 1 : 0; const era = Math.floor(y / 400); const yoe = y - era * 400; const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; }; const n = dc(+iso.slice(0, 4), +iso.slice(5, 7), +iso.slice(8, 10)) * 1440 + (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16)) + m; const days = Math.floor(n / 1440); const rem = n - days * 1440; const z = days + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const mo = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (mo <= 2 ? 1 : 0); const p = (x, w) => String(x).padStart(w, '0'); return p(y, 4) + '-' + p(mo, 2) + '-' + p(d, 2) + 'T' + p(Math.floor(rem / 60), 2) + ':' + p(rem % 60, 2) + iso.slice(16); };
+       const at = (m) => plus(t0, m);
+       const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+       const code = (r) => (r.body && r.body.error ? r.body.error.code : null);
+       const d = ctx.api('POST', '/doctors', { name: 'Dr Ola', specialty: 'general_practice', email: 'ola@clinic.example' }).body;
+       const p = ctx.api('POST', '/patients', { name: 'Pat Quin', email: 'quin@mail.example' }).body;
+       const mk = (s, e) => { const r = ctx.api('POST', '/slots', { doctor_id: d.id, starts_at: at(s), ends_at: at(e) }); ok(r, 'create slot'); const b = ctx.api('POST', '/slots/' + r.body.id + '/book', { patient_id: p.id, reason: 'back pain' }); ctx.assert(b.status === 201, 'book: ' + JSON.stringify(b.body)); return b.body; };
+       const a1 = mk(60, 90); const a2 = mk(90, 120); const a3 = mk(120, 150);
+       const early = ctx.api('POST', '/appointments/' + a1.id + '/no_show', {});
+       ctx.assert(early.status === 409 && code(early) === 'too_early', 'before the start: ' + JSON.stringify(early));
+       ctx.advance('1h');
+       const r1 = ctx.api('POST', '/appointments/' + a1.id + '/no_show', {});
+       ctx.assert(r1.status === 200 && r1.body.status === 'no_show', 'no-show at the start time: ' + JSON.stringify(r1));
+       let pp = ctx.api('GET', '/patients/' + p.id).body;
+       ctx.assert(pp.no_show_count === 1 && pp.booking_blocked === false, 'one strike: ' + JSON.stringify(pp));
+       ctx.assert(ctx.api('GET', '/slots/' + a1.slot_id).body.status === 'booked', 'slot stays booked');
+       const again = ctx.api('POST', '/appointments/' + a1.id + '/no_show', {});
+       ctx.assert(again.status === 409 && code(again) === 'invalid_state', 'second no-show on the same appointment: ' + JSON.stringify(again));
+       const soon = ctx.api('POST', '/appointments/' + a2.id + '/no_show', {});
+       ctx.assert(soon.status === 409 && code(soon) === 'too_early', 'next visit not started: ' + JSON.stringify(soon));
+       ctx.advance('30m');
+       ok(ctx.api('POST', '/appointments/' + a2.id + '/no_show', {}), 'second no-show');
+       pp = ctx.api('GET', '/patients/' + p.id).body;
+       ctx.assert(pp.no_show_count === 2 && pp.booking_blocked === false, 'two strikes: ' + JSON.stringify(pp));
+       ctx.advance('30m');
+       ok(ctx.api('POST', '/appointments/' + a3.id + '/no_show', {}), 'third no-show');
+       pp = ctx.api('GET', '/patients/' + p.id).body;
+       ctx.assert(pp.no_show_count === 3 && pp.booking_blocked === true, 'three strikes block: ' + JSON.stringify(pp));
+       const s = ctx.api('POST', '/slots', { doctor_id: d.id, starts_at: at(300), ends_at: at(330) }).body;
+       const blocked = ctx.api('POST', '/slots/' + s.id + '/book', { patient_id: p.id, reason: 'back pain' });
+       ctx.assert(blocked.status === 409 && code(blocked) === 'patient_blocked', 'blocked patient: ' + JSON.stringify(blocked));
+       ctx.assert(ctx.api('GET', '/slots/' + s.id).body.status === 'open', 'slot stays open');
+       const nf = ctx.api('POST', '/appointments/apt_9999/no_show', {});
+       ctx.assert(nf.status === 404, 'unknown appointment: ' + nf.status);
+      }
+  close_expired_slots_job:
+    description: close_expired_slots closes open slots that have started and leaves future open slots and booked slots alone. A closed slot cannot be booked.
+    script: |-
+      (ctx) => {
+       const t0 = ctx.now();
+       const plus = (iso, m) => { const dc = (y, mo, d) => { y -= mo <= 2 ? 1 : 0; const era = Math.floor(y / 400); const yoe = y - era * 400; const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; }; const n = dc(+iso.slice(0, 4), +iso.slice(5, 7), +iso.slice(8, 10)) * 1440 + (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16)) + m; const days = Math.floor(n / 1440); const rem = n - days * 1440; const z = days + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const mo = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (mo <= 2 ? 1 : 0); const p = (x, w) => String(x).padStart(w, '0'); return p(y, 4) + '-' + p(mo, 2) + '-' + p(d, 2) + 'T' + p(Math.floor(rem / 60), 2) + ':' + p(rem % 60, 2) + iso.slice(16); };
+       const at = (m) => plus(t0, m);
+       const d = ctx.api('POST', '/doctors', { name: 'Dr Rae', specialty: 'orthopedics', email: 'rae@clinic.example' }).body;
+       const p = ctx.api('POST', '/patients', { name: 'Pat Sol', email: 'sol@mail.example' }).body;
+       const mk = (s, e) => ctx.api('POST', '/slots', { doctor_id: d.id, starts_at: at(s), ends_at: at(e) }).body;
+       const stale = mk(30, 60); const future = mk(180, 210); const booked = mk(60, 90);
+       ctx.assert(ctx.api('POST', '/slots/' + booked.id + '/book', { patient_id: p.id, reason: 'knee pain' }).status === 201, 'book the third slot');
+       const res = ctx.advance('2h');
+       ctx.assert(res.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(res.jobsFailed));
+       ctx.assert(ctx.api('GET', '/slots/' + stale.id).body.status === 'closed', 'expired open slot is closed');
+       ctx.assert(ctx.api('GET', '/slots/' + future.id).body.status === 'open', 'future open slot stays open');
+       ctx.assert(ctx.api('GET', '/slots/' + booked.id).body.status === 'booked', 'booked slot stays booked');
+       const r = ctx.api('POST', '/slots/' + stale.id + '/book', { patient_id: p.id, reason: 'knee pain' });
+       ctx.assert(r.status === 409 && r.body.error.code === 'slot_taken', 'closed slot cannot be booked: ' + JSON.stringify(r));
+      }
+  auto_no_show_job:
+    description: auto_no_show marks booked appointments no_show once the slot ended more than 30 minutes ago, counts the strikes, blocks the patient at 3 and leaves future appointments alone.
+    script: |-
+      (ctx) => {
+       const t0 = ctx.now();
+       const plus = (iso, m) => { const dc = (y, mo, d) => { y -= mo <= 2 ? 1 : 0; const era = Math.floor(y / 400); const yoe = y - era * 400; const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; }; const n = dc(+iso.slice(0, 4), +iso.slice(5, 7), +iso.slice(8, 10)) * 1440 + (+iso.slice(11, 13)) * 60 + (+iso.slice(14, 16)) + m; const days = Math.floor(n / 1440); const rem = n - days * 1440; const z = days + 719468; const era = Math.floor(z / 146097); const doe = z - era * 146097; const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365); const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)); const mp = Math.floor((5 * doy + 2) / 153); const d = doy - Math.floor((153 * mp + 2) / 5) + 1; const mo = mp < 10 ? mp + 3 : mp - 9; const y = yoe + era * 400 + (mo <= 2 ? 1 : 0); const p = (x, w) => String(x).padStart(w, '0'); return p(y, 4) + '-' + p(mo, 2) + '-' + p(d, 2) + 'T' + p(Math.floor(rem / 60), 2) + ':' + p(rem % 60, 2) + iso.slice(16); };
+       const at = (m) => plus(t0, m);
+       const d = ctx.api('POST', '/doctors', { name: 'Dr Tia', specialty: 'general_practice', email: 'tia@clinic.example' }).body;
+       const p = ctx.api('POST', '/patients', { name: 'Pat Uma', email: 'uma@mail.example' }).body;
+       const q = ctx.api('POST', '/patients', { name: 'Pat Vic', email: 'vic@mail.example' }).body;
+       const mk = (pt, s, e) => { const sl = ctx.api('POST', '/slots', { doctor_id: d.id, starts_at: at(s), ends_at: at(e) }).body; const b = ctx.api('POST', '/slots/' + sl.id + '/book', { patient_id: pt.id, reason: 'checkup' }); ctx.assert(b.status === 201, 'book: ' + JSON.stringify(b.body)); return b.body; };
+       const a1 = mk(p, 30, 60); const a2 = mk(p, 60, 90); const a3 = mk(p, 90, 120); const far = mk(q, 2880, 2910);
+       const r1 = ctx.advance('90m');
+       ctx.assert(r1.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(r1.jobsFailed));
+       ctx.assert(ctx.api('GET', '/appointments/' + a1.id).body.status === 'booked', 'exactly 30 minutes after the end is not enough');
+       const r2 = ctx.advance('100m');
+       ctx.assert(r2.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(r2.jobsFailed));
+       for (const a of [a1, a2, a3]) ctx.assert(ctx.api('GET', '/appointments/' + a.id).body.status === 'no_show', a.id + ' is no_show');
+       const pp = ctx.api('GET', '/patients/' + p.id).body;
+       ctx.assert(pp.no_show_count === 3 && pp.booking_blocked === true, 'patient counters: ' + JSON.stringify(pp));
+       ctx.assert(ctx.api('GET', '/appointments/' + far.id).body.status === 'booked', 'future appointment untouched');
+       const qq = ctx.api('GET', '/patients/' + q.id).body;
+       ctx.assert(qq.no_show_count === 0 && qq.booking_blocked === false, 'other patient untouched: ' + JSON.stringify(qq));
+       ctx.assert(ctx.api('GET', '/slots/' + a1.slot_id).body.status === 'booked', 'no-show slot stays booked');
+      }
+tasks:
+  cancel_marias_far_appointment:
+    difficulty: easy
+    instruction: Cancel the upcoming appointment of the patient Maria Lopez that is more than 24 hours away, and give a cancel reason. Her other appointments must stay as they are.
+    decoys: []
+    alternatives: []
+  book_earliest_cardiology_slot:
+    difficulty: medium
+    instruction: Book the patient Daniel Okoye into the earliest open slot that has not started yet with any cardiologist who is currently taking bookings. Use the reason 'follow-up consultation'.
+    decoys: []
+    alternatives: []
+  record_yesterdays_no_shows:
+    difficulty: hard
+    instruction: Many of yesterday's appointments are still in status booked, but those patients never showed up and nobody checked them in. Yesterday means the calendar day before the world's current date, as given by the engine clock. Mark every appointment from yesterday that is still booked as a no-show. Leave appointments that are checked in, completed or cancelled alone, and leave older and upcoming appointments alone.
+    decoys: []
+    alternatives: []
+  clear_dr_patel_calendar_for_leave:
+    difficulty: hard
+    instruction: Dr. Priya Patel is going on leave starting now. Deactivate her. Cancel every one of her booked appointments that can still be cancelled under the clinic's 24-hour cancellation rule, giving each a cancel reason. Appointments that cannot be cancelled must stay booked. Then close all of her open slots, including the ones freed by those cancellations, so nobody else can book them. Leave every other doctor, patient and slot alone.
+    decoys: []
+    alternatives: []

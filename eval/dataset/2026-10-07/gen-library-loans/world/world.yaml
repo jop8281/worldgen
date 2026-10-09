@@ -1,0 +1,4265 @@
+format: 1
+meta:
+  name: gen_library_loans
+  description: A library circulation system built from the books and loans CSVs. Staff look up books and members, check books out, renew them, return them and collect overdue fines. A job marks late loans overdue and accrues fines. Checkout rules cover copy availability, a loan limit, unpaid fines and member suspension.
+  resembles: Koha/Evergreen-style public library circulation desk (catalog, patrons, loans, renewals, overdue fines)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-07T09:00:00Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  book:
+    description: A catalog title held at one branch, with the number of physical copies. Availability is copies minus open (active or overdue) loans, so it is not stored.
+    idPrefix: book
+    fields:
+      isbn:
+        type: string
+        description: 13-digit ISBN, kept as a string.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        pattern: ^[0-9]{13}$
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      author:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      genre:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - fiction
+          - mystery
+          - science-fiction
+          - fantasy
+          - science
+          - history
+          - biography
+          - travel
+          - poetry
+          - children
+      branch:
+        type: enum
+        description: Library branch that holds the copies.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - central
+          - northgate
+          - eastfield
+          - riverside
+      copies:
+        type: int
+        description: Number of physical copies owned.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 1
+  member:
+    description: A library patron. A suspended member cannot check out or renew, but can still return books and pay fines. Members are never deleted.
+    idPrefix: mem
+    fields:
+      code:
+        type: string
+        description: Member card code, such as M0005.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 40
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        format: email
+      status:
+        type: state
+        description: Staff move a member between active and suspended with a plain PATCH.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - active
+          - suspended
+        initial: active
+        transitions:
+          active:
+            - suspended
+          suspended:
+            - active
+  loan:
+    description: One copy of a book borrowed by a member, from borrowed_at to due_at. returned_at is set when the book comes back. Carries the overdue fine and whether it was paid. Written only by the checkout, return, renew and pay_fine actions and the accrue_overdue job.
+    idPrefix: loan
+    fields:
+      loan_ref:
+        type: string
+        description: L plus a 5-digit sequence, such as L00301.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 20
+      book_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: book
+        onDelete: restrict
+      member_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+      borrowed_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      due_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      returned_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: active until due_at passes, then overdue (set by the accrue_overdue job), then returned.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - active
+          - overdue
+          - returned
+        initial: active
+        transitions:
+          active:
+            - overdue
+            - returned
+          overdue:
+            - returned
+          returned: []
+      renewals:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        max: 2
+        default: 0
+      fine_cents:
+        type: money
+        description: Overdue fine, 25 cents per full day past due, capped at 2000.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+        default: 0
+      fine_paid:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+routes:
+  list_books:
+    op: list
+    entity: book
+    filters:
+      - genre
+      - branch
+    search:
+      - title
+      - author
+    sort:
+      - title
+      - author
+    pageSize: 25
+    method: GET
+    path: /books
+    description: "List books. Filters: genre, branch. Search with q over title and author."
+  get_book:
+    op: get
+    entity: book
+    method: GET
+    path: /books/{id}
+  create_book:
+    op: create
+    entity: book
+    method: POST
+    path: /books
+    description: Add a catalog title.
+  update_book:
+    op: update
+    entity: book
+    method: PATCH
+    path: /books/{id}
+    description: Edit book details, such as the copy count or branch.
+  list_members:
+    op: list
+    entity: member
+    filters:
+      - status
+    search:
+      - name
+      - code
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /members
+  get_member:
+    op: get
+    entity: member
+    method: GET
+    path: /members/{id}
+  create_member:
+    op: create
+    entity: member
+    method: POST
+    path: /members
+    description: Register a member. The status starts as active.
+  update_member:
+    op: update
+    entity: member
+    method: PATCH
+    path: /members/{id}
+    description: Edit a member, including active to suspended and back.
+  list_loans:
+    op: list
+    entity: loan
+    filters:
+      - status
+      - member_id
+      - book_id
+      - fine_paid
+    search: []
+    sort:
+      - due_at
+      - borrowed_at
+    pageSize: 25
+    method: GET
+    path: /loans
+    description: List loans. Loans are created only by the checkout action.
+  get_loan:
+    op: get
+    entity: loan
+    method: GET
+    path: /loans/{id}
+  list_member_loans:
+    op: list
+    entity: loan
+    filters:
+      - status
+      - fine_paid
+    search: []
+    sort:
+      - due_at
+      - borrowed_at
+    pageSize: 25
+    method: GET
+    path: /members/{member_id}/loans
+    description: List one member's loans.
+  list_book_loans:
+    op: list
+    entity: loan
+    filters:
+      - status
+      - fine_paid
+    search: []
+    sort:
+      - due_at
+      - borrowed_at
+    pageSize: 25
+    method: GET
+    path: /books/{book_id}/loans
+    description: List the loans of one book.
+actions:
+  checkout_book:
+    method: POST
+    path: /loans/checkout
+    description: Check a book out to a member. Active loan due in 21 days.
+    input:
+      book_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: book
+        onDelete: restrict
+      member_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const book = ctx.db.get('book', ctx.body.book_id);
+        if (book === null) ctx.fail(404, 'not_found', 'book ' + ctx.body.book_id + ' not found');
+        const member = ctx.db.get('member', ctx.body.member_id);
+        if (member === null) ctx.fail(404, 'not_found', 'member ' + ctx.body.member_id + ' not found');
+        if (member.status === 'suspended') ctx.fail(409, 'member_suspended', 'member ' + member.id + ' is suspended');
+        const open = (l) => l.status === 'active' || l.status === 'overdue';
+        const mine = ctx.db.list('loan', { where: { member_id: member.id } });
+        if (mine.filter(open).length >= 5) ctx.fail(409, 'loan_limit', 'member ' + member.id + ' already has 5 open loans');
+        let unpaid = 0;
+        for (const l of mine) {
+          if ((l.status === 'returned' || l.status === 'overdue') && !l.fine_paid) unpaid += l.fine_cents;
+        }
+        if (unpaid >= 1000) ctx.fail(409, 'unpaid_fines', 'member ' + member.id + ' has ' + unpaid + ' cents of unpaid fines');
+        const bookLoans = ctx.db.list('loan', { where: { book_id: book.id } }).filter(open);
+        if (bookLoans.length >= book.copies) ctx.fail(409, 'no_copies_available', 'no copies of book ' + book.id + ' are available');
+        const n = ctx.db.list('loan').length + 1;
+        const ref = 'L' + ('00000' + n).slice(-5);
+        const now = ctx.now();
+        const loan = ctx.db.create('loan', { loan_ref: ref, book_id: book.id, member_id: member.id, borrowed_at: now, due_at: ctx.time.plus(now, '21d'), returned_at: null, status: 'active', renewals: 0, fine_cents: 0, fine_paid: false });
+        return { status: 201, body: loan };
+      }
+  return_loan:
+    method: POST
+    path: /loans/{id}/return
+    description: Return an active or overdue loan and fix the fine.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const l = ctx.db.get('loan', id);
+        if (l === null) ctx.fail(404, 'not_found', 'loan ' + id + ' not found');
+        if (l.status !== 'active' && l.status !== 'overdue') ctx.fail(409, 'invalid_state', 'loan ' + id + ' is ' + l.status + '. Only active or overdue loans can be returned.');
+        const now = ctx.now();
+        const mins = ctx.time.minutesBetween(l.due_at, now);
+        const days = mins > 0 ? Math.floor(mins / 1440) : 0;
+        const fine = Math.min(2000, days * 25);
+        const updated = ctx.db.update('loan', id, { status: 'returned', returned_at: now, fine_cents: fine });
+        return { status: 200, body: updated };
+      }
+  renew_loan:
+    method: POST
+    path: /loans/{id}/renew
+    description: Renew an active loan for 14 days, at most twice.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const l = ctx.db.get('loan', id);
+        if (l === null) ctx.fail(404, 'not_found', 'loan ' + id + ' not found');
+        if (l.status === 'returned') ctx.fail(409, 'invalid_state', 'loan ' + id + ' is already returned');
+        if (l.status === 'overdue') ctx.fail(409, 'loan_overdue', 'loan ' + id + ' is overdue and cannot be renewed');
+        const member = ctx.db.get('member', l.member_id);
+        if (member.status === 'suspended') ctx.fail(409, 'member_suspended', 'member ' + member.id + ' is suspended');
+        if (l.renewals >= 2) ctx.fail(409, 'renewal_limit', 'loan ' + id + ' has reached the renewal limit');
+        const updated = ctx.db.update('loan', id, { due_at: ctx.time.plus(l.due_at, '14d'), renewals: l.renewals + 1 });
+        return { status: 200, body: updated };
+      }
+  pay_fine:
+    method: POST
+    path: /loans/{id}/pay_fine
+    description: Pay the fine of a returned loan in full.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const l = ctx.db.get('loan', id);
+        if (l === null) ctx.fail(404, 'not_found', 'loan ' + id + ' not found');
+        if (l.status !== 'returned' || l.fine_cents <= 0 || l.fine_paid) ctx.fail(409, 'no_fine_due', 'loan ' + id + ' has no payable fine');
+        const updated = ctx.db.update('loan', id, { fine_paid: true });
+        return { status: 200, body: updated };
+      }
+jobs:
+  accrue_overdue:
+    description: Hourly. Active loans past due become overdue. Overdue loans carry 25 cents per full day overdue, capped at 2000.
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const status of ['active', 'overdue']) {
+          for (const l of ctx.db.list('loan', { where: { status } })) {
+            const mins = ctx.time.minutesBetween(l.due_at, now);
+            if (mins <= 0) continue;
+            const fine = Math.min(2000, Math.floor(mins / 1440) * 25);
+            if (l.status === 'active') ctx.db.update('loan', l.id, { status: 'overdue', fine_cents: fine });
+            else if (l.fine_cents !== fine) ctx.db.update('loan', l.id, { fine_cents: fine });
+          }
+        }
+      }
+fixtures:
+  books:
+    - isbn: 9781001029535
+      title: The Silent River and Other Stories
+      author: Farid Goldberg
+      genre: poetry
+      copies: 1
+      branch: northgate
+    - isbn: 9781002059067
+      title: The Northern River and Other Stories
+      author: Uma Quiroga
+      genre: biography
+      copies: 2
+      branch: riverside
+    - isbn: 9781003088592
+      title: The Hidden Tide and Other Stories
+      author: Ada Fairchild
+      genre: biography
+      copies: 6
+      branch: northgate
+    - isbn: 9781004118120
+      title: The Forgotten Archive
+      author: Keiko Rahman
+      genre: children
+      copies: 3
+      branch: northgate
+    - isbn: 9781005147655
+      title: The Paper Tide
+      author: Imani Quiroga
+      genre: science-fiction
+      copies: 6
+      branch: riverside
+    - isbn: 9781006177187
+      title: The Glass Library
+      author: Luis Thornbury
+      genre: travel
+      copies: 1
+      branch: northgate
+    - isbn: 9781007206718
+      title: The Glass Lighthouse
+      author: Clara Dunmore
+      genre: science-fiction
+      copies: 6
+      branch: eastfield
+    - isbn: 9781008236240
+      title: The Forgotten River and Other Stories
+      author: Yara Kowalski
+      genre: science-fiction
+      copies: 1
+      branch: central
+    - isbn: 9781009265775
+      title: "The Paper Kingdom: Notes from the Field"
+      author: Ada Jovanovic
+      genre: mystery
+      copies: 3
+      branch: riverside
+    - isbn: 9781010295303
+      title: The Broken Season
+      author: Rosa Abara
+      genre: science-fiction
+      copies: 4
+      branch: riverside
+    - isbn: 9781011324835
+      title: The Silent Library, Volume II
+      author: Tomas Sato
+      genre: poetry
+      copies: 6
+      branch: northgate
+    - isbn: 9781012354367
+      title: "The Burning Kingdom: A History"
+      author: Clara Haddad
+      genre: science
+      copies: 1
+      branch: riverside
+    - isbn: 9781013383892
+      title: The Forgotten Meridian, a Novel
+      author: Rosa O'Hara
+      genre: children
+      copies: 5
+      branch: central
+    - isbn: 9781014413420
+      title: "The Hidden Kingdom: A History"
+      author: Bram Quiroga
+      genre: poetry
+      copies: 6
+      branch: central
+    - isbn: 9781015442955
+      title: The Glass Garden
+      author: Quinn Petrov
+      genre: fantasy
+      copies: 6
+      branch: eastfield
+    - isbn: 9781016472487
+      title: The Northern Kingdom
+      author: Luis Eriksen
+      genre: science-fiction
+      copies: 1
+      branch: eastfield
+    - isbn: 9781017502015
+      title: The Northern Kingdom, a Novel
+      author: Wen Mbeki
+      genre: poetry
+      copies: 2
+      branch: central
+    - isbn: 9781018531540
+      title: The Last Lighthouse
+      author: Ada Eriksen
+      genre: science
+      copies: 3
+      branch: northgate
+    - isbn: 9781019561072
+      title: The Salt Tide
+      author: Keiko Mbeki
+      genre: children
+      copies: 4
+      branch: riverside
+    - isbn: 9781020590603
+      title: The Winter Orchard
+      author: Farid Kowalski
+      genre: biography
+      copies: 1
+      branch: eastfield
+    - isbn: 9781021620132
+      title: The Burning River, Volume II
+      author: Tomas Abara
+      genre: science
+      copies: 3
+      branch: northgate
+    - isbn: 9781022649668
+      title: The Iron Compass
+      author: Tomas Sato
+      genre: fantasy
+      copies: 1
+      branch: northgate
+    - isbn: 9781023679190
+      title: The Distant Cartographer
+      author: Imani Mbeki
+      genre: poetry
+      copies: 4
+      branch: central
+    - isbn: 9781024708721
+      title: The Broken Tide
+      author: Jonas Lindqvist
+      genre: history
+      copies: 3
+      branch: eastfield
+    - isbn: 9781025738253
+      title: The Last Season and Other Stories
+      author: Ada Mbeki
+      genre: science-fiction
+      copies: 5
+      branch: riverside
+    - isbn: 9781026767788
+      title: The Quiet Orchard, Volume II
+      author: Yara Bellweather
+      genre: poetry
+      copies: 5
+      branch: central
+    - isbn: 9781027797319
+      title: The Distant Harbor, a Novel
+      author: Quinn Lindqvist
+      genre: science
+      copies: 6
+      branch: riverside
+    - isbn: 9781028826841
+      title: The Distant Season
+      author: Grace Petrov
+      genre: history
+      copies: 6
+      branch: riverside
+    - isbn: 9781029856373
+      title: The Burning Lighthouse and Other Stories
+      author: Nadia Mbeki
+      genre: travel
+      copies: 2
+      branch: northgate
+    - isbn: 9781030885904
+      title: "The Silent Cartographer: Notes from the Field"
+      author: Bram Mbeki
+      genre: science-fiction
+      copies: 3
+      branch: central
+    - isbn: 9781031915433
+      title: The Northern Compass, a Novel
+      author: Imani Abara
+      genre: history
+      copies: 4
+      branch: riverside
+    - isbn: 9781032944968
+      title: The Distant Library, Volume II
+      author: Maren Kowalski
+      genre: mystery
+      copies: 5
+      branch: riverside
+    - isbn: 9781033974490
+      title: The Salt Kingdom, Volume II
+      author: Uma Castellanos
+      genre: fantasy
+      copies: 3
+      branch: eastfield
+    - isbn: 9781035004027
+      title: "The Quiet Season: A History"
+      author: Luis Goldberg
+      genre: science
+      copies: 4
+      branch: northgate
+    - isbn: 9781036033552
+      title: The Northern Meridian and Other Stories
+      author: Bram Dunmore
+      genre: mystery
+      copies: 3
+      branch: eastfield
+    - isbn: 9781037063084
+      title: "The Quiet Library: Notes from the Field"
+      author: Elena Novak
+      genre: science
+      copies: 5
+      branch: eastfield
+    - isbn: 9781038092618
+      title: The Paper Harbor
+      author: Yara Petrov
+      genre: science
+      copies: 6
+      branch: riverside
+    - isbn: 9781039122147
+      title: "The Broken Engine: A History"
+      author: Maren Kowalski
+      genre: history
+      copies: 3
+      branch: riverside
+    - isbn: 9781040151679
+      title: The Forgotten Garden
+      author: Nadia Bellweather
+      genre: children
+      copies: 6
+      branch: riverside
+    - isbn: 9781041181200
+      title: The Broken Library, a Novel
+      author: Rosa Kowalski
+      genre: science-fiction
+      copies: 1
+      branch: northgate
+    - isbn: 9781042210732
+      title: "The Burning Lighthouse: A History"
+      author: Maren Lindqvist
+      genre: poetry
+      copies: 3
+      branch: riverside
+    - isbn: 9781043240264
+      title: The Silent Harbor
+      author: Priya Castellanos
+      genre: children
+      copies: 3
+      branch: central
+    - isbn: 9781044269790
+      title: The Silent Meridian
+      author: Elena Rahman
+      genre: mystery
+      copies: 6
+      branch: northgate
+    - isbn: 9781045299321
+      title: The Glass Archive
+      author: Uma Petrov
+      genre: fiction
+      copies: 4
+      branch: central
+    - isbn: 9781046328853
+      title: "The Burning Atlas: A History"
+      author: Viktor O'Hara
+      genre: children
+      copies: 3
+      branch: northgate
+    - isbn: 9781047358385
+      title: "The Hollow Harbor: Notes from the Field"
+      author: Soren Kowalski
+      genre: history
+      copies: 2
+      branch: riverside
+    - isbn: 9781048387919
+      title: The Glass Meridian, a Novel
+      author: Bram Quiroga
+      genre: biography
+      copies: 3
+      branch: riverside
+    - isbn: 9781050446970
+      title: The Broken Cartographer
+      author: Maren Ishikawa
+      genre: travel
+      copies: 1
+      branch: eastfield
+    - isbn: 9781051476501
+      title: The Last Harbor
+      author: Quinn Ishikawa
+      genre: history
+      copies: 5
+      branch: riverside
+    - isbn: 9781052506030
+      title: The Forgotten Meridian
+      author: Farid Thornbury
+      genre: science-fiction
+      copies: 1
+      branch: northgate
+    - isbn: 9781053535565
+      title: The Forgotten Atlas, Volume II
+      author: Grace Jovanovic
+      genre: travel
+      copies: 3
+      branch: central
+    - isbn: 9781054565097
+      title: "The Distant Archive: Notes from the Field"
+      author: Imani Lindqvist
+      genre: poetry
+      copies: 4
+      branch: eastfield
+    - isbn: 9781055594621
+      title: "The Forgotten Archive: Notes from the Field"
+      author: Wen Bellweather
+      genre: fiction
+      copies: 4
+      branch: northgate
+    - isbn: 9781056624150
+      title: The Forgotten Harbor
+      author: Uma Kowalski
+      genre: science
+      copies: 3
+      branch: central
+    - isbn: 9781057653685
+      title: "The Iron Signal: Notes from the Field"
+      author: Quinn Goldberg
+      genre: fantasy
+      copies: 2
+      branch: central
+    - isbn: 9781058683216
+      title: The Glass Atlas
+      author: Uma Eriksen
+      genre: history
+      copies: 2
+      branch: eastfield
+    - isbn: 9781059712748
+      title: The Winter River, Volume II
+      author: Nadia Fairchild
+      genre: biography
+      copies: 6
+      branch: eastfield
+    - isbn: 9781060742277
+      title: The Silent Atlas
+      author: Tomas Bellweather
+      genre: history
+      copies: 4
+      branch: eastfield
+    - isbn: 9781062801330
+      title: The Hollow Engine, a Novel
+      author: Luis Jovanovic
+      genre: travel
+      copies: 3
+      branch: eastfield
+    - isbn: 9781063830865
+      title: The Hidden Signal and Other Stories
+      author: Tomas O'Hara
+      genre: poetry
+      copies: 2
+      branch: riverside
+    - isbn: 9781064860397
+      title: "The Northern Garden: Notes from the Field"
+      author: Omar Eriksen
+      genre: children
+      copies: 2
+      branch: riverside
+    - isbn: 9781065889922
+      title: The Salt Season, a Novel
+      author: Bram Fairchild
+      genre: children
+      copies: 3
+      branch: northgate
+    - isbn: 9781066919451
+      title: The Hollow Orchard, a Novel
+      author: Tomas Kowalski
+      genre: fiction
+      copies: 5
+      branch: central
+    - isbn: 9781067948986
+      title: The Last Orchard
+      author: Yara Abara
+      genre: travel
+      copies: 2
+      branch: central
+    - isbn: 9781068978517
+      title: The Hidden Lighthouse
+      author: Ada Bellweather
+      genre: poetry
+      copies: 5
+      branch: riverside
+    - isbn: 9781070008042
+      title: The Hollow Harbor, Volume II
+      author: Quinn Thornbury
+      genre: mystery
+      copies: 4
+      branch: eastfield
+    - isbn: 9781071037577
+      title: "The Northern Season: Notes from the Field"
+      author: Elena O'Hara
+      genre: fantasy
+      copies: 2
+      branch: central
+    - isbn: 9781072067108
+      title: "The Silent Engine: Notes from the Field"
+      author: Rosa Kowalski
+      genre: children
+      copies: 1
+      branch: northgate
+    - isbn: 9781074126162
+      title: The Paper Engine, a Novel
+      author: Yara Kowalski
+      genre: travel
+      copies: 2
+      branch: eastfield
+    - isbn: 9781075155697
+      title: The Northern Library
+      author: Maren Jovanovic
+      genre: history
+      copies: 1
+      branch: northgate
+    - isbn: 9781076185228
+      title: "The Golden Library: A History"
+      author: Luis Jovanovic
+      genre: mystery
+      copies: 3
+      branch: eastfield
+    - isbn: 9781077214750
+      title: The Salt Engine
+      author: Elena Bellweather
+      genre: fantasy
+      copies: 6
+      branch: eastfield
+    - isbn: 9781078244282
+      title: The Golden Signal
+      author: Bram Goldberg
+      genre: children
+      copies: 5
+      branch: central
+    - isbn: 9781079273816
+      title: The Quiet Meridian
+      author: Uma Ishikawa
+      genre: biography
+      copies: 4
+      branch: central
+    - isbn: 9781080303342
+      title: The Salt Archive and Other Stories
+      author: Maren Haddad
+      genre: poetry
+      copies: 5
+      branch: central
+    - isbn: 9781081332877
+      title: The Burning Engine, Volume II
+      author: Nadia Jovanovic
+      genre: children
+      copies: 5
+      branch: riverside
+    - isbn: 9781082362408
+      title: The Winter Lighthouse
+      author: Rosa Castellanos
+      genre: fiction
+      copies: 2
+      branch: riverside
+    - isbn: 9781083391933
+      title: The Distant Archive, Volume II
+      author: Nadia Fairchild
+      genre: biography
+      copies: 4
+      branch: eastfield
+    - isbn: 9781084421462
+      title: The Winter Kingdom
+      author: Grace Novak
+      genre: fiction
+      copies: 1
+      branch: riverside
+    - isbn: 9781085450997
+      title: "The Hidden Harbor: Notes from the Field"
+      author: Imani Castellanos
+      genre: biography
+      copies: 1
+      branch: riverside
+    - isbn: 9781086480528
+      title: The Last Season, a Novel
+      author: Soren Kowalski
+      genre: mystery
+      copies: 4
+      branch: northgate
+    - isbn: 9781087510057
+      title: "The Hollow Compass: A History"
+      author: Keiko Petrov
+      genre: biography
+      copies: 6
+      branch: northgate
+    - isbn: 9781088539583
+      title: The Golden Meridian
+      author: Yara Goldberg
+      genre: fiction
+      copies: 2
+      branch: eastfield
+    - isbn: 9781089569114
+      title: The Burning Engine
+      author: Elena Castellanos
+      genre: children
+      copies: 6
+      branch: eastfield
+    - isbn: 9781090598646
+      title: The Iron Garden
+      author: Hiro Dunmore
+      genre: travel
+      copies: 5
+      branch: riverside
+    - isbn: 9781091628175
+      title: The Hidden Tide
+      author: Imani Jovanovic
+      genre: mystery
+      copies: 6
+      branch: central
+    - isbn: 9781092657709
+      title: "The Iron Compass: A History"
+      author: Viktor Haddad
+      genre: fantasy
+      copies: 3
+      branch: northgate
+    - isbn: 9781093687231
+      title: The Winter Season, a Novel
+      author: Wen Rahman
+      genre: history
+      copies: 4
+      branch: central
+    - isbn: 9781094716763
+      title: The Hollow Compass, a Novel
+      author: Maren Thornbury
+      genre: history
+      copies: 2
+      branch: riverside
+    - isbn: 9781095746295
+      title: The Burning Orchard
+      author: Wen Ishikawa
+      genre: biography
+      copies: 1
+      branch: northgate
+    - isbn: 9781096775829
+      title: The Hollow Harbor
+      author: Ada Quiroga
+      genre: travel
+      copies: 5
+      branch: central
+    - isbn: 9781097805358
+      title: The Golden River
+      author: Wen Petrov
+      genre: travel
+      copies: 5
+      branch: northgate
+    - isbn: 9781098834883
+      title: The Hollow Lighthouse
+      author: Imani Jovanovic
+      genre: fiction
+      copies: 3
+      branch: eastfield
+    - isbn: 9781099864414
+      title: "The Golden Signal: Notes from the Field"
+      author: Clara Mbeki
+      genre: children
+      copies: 1
+      branch: northgate
+    - isbn: 9781100893945
+      title: The Silent Compass
+      author: Keiko Sato
+      genre: biography
+      copies: 5
+      branch: northgate
+    - isbn: 9781101923474
+      title: The Paper Signal
+      author: Viktor Bellweather
+      genre: travel
+      copies: 2
+      branch: central
+    - isbn: 9781102953005
+      title: "The Northern Lighthouse: Notes from the Field"
+      author: Yara Haddad
+      genre: mystery
+      copies: 3
+      branch: central
+    - isbn: 9781103982530
+      title: The Salt River, Volume II
+      author: Bram Mbeki
+      genre: biography
+      copies: 5
+      branch: northgate
+    - isbn: 9781105012068
+      title: "The Iron Meridian: A History"
+      author: Jonas Thornbury
+      genre: fiction
+      copies: 4
+      branch: central
+    - isbn: 9781106041593
+      title: The Winter Lighthouse and Other Stories
+      author: Desmond Rahman
+      genre: fiction
+      copies: 5
+      branch: central
+    - isbn: 9781107071124
+      title: The Broken Atlas
+      author: Luis Goldberg
+      genre: history
+      copies: 3
+      branch: central
+    - isbn: 9781108100656
+      title: The Last Signal, a Novel
+      author: Maren Ishikawa
+      genre: science
+      copies: 5
+      branch: northgate
+    - isbn: 9781109130188
+      title: The Golden Cartographer
+      author: Uma Lindqvist
+      genre: fiction
+      copies: 3
+      branch: northgate
+    - isbn: 9781110159710
+      title: The Burning River, a Novel
+      author: Wen Ishikawa
+      genre: mystery
+      copies: 4
+      branch: eastfield
+    - isbn: 9781111189242
+      title: "The Hollow Lighthouse: Notes from the Field"
+      author: Jonas Haddad
+      genre: fantasy
+      copies: 2
+      branch: northgate
+    - isbn: 9781112218774
+      title: The Hidden Tide, a Novel
+      author: Quinn Fairchild
+      genre: biography
+      copies: 2
+      branch: eastfield
+    - isbn: 9781113248305
+      title: "The Salt Harbor: A History"
+      author: Maren O'Hara
+      genre: history
+      copies: 2
+      branch: eastfield
+    - isbn: 9781114277830
+      title: "The Salt Compass: A History"
+      author: Viktor Ishikawa
+      genre: poetry
+      copies: 1
+      branch: central
+    - isbn: 9781115307369
+      title: "The Silent Kingdom: Notes from the Field"
+      author: Farid Lindqvist
+      genre: science
+      copies: 4
+      branch: eastfield
+    - isbn: 9781116336894
+      title: The Burning Archive and Other Stories
+      author: Omar Sato
+      genre: science-fiction
+      copies: 2
+      branch: northgate
+    - isbn: 9781117366425
+      title: The Hidden Engine, Volume II
+      author: Bram Thornbury
+      genre: children
+      copies: 2
+      branch: northgate
+    - isbn: 9781118395950
+      title: The Distant Tide
+      author: Imani Jovanovic
+      genre: science
+      copies: 6
+      branch: riverside
+    - isbn: 9781120455017
+      title: The Distant Harbor
+      author: Yara Mbeki
+      genre: poetry
+      copies: 1
+      branch: northgate
+    - isbn: 9781121484542
+      title: The Hollow Compass, Volume II
+      author: Wen Sato
+      genre: biography
+      copies: 1
+      branch: northgate
+    - isbn: 9781122514071
+      title: The Golden River, Volume II
+      author: Desmond Mbeki
+      genre: children
+      copies: 4
+      branch: eastfield
+    - isbn: 9781123543605
+      title: "The Broken Library: A History"
+      author: Quinn Quiroga
+      genre: travel
+      copies: 2
+      branch: central
+    - isbn: 9781125602669
+      title: The Broken Meridian
+      author: Rosa Sato
+      genre: science
+      copies: 4
+      branch: eastfield
+    - isbn: 9781126632191
+      title: The Paper Orchard
+      author: Keiko Sato
+      genre: poetry
+      copies: 4
+      branch: eastfield
+    - isbn: 9781127661725
+      title: The Hidden Meridian, a Novel
+      author: Clara Jovanovic
+      genre: science
+      copies: 3
+      branch: northgate
+    - isbn: 9781128691257
+      title: "The Hidden River: Notes from the Field"
+      author: Yara Kowalski
+      genre: science
+      copies: 3
+      branch: northgate
+    - isbn: 9781129720789
+      title: The Hollow Atlas
+      author: Keiko O'Hara
+      genre: poetry
+      copies: 4
+      branch: northgate
+    - isbn: 9781130750317
+      title: The Last Kingdom, a Novel
+      author: Wen Mbeki
+      genre: travel
+      copies: 6
+      branch: northgate
+    - isbn: 9781131779843
+      title: The Silent River, Volume II
+      author: Omar Novak
+      genre: mystery
+      copies: 1
+      branch: northgate
+    - isbn: 9781132809372
+      title: The Paper Garden
+      author: Hiro Mbeki
+      genre: biography
+      copies: 2
+      branch: riverside
+    - isbn: 9781133838906
+      title: "The Broken Garden: Notes from the Field"
+      author: Wen Sato
+      genre: mystery
+      copies: 2
+      branch: riverside
+    - isbn: 9781134868438
+      title: The Hollow Compass
+      author: Ada Rahman
+      genre: science-fiction
+      copies: 1
+      branch: riverside
+    - isbn: 9781135897963
+      title: "The Last Lighthouse: A History"
+      author: Grace Abara
+      genre: history
+      copies: 6
+      branch: eastfield
+    - isbn: 9781136927492
+      title: The Winter Tide, Volume II
+      author: Quinn Sato
+      genre: travel
+      copies: 3
+      branch: northgate
+    - isbn: 9781137957023
+      title: The Forgotten Lighthouse and Other Stories
+      author: Elena Quiroga
+      genre: children
+      copies: 1
+      branch: riverside
+    - isbn: 9781140016083
+      title: The Last Atlas, a Novel
+      author: Grace Quiroga
+      genre: science-fiction
+      copies: 6
+      branch: central
+    - isbn: 9781141045617
+      title: The Forgotten Tide, Volume II
+      author: Bram Kowalski
+      genre: fiction
+      copies: 3
+      branch: central
+    - isbn: 9781142075149
+      title: The Salt Kingdom
+      author: Jonas Eriksen
+      genre: fantasy
+      copies: 3
+      branch: eastfield
+    - isbn: 9781143104671
+      title: The Golden Harbor
+      author: Maren Castellanos
+      genre: mystery
+      copies: 1
+      branch: eastfield
+    - isbn: 9781145163737
+      title: The Forgotten Season and Other Stories
+      author: Desmond Ishikawa
+      genre: biography
+      copies: 3
+      branch: eastfield
+    - isbn: 9781146193269
+      title: "The Iron Cartographer: A History"
+      author: Jonas Dunmore
+      genre: fantasy
+      copies: 2
+      branch: eastfield
+    - isbn: 9781147222791
+      title: The Quiet Kingdom, a Novel
+      author: Nadia Fairchild
+      genre: children
+      copies: 2
+      branch: riverside
+    - isbn: 9781148252322
+      title: The Paper Season, a Novel
+      author: Jonas Kowalski
+      genre: fantasy
+      copies: 1
+      branch: eastfield
+    - isbn: 9781149281857
+      title: "The Hidden Meridian: A History"
+      author: Ada Quiroga
+      genre: history
+      copies: 6
+      branch: central
+    - isbn: 9781150311383
+      title: The Silent Cartographer, a Novel
+      author: Keiko Thornbury
+      genre: biography
+      copies: 5
+      branch: eastfield
+    - isbn: 9781151340917
+      title: The Iron Lighthouse
+      author: Bram Mbeki
+      genre: science-fiction
+      copies: 5
+      branch: eastfield
+    - isbn: 9781152370449
+      title: The Paper Compass
+      author: Maren Rahman
+      genre: science-fiction
+      copies: 6
+      branch: northgate
+    - isbn: 9781153399975
+      title: "The Northern Harbor: A History"
+      author: Omar Bellweather
+      genre: children
+      copies: 5
+      branch: riverside
+    - isbn: 9781154429503
+      title: "The Hollow Orchard: Notes from the Field"
+      author: Luis Haddad
+      genre: fantasy
+      copies: 2
+      branch: eastfield
+    - isbn: 9781155459035
+      title: The Golden Orchard
+      author: Uma Quiroga
+      genre: science
+      copies: 5
+      branch: northgate
+    - isbn: 9781156488560
+      title: "The Northern Kingdom: A History"
+      author: Keiko Haddad
+      genre: science
+      copies: 2
+      branch: eastfield
+    - isbn: 9781157518099
+      title: The Silent Cartographer
+      author: Viktor Rahman
+      genre: children
+      copies: 4
+      branch: eastfield
+    - isbn: 9781158547623
+      title: "The Silent Garden: A History"
+      author: Quinn Kowalski
+      genre: poetry
+      copies: 2
+      branch: northgate
+    - isbn: 9781159577155
+      title: "The Quiet Compass: A History"
+      author: Imani Lindqvist
+      genre: travel
+      copies: 3
+      branch: eastfield
+    - isbn: 9781160606684
+      title: "The Forgotten Lighthouse: A History"
+      author: Viktor Eriksen
+      genre: fiction
+      copies: 6
+      branch: riverside
+    - isbn: 9781161636215
+      title: The Silent Meridian, Volume II
+      author: Soren Mbeki
+      genre: fantasy
+      copies: 6
+      branch: northgate
+    - isbn: 9781162665740
+      title: The Hidden Harbor
+      author: Desmond Fairchild
+      genre: travel
+      copies: 3
+      branch: central
+    - isbn: 9781163695272
+      title: The Distant Library and Other Stories
+      author: Farid Quiroga
+      genre: fiction
+      copies: 3
+      branch: central
+    - isbn: 9781164724803
+      title: "The Broken Tide: A History"
+      author: Keiko Petrov
+      genre: science-fiction
+      copies: 4
+      branch: central
+    - isbn: 9781165754335
+      title: "The Forgotten Harbor: A History"
+      author: Clara Haddad
+      genre: mystery
+      copies: 5
+      branch: northgate
+    - isbn: 9781166783860
+      title: The Burning Garden, Volume II
+      author: Omar Eriksen
+      genre: poetry
+      copies: 4
+      branch: central
+    - isbn: 9781167813399
+      title: The Broken Engine
+      author: Wen Lindqvist
+      genre: children
+      copies: 5
+      branch: eastfield
+    - isbn: 9781168842923
+      title: The Winter Compass
+      author: Yara Bellweather
+      genre: science-fiction
+      copies: 5
+      branch: riverside
+    - isbn: 9781169872455
+      title: The Silent Signal
+      author: Imani Eriksen
+      genre: fiction
+      copies: 3
+      branch: eastfield
+    - isbn: 9781170901984
+      title: The Burning Orchard and Other Stories
+      author: Yara Jovanovic
+      genre: mystery
+      copies: 6
+      branch: central
+    - isbn: 9781171931515
+      title: The Winter Meridian
+      author: Viktor Kowalski
+      genre: children
+      copies: 4
+      branch: eastfield
+    - isbn: 9781172961047
+      title: "The Burning Compass: A History"
+      author: Yara Lindqvist
+      genre: mystery
+      copies: 6
+      branch: central
+    - isbn: 9781173990572
+      title: The Last Archive
+      author: Viktor Kowalski
+      genre: mystery
+      copies: 5
+      branch: northgate
+    - isbn: 9781175020109
+      title: The Last Archive and Other Stories
+      author: Farid Mbeki
+      genre: fantasy
+      copies: 2
+      branch: central
+    - isbn: 9781176049635
+      title: The Paper Archive
+      author: Keiko Lindqvist
+      genre: fiction
+      copies: 1
+      branch: central
+    - isbn: 9781177079167
+      title: "The Northern Tide: A History"
+      author: Uma Thornbury
+      genre: mystery
+      copies: 2
+      branch: riverside
+    - isbn: 9781179138220
+      title: The Last Harbor and Other Stories
+      author: Yara Abara
+      genre: fantasy
+      copies: 6
+      branch: northgate
+    - isbn: 9781180167752
+      title: The Broken Archive
+      author: Ada Lindqvist
+      genre: history
+      copies: 2
+      branch: eastfield
+    - isbn: 9781181197284
+      title: The Paper Meridian, a Novel
+      author: Nadia Petrov
+      genre: poetry
+      copies: 4
+      branch: central
+    - isbn: 9781182226815
+      title: The Paper Harbor, Volume II
+      author: Tomas Goldberg
+      genre: fiction
+      copies: 5
+      branch: northgate
+    - isbn: 9781183256347
+      title: The Hollow Kingdom, Volume II
+      author: Desmond Thornbury
+      genre: fiction
+      copies: 6
+      branch: riverside
+    - isbn: 9781184285872
+      title: "The Hollow Tide: A History"
+      author: Wen Quiroga
+      genre: children
+      copies: 6
+      branch: riverside
+    - isbn: 9781185315400
+      title: "The Iron Engine: A History"
+      author: Farid Novak
+      genre: children
+      copies: 4
+      branch: central
+    - isbn: 9781186344935
+      title: The Paper Harbor, a Novel
+      author: Viktor Fairchild
+      genre: science-fiction
+      copies: 5
+      branch: central
+    - isbn: 9781187374467
+      title: "The Northern Tide: Notes from the Field"
+      author: Tomas Lindqvist
+      genre: children
+      copies: 5
+      branch: riverside
+    - isbn: 9781188403999
+      title: The Forgotten Cartographer
+      author: Farid Kowalski
+      genre: history
+      copies: 5
+      branch: northgate
+    - isbn: 9781189433520
+      title: "The Hollow Archive: Notes from the Field"
+      author: Wen O'Hara
+      genre: history
+      copies: 6
+      branch: eastfield
+    - isbn: 9781190463059
+      title: "The Quiet Archive: A History"
+      author: Omar Jovanovic
+      genre: poetry
+      copies: 3
+      branch: riverside
+    - isbn: 9781191492584
+      title: "The Broken River: A History"
+      author: Yara Castellanos
+      genre: travel
+      copies: 2
+      branch: northgate
+    - isbn: 9781192522112
+      title: The Winter Harbor
+      author: Jonas Jovanovic
+      genre: mystery
+      copies: 2
+      branch: eastfield
+    - isbn: 9781193551647
+      title: "The Silent Compass: Notes from the Field"
+      author: Uma Kowalski
+      genre: science
+      copies: 6
+      branch: northgate
+    - isbn: 9781195610700
+      title: The Distant Lighthouse
+      author: Keiko Goldberg
+      genre: travel
+      copies: 1
+      branch: eastfield
+    - isbn: 9781196640232
+      title: The Paper Lighthouse, a Novel
+      author: Rosa Goldberg
+      genre: mystery
+      copies: 3
+      branch: eastfield
+    - isbn: 9781197669768
+      title: The Silent Library
+      author: Ada Sato
+      genre: fiction
+      copies: 6
+      branch: riverside
+    - isbn: 9781198699290
+      title: The Golden Tide, a Novel
+      author: Farid Mbeki
+      genre: science-fiction
+      copies: 2
+      branch: central
+    - isbn: 9781200758359
+      title: The Hollow Signal
+      author: Jonas Lindqvist
+      genre: science
+      copies: 5
+      branch: northgate
+    - isbn: 9781201787884
+      title: "The Forgotten Library: A History"
+      author: Imani Novak
+      genre: biography
+      copies: 2
+      branch: riverside
+    - isbn: 9781202817412
+      title: "The Broken Kingdom: Notes from the Field"
+      author: Viktor Sato
+      genre: fiction
+      copies: 4
+      branch: central
+    - isbn: 9781203846947
+      title: "The Broken Orchard: A History"
+      author: Bram Petrov
+      genre: history
+      copies: 6
+      branch: riverside
+    - isbn: 9781204876479
+      title: The Quiet Harbor
+      author: Maren Mbeki
+      genre: biography
+      copies: 1
+      branch: central
+    - isbn: 9781205906007
+      title: The Distant Meridian and Other Stories
+      author: Ada Goldberg
+      genre: science
+      copies: 5
+      branch: eastfield
+    - isbn: 9781208994599
+      title: The Salt Meridian
+      author: Grace Fairchild
+      genre: biography
+      copies: 1
+      branch: eastfield
+    - isbn: 9781210024123
+      title: "The Distant Tide: Notes from the Field"
+      author: Jonas Novak
+      genre: mystery
+      copies: 2
+      branch: central
+    - isbn: 9781211053658
+      title: The Quiet Signal and Other Stories
+      author: Farid Kowalski
+      genre: fiction
+      copies: 3
+      branch: northgate
+    - isbn: 9781213112711
+      title: The Winter Library, a Novel
+      author: Farid Sato
+      genre: biography
+      copies: 6
+      branch: eastfield
+    - isbn: 9781214142243
+      title: "The Distant Kingdom: A History"
+      author: Uma Goldberg
+      genre: science-fiction
+      copies: 1
+      branch: eastfield
+    - isbn: 9781216201306
+      title: The Northern River, Volume II
+      author: Soren O'Hara
+      genre: fantasy
+      copies: 3
+      branch: eastfield
+    - isbn: 9781217230831
+      title: The Last Library
+      author: Elena Bellweather
+      genre: science-fiction
+      copies: 1
+      branch: central
+    - isbn: 9781219289899
+      title: The Last Signal
+      author: Soren Thornbury
+      genre: children
+      copies: 3
+      branch: riverside
+    - isbn: 9781220319424
+      title: The Paper Season
+      author: Yara Goldberg
+      genre: biography
+      copies: 5
+      branch: eastfield
+    - isbn: 9781221348959
+      title: The Burning Lighthouse, a Novel
+      author: Soren Haddad
+      genre: science-fiction
+      copies: 4
+      branch: riverside
+  loans:
+    - loan_id: L00001
+      isbn: 9781026767788
+      member_id: M0005
+      borrowed_at: 2026-06-15T10:00:00.000Z
+      due_at: 2026-07-06T10:00:00.000Z
+      returned_at: 2026-07-23T15:00:00.000Z
+      fine_cents: 450
+    - loan_id: L00002
+      isbn: 9781162665740
+      member_id: M0081
+      borrowed_at: 2026-06-15T11:00:00.000Z
+      due_at: 2026-07-06T11:00:00.000Z
+      returned_at: 2026-07-22T16:00:00.000Z
+      fine_cents: 425
+    - loan_id: L00003
+      isbn: 9781132809372
+      member_id: M0012
+      borrowed_at: 2026-06-16T09:00:00.000Z
+      due_at: 2026-07-07T09:00:00.000Z
+      returned_at: 2026-06-24T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00004
+      isbn: 9781052506030
+      member_id: M0006
+      borrowed_at: 2026-06-16T11:00:00.000Z
+      due_at: 2026-07-07T11:00:00.000Z
+      returned_at: 2026-07-05T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00005
+      isbn: 9781015442955
+      member_id: M0015
+      borrowed_at: 2026-06-16T14:00:00.000Z
+      due_at: 2026-07-07T14:00:00.000Z
+      returned_at: 2026-07-31T16:00:00.000Z
+      fine_cents: 625
+    - loan_id: L00006
+      isbn: 9781046328853
+      member_id: M0053
+      borrowed_at: 2026-06-17T11:00:00.000Z
+      due_at: 2026-07-08T11:00:00.000Z
+      returned_at: 2026-07-26T16:00:00.000Z
+      fine_cents: 475
+    - loan_id: L00007
+      isbn: 9781111189242
+      member_id: M0060
+      borrowed_at: 2026-06-17T13:00:00.000Z
+      due_at: 2026-07-08T13:00:00.000Z
+      returned_at: 2026-07-12T18:00:00.000Z
+      fine_cents: 125
+    - loan_id: L00008
+      isbn: 9781110159710
+      member_id: M0077
+      borrowed_at: 2026-06-17T16:00:00.000Z
+      due_at: 2026-07-08T16:00:00.000Z
+      returned_at: 2026-07-02T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00009
+      isbn: 9781127661725
+      member_id: M0076
+      borrowed_at: 2026-06-18T09:00:00.000Z
+      due_at: 2026-07-09T09:00:00.000Z
+      returned_at: 2026-07-28T12:00:00.000Z
+      fine_cents: 500
+    - loan_id: L00010
+      isbn: 9781103982530
+      member_id: M0074
+      borrowed_at: 2026-06-18T13:00:00.000Z
+      due_at: 2026-07-09T13:00:00.000Z
+      returned_at: 2026-06-28T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00011
+      isbn: 9781165754335
+      member_id: M0043
+      borrowed_at: 2026-06-18T13:00:00.000Z
+      due_at: 2026-07-09T13:00:00.000Z
+      returned_at: 2026-06-23T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00012
+      isbn: 9781031915433
+      member_id: M0120
+      borrowed_at: 2026-06-18T16:00:00.000Z
+      due_at: 2026-07-09T16:00:00.000Z
+      returned_at: 2026-06-27T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00013
+      isbn: 9781086480528
+      member_id: M0092
+      borrowed_at: 2026-06-19T16:00:00.000Z
+      due_at: 2026-07-10T16:00:00.000Z
+      returned_at: 2026-07-03T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00014
+      isbn: 9781152370449
+      member_id: M0069
+      borrowed_at: 2026-06-19T17:00:00.000Z
+      due_at: 2026-07-10T17:00:00.000Z
+      returned_at: 2026-07-04T22:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00015
+      isbn: 9781184285872
+      member_id: M0014
+      borrowed_at: 2026-06-20T12:00:00.000Z
+      due_at: 2026-07-11T12:00:00.000Z
+      returned_at: 2026-06-25T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00016
+      isbn: 9781105012068
+      member_id: M0008
+      borrowed_at: 2026-06-20T13:00:00.000Z
+      due_at: 2026-07-11T13:00:00.000Z
+      returned_at: 2026-07-23T16:00:00.000Z
+      fine_cents: 325
+    - loan_id: L00017
+      isbn: 9781079273816
+      member_id: M0115
+      borrowed_at: 2026-06-21T14:00:00.000Z
+      due_at: 2026-07-12T14:00:00.000Z
+      returned_at: 2026-07-06T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00018
+      isbn: 9781105012068
+      member_id: M0006
+      borrowed_at: 2026-06-21T17:00:00.000Z
+      due_at: 2026-07-12T17:00:00.000Z
+      returned_at: 2026-07-17T20:00:00.000Z
+      fine_cents: 150
+    - loan_id: L00019
+      isbn: 9781175020109
+      member_id: M0052
+      borrowed_at: 2026-06-22T13:00:00.000Z
+      due_at: 2026-07-13T13:00:00.000Z
+      returned_at: 2026-07-30T18:00:00.000Z
+      fine_cents: 450
+    - loan_id: L00020
+      isbn: 9781098834883
+      member_id: M0050
+      borrowed_at: 2026-06-22T14:00:00.000Z
+      due_at: 2026-07-13T14:00:00.000Z
+      returned_at: 2026-06-30T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00021
+      isbn: 9781083391933
+      member_id: M0072
+      borrowed_at: 2026-06-22T15:00:00.000Z
+      due_at: 2026-07-13T15:00:00.000Z
+      returned_at: 2026-07-10T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00022
+      isbn: 9781003088592
+      member_id: M0078
+      borrowed_at: 2026-06-22T15:00:00.000Z
+      due_at: 2026-07-13T15:00:00.000Z
+      returned_at: 2026-07-01T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00023
+      isbn: 9781081332877
+      member_id: M0096
+      borrowed_at: 2026-06-22T17:00:00.000Z
+      due_at: 2026-07-13T17:00:00.000Z
+      returned_at: 2026-07-23T21:00:00.000Z
+      fine_cents: 275
+    - loan_id: L00024
+      isbn: 9781136927492
+      member_id: M0001
+      borrowed_at: 2026-06-23T12:00:00.000Z
+      due_at: 2026-07-14T12:00:00.000Z
+      returned_at: 2026-07-04T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00025
+      isbn: 9781175020109
+      member_id: M0006
+      borrowed_at: 2026-06-23T15:00:00.000Z
+      due_at: 2026-07-14T15:00:00.000Z
+      returned_at: 2026-07-02T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00026
+      isbn: 9781050446970
+      member_id: M0012
+      borrowed_at: 2026-06-23T17:00:00.000Z
+      due_at: 2026-07-14T17:00:00.000Z
+      returned_at: 2026-06-29T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00027
+      isbn: 9781158547623
+      member_id: M0044
+      borrowed_at: 2026-06-24T10:00:00.000Z
+      due_at: 2026-07-15T10:00:00.000Z
+      returned_at: 2026-07-28T14:00:00.000Z
+      fine_cents: 350
+    - loan_id: L00028
+      isbn: 9781085450997
+      member_id: M0082
+      borrowed_at: 2026-06-24T13:00:00.000Z
+      due_at: 2026-07-15T13:00:00.000Z
+      returned_at: 2026-07-01T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00029
+      isbn: 9781196640232
+      member_id: M0081
+      borrowed_at: 2026-06-24T17:00:00.000Z
+      due_at: 2026-07-15T17:00:00.000Z
+      returned_at: 2026-07-02T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00030
+      isbn: 9781168842923
+      member_id: M0102
+      borrowed_at: 2026-06-25T10:00:00.000Z
+      due_at: 2026-07-16T10:00:00.000Z
+      returned_at: 2026-07-16T11:00:00.000Z
+      fine_cents: 25
+    - loan_id: L00031
+      isbn: 9781195610700
+      member_id: M0017
+      borrowed_at: 2026-06-25T16:00:00.000Z
+      due_at: 2026-07-16T16:00:00.000Z
+      returned_at: 2026-07-15T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00032
+      isbn: 9781195610700
+      member_id: M0016
+      borrowed_at: 2026-06-25T18:00:00.000Z
+      due_at: 2026-07-16T18:00:00.000Z
+      returned_at: 2026-06-29T21:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00033
+      isbn: 9781118395950
+      member_id: M0108
+      borrowed_at: 2026-06-26T10:00:00.000Z
+      due_at: 2026-07-17T10:00:00.000Z
+      returned_at: 2026-07-07T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00034
+      isbn: 9781063830865
+      member_id: M0050
+      borrowed_at: 2026-06-26T12:00:00.000Z
+      due_at: 2026-07-17T12:00:00.000Z
+      returned_at: 2026-07-08T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00035
+      isbn: 9781057653685
+      member_id: M0002
+      borrowed_at: 2026-06-26T13:00:00.000Z
+      due_at: 2026-07-17T13:00:00.000Z
+      returned_at: 2026-07-12T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00036
+      isbn: 9781060742277
+      member_id: M0071
+      borrowed_at: 2026-06-26T16:00:00.000Z
+      due_at: 2026-07-17T16:00:00.000Z
+      returned_at: 2026-08-15T18:00:00.000Z
+      fine_cents: 750
+    - loan_id: L00037
+      isbn: 9781032944968
+      member_id: M0009
+      borrowed_at: 2026-06-27T18:00:00.000Z
+      due_at: 2026-07-18T18:00:00.000Z
+      returned_at: 2026-07-12T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00038
+      isbn: 9781014413420
+      member_id: M0092
+      borrowed_at: 2026-06-28T10:00:00.000Z
+      due_at: 2026-07-19T10:00:00.000Z
+      returned_at: 2026-07-01T12:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00039
+      isbn: 9781074126162
+      member_id: M0048
+      borrowed_at: 2026-06-28T15:00:00.000Z
+      due_at: 2026-07-19T15:00:00.000Z
+      returned_at: 2026-07-01T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00040
+      isbn: 9781080303342
+      member_id: M0104
+      borrowed_at: 2026-06-28T15:00:00.000Z
+      due_at: 2026-07-19T15:00:00.000Z
+      returned_at: 2026-07-16T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00041
+      isbn: 9781204876479
+      member_id: M0107
+      borrowed_at: 2026-06-29T09:00:00.000Z
+      due_at: 2026-07-20T09:00:00.000Z
+      returned_at: 2026-08-16T09:00:00.000Z
+      fine_cents: 675
+    - loan_id: L00042
+      isbn: 9781172961047
+      member_id: M0061
+      borrowed_at: 2026-06-29T12:00:00.000Z
+      due_at: 2026-07-20T12:00:00.000Z
+      returned_at: 2026-07-06T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00043
+      isbn: 9781110159710
+      member_id: M0048
+      borrowed_at: 2026-06-29T12:00:00.000Z
+      due_at: 2026-07-20T12:00:00.000Z
+      returned_at: 2026-07-27T12:00:00.000Z
+      fine_cents: 175
+    - loan_id: L00044
+      isbn: 9781083391933
+      member_id: M0006
+      borrowed_at: 2026-06-29T15:00:00.000Z
+      due_at: 2026-07-20T15:00:00.000Z
+      returned_at: 2026-07-23T16:00:00.000Z
+      fine_cents: 100
+    - loan_id: L00045
+      isbn: 9781198699290
+      member_id: M0101
+      borrowed_at: 2026-06-30T13:00:00.000Z
+      due_at: 2026-07-21T13:00:00.000Z
+      returned_at: 2026-07-31T13:00:00.000Z
+      fine_cents: 250
+    - loan_id: L00046
+      isbn: 9781157518099
+      member_id: M0099
+      borrowed_at: 2026-06-30T17:00:00.000Z
+      due_at: 2026-07-21T17:00:00.000Z
+      returned_at: 2026-08-17T20:00:00.000Z
+      fine_cents: 700
+    - loan_id: L00047
+      isbn: 9781130750317
+      member_id: M0076
+      borrowed_at: 2026-07-01T16:00:00.000Z
+      due_at: 2026-07-22T16:00:00.000Z
+      returned_at: 2026-08-19T17:00:00.000Z
+      fine_cents: 725
+    - loan_id: L00048
+      isbn: 9781023679190
+      member_id: M0013
+      borrowed_at: 2026-07-02T09:00:00.000Z
+      due_at: 2026-07-23T09:00:00.000Z
+      returned_at: 2026-07-05T09:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00049
+      isbn: 9781044269790
+      member_id: M0001
+      borrowed_at: 2026-07-02T13:00:00.000Z
+      due_at: 2026-07-23T13:00:00.000Z
+      returned_at: 2026-07-09T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00050
+      isbn: 9781176049635
+      member_id: M0077
+      borrowed_at: 2026-07-03T09:00:00.000Z
+      due_at: 2026-07-24T09:00:00.000Z
+      returned_at: 2026-07-18T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00051
+      isbn: 9781086480528
+      member_id: M0118
+      borrowed_at: 2026-07-03T10:00:00.000Z
+      due_at: 2026-07-24T10:00:00.000Z
+      returned_at: 2026-07-21T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00052
+      isbn: 9781197669768
+      member_id: M0050
+      borrowed_at: 2026-07-03T15:00:00.000Z
+      due_at: 2026-07-24T15:00:00.000Z
+      returned_at: 2026-07-14T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00053
+      isbn: 9781185315400
+      member_id: M0108
+      borrowed_at: 2026-07-03T16:00:00.000Z
+      due_at: 2026-07-24T16:00:00.000Z
+      returned_at: 2026-07-19T22:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00054
+      isbn: 9781030885904
+      member_id: M0023
+      borrowed_at: 2026-07-04T09:00:00.000Z
+      due_at: 2026-07-25T09:00:00.000Z
+      returned_at: 2026-07-21T10:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00055
+      isbn: 9781023679190
+      member_id: M0026
+      borrowed_at: 2026-07-04T15:00:00.000Z
+      due_at: 2026-07-25T15:00:00.000Z
+      returned_at: 2026-07-07T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00056
+      isbn: 9781035004027
+      member_id: M0099
+      borrowed_at: 2026-07-04T15:00:00.000Z
+      due_at: 2026-07-25T15:00:00.000Z
+      returned_at: 2026-08-08T18:00:00.000Z
+      fine_cents: 375
+    - loan_id: L00057
+      isbn: 9781022649668
+      member_id: M0078
+      borrowed_at: 2026-07-04T18:00:00.000Z
+      due_at: 2026-07-25T18:00:00.000Z
+      returned_at: 2026-07-20T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00058
+      isbn: 9781168842923
+      member_id: M0084
+      borrowed_at: 2026-07-05T14:00:00.000Z
+      due_at: 2026-07-26T14:00:00.000Z
+      returned_at: 2026-08-16T18:00:00.000Z
+      fine_cents: 550
+    - loan_id: L00059
+      isbn: 9781196640232
+      member_id: M0109
+      borrowed_at: 2026-07-05T16:00:00.000Z
+      due_at: 2026-07-26T16:00:00.000Z
+      returned_at: 2026-07-13T22:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00060
+      isbn: 9781154429503
+      member_id: M0059
+      borrowed_at: 2026-07-06T18:00:00.000Z
+      due_at: 2026-07-27T18:00:00.000Z
+      returned_at: 2026-07-22T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00061
+      isbn: 9781033974490
+      member_id: M0049
+      borrowed_at: 2026-07-07T10:00:00.000Z
+      due_at: 2026-07-28T10:00:00.000Z
+      returned_at: 2026-07-16T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00062
+      isbn: 9781156488560
+      member_id: M0057
+      borrowed_at: 2026-07-07T11:00:00.000Z
+      due_at: 2026-07-28T11:00:00.000Z
+      returned_at: 2026-08-05T14:00:00.000Z
+      fine_cents: 225
+    - loan_id: L00063
+      isbn: 9781068978517
+      member_id: M0083
+      borrowed_at: 2026-07-07T13:00:00.000Z
+      due_at: 2026-07-28T13:00:00.000Z
+      returned_at: 2026-07-14T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00064
+      isbn: 9781054565097
+      member_id: M0115
+      borrowed_at: 2026-07-07T13:00:00.000Z
+      due_at: 2026-07-28T13:00:00.000Z
+      returned_at: 2026-07-31T19:00:00.000Z
+      fine_cents: 100
+    - loan_id: L00065
+      isbn: 9781047358385
+      member_id: M0002
+      borrowed_at: 2026-07-07T17:00:00.000Z
+      due_at: 2026-07-28T17:00:00.000Z
+      returned_at: 2026-08-10T23:00:00.000Z
+      fine_cents: 350
+    - loan_id: L00066
+      isbn: 9781022649668
+      member_id: M0107
+      borrowed_at: 2026-07-07T17:00:00.000Z
+      due_at: 2026-07-28T17:00:00.000Z
+      returned_at: 2026-07-18T23:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00067
+      isbn: 9781161636215
+      member_id: M0044
+      borrowed_at: 2026-07-07T18:00:00.000Z
+      due_at: 2026-07-28T18:00:00.000Z
+      returned_at: 2026-08-16T22:00:00.000Z
+      fine_cents: 500
+    - loan_id: L00068
+      isbn: 9781008236240
+      member_id: M0109
+      borrowed_at: 2026-07-08T11:00:00.000Z
+      due_at: 2026-07-29T11:00:00.000Z
+      returned_at: 2026-07-19T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00069
+      isbn: 9781005147655
+      member_id: M0002
+      borrowed_at: 2026-07-08T12:00:00.000Z
+      due_at: 2026-07-29T12:00:00.000Z
+      returned_at: 2026-08-26T18:00:00.000Z
+      fine_cents: 725
+    - loan_id: L00070
+      isbn: 9781183256347
+      member_id: M0103
+      borrowed_at: 2026-07-08T14:00:00.000Z
+      due_at: 2026-07-29T14:00:00.000Z
+      returned_at: 2026-07-25T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00071
+      isbn: 9781075155697
+      member_id: M0117
+      borrowed_at: 2026-07-08T16:00:00.000Z
+      due_at: 2026-07-29T16:00:00.000Z
+      returned_at: 2026-08-08T21:00:00.000Z
+      fine_cents: 275
+    - loan_id: L00072
+      isbn: 9781165754335
+      member_id: M0033
+      borrowed_at: 2026-07-09T09:00:00.000Z
+      due_at: 2026-07-30T09:00:00.000Z
+      returned_at: null
+      fine_cents: 1575
+    - loan_id: L00073
+      isbn: 9781177079167
+      member_id: M0036
+      borrowed_at: 2026-07-09T14:00:00.000Z
+      due_at: 2026-07-30T14:00:00.000Z
+      returned_at: null
+      fine_cents: 1575
+    - loan_id: L00074
+      isbn: 9781117366425
+      member_id: M0068
+      borrowed_at: 2026-07-09T16:00:00.000Z
+      due_at: 2026-07-30T16:00:00.000Z
+      returned_at: 2026-07-23T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00075
+      isbn: 9781048387919
+      member_id: M0025
+      borrowed_at: 2026-07-11T09:00:00.000Z
+      due_at: 2026-08-01T09:00:00.000Z
+      returned_at: 2026-08-30T09:00:00.000Z
+      fine_cents: 725
+    - loan_id: L00076
+      isbn: 9781064860397
+      member_id: M0072
+      borrowed_at: 2026-07-11T11:00:00.000Z
+      due_at: 2026-08-01T11:00:00.000Z
+      returned_at: 2026-08-10T17:00:00.000Z
+      fine_cents: 250
+    - loan_id: L00077
+      isbn: 9781023679190
+      member_id: M0030
+      borrowed_at: 2026-07-12T09:00:00.000Z
+      due_at: 2026-08-02T09:00:00.000Z
+      returned_at: 2026-07-16T11:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00078
+      isbn: 9781074126162
+      member_id: M0107
+      borrowed_at: 2026-07-12T09:00:00.000Z
+      due_at: 2026-08-02T09:00:00.000Z
+      returned_at: 2026-07-24T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00079
+      isbn: 9781083391933
+      member_id: M0032
+      borrowed_at: 2026-07-12T11:00:00.000Z
+      due_at: 2026-08-02T11:00:00.000Z
+      returned_at: 2026-07-17T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00080
+      isbn: 9781120455017
+      member_id: M0039
+      borrowed_at: 2026-07-12T15:00:00.000Z
+      due_at: 2026-08-02T15:00:00.000Z
+      returned_at: 2026-08-09T16:00:00.000Z
+      fine_cents: 200
+    - loan_id: L00081
+      isbn: 9781143104671
+      member_id: M0048
+      borrowed_at: 2026-07-13T18:00:00.000Z
+      due_at: 2026-08-03T18:00:00.000Z
+      returned_at: 2026-08-01T23:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00082
+      isbn: 9781140016083
+      member_id: M0065
+      borrowed_at: 2026-07-14T11:00:00.000Z
+      due_at: 2026-08-04T11:00:00.000Z
+      returned_at: 2026-07-19T11:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00083
+      isbn: 9781045299321
+      member_id: M0101
+      borrowed_at: 2026-07-14T11:00:00.000Z
+      due_at: 2026-08-04T11:00:00.000Z
+      returned_at: 2026-07-24T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00084
+      isbn: 9781173990572
+      member_id: M0016
+      borrowed_at: 2026-07-14T12:00:00.000Z
+      due_at: 2026-08-04T12:00:00.000Z
+      returned_at: 2026-07-22T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00085
+      isbn: 9781191492584
+      member_id: M0019
+      borrowed_at: 2026-07-14T15:00:00.000Z
+      due_at: 2026-08-04T15:00:00.000Z
+      returned_at: 2026-08-10T15:00:00.000Z
+      fine_cents: 150
+    - loan_id: L00086
+      isbn: 9781008236240
+      member_id: M0005
+      borrowed_at: 2026-07-15T13:00:00.000Z
+      due_at: 2026-08-05T13:00:00.000Z
+      returned_at: 2026-08-21T16:00:00.000Z
+      fine_cents: 425
+    - loan_id: L00087
+      isbn: 9781062801330
+      member_id: M0092
+      borrowed_at: 2026-07-15T16:00:00.000Z
+      due_at: 2026-08-05T16:00:00.000Z
+      returned_at: 2026-09-01T18:00:00.000Z
+      fine_cents: 700
+    - loan_id: L00088
+      isbn: 9781172961047
+      member_id: M0061
+      borrowed_at: 2026-07-16T10:00:00.000Z
+      due_at: 2026-08-06T10:00:00.000Z
+      returned_at: 2026-08-03T12:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00089
+      isbn: 9781079273816
+      member_id: M0003
+      borrowed_at: 2026-07-16T12:00:00.000Z
+      due_at: 2026-08-06T12:00:00.000Z
+      returned_at: 2026-07-21T12:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00090
+      isbn: 9781046328853
+      member_id: M0013
+      borrowed_at: 2026-07-17T15:00:00.000Z
+      due_at: 2026-08-07T15:00:00.000Z
+      returned_at: 2026-08-19T20:00:00.000Z
+      fine_cents: 325
+    - loan_id: L00091
+      isbn: 9781092657709
+      member_id: M0099
+      borrowed_at: 2026-07-17T17:00:00.000Z
+      due_at: 2026-08-07T17:00:00.000Z
+      returned_at: 2026-08-23T18:00:00.000Z
+      fine_cents: 425
+    - loan_id: L00092
+      isbn: 9781129720789
+      member_id: M0092
+      borrowed_at: 2026-07-18T10:00:00.000Z
+      due_at: 2026-08-08T10:00:00.000Z
+      returned_at: 2026-08-12T12:00:00.000Z
+      fine_cents: 125
+    - loan_id: L00093
+      isbn: 9781111189242
+      member_id: M0070
+      borrowed_at: 2026-07-18T12:00:00.000Z
+      due_at: 2026-08-08T12:00:00.000Z
+      returned_at: 2026-08-30T17:00:00.000Z
+      fine_cents: 575
+    - loan_id: L00094
+      isbn: 9781116336894
+      member_id: M0096
+      borrowed_at: 2026-07-18T12:00:00.000Z
+      due_at: 2026-08-08T12:00:00.000Z
+      returned_at: 2026-08-02T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00095
+      isbn: 9781202817412
+      member_id: M0010
+      borrowed_at: 2026-07-18T14:00:00.000Z
+      due_at: 2026-08-08T14:00:00.000Z
+      returned_at: 2026-07-21T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00096
+      isbn: 9781076185228
+      member_id: M0111
+      borrowed_at: 2026-07-18T15:00:00.000Z
+      due_at: 2026-08-08T15:00:00.000Z
+      returned_at: 2026-09-06T20:00:00.000Z
+      fine_cents: 750
+    - loan_id: L00097
+      isbn: 9781090598646
+      member_id: M0113
+      borrowed_at: 2026-07-19T09:00:00.000Z
+      due_at: 2026-08-09T09:00:00.000Z
+      returned_at: 2026-08-06T12:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00098
+      isbn: 9781113248305
+      member_id: M0105
+      borrowed_at: 2026-07-19T10:00:00.000Z
+      due_at: 2026-08-09T10:00:00.000Z
+      returned_at: 2026-09-04T16:00:00.000Z
+      fine_cents: 675
+    - loan_id: L00099
+      isbn: 9781008236240
+      member_id: M0096
+      borrowed_at: 2026-07-19T11:00:00.000Z
+      due_at: 2026-08-09T11:00:00.000Z
+      returned_at: 2026-09-06T14:00:00.000Z
+      fine_cents: 725
+    - loan_id: L00100
+      isbn: 9781158547623
+      member_id: M0076
+      borrowed_at: 2026-07-19T11:00:00.000Z
+      due_at: 2026-08-09T11:00:00.000Z
+      returned_at: 2026-08-17T13:00:00.000Z
+      fine_cents: 225
+    - loan_id: L00101
+      isbn: 9781105012068
+      member_id: M0079
+      borrowed_at: 2026-07-19T18:00:00.000Z
+      due_at: 2026-08-09T18:00:00.000Z
+      returned_at: 2026-08-18T00:00:00.000Z
+      fine_cents: 225
+    - loan_id: L00102
+      isbn: 9781202817412
+      member_id: M0052
+      borrowed_at: 2026-07-20T10:00:00.000Z
+      due_at: 2026-08-10T10:00:00.000Z
+      returned_at: 2026-08-02T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00103
+      isbn: 9781008236240
+      member_id: M0023
+      borrowed_at: 2026-07-20T18:00:00.000Z
+      due_at: 2026-08-10T18:00:00.000Z
+      returned_at: 2026-08-27T22:00:00.000Z
+      fine_cents: 450
+    - loan_id: L00104
+      isbn: 9781147222791
+      member_id: M0069
+      borrowed_at: 2026-07-21T10:00:00.000Z
+      due_at: 2026-08-11T10:00:00.000Z
+      returned_at: 2026-07-31T11:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00105
+      isbn: 9781145163737
+      member_id: M0060
+      borrowed_at: 2026-07-21T11:00:00.000Z
+      due_at: 2026-08-11T11:00:00.000Z
+      returned_at: 2026-08-14T13:00:00.000Z
+      fine_cents: 100
+    - loan_id: L00106
+      isbn: 9781117366425
+      member_id: M0117
+      borrowed_at: 2026-07-21T13:00:00.000Z
+      due_at: 2026-08-11T13:00:00.000Z
+      returned_at: 2026-08-22T19:00:00.000Z
+      fine_cents: 300
+    - loan_id: L00107
+      isbn: 9781028826841
+      member_id: M0026
+      borrowed_at: 2026-07-22T11:00:00.000Z
+      due_at: 2026-08-12T11:00:00.000Z
+      returned_at: 2026-09-03T17:00:00.000Z
+      fine_cents: 575
+    - loan_id: L00108
+      isbn: 9781216201306
+      member_id: M0066
+      borrowed_at: 2026-07-22T14:00:00.000Z
+      due_at: 2026-08-12T14:00:00.000Z
+      returned_at: 2026-08-03T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00109
+      isbn: 9781021620132
+      member_id: M0045
+      borrowed_at: 2026-07-22T16:00:00.000Z
+      due_at: 2026-08-12T16:00:00.000Z
+      returned_at: 2026-08-05T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00110
+      isbn: 9781059712748
+      member_id: M0118
+      borrowed_at: 2026-07-22T18:00:00.000Z
+      due_at: 2026-08-12T18:00:00.000Z
+      returned_at: 2026-08-15T19:00:00.000Z
+      fine_cents: 100
+    - loan_id: L00111
+      isbn: 9781020590603
+      member_id: M0097
+      borrowed_at: 2026-07-23T11:00:00.000Z
+      due_at: 2026-08-13T11:00:00.000Z
+      returned_at: 2026-08-02T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00112
+      isbn: 9781208994599
+      member_id: M0021
+      borrowed_at: 2026-07-23T15:00:00.000Z
+      due_at: 2026-08-13T15:00:00.000Z
+      returned_at: 2026-08-09T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00113
+      isbn: 9781220319424
+      member_id: M0083
+      borrowed_at: 2026-07-24T10:00:00.000Z
+      due_at: 2026-08-14T10:00:00.000Z
+      returned_at: 2026-08-28T13:00:00.000Z
+      fine_cents: 375
+    - loan_id: L00114
+      isbn: 9781133838906
+      member_id: M0083
+      borrowed_at: 2026-07-24T12:00:00.000Z
+      due_at: 2026-08-14T12:00:00.000Z
+      returned_at: 2026-08-17T14:00:00.000Z
+      fine_cents: 100
+    - loan_id: L00115
+      isbn: 9781121484542
+      member_id: M0009
+      borrowed_at: 2026-07-24T13:00:00.000Z
+      due_at: 2026-08-14T13:00:00.000Z
+      returned_at: 2026-08-30T16:00:00.000Z
+      fine_cents: 425
+    - loan_id: L00116
+      isbn: 9781186344935
+      member_id: M0011
+      borrowed_at: 2026-07-24T14:00:00.000Z
+      due_at: 2026-08-14T14:00:00.000Z
+      returned_at: null
+      fine_cents: 1200
+    - loan_id: L00117
+      isbn: 9781111189242
+      member_id: M0083
+      borrowed_at: 2026-07-24T14:00:00.000Z
+      due_at: 2026-08-14T14:00:00.000Z
+      returned_at: 2026-08-09T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00118
+      isbn: 9781091628175
+      member_id: M0105
+      borrowed_at: 2026-07-24T15:00:00.000Z
+      due_at: 2026-08-14T15:00:00.000Z
+      returned_at: 2026-08-10T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00119
+      isbn: 9781020590603
+      member_id: M0007
+      borrowed_at: 2026-07-25T10:00:00.000Z
+      due_at: 2026-08-15T10:00:00.000Z
+      returned_at: 2026-08-11T10:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00120
+      isbn: 9781019561072
+      member_id: M0065
+      borrowed_at: 2026-07-25T17:00:00.000Z
+      due_at: 2026-08-15T17:00:00.000Z
+      returned_at: 2026-09-05T18:00:00.000Z
+      fine_cents: 550
+    - loan_id: L00121
+      isbn: 9781091628175
+      member_id: M0061
+      borrowed_at: 2026-07-25T17:00:00.000Z
+      due_at: 2026-08-15T17:00:00.000Z
+      returned_at: 2026-08-20T18:00:00.000Z
+      fine_cents: 150
+    - loan_id: L00122
+      isbn: 9781202817412
+      member_id: M0050
+      borrowed_at: 2026-07-26T16:00:00.000Z
+      due_at: 2026-08-16T16:00:00.000Z
+      returned_at: 2026-08-31T21:00:00.000Z
+      fine_cents: 400
+    - loan_id: L00123
+      isbn: 9781066919451
+      member_id: M0108
+      borrowed_at: 2026-07-26T16:00:00.000Z
+      due_at: 2026-08-16T16:00:00.000Z
+      returned_at: 2026-08-21T17:00:00.000Z
+      fine_cents: 150
+    - loan_id: L00124
+      isbn: 9781009265775
+      member_id: M0009
+      borrowed_at: 2026-07-27T13:00:00.000Z
+      due_at: 2026-08-17T13:00:00.000Z
+      returned_at: 2026-09-08T18:00:00.000Z
+      fine_cents: 575
+    - loan_id: L00125
+      isbn: 9781153399975
+      member_id: M0118
+      borrowed_at: 2026-07-27T17:00:00.000Z
+      due_at: 2026-08-17T17:00:00.000Z
+      returned_at: 2026-08-19T19:00:00.000Z
+      fine_cents: 75
+    - loan_id: L00126
+      isbn: 9781190463059
+      member_id: M0010
+      borrowed_at: 2026-07-28T10:00:00.000Z
+      due_at: 2026-08-18T10:00:00.000Z
+      returned_at: 2026-08-17T11:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00127
+      isbn: 9781086480528
+      member_id: M0068
+      borrowed_at: 2026-07-28T16:00:00.000Z
+      due_at: 2026-08-18T16:00:00.000Z
+      returned_at: 2026-08-29T20:00:00.000Z
+      fine_cents: 300
+    - loan_id: L00128
+      isbn: 9781151340917
+      member_id: M0109
+      borrowed_at: 2026-07-28T17:00:00.000Z
+      due_at: 2026-08-18T17:00:00.000Z
+      returned_at: 2026-08-01T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00129
+      isbn: 9781204876479
+      member_id: M0044
+      borrowed_at: 2026-07-29T09:00:00.000Z
+      due_at: 2026-08-19T09:00:00.000Z
+      returned_at: 2026-09-10T15:00:00.000Z
+      fine_cents: 575
+    - loan_id: L00130
+      isbn: 9781048387919
+      member_id: M0066
+      borrowed_at: 2026-07-29T10:00:00.000Z
+      due_at: 2026-08-19T10:00:00.000Z
+      returned_at: 2026-08-10T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00131
+      isbn: 9781162665740
+      member_id: M0054
+      borrowed_at: 2026-07-29T13:00:00.000Z
+      due_at: 2026-08-19T13:00:00.000Z
+      returned_at: 2026-08-18T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00132
+      isbn: 9781159577155
+      member_id: M0054
+      borrowed_at: 2026-07-29T14:00:00.000Z
+      due_at: 2026-08-19T14:00:00.000Z
+      returned_at: 2026-08-16T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00133
+      isbn: 9781128691257
+      member_id: M0005
+      borrowed_at: 2026-07-29T16:00:00.000Z
+      due_at: 2026-08-19T16:00:00.000Z
+      returned_at: 2026-08-13T22:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00134
+      isbn: 9781027797319
+      member_id: M0057
+      borrowed_at: 2026-07-29T17:00:00.000Z
+      due_at: 2026-08-19T17:00:00.000Z
+      returned_at: 2026-08-03T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00135
+      isbn: 9781221348959
+      member_id: M0065
+      borrowed_at: 2026-07-29T18:00:00.000Z
+      due_at: 2026-08-19T18:00:00.000Z
+      returned_at: 2026-08-14T23:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00136
+      isbn: 9781023679190
+      member_id: M0118
+      borrowed_at: 2026-07-30T13:00:00.000Z
+      due_at: 2026-08-20T13:00:00.000Z
+      returned_at: 2026-08-23T17:00:00.000Z
+      fine_cents: 100
+    - loan_id: L00137
+      isbn: 9781205906007
+      member_id: M0086
+      borrowed_at: 2026-07-30T15:00:00.000Z
+      due_at: 2026-08-20T15:00:00.000Z
+      returned_at: 2026-08-09T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00138
+      isbn: 9781149281857
+      member_id: M0106
+      borrowed_at: 2026-07-30T17:00:00.000Z
+      due_at: 2026-08-20T17:00:00.000Z
+      returned_at: 2026-09-19T19:00:00.000Z
+      fine_cents: 775
+    - loan_id: L00139
+      isbn: 9781018531540
+      member_id: M0014
+      borrowed_at: 2026-07-31T09:00:00.000Z
+      due_at: 2026-08-21T09:00:00.000Z
+      returned_at: 2026-08-18T12:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00140
+      isbn: 9781200758359
+      member_id: M0090
+      borrowed_at: 2026-08-01T09:00:00.000Z
+      due_at: 2026-08-22T09:00:00.000Z
+      returned_at: 2026-09-17T09:00:00.000Z
+      fine_cents: 650
+    - loan_id: L00141
+      isbn: 9781103982530
+      member_id: M0025
+      borrowed_at: 2026-08-01T09:00:00.000Z
+      due_at: 2026-08-22T09:00:00.000Z
+      returned_at: 2026-09-11T13:00:00.000Z
+      fine_cents: 525
+    - loan_id: L00142
+      isbn: 9781145163737
+      member_id: M0105
+      borrowed_at: 2026-08-02T11:00:00.000Z
+      due_at: 2026-08-23T11:00:00.000Z
+      returned_at: 2026-09-13T17:00:00.000Z
+      fine_cents: 550
+    - loan_id: L00143
+      isbn: 9781115307369
+      member_id: M0076
+      borrowed_at: 2026-08-02T14:00:00.000Z
+      due_at: 2026-08-23T14:00:00.000Z
+      returned_at: 2026-08-14T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00144
+      isbn: 9781189433520
+      member_id: M0035
+      borrowed_at: 2026-08-02T16:00:00.000Z
+      due_at: 2026-08-23T16:00:00.000Z
+      returned_at: 2026-08-08T21:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00145
+      isbn: 9781102953005
+      member_id: M0058
+      borrowed_at: 2026-08-02T16:00:00.000Z
+      due_at: 2026-08-23T16:00:00.000Z
+      returned_at: 2026-08-20T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00146
+      isbn: 9781080303342
+      member_id: M0114
+      borrowed_at: 2026-08-02T16:00:00.000Z
+      due_at: 2026-08-23T16:00:00.000Z
+      returned_at: 2026-08-06T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00147
+      isbn: 9781210024123
+      member_id: M0019
+      borrowed_at: 2026-08-03T13:00:00.000Z
+      due_at: 2026-08-24T13:00:00.000Z
+      returned_at: 2026-08-24T15:00:00.000Z
+      fine_cents: 25
+    - loan_id: L00148
+      isbn: 9781057653685
+      member_id: M0002
+      borrowed_at: 2026-08-03T15:00:00.000Z
+      due_at: 2026-08-24T15:00:00.000Z
+      returned_at: 2026-08-27T17:00:00.000Z
+      fine_cents: 100
+    - loan_id: L00149
+      isbn: 9781103982530
+      member_id: M0077
+      borrowed_at: 2026-08-04T10:00:00.000Z
+      due_at: 2026-08-25T10:00:00.000Z
+      returned_at: 2026-08-08T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00150
+      isbn: 9781046328853
+      member_id: M0083
+      borrowed_at: 2026-08-04T12:00:00.000Z
+      due_at: 2026-08-25T12:00:00.000Z
+      returned_at: 2026-08-16T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00151
+      isbn: 9781217230831
+      member_id: M0034
+      borrowed_at: 2026-08-05T11:00:00.000Z
+      due_at: 2026-08-26T11:00:00.000Z
+      returned_at: 2026-09-09T16:00:00.000Z
+      fine_cents: 375
+    - loan_id: L00152
+      isbn: 9781076185228
+      member_id: M0049
+      borrowed_at: 2026-08-05T13:00:00.000Z
+      due_at: 2026-08-26T13:00:00.000Z
+      returned_at: 2026-08-12T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00153
+      isbn: 9781096775829
+      member_id: M0092
+      borrowed_at: 2026-08-05T14:00:00.000Z
+      due_at: 2026-08-26T14:00:00.000Z
+      returned_at: 2026-09-08T19:00:00.000Z
+      fine_cents: 350
+    - loan_id: L00154
+      isbn: 9781039122147
+      member_id: M0020
+      borrowed_at: 2026-08-06T14:00:00.000Z
+      due_at: 2026-08-27T14:00:00.000Z
+      returned_at: 2026-09-16T20:00:00.000Z
+      fine_cents: 525
+    - loan_id: L00155
+      isbn: 9781135897963
+      member_id: M0031
+      borrowed_at: 2026-08-07T09:00:00.000Z
+      due_at: 2026-08-28T09:00:00.000Z
+      returned_at: 2026-08-24T09:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00156
+      isbn: 9781169872455
+      member_id: M0066
+      borrowed_at: 2026-08-07T09:00:00.000Z
+      due_at: 2026-08-28T09:00:00.000Z
+      returned_at: 2026-08-21T10:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00157
+      isbn: 9781220319424
+      member_id: M0012
+      borrowed_at: 2026-08-07T17:00:00.000Z
+      due_at: 2026-08-28T17:00:00.000Z
+      returned_at: 2026-09-23T19:00:00.000Z
+      fine_cents: 675
+    - loan_id: L00158
+      isbn: 9781181197284
+      member_id: M0013
+      borrowed_at: 2026-08-08T11:00:00.000Z
+      due_at: 2026-08-29T11:00:00.000Z
+      returned_at: 2026-08-13T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00159
+      isbn: 9781033974490
+      member_id: M0108
+      borrowed_at: 2026-08-08T11:00:00.000Z
+      due_at: 2026-08-29T11:00:00.000Z
+      returned_at: 2026-08-11T11:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00160
+      isbn: 9781155459035
+      member_id: M0113
+      borrowed_at: 2026-08-08T12:00:00.000Z
+      due_at: 2026-08-29T12:00:00.000Z
+      returned_at: 2026-09-25T17:00:00.000Z
+      fine_cents: 700
+    - loan_id: L00161
+      isbn: 9781019561072
+      member_id: M0083
+      borrowed_at: 2026-08-09T12:00:00.000Z
+      due_at: 2026-08-30T12:00:00.000Z
+      returned_at: 2026-08-16T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00162
+      isbn: 9781164724803
+      member_id: M0003
+      borrowed_at: 2026-08-09T16:00:00.000Z
+      due_at: 2026-08-30T16:00:00.000Z
+      returned_at: null
+      fine_cents: 800
+    - loan_id: L00163
+      isbn: 9781149281857
+      member_id: M0030
+      borrowed_at: 2026-08-09T18:00:00.000Z
+      due_at: 2026-08-30T18:00:00.000Z
+      returned_at: 2026-08-23T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00164
+      isbn: 9781029856373
+      member_id: M0026
+      borrowed_at: 2026-08-09T18:00:00.000Z
+      due_at: 2026-08-30T18:00:00.000Z
+      returned_at: null
+      fine_cents: 800
+    - loan_id: L00165
+      isbn: 9781216201306
+      member_id: M0010
+      borrowed_at: 2026-08-10T10:00:00.000Z
+      due_at: 2026-08-31T10:00:00.000Z
+      returned_at: 2026-09-17T11:00:00.000Z
+      fine_cents: 450
+    - loan_id: L00166
+      isbn: 9781188403999
+      member_id: M0083
+      borrowed_at: 2026-08-10T14:00:00.000Z
+      due_at: 2026-08-31T14:00:00.000Z
+      returned_at: 2026-09-15T14:00:00.000Z
+      fine_cents: 375
+    - loan_id: L00167
+      isbn: 9781172961047
+      member_id: M0090
+      borrowed_at: 2026-08-10T14:00:00.000Z
+      due_at: 2026-08-31T14:00:00.000Z
+      returned_at: 2026-08-26T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00168
+      isbn: 9781083391933
+      member_id: M0054
+      borrowed_at: 2026-08-11T10:00:00.000Z
+      due_at: 2026-09-01T10:00:00.000Z
+      returned_at: 2026-08-31T11:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00169
+      isbn: 9781162665740
+      member_id: M0071
+      borrowed_at: 2026-08-12T14:00:00.000Z
+      due_at: 2026-09-02T14:00:00.000Z
+      returned_at: 2026-08-29T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00170
+      isbn: 9781094716763
+      member_id: M0083
+      borrowed_at: 2026-08-12T16:00:00.000Z
+      due_at: 2026-09-02T16:00:00.000Z
+      returned_at: 2026-09-13T21:00:00.000Z
+      fine_cents: 300
+    - loan_id: L00171
+      isbn: 9781056624150
+      member_id: M0065
+      borrowed_at: 2026-08-13T12:00:00.000Z
+      due_at: 2026-09-03T12:00:00.000Z
+      returned_at: null
+      fine_cents: 700
+    - loan_id: L00172
+      isbn: 9781022649668
+      member_id: M0093
+      borrowed_at: 2026-08-13T15:00:00.000Z
+      due_at: 2026-09-03T15:00:00.000Z
+      returned_at: 2026-08-28T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00173
+      isbn: 9781149281857
+      member_id: M0001
+      borrowed_at: 2026-08-14T11:00:00.000Z
+      due_at: 2026-09-04T11:00:00.000Z
+      returned_at: 2026-09-09T17:00:00.000Z
+      fine_cents: 150
+    - loan_id: L00174
+      isbn: 9781131779843
+      member_id: M0014
+      borrowed_at: 2026-08-14T13:00:00.000Z
+      due_at: 2026-09-04T13:00:00.000Z
+      returned_at: 2026-08-23T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00175
+      isbn: 9781107071124
+      member_id: M0092
+      borrowed_at: 2026-08-14T14:00:00.000Z
+      due_at: 2026-09-04T14:00:00.000Z
+      returned_at: null
+      fine_cents: 675
+    - loan_id: L00176
+      isbn: 9781125602669
+      member_id: M0116
+      borrowed_at: 2026-08-14T15:00:00.000Z
+      due_at: 2026-09-04T15:00:00.000Z
+      returned_at: null
+      fine_cents: 675
+    - loan_id: L00177
+      isbn: 9781109130188
+      member_id: M0049
+      borrowed_at: 2026-08-15T13:00:00.000Z
+      due_at: 2026-09-05T13:00:00.000Z
+      returned_at: 2026-08-27T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00178
+      isbn: 9781001029535
+      member_id: M0009
+      borrowed_at: 2026-08-15T17:00:00.000Z
+      due_at: 2026-09-05T17:00:00.000Z
+      returned_at: 2026-08-24T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00179
+      isbn: 9781149281857
+      member_id: M0015
+      borrowed_at: 2026-08-16T12:00:00.000Z
+      due_at: 2026-09-06T12:00:00.000Z
+      returned_at: null
+      fine_cents: 625
+    - loan_id: L00180
+      isbn: 9781011324835
+      member_id: M0031
+      borrowed_at: 2026-08-17T10:00:00.000Z
+      due_at: 2026-09-07T10:00:00.000Z
+      returned_at: 2026-08-20T11:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00181
+      isbn: 9781106041593
+      member_id: M0024
+      borrowed_at: 2026-08-17T16:00:00.000Z
+      due_at: 2026-09-07T16:00:00.000Z
+      returned_at: null
+      fine_cents: 600
+    - loan_id: L00182
+      isbn: 9781137957023
+      member_id: M0045
+      borrowed_at: 2026-08-17T18:00:00.000Z
+      due_at: 2026-09-07T18:00:00.000Z
+      returned_at: 2026-08-23T00:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00183
+      isbn: 9781032944968
+      member_id: M0081
+      borrowed_at: 2026-08-18T12:00:00.000Z
+      due_at: 2026-09-08T12:00:00.000Z
+      returned_at: null
+      fine_cents: 575
+    - loan_id: L00184
+      isbn: 9781045299321
+      member_id: M0102
+      borrowed_at: 2026-08-18T13:00:00.000Z
+      due_at: 2026-09-08T13:00:00.000Z
+      returned_at: 2026-08-30T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00185
+      isbn: 9781024708721
+      member_id: M0019
+      borrowed_at: 2026-08-18T15:00:00.000Z
+      due_at: 2026-09-08T15:00:00.000Z
+      returned_at: null
+      fine_cents: 575
+    - loan_id: L00186
+      isbn: 9781161636215
+      member_id: M0119
+      borrowed_at: 2026-08-18T17:00:00.000Z
+      due_at: 2026-09-08T17:00:00.000Z
+      returned_at: 2026-08-23T22:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00187
+      isbn: 9781126632191
+      member_id: M0098
+      borrowed_at: 2026-08-19T10:00:00.000Z
+      due_at: 2026-09-09T10:00:00.000Z
+      returned_at: 2026-09-26T13:00:00.000Z
+      fine_cents: 450
+    - loan_id: L00188
+      isbn: 9781141045617
+      member_id: M0030
+      borrowed_at: 2026-08-19T12:00:00.000Z
+      due_at: 2026-09-09T12:00:00.000Z
+      returned_at: 2026-08-22T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00189
+      isbn: 9781137957023
+      member_id: M0002
+      borrowed_at: 2026-08-20T10:00:00.000Z
+      due_at: 2026-09-10T10:00:00.000Z
+      returned_at: 2026-09-06T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00190
+      isbn: 9781010295303
+      member_id: M0081
+      borrowed_at: 2026-08-20T10:00:00.000Z
+      due_at: 2026-09-10T10:00:00.000Z
+      returned_at: null
+      fine_cents: 525
+    - loan_id: L00191
+      isbn: 9781002059067
+      member_id: M0070
+      borrowed_at: 2026-08-20T12:00:00.000Z
+      due_at: 2026-09-10T12:00:00.000Z
+      returned_at: 2026-08-23T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00192
+      isbn: 9781158547623
+      member_id: M0112
+      borrowed_at: 2026-08-20T14:00:00.000Z
+      due_at: 2026-09-10T14:00:00.000Z
+      returned_at: 2026-09-03T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00193
+      isbn: 9781126632191
+      member_id: M0036
+      borrowed_at: 2026-08-21T12:00:00.000Z
+      due_at: 2026-09-11T12:00:00.000Z
+      returned_at: null
+      fine_cents: 500
+    - loan_id: L00194
+      isbn: 9781090598646
+      member_id: M0086
+      borrowed_at: 2026-08-22T17:00:00.000Z
+      due_at: 2026-09-12T17:00:00.000Z
+      returned_at: 2026-09-03T21:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00195
+      isbn: 9781093687231
+      member_id: M0028
+      borrowed_at: 2026-08-22T18:00:00.000Z
+      due_at: 2026-09-12T18:00:00.000Z
+      returned_at: 2026-09-18T19:00:00.000Z
+      fine_cents: 175
+    - loan_id: L00196
+      isbn: 9781114277830
+      member_id: M0105
+      borrowed_at: 2026-08-23T11:00:00.000Z
+      due_at: 2026-09-13T11:00:00.000Z
+      returned_at: 2026-08-28T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00197
+      isbn: 9781085450997
+      member_id: M0083
+      borrowed_at: 2026-08-23T12:00:00.000Z
+      due_at: 2026-09-13T12:00:00.000Z
+      returned_at: 2026-09-18T16:00:00.000Z
+      fine_cents: 150
+    - loan_id: L00198
+      isbn: 9781198699290
+      member_id: M0104
+      borrowed_at: 2026-08-23T12:00:00.000Z
+      due_at: 2026-09-13T12:00:00.000Z
+      returned_at: 2026-09-26T18:00:00.000Z
+      fine_cents: 350
+    - loan_id: L00199
+      isbn: 9781190463059
+      member_id: M0007
+      borrowed_at: 2026-08-23T13:00:00.000Z
+      due_at: 2026-09-13T13:00:00.000Z
+      returned_at: 2026-09-06T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00200
+      isbn: 9781109130188
+      member_id: M0038
+      borrowed_at: 2026-08-23T14:00:00.000Z
+      due_at: 2026-09-13T14:00:00.000Z
+      returned_at: null
+      fine_cents: 450
+    - loan_id: L00201
+      isbn: 9781023679190
+      member_id: M0056
+      borrowed_at: 2026-08-23T16:00:00.000Z
+      due_at: 2026-09-13T16:00:00.000Z
+      returned_at: null
+      fine_cents: 450
+    - loan_id: L00202
+      isbn: 9781083391933
+      member_id: M0019
+      borrowed_at: 2026-08-24T15:00:00.000Z
+      due_at: 2026-09-14T15:00:00.000Z
+      returned_at: 2026-09-13T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00203
+      isbn: 9781071037577
+      member_id: M0030
+      borrowed_at: 2026-08-24T18:00:00.000Z
+      due_at: 2026-09-14T18:00:00.000Z
+      returned_at: null
+      fine_cents: 425
+    - loan_id: L00204
+      isbn: 9781189433520
+      member_id: M0111
+      borrowed_at: 2026-08-25T13:00:00.000Z
+      due_at: 2026-09-15T13:00:00.000Z
+      returned_at: 2026-09-16T17:00:00.000Z
+      fine_cents: 50
+    - loan_id: L00205
+      isbn: 9781141045617
+      member_id: M0020
+      borrowed_at: 2026-08-25T15:00:00.000Z
+      due_at: 2026-09-15T15:00:00.000Z
+      returned_at: 2026-09-14T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00206
+      isbn: 9781125602669
+      member_id: M0046
+      borrowed_at: 2026-08-25T15:00:00.000Z
+      due_at: 2026-09-15T15:00:00.000Z
+      returned_at: null
+      fine_cents: 400
+    - loan_id: L00207
+      isbn: 9781113248305
+      member_id: M0069
+      borrowed_at: 2026-08-25T16:00:00.000Z
+      due_at: 2026-09-15T16:00:00.000Z
+      returned_at: 2026-09-16T17:00:00.000Z
+      fine_cents: 50
+    - loan_id: L00208
+      isbn: 9781187374467
+      member_id: M0080
+      borrowed_at: 2026-08-26T10:00:00.000Z
+      due_at: 2026-09-16T10:00:00.000Z
+      returned_at: 2026-09-15T12:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00209
+      isbn: 9781216201306
+      member_id: M0042
+      borrowed_at: 2026-08-27T15:00:00.000Z
+      due_at: 2026-09-17T15:00:00.000Z
+      returned_at: 2026-09-05T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00210
+      isbn: 9781204876479
+      member_id: M0030
+      borrowed_at: 2026-08-27T17:00:00.000Z
+      due_at: 2026-09-17T17:00:00.000Z
+      returned_at: 2026-09-16T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00211
+      isbn: 9781151340917
+      member_id: M0059
+      borrowed_at: 2026-08-28T09:00:00.000Z
+      due_at: 2026-09-18T09:00:00.000Z
+      returned_at: 2026-09-14T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00212
+      isbn: 9781030885904
+      member_id: M0071
+      borrowed_at: 2026-08-28T16:00:00.000Z
+      due_at: 2026-09-18T16:00:00.000Z
+      returned_at: null
+      fine_cents: 325
+    - loan_id: L00213
+      isbn: 9781118395950
+      member_id: M0045
+      borrowed_at: 2026-08-29T09:00:00.000Z
+      due_at: 2026-09-19T09:00:00.000Z
+      returned_at: null
+      fine_cents: 300
+    - loan_id: L00214
+      isbn: 9781220319424
+      member_id: M0118
+      borrowed_at: 2026-08-29T09:00:00.000Z
+      due_at: 2026-09-19T09:00:00.000Z
+      returned_at: 2026-09-07T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00215
+      isbn: 9781050446970
+      member_id: M0011
+      borrowed_at: 2026-08-29T10:00:00.000Z
+      due_at: 2026-09-19T10:00:00.000Z
+      returned_at: 2026-09-11T10:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00216
+      isbn: 9781220319424
+      member_id: M0100
+      borrowed_at: 2026-08-29T14:00:00.000Z
+      due_at: 2026-09-19T14:00:00.000Z
+      returned_at: 2026-09-03T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00217
+      isbn: 9781048387919
+      member_id: M0047
+      borrowed_at: 2026-08-29T14:00:00.000Z
+      due_at: 2026-09-19T14:00:00.000Z
+      returned_at: 2026-09-05T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00218
+      isbn: 9781122514071
+      member_id: M0101
+      borrowed_at: 2026-08-30T16:00:00.000Z
+      due_at: 2026-09-20T16:00:00.000Z
+      returned_at: null
+      fine_cents: 275
+    - loan_id: L00219
+      isbn: 9781041181200
+      member_id: M0115
+      borrowed_at: 2026-08-31T09:00:00.000Z
+      due_at: 2026-09-21T09:00:00.000Z
+      returned_at: 2026-09-19T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00220
+      isbn: 9781015442955
+      member_id: M0055
+      borrowed_at: 2026-08-31T10:00:00.000Z
+      due_at: 2026-09-21T10:00:00.000Z
+      returned_at: 2026-09-08T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00221
+      isbn: 9781211053658
+      member_id: M0018
+      borrowed_at: 2026-08-31T15:00:00.000Z
+      due_at: 2026-09-21T15:00:00.000Z
+      returned_at: 2026-09-09T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00222
+      isbn: 9781133838906
+      member_id: M0086
+      borrowed_at: 2026-09-02T13:00:00.000Z
+      due_at: 2026-09-23T13:00:00.000Z
+      returned_at: 2026-09-21T16:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00223
+      isbn: 9781123543605
+      member_id: M0043
+      borrowed_at: 2026-09-02T14:00:00.000Z
+      due_at: 2026-09-23T14:00:00.000Z
+      returned_at: null
+      fine_cents: 200
+    - loan_id: L00224
+      isbn: 9781131779843
+      member_id: M0118
+      borrowed_at: 2026-09-02T15:00:00.000Z
+      due_at: 2026-09-23T15:00:00.000Z
+      returned_at: 2026-09-23T21:00:00.000Z
+      fine_cents: 25
+    - loan_id: L00225
+      isbn: 9781012354367
+      member_id: M0049
+      borrowed_at: 2026-09-02T15:00:00.000Z
+      due_at: 2026-09-23T15:00:00.000Z
+      returned_at: 2026-09-14T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00226
+      isbn: 9781166783860
+      member_id: M0064
+      borrowed_at: 2026-09-02T17:00:00.000Z
+      due_at: 2026-09-23T17:00:00.000Z
+      returned_at: 2026-09-15T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00227
+      isbn: 9781159577155
+      member_id: M0068
+      borrowed_at: 2026-09-02T18:00:00.000Z
+      due_at: 2026-09-23T18:00:00.000Z
+      returned_at: 2026-09-18T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00228
+      isbn: 9781181197284
+      member_id: M0040
+      borrowed_at: 2026-09-03T11:00:00.000Z
+      due_at: 2026-09-24T11:00:00.000Z
+      returned_at: 2026-09-06T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00229
+      isbn: 9781057653685
+      member_id: M0090
+      borrowed_at: 2026-09-03T18:00:00.000Z
+      due_at: 2026-09-24T18:00:00.000Z
+      returned_at: 2026-09-17T23:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00230
+      isbn: 9781102953005
+      member_id: M0062
+      borrowed_at: 2026-09-03T18:00:00.000Z
+      due_at: 2026-09-24T18:00:00.000Z
+      returned_at: null
+      fine_cents: 175
+    - loan_id: L00231
+      isbn: 9781201787884
+      member_id: M0117
+      borrowed_at: 2026-09-05T11:00:00.000Z
+      due_at: 2026-09-26T11:00:00.000Z
+      returned_at: 2026-09-08T15:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00232
+      isbn: 9781047358385
+      member_id: M0052
+      borrowed_at: 2026-09-05T15:00:00.000Z
+      due_at: 2026-09-26T15:00:00.000Z
+      returned_at: 2026-09-22T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00233
+      isbn: 9781208994599
+      member_id: M0107
+      borrowed_at: 2026-09-05T16:00:00.000Z
+      due_at: 2026-09-26T16:00:00.000Z
+      returned_at: 2026-09-16T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00234
+      isbn: 9781170901984
+      member_id: M0087
+      borrowed_at: 2026-09-06T14:00:00.000Z
+      due_at: 2026-09-27T14:00:00.000Z
+      returned_at: 2026-09-16T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00235
+      isbn: 9781166783860
+      member_id: M0067
+      borrowed_at: 2026-09-06T17:00:00.000Z
+      due_at: 2026-09-27T17:00:00.000Z
+      returned_at: 2026-09-18T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00236
+      isbn: 9781075155697
+      member_id: M0108
+      borrowed_at: 2026-09-07T12:00:00.000Z
+      due_at: 2026-09-28T12:00:00.000Z
+      returned_at: 2026-09-13T13:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00237
+      isbn: 9781205906007
+      member_id: M0036
+      borrowed_at: 2026-09-08T17:00:00.000Z
+      due_at: 2026-09-29T17:00:00.000Z
+      returned_at: 2026-09-11T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00238
+      isbn: 9781004118120
+      member_id: M0029
+      borrowed_at: 2026-09-09T10:00:00.000Z
+      due_at: 2026-09-30T10:00:00.000Z
+      returned_at: 2026-09-30T16:00:00.000Z
+      fine_cents: 25
+    - loan_id: L00239
+      isbn: 9781116336894
+      member_id: M0079
+      borrowed_at: 2026-09-09T17:00:00.000Z
+      due_at: 2026-09-30T17:00:00.000Z
+      returned_at: null
+      fine_cents: 25
+    - loan_id: L00240
+      isbn: 9781044269790
+      member_id: M0056
+      borrowed_at: 2026-09-10T13:00:00.000Z
+      due_at: 2026-10-01T13:00:00.000Z
+      returned_at: 2026-09-22T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00241
+      isbn: 9781183256347
+      member_id: M0083
+      borrowed_at: 2026-09-10T14:00:00.000Z
+      due_at: 2026-10-01T14:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00242
+      isbn: 9781025738253
+      member_id: M0023
+      borrowed_at: 2026-09-10T16:00:00.000Z
+      due_at: 2026-10-01T16:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00243
+      isbn: 9781014413420
+      member_id: M0108
+      borrowed_at: 2026-09-11T11:00:00.000Z
+      due_at: 2026-10-02T11:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00244
+      isbn: 9781135897963
+      member_id: M0007
+      borrowed_at: 2026-09-11T18:00:00.000Z
+      due_at: 2026-10-02T18:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00245
+      isbn: 9781188403999
+      member_id: M0064
+      borrowed_at: 2026-09-12T16:00:00.000Z
+      due_at: 2026-10-03T16:00:00.000Z
+      returned_at: 2026-09-19T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00246
+      isbn: 9781154429503
+      member_id: M0017
+      borrowed_at: 2026-09-13T09:00:00.000Z
+      due_at: 2026-10-04T09:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00247
+      isbn: 9781074126162
+      member_id: M0091
+      borrowed_at: 2026-09-13T16:00:00.000Z
+      due_at: 2026-10-04T16:00:00.000Z
+      returned_at: 2026-09-30T21:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00248
+      isbn: 9781204876479
+      member_id: M0026
+      borrowed_at: 2026-09-13T16:00:00.000Z
+      due_at: 2026-10-04T16:00:00.000Z
+      returned_at: 2026-09-26T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00249
+      isbn: 9781026767788
+      member_id: M0003
+      borrowed_at: 2026-09-13T18:00:00.000Z
+      due_at: 2026-10-04T18:00:00.000Z
+      returned_at: 2026-09-29T19:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00250
+      isbn: 9781043240264
+      member_id: M0084
+      borrowed_at: 2026-09-13T18:00:00.000Z
+      due_at: 2026-10-04T18:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00251
+      isbn: 9781155459035
+      member_id: M0067
+      borrowed_at: 2026-09-14T11:00:00.000Z
+      due_at: 2026-10-05T11:00:00.000Z
+      returned_at: 2026-09-28T11:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00252
+      isbn: 9781141045617
+      member_id: M0051
+      borrowed_at: 2026-09-14T12:00:00.000Z
+      due_at: 2026-10-05T12:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00253
+      isbn: 9781120455017
+      member_id: M0077
+      borrowed_at: 2026-09-14T15:00:00.000Z
+      due_at: 2026-10-05T15:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00254
+      isbn: 9781004118120
+      member_id: M0046
+      borrowed_at: 2026-09-14T17:00:00.000Z
+      due_at: 2026-10-05T17:00:00.000Z
+      returned_at: 2026-09-18T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00255
+      isbn: 9781162665740
+      member_id: M0009
+      borrowed_at: 2026-09-15T10:00:00.000Z
+      due_at: 2026-10-06T10:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00256
+      isbn: 9781198699290
+      member_id: M0059
+      borrowed_at: 2026-09-15T13:00:00.000Z
+      due_at: 2026-10-06T13:00:00.000Z
+      returned_at: 2026-09-26T17:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00257
+      isbn: 9781156488560
+      member_id: M0035
+      borrowed_at: 2026-09-15T13:00:00.000Z
+      due_at: 2026-10-06T13:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00258
+      isbn: 9781168842923
+      member_id: M0080
+      borrowed_at: 2026-09-16T11:00:00.000Z
+      due_at: 2026-10-07T11:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00259
+      isbn: 9781180167752
+      member_id: M0080
+      borrowed_at: 2026-09-16T15:00:00.000Z
+      due_at: 2026-10-07T15:00:00.000Z
+      returned_at: 2026-09-30T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00260
+      isbn: 9781112218774
+      member_id: M0052
+      borrowed_at: 2026-09-17T09:00:00.000Z
+      due_at: 2026-10-08T09:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00261
+      isbn: 9781054565097
+      member_id: M0034
+      borrowed_at: 2026-09-17T09:00:00.000Z
+      due_at: 2026-10-08T09:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00262
+      isbn: 9781200758359
+      member_id: M0086
+      borrowed_at: 2026-09-17T10:00:00.000Z
+      due_at: 2026-10-08T10:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00263
+      isbn: 9781166783860
+      member_id: M0030
+      borrowed_at: 2026-09-17T14:00:00.000Z
+      due_at: 2026-10-08T14:00:00.000Z
+      returned_at: 2026-09-28T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00264
+      isbn: 9781099864414
+      member_id: M0111
+      borrowed_at: 2026-09-17T17:00:00.000Z
+      due_at: 2026-10-08T17:00:00.000Z
+      returned_at: 2026-09-26T21:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00265
+      isbn: 9781163695272
+      member_id: M0068
+      borrowed_at: 2026-09-18T14:00:00.000Z
+      due_at: 2026-10-09T14:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00266
+      isbn: 9781020590603
+      member_id: M0021
+      borrowed_at: 2026-09-18T17:00:00.000Z
+      due_at: 2026-10-09T17:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00267
+      isbn: 9781111189242
+      member_id: M0111
+      borrowed_at: 2026-09-18T18:00:00.000Z
+      due_at: 2026-10-09T18:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00268
+      isbn: 9781088539583
+      member_id: M0100
+      borrowed_at: 2026-09-19T09:00:00.000Z
+      due_at: 2026-10-10T09:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00269
+      isbn: 9781205906007
+      member_id: M0107
+      borrowed_at: 2026-09-19T11:00:00.000Z
+      due_at: 2026-10-10T11:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00270
+      isbn: 9781058683216
+      member_id: M0042
+      borrowed_at: 2026-09-19T12:00:00.000Z
+      due_at: 2026-10-10T12:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00271
+      isbn: 9781016472487
+      member_id: M0002
+      borrowed_at: 2026-09-19T12:00:00.000Z
+      due_at: 2026-10-10T12:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00272
+      isbn: 9781084421462
+      member_id: M0079
+      borrowed_at: 2026-09-19T16:00:00.000Z
+      due_at: 2026-10-10T16:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00273
+      isbn: 9781044269790
+      member_id: M0065
+      borrowed_at: 2026-09-20T15:00:00.000Z
+      due_at: 2026-10-11T15:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00274
+      isbn: 9781210024123
+      member_id: M0021
+      borrowed_at: 2026-09-21T15:00:00.000Z
+      due_at: 2026-10-12T15:00:00.000Z
+      returned_at: 2026-09-29T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00275
+      isbn: 9781008236240
+      member_id: M0117
+      borrowed_at: 2026-09-21T18:00:00.000Z
+      due_at: 2026-10-12T18:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00276
+      isbn: 9781011324835
+      member_id: M0073
+      borrowed_at: 2026-09-21T18:00:00.000Z
+      due_at: 2026-10-12T18:00:00.000Z
+      returned_at: 2026-09-30T18:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00277
+      isbn: 9781037063084
+      member_id: M0073
+      borrowed_at: 2026-09-22T12:00:00.000Z
+      due_at: 2026-10-13T12:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00278
+      isbn: 9781190463059
+      member_id: M0064
+      borrowed_at: 2026-09-22T15:00:00.000Z
+      due_at: 2026-10-13T15:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00279
+      isbn: 9781029856373
+      member_id: M0050
+      borrowed_at: 2026-09-22T16:00:00.000Z
+      due_at: 2026-10-13T16:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00280
+      isbn: 9781079273816
+      member_id: M0118
+      borrowed_at: 2026-09-22T17:00:00.000Z
+      due_at: 2026-10-13T17:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00281
+      isbn: 9781216201306
+      member_id: M0051
+      borrowed_at: 2026-09-22T18:00:00.000Z
+      due_at: 2026-10-13T18:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00282
+      isbn: 9781179138220
+      member_id: M0008
+      borrowed_at: 2026-09-22T18:00:00.000Z
+      due_at: 2026-10-13T18:00:00.000Z
+      returned_at: 2026-09-29T20:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00283
+      isbn: 9781185315400
+      member_id: M0087
+      borrowed_at: 2026-09-23T10:00:00.000Z
+      due_at: 2026-10-14T10:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00284
+      isbn: 9781143104671
+      member_id: M0058
+      borrowed_at: 2026-09-23T10:00:00.000Z
+      due_at: 2026-10-14T10:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00285
+      isbn: 9781038092618
+      member_id: M0117
+      borrowed_at: 2026-09-23T14:00:00.000Z
+      due_at: 2026-10-14T14:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00286
+      isbn: 9781185315400
+      member_id: M0108
+      borrowed_at: 2026-09-24T11:00:00.000Z
+      due_at: 2026-10-15T11:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00287
+      isbn: 9781042210732
+      member_id: M0106
+      borrowed_at: 2026-09-24T16:00:00.000Z
+      due_at: 2026-10-15T16:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00288
+      isbn: 9781117366425
+      member_id: M0067
+      borrowed_at: 2026-09-24T18:00:00.000Z
+      due_at: 2026-10-15T18:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00289
+      isbn: 9781041181200
+      member_id: M0029
+      borrowed_at: 2026-09-25T12:00:00.000Z
+      due_at: 2026-10-16T12:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00290
+      isbn: 9781197669768
+      member_id: M0002
+      borrowed_at: 2026-09-25T16:00:00.000Z
+      due_at: 2026-10-16T16:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00291
+      isbn: 9781044269790
+      member_id: M0007
+      borrowed_at: 2026-09-26T09:00:00.000Z
+      due_at: 2026-10-17T09:00:00.000Z
+      returned_at: 2026-09-29T14:00:00.000Z
+      fine_cents: 0
+    - loan_id: L00292
+      isbn: 9781191492584
+      member_id: M0033
+      borrowed_at: 2026-09-26T12:00:00.000Z
+      due_at: 2026-10-17T12:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00293
+      isbn: 9781160606684
+      member_id: M0033
+      borrowed_at: 2026-09-26T14:00:00.000Z
+      due_at: 2026-10-17T14:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00294
+      isbn: 9781046328853
+      member_id: M0099
+      borrowed_at: 2026-09-27T09:00:00.000Z
+      due_at: 2026-10-18T09:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00295
+      isbn: 9781172961047
+      member_id: M0080
+      borrowed_at: 2026-09-27T11:00:00.000Z
+      due_at: 2026-10-18T11:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00296
+      isbn: 9781058683216
+      member_id: M0099
+      borrowed_at: 2026-09-27T12:00:00.000Z
+      due_at: 2026-10-18T12:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00297
+      isbn: 9781116336894
+      member_id: M0109
+      borrowed_at: 2026-09-27T17:00:00.000Z
+      due_at: 2026-10-18T17:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00298
+      isbn: 9781074126162
+      member_id: M0051
+      borrowed_at: 2026-09-27T17:00:00.000Z
+      due_at: 2026-10-18T17:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00299
+      isbn: 9781002059067
+      member_id: M0101
+      borrowed_at: 2026-09-28T18:00:00.000Z
+      due_at: 2026-10-19T18:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+    - loan_id: L00300
+      isbn: 9781152370449
+      member_id: M0104
+      borrowed_at: 2026-09-28T18:00:00.000Z
+      due_at: 2026-10-19T18:00:00.000Z
+      returned_at: null
+      fine_cents: 0
+seed:
+  book: |-
+    (ctx) => ctx.fixtures.books.map((b, i) => {
+      const t = ctx.time.plus('2026-01-05T09:00:00.000Z', (i % 60) + 'd');
+      return { isbn: String(b.isbn), title: b.title, author: b.author, genre: b.genre, branch: b.branch, copies: Number(b.copies), created_at: t, updated_at: t };
+    })
+  member: |-
+    (ctx) => {
+      const codes = [];
+      const seen = {};
+      for (const l of ctx.fixtures.loans) { if (!seen[l.member_id]) { seen[l.member_id] = true; codes.push(l.member_id); } }
+      codes.sort();
+      const firsts = ['Alice','Bruno','Chloe','Dmitri','Esme','Felix','Gita','Hugo','Ines','Jamal','Kira','Liam','Mona','Nico','Olga','Pablo','Quinn','Rhea','Sven','Tara'];
+      const lasts = ['Adler','Brooks','Castro','Dalton','Ellis','Foster','Grant','Hayes','Iverson','Jensen','Keller','Lopez','Morris','Nolan','Ortega','Patel','Reyes','Stone','Turner','Wells'];
+      return codes.map((code, i) => {
+        const f = firsts[i % 20];
+        const l = lasts[(i * 7 + Math.floor(i / 20)) % 20];
+        const t = ctx.time.plus('2025-09-01T09:00:00.000Z', (i * 2) + 'd');
+        return { code, name: f + ' ' + l, email: f.toLowerCase() + '.' + l.toLowerCase() + (i + 1) + '@members.example', status: i % 11 === 4 ? 'suspended' : 'active', created_at: t, updated_at: t };
+      });
+    }
+  loan: |-
+    (ctx) => {
+      const iso = (v) => (v === null || v === undefined || v === '' ? null : String(v));
+      const start = ctx.now();
+      const bookId = {};
+      for (const b of ctx.rows('book')) bookId[b.isbn] = b.id;
+      const memId = {};
+      for (const m of ctx.rows('member')) memId[m.code] = m.id;
+      return ctx.fixtures.loans.map((l, i) => {
+        const borrowed = iso(l.borrowed_at);
+        const due = iso(l.due_at);
+        const ret = iso(l.returned_at);
+        const fine = Number(l.fine_cents);
+        let status = 'active';
+        let paid = false;
+        if (ret !== null) {
+          status = 'returned';
+          paid = fine > 0 && i % 5 < 2;
+        } else if (ctx.time.minutesBetween(due, start) > 0) {
+          status = 'overdue';
+        }
+        return { loan_ref: l.loan_id, book_id: bookId[String(l.isbn)], member_id: memId[l.member_id], borrowed_at: borrowed, due_at: due, returned_at: ret, status, renewals: i % 7 === 0 ? 2 : i % 3 === 0 ? 1 : 0, fine_cents: fine, fine_paid: paid, created_at: borrowed, updated_at: ret !== null ? ret : borrowed };
+      });
+    }
+tests:
+  checkout_creates_active_loan:
+    description: Create a book and a member through the API, check the book out, and verify status, borrowed_at, due_at, renewals, fine fields, and that the loan appears in the member's loan list. An unknown book is refused.
+    script: |-
+      (ctx) => {
+        const ok = (r) => r.status >= 200 && r.status < 300;
+        const b = ctx.api('POST', '/books', { isbn: '9790000000011', title: 'Acceptance Atlas of Rivers', author: 'T. Writer', genre: 'travel', branch: 'central', copies: 2 });
+        ctx.assert(ok(b), 'create book: ' + JSON.stringify(b));
+        const m = ctx.api('POST', '/members', { code: 'ACC-M01', name: 'Acceptance Member One' });
+        ctx.assert(ok(m) && m.body.status === 'active', 'create member active: ' + JSON.stringify(m));
+        const start = ctx.now();
+        const r = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: m.body.id });
+        ctx.assert(ok(r), 'checkout: ' + JSON.stringify(r));
+        ctx.assert(r.body.status === 'active' && r.body.book_id === b.body.id && r.body.member_id === m.body.id, 'active loan for the book and member: ' + JSON.stringify(r.body));
+        ctx.assert(r.body.borrowed_at === start, 'borrowed_at is now ' + start + ', got ' + r.body.borrowed_at);
+        ctx.assert(r.body.due_at === '2026-10-28T09:00:00.000Z', 'due 21 days later, got ' + r.body.due_at);
+        ctx.assert(r.body.returned_at === null && r.body.renewals === 0 && r.body.fine_cents === 0 && r.body.fine_paid === false, 'fresh loan fields: ' + JSON.stringify(r.body));
+        const list = ctx.api('GET', '/members/' + m.body.id + '/loans');
+        ctx.assert(list.status === 200 && list.body.data.length === 1 && list.body.data[0].id === r.body.id, 'member loan list: ' + JSON.stringify(list.body));
+        const bad = ctx.api('POST', '/loans/checkout', { book_id: 'book_9999', member_id: m.body.id });
+        ctx.assert(bad.status >= 400 && bad.status < 500, 'unknown book refused, got ' + bad.status);
+      }
+  checkout_respects_copies:
+    description: A one-copy book goes to member A. Member B is refused with no_copies_available. After A returns it, B can borrow it.
+    script: |-
+      (ctx) => {
+        const ok = (r) => r.status >= 200 && r.status < 300;
+        const b = ctx.api('POST', '/books', { isbn: '9790000000012', title: 'Acceptance Single Copy', author: 'T. Writer', genre: 'fiction', branch: 'northgate', copies: 1 });
+        const a = ctx.api('POST', '/members', { code: 'ACC-M02A', name: 'Acceptance Member A' });
+        const c = ctx.api('POST', '/members', { code: 'ACC-M02B', name: 'Acceptance Member B' });
+        ctx.assert(ok(b) && ok(a) && ok(c), 'setup failed');
+        const first = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: a.body.id });
+        ctx.assert(ok(first), 'first checkout: ' + JSON.stringify(first));
+        const second = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: c.body.id });
+        ctx.assert(second.status === 409 && second.body.error.code === 'no_copies_available', 'second checkout refused: ' + JSON.stringify(second));
+        const ret = ctx.api('POST', '/loans/' + first.body.id + '/return', {});
+        ctx.assert(ok(ret) && ret.body.status === 'returned', 'return: ' + JSON.stringify(ret));
+        const third = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: c.body.id });
+        ctx.assert(ok(third), 'checkout after return: ' + JSON.stringify(third));
+        const loans = ctx.api('GET', '/loans?book_id=' + b.body.id);
+        ctx.assert(loans.status === 200 && loans.body.data.length === 2, 'two loans on the book, got ' + JSON.stringify(loans.body));
+      }
+  return_on_time_no_fine:
+    description: Check out and return immediately. The status is returned, returned_at is the call time, and the fine is 0. A repeat return is 409 invalid_state, and paying a zero fine is 409 no_fine_due.
+    script: |-
+      (ctx) => {
+        const ok = (r) => r.status >= 200 && r.status < 300;
+        const b = ctx.api('POST', '/books', { isbn: '9790000000013', title: 'Acceptance On Time', author: 'T. Writer', genre: 'science', branch: 'eastfield', copies: 1 });
+        const m = ctx.api('POST', '/members', { code: 'ACC-M03', name: 'Acceptance Member Three' });
+        const l = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: m.body.id });
+        ctx.assert(ok(l), 'checkout: ' + JSON.stringify(l));
+        const at = ctx.now();
+        const r = ctx.api('POST', '/loans/' + l.body.id + '/return', {});
+        ctx.assert(ok(r), 'return: ' + JSON.stringify(r));
+        ctx.assert(r.body.status === 'returned' && r.body.returned_at === at && r.body.fine_cents === 0, 'returned without fine: ' + JSON.stringify(r.body));
+        const again = ctx.api('POST', '/loans/' + l.body.id + '/return', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second return: ' + JSON.stringify(again));
+        const pay = ctx.api('POST', '/loans/' + l.body.id + '/pay_fine', {});
+        ctx.assert(pay.status === 409 && pay.body.error.code === 'no_fine_due', 'pay zero fine: ' + JSON.stringify(pay));
+        const missing = ctx.api('POST', '/loans/loan_9999/return', {});
+        ctx.assert(missing.status === 404, 'missing loan 404, got ' + missing.status);
+      }
+  renewals_extend_due_date:
+    description: Check out, renew twice and verify due_at and the renewals count, then verify the third renewal is refused with renewal_limit. A returned loan cannot be renewed.
+    script: |-
+      (ctx) => {
+        const ok = (r) => r.status >= 200 && r.status < 300;
+        const b = ctx.api('POST', '/books', { isbn: '9790000000014', title: 'Acceptance Renewals', author: 'T. Writer', genre: 'history', branch: 'riverside', copies: 1 });
+        const m = ctx.api('POST', '/members', { code: 'ACC-M04', name: 'Acceptance Member Four' });
+        const l = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: m.body.id });
+        ctx.assert(ok(l) && l.body.due_at === '2026-10-28T09:00:00.000Z', 'checkout: ' + JSON.stringify(l));
+        const r1 = ctx.api('POST', '/loans/' + l.body.id + '/renew', {});
+        ctx.assert(ok(r1) && r1.body.renewals === 1 && r1.body.due_at === '2026-11-11T09:00:00.000Z', 'first renewal: ' + JSON.stringify(r1));
+        const r2 = ctx.api('POST', '/loans/' + l.body.id + '/renew', {});
+        ctx.assert(ok(r2) && r2.body.renewals === 2 && r2.body.due_at === '2026-11-25T09:00:00.000Z', 'second renewal: ' + JSON.stringify(r2));
+        const r3 = ctx.api('POST', '/loans/' + l.body.id + '/renew', {});
+        ctx.assert(r3.status === 409 && r3.body.error.code === 'renewal_limit', 'third renewal: ' + JSON.stringify(r3));
+        const after = ctx.api('GET', '/loans/' + l.body.id).body;
+        ctx.assert(after.renewals === 2 && after.due_at === '2026-11-25T09:00:00.000Z', 'refused renewal changed nothing: ' + JSON.stringify(after));
+        ctx.assert(ok(ctx.api('POST', '/loans/' + l.body.id + '/return', {})), 'return');
+        const late = ctx.api('POST', '/loans/' + l.body.id + '/renew', {});
+        ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'renew returned loan: ' + JSON.stringify(late));
+      }
+  overdue_job_and_fine_payment:
+    description: Check out, advance 24 days 12 hours (3 full days past the due date), verify overdue with a 75 cent fine, refuse renewal, return, verify the fine stays 75 and is unpaid, pay it, and refuse a second payment.
+    script: |-
+      (ctx) => {
+        const ok = (r) => r.status >= 200 && r.status < 300;
+        const b = ctx.api('POST', '/books', { isbn: '9790000000015', title: 'Acceptance Overdue', author: 'T. Writer', genre: 'mystery', branch: 'central', copies: 1 });
+        const m = ctx.api('POST', '/members', { code: 'ACC-M05', name: 'Acceptance Member Five' });
+        const l = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: m.body.id });
+        ctx.assert(ok(l), 'checkout: ' + JSON.stringify(l));
+        const adv = ctx.advance('24d12h');
+        ctx.assert(adv.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(adv.jobsFailed));
+        const mid = ctx.api('GET', '/loans/' + l.body.id).body;
+        ctx.assert(mid.status === 'overdue' && mid.fine_cents === 75 && mid.returned_at === null, 'overdue with 75 cents: ' + JSON.stringify(mid));
+        const renew = ctx.api('POST', '/loans/' + l.body.id + '/renew', {});
+        ctx.assert(renew.status === 409 && renew.body.error.code === 'loan_overdue', 'renew overdue: ' + JSON.stringify(renew));
+        const early = ctx.api('POST', '/loans/' + l.body.id + '/pay_fine', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'no_fine_due', 'pay before return: ' + JSON.stringify(early));
+        const ret = ctx.api('POST', '/loans/' + l.body.id + '/return', {});
+        ctx.assert(ok(ret) && ret.body.status === 'returned' && ret.body.fine_cents === 75 && ret.body.fine_paid === false, 'return with fine: ' + JSON.stringify(ret));
+        const overdueList = ctx.api('GET', '/loans?status=overdue&member_id=' + m.body.id);
+        ctx.assert(overdueList.status === 200 && overdueList.body.data.length === 0, 'no overdue loans remain');
+        const pay = ctx.api('POST', '/loans/' + l.body.id + '/pay_fine', {});
+        ctx.assert(ok(pay) && pay.body.fine_paid === true && pay.body.fine_cents === 75, 'pay fine: ' + JSON.stringify(pay));
+        const twice = ctx.api('POST', '/loans/' + l.body.id + '/pay_fine', {});
+        ctx.assert(twice.status === 409 && twice.body.error.code === 'no_fine_due', 'pay twice: ' + JSON.stringify(twice));
+      }
+  unpaid_fines_block_checkout:
+    description: Check out a book, advance 61 days 12 hours (40 full days overdue, 1000 cents), return it, verify a new checkout is refused with unpaid_fines, pay the fine, and verify the checkout now works.
+    script: |-
+      (ctx) => {
+        const ok = (r) => r.status >= 200 && r.status < 300;
+        const b1 = ctx.api('POST', '/books', { isbn: '9790000000016', title: 'Acceptance Fines One', author: 'T. Writer', genre: 'fantasy', branch: 'northgate', copies: 1 });
+        const b2 = ctx.api('POST', '/books', { isbn: '9790000000017', title: 'Acceptance Fines Two', author: 'T. Writer', genre: 'poetry', branch: 'northgate', copies: 1 });
+        const m = ctx.api('POST', '/members', { code: 'ACC-M06', name: 'Acceptance Member Six' });
+        const l = ctx.api('POST', '/loans/checkout', { book_id: b1.body.id, member_id: m.body.id });
+        ctx.assert(ok(l), 'checkout: ' + JSON.stringify(l));
+        ctx.advance('61d12h');
+        const ret = ctx.api('POST', '/loans/' + l.body.id + '/return', {});
+        ctx.assert(ok(ret) && ret.body.fine_cents === 1000, 'fine of 1000 cents: ' + JSON.stringify(ret));
+        const blocked = ctx.api('POST', '/loans/checkout', { book_id: b2.body.id, member_id: m.body.id });
+        ctx.assert(blocked.status === 409 && blocked.body.error.code === 'unpaid_fines', 'blocked by fines: ' + JSON.stringify(blocked));
+        ctx.assert(ok(ctx.api('POST', '/loans/' + l.body.id + '/pay_fine', {})), 'pay fine');
+        const allowed = ctx.api('POST', '/loans/checkout', { book_id: b2.body.id, member_id: m.body.id });
+        ctx.assert(ok(allowed), 'checkout after paying: ' + JSON.stringify(allowed));
+      }
+  member_limits_and_suspension:
+    description: A member borrows 5 copies of a 6-copy book. The sixth is refused with loan_limit. After suspending the member through PATCH, checkout and renewal are refused with member_suspended, and returning still works.
+    script: |-
+      (ctx) => {
+        const ok = (r) => r.status >= 200 && r.status < 300;
+        const b = ctx.api('POST', '/books', { isbn: '9790000000018', title: 'Acceptance Many Copies', author: 'T. Writer', genre: 'children', branch: 'eastfield', copies: 6 });
+        const m = ctx.api('POST', '/members', { code: 'ACC-M07', name: 'Acceptance Member Seven' });
+        ctx.assert(ok(b) && ok(m), 'setup failed');
+        const ids = [];
+        for (let i = 0; i < 5; i++) {
+          const r = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: m.body.id });
+          ctx.assert(ok(r), 'checkout ' + i + ': ' + JSON.stringify(r));
+          ids.push(r.body.id);
+        }
+        const sixth = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: m.body.id });
+        ctx.assert(sixth.status === 409 && sixth.body.error.code === 'loan_limit', 'sixth checkout: ' + JSON.stringify(sixth));
+        const sus = ctx.api('PATCH', '/members/' + m.body.id, { status: 'suspended' });
+        ctx.assert(ok(sus) && sus.body.status === 'suspended', 'suspend: ' + JSON.stringify(sus));
+        const renew = ctx.api('POST', '/loans/' + ids[0] + '/renew', {});
+        ctx.assert(renew.status === 409 && renew.body.error.code === 'member_suspended', 'renew suspended: ' + JSON.stringify(renew));
+        const ret = ctx.api('POST', '/loans/' + ids[0] + '/return', {});
+        ctx.assert(ok(ret) && ret.body.status === 'returned', 'suspended member can still return: ' + JSON.stringify(ret));
+        const co = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: m.body.id });
+        ctx.assert(co.status === 409 && co.body.error.code === 'member_suspended', 'checkout suspended: ' + JSON.stringify(co));
+      }
+  catalog_filters_and_search:
+    description: Create two books with distinctive titles and verify the genre and branch filters, text search, a PATCH of the copy count, a refused duplicate ISBN, and a refused checkout once copies is patched to 0.
+    script: |-
+      (ctx) => {
+        const ok = (r) => r.status >= 200 && r.status < 300;
+        const a = ctx.api('POST', '/books', { isbn: '9790000000019', title: 'Zyxwv Quantum Gardens', author: 'Quillon Ferrante', genre: 'poetry', branch: 'riverside', copies: 3 });
+        const b = ctx.api('POST', '/books', { isbn: '9790000000020', title: 'Zyxwv Ocean Letters', author: 'Marta Vosk', genre: 'travel', branch: 'central', copies: 1 });
+        ctx.assert(ok(a) && ok(b), 'create books');
+        const byTitle = ctx.api('GET', '/books?q=Zyxwv');
+        ctx.assert(byTitle.status === 200 && byTitle.body.data.length === 2, 'title search finds both: ' + JSON.stringify(byTitle.body));
+        const byAuthor = ctx.api('GET', '/books?q=Ferrante');
+        ctx.assert(byAuthor.body.data.length === 1 && byAuthor.body.data[0].id === a.body.id, 'author search: ' + JSON.stringify(byAuthor.body));
+        const byGenre = ctx.api('GET', '/books?q=Zyxwv&genre=travel');
+        ctx.assert(byGenre.body.data.length === 1 && byGenre.body.data[0].id === b.body.id, 'genre filter: ' + JSON.stringify(byGenre.body));
+        const byBranch = ctx.api('GET', '/books?q=Zyxwv&branch=riverside');
+        ctx.assert(byBranch.body.data.length === 1 && byBranch.body.data[0].id === a.body.id, 'branch filter: ' + JSON.stringify(byBranch.body));
+        const up = ctx.api('PATCH', '/books/' + a.body.id, { copies: 5 });
+        ctx.assert(ok(up) && up.body.copies === 5, 'patch copies: ' + JSON.stringify(up));
+        const dup = ctx.api('POST', '/books', { isbn: '9790000000019', title: 'Duplicate ISBN', author: 'X', genre: 'poetry', branch: 'central', copies: 1 });
+        ctx.assert(dup.status >= 400 && dup.status < 500, 'duplicate isbn refused, got ' + dup.status);
+        const m = ctx.api('POST', '/members', { code: 'ACC-M08', name: 'Acceptance Member Eight' });
+        ctx.assert(ok(m), 'create member');
+        ctx.assert(ok(ctx.api('PATCH', '/books/' + b.body.id, { copies: 0 })), 'patch copies to 0');
+        const none = ctx.api('POST', '/loans/checkout', { book_id: b.body.id, member_id: m.body.id });
+        ctx.assert(none.status === 409 && none.body.error.code === 'no_copies_available', 'zero copies: ' + JSON.stringify(none));
+      }
+tasks:
+  return_longest_overdue_loan:
+    difficulty: easy
+    instruction: The library reports that the book on the loan that is furthest past its due date has finally been handed back. Among the loans that have not been returned, find the one with the earliest due date and record its return. Change nothing else.
+    grader: |-
+      (ctx) => {
+        let target = null;
+        for (const l of ctx.seed.list('loan')) {
+          if (l.returned_at !== null) continue;
+          if (target === null || ctx.time.minutesBetween(target.due_at, l.due_at) < 0) target = l;
+        }
+        if (target === null) return 0;
+        ctx.guardChanges('only the target loan was returned', [
+          { entity: 'loan', id: target.id, kind: 'updated', fields: ['status', 'returned_at', 'fine_cents'] },
+        ]);
+        const end = ctx.db.get('loan', target.id);
+        if (end === null || end.status !== 'returned' || end.returned_at === null) return 0;
+        const mins = ctx.time.minutesBetween(end.due_at, end.returned_at);
+        const fine = Math.min(2000, (mins > 0 ? Math.floor(mins / 1440) : 0) * 25);
+        return end.fine_cents === fine ? 1 : 0;
+      }
+    solution: |-
+      (ctx) => {
+        const r = ctx.api('GET', '/loans?status=overdue&sort=due_at&limit=1');
+        ctx.assert(r.status === 200 && r.body.data.length === 1, 'no overdue loan found: ' + JSON.stringify(r.body));
+        const loan = r.body.data[0];
+        ctx.assert(loan.returned_at === null, 'loan is already returned');
+        const ret = ctx.api('POST', '/loans/' + loan.id + '/return', {});
+        ctx.assert(ret.status === 200, 'return failed: ' + JSON.stringify(ret.body));
+      }
+    decoys:
+      - why: returns the overdue loan with the latest due date instead of the earliest
+        script: |-
+          (ctx) => {
+            const r = ctx.api('GET', '/loans?status=overdue&sort=-due_at&limit=1');
+            ctx.api('POST', '/loans/' + r.body.data[0].id + '/return', {});
+          }
+      - why: returns the correct loan but also returns the next overdue loan, changing an unrelated record
+        script: |-
+          (ctx) => {
+            const r = ctx.api('GET', '/loans?status=overdue&sort=due_at&limit=2');
+            for (const l of r.body.data) ctx.api('POST', '/loans/' + l.id + '/return', {});
+          }
+    alternatives: []
+  collect_top_fines_member:
+    difficulty: medium
+    instruction: Find the member whose returned loans carry the largest total of unpaid fines (fine_cents on returned loans where the fine is not yet paid) and pay every one of those fines. Do not pay any other member's fines.
+    grader: |-
+      (ctx) => {
+        const all = ctx.seed.list('loan');
+        const tot = {};
+        for (const l of all) {
+          if (l.status === 'returned' && !l.fine_paid) tot[l.member_id] = (tot[l.member_id] || 0) + l.fine_cents;
+        }
+        let top = null;
+        for (const m of Object.keys(tot)) {
+          if (top === null || tot[m] > tot[top]) top = m;
+        }
+        if (top === null) return 0;
+        const targets = all.filter((l) => l.member_id === top && l.status === 'returned' && !l.fine_paid && l.fine_cents > 0);
+        if (targets.length === 0) return 0;
+        ctx.guardChanges('only the unpaid fines of the top member were paid', targets.map((t) => ({ entity: 'loan', id: t.id, kind: 'updated', fields: ['fine_paid'] })));
+        let done = 0;
+        for (const t of targets) {
+          const end = ctx.db.get('loan', t.id);
+          if (end !== null && end.fine_paid === true) done += 1;
+        }
+        return done / targets.length;
+      }
+    solution: |-
+      (ctx) => {
+        const rows = [];
+        let cursor = null;
+        do {
+          const r = ctx.api('GET', '/loans?status=returned&fine_paid=false' + (cursor === null ? '' : '&cursor=' + cursor));
+          ctx.assert(r.status === 200, 'list loans failed: ' + JSON.stringify(r.body));
+          rows.push(...r.body.data);
+          cursor = r.body.next_cursor;
+        } while (cursor !== null);
+        const tot = {};
+        for (const l of rows) tot[l.member_id] = (tot[l.member_id] || 0) + l.fine_cents;
+        let top = null;
+        for (const m of Object.keys(tot)) {
+          if (top === null || tot[m] > tot[top]) top = m;
+        }
+        ctx.assert(top !== null, 'no unpaid fines found');
+        const due = rows.filter((l) => l.member_id === top && l.fine_cents > 0);
+        ctx.assert(due.length > 0, 'top member has no payable fines');
+        for (const l of due) {
+          const r = ctx.api('POST', '/loans/' + l.id + '/pay_fine', {});
+          ctx.assert(r.status === 200, 'pay_fine failed for ' + l.id + ': ' + JSON.stringify(r.body));
+        }
+      }
+    decoys:
+      - why: pays only the single largest unpaid fine of the top member and leaves the rest unpaid
+        script: |-
+          (ctx) => {
+            const rows = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/loans?status=returned&fine_paid=false' + (cursor === null ? '' : '&cursor=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            const tot = {};
+            for (const l of rows) tot[l.member_id] = (tot[l.member_id] || 0) + l.fine_cents;
+            let top = null;
+            for (const m of Object.keys(tot)) {
+              if (top === null || tot[m] > tot[top]) top = m;
+            }
+            const mine = rows.filter((l) => l.member_id === top && l.fine_cents > 0).sort((a, b) => b.fine_cents - a.fine_cents);
+            ctx.api('POST', '/loans/' + mine[0].id + '/pay_fine', {});
+          }
+      - why: picks the member with the most loans instead of the largest unpaid fine total and pays that member's fines
+        script: |-
+          (ctx) => {
+            const rows = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/loans' + (cursor === null ? '' : '?cursor=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            const count = {};
+            for (const l of rows) count[l.member_id] = (count[l.member_id] || 0) + 1;
+            let top = null;
+            for (const m of Object.keys(count)) {
+              if (top === null || count[m] > count[top]) top = m;
+            }
+            for (const l of rows) {
+              if (l.member_id === top && l.status === 'returned' && !l.fine_paid && l.fine_cents > 0) ctx.api('POST', '/loans/' + l.id + '/pay_fine', {});
+            }
+          }
+      - why: pays only the one largest unpaid fine in the whole library, whoever owes it
+        script: |-
+          (ctx) => {
+            const rows = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/loans?status=returned&fine_paid=false' + (cursor === null ? '' : '&cursor=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            let best = null;
+            for (const l of rows) {
+              if (best === null || l.fine_cents > best.fine_cents) best = l;
+            }
+            ctx.api('POST', '/loans/' + best.id + '/pay_fine', {});
+          }
+      - why: pays every unpaid fine in the library instead of only the top member's fines
+        script: |-
+          (ctx) => {
+            const rows = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/loans?status=returned&fine_paid=false' + (cursor === null ? '' : '&cursor=' + cursor));
+              rows.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            for (const l of rows) {
+              if (l.fine_cents > 0) ctx.api('POST', '/loans/' + l.id + '/pay_fine', {});
+            }
+          }
+    alternatives: []
+  clear_riverside_overdue:
+    difficulty: hard
+    instruction: "Clear out the overdue loans at the riverside branch: every loan that is currently overdue (not returned and past its due date) for a book held at the riverside branch must be returned, and the fine that each return produces must then be paid. Leave overdue loans at other branches, and loans that are not overdue, alone."
+    grader: |-
+      (ctx) => {
+        const branch = {};
+        for (const b of ctx.seed.list('book')) branch[b.id] = b.branch;
+        const targets = ctx.seed.list('loan', { where: { status: 'overdue' } }).filter((l) => branch[l.book_id] === 'riverside');
+        if (targets.length === 0) return 0;
+        ctx.guardChanges('only riverside overdue loans were returned and their fines paid', targets.map((t) => ({ entity: 'loan', id: t.id, kind: 'updated', fields: ['status', 'returned_at', 'fine_cents', 'fine_paid'] })));
+        let returned = 0;
+        let paid = 0;
+        for (const t of targets) {
+          const end = ctx.db.get('loan', t.id);
+          if (end === null || end.status !== 'returned' || end.returned_at === null) continue;
+          returned += 1;
+          if (end.fine_paid === true && end.fine_cents > 0) paid += 1;
+        }
+        return (returned + paid) / (2 * targets.length);
+      }
+    solution: |-
+      (ctx) => {
+        const pages = (path) => {
+          const rows = [];
+          let cursor = null;
+          const sep = path.indexOf('?') === -1 ? '?' : '&';
+          do {
+            const r = ctx.api('GET', path + (cursor === null ? '' : sep + 'cursor=' + cursor));
+            ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body));
+            rows.push(...r.body.data);
+            cursor = r.body.next_cursor;
+          } while (cursor !== null);
+          return rows;
+        };
+        const riverside = new Set(pages('/books?branch=riverside').map((b) => b.id));
+        const targets = pages('/loans?status=overdue').filter((l) => riverside.has(l.book_id));
+        ctx.assert(targets.length > 0, 'no overdue riverside loans found');
+        for (const l of targets) {
+          const ret = ctx.api('POST', '/loans/' + l.id + '/return', {});
+          ctx.assert(ret.status === 200, 'return failed for ' + l.id + ': ' + JSON.stringify(ret.body));
+          const pay = ctx.api('POST', '/loans/' + l.id + '/pay_fine', {});
+          ctx.assert(pay.status === 200, 'pay_fine failed for ' + l.id + ': ' + JSON.stringify(pay.body));
+        }
+      }
+    decoys:
+      - why: reads only the first page of overdue loans, so the riverside loans on page 2 stay overdue
+        script: |-
+          (ctx) => {
+            const books = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/books?branch=riverside' + (cursor === null ? '' : '&cursor=' + cursor));
+              books.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            const riverside = new Set(books.map((b) => b.id));
+            const page = ctx.api('GET', '/loans?status=overdue').body.data;
+            for (const l of page) {
+              if (!riverside.has(l.book_id)) continue;
+              ctx.api('POST', '/loans/' + l.id + '/return', {});
+              ctx.api('POST', '/loans/' + l.id + '/pay_fine', {});
+            }
+          }
+      - why: returns every overdue riverside loan but never pays the fines the returns created
+        script: |-
+          (ctx) => {
+            const books = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/books?branch=riverside' + (cursor === null ? '' : '&cursor=' + cursor));
+              books.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            const riverside = new Set(books.map((b) => b.id));
+            const loans = [];
+            cursor = null;
+            do {
+              const r = ctx.api('GET', '/loans?status=overdue' + (cursor === null ? '' : '&cursor=' + cursor));
+              loans.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            for (const l of loans) {
+              if (riverside.has(l.book_id)) ctx.api('POST', '/loans/' + l.id + '/return', {});
+            }
+          }
+      - why: returns and pays every open riverside loan, including active ones that are not overdue
+        script: |-
+          (ctx) => {
+            const books = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/books?branch=riverside' + (cursor === null ? '' : '&cursor=' + cursor));
+              books.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            const riverside = new Set(books.map((b) => b.id));
+            const loans = [];
+            for (const status of ['overdue', 'active']) {
+              cursor = null;
+              do {
+                const r = ctx.api('GET', '/loans?status=' + status + (cursor === null ? '' : '&cursor=' + cursor));
+                loans.push(...r.body.data);
+                cursor = r.body.next_cursor;
+              } while (cursor !== null);
+            }
+            for (const l of loans) {
+              if (!riverside.has(l.book_id)) continue;
+              ctx.api('POST', '/loans/' + l.id + '/return', {});
+              ctx.api('POST', '/loans/' + l.id + '/pay_fine', {});
+            }
+          }
+      - why: ignores the branch and returns and pays every overdue loan in the library
+        script: |-
+          (ctx) => {
+            const loans = [];
+            let cursor = null;
+            do {
+              const r = ctx.api('GET', '/loans?status=overdue' + (cursor === null ? '' : '&cursor=' + cursor));
+              loans.push(...r.body.data);
+              cursor = r.body.next_cursor;
+            } while (cursor !== null);
+            for (const l of loans) {
+              ctx.api('POST', '/loans/' + l.id + '/return', {});
+              ctx.api('POST', '/loans/' + l.id + '/pay_fine', {});
+            }
+          }
+    alternatives: []
