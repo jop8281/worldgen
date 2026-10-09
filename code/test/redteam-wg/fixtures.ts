@@ -38,7 +38,7 @@ export const RT_CONFIG: Config = {
   maxOutputTokens: 16000,
   steps: { plan: budget(3), model: budget(4), workflow: budget(5), seed: budget(4), tasks: budget(5) },
   prices: {},
-  exampleWorld: '../prod/worlds/helpdesk',
+  exampleWorld: ['../prod/worlds/helpdesk'],
 };
 
 export const T0 = 5_000_000;

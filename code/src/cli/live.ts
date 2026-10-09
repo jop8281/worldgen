@@ -12,14 +12,14 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { checkWorld, loadWorld, type World } from '#engine';
+import { checkWorld, loadWorld, publicWorldOf, saveWorld, type World } from '#engine';
 import { loadConfig, transportOf, type Config } from '../worldgen/config.ts';
 import { createEmitter, describeStop } from '../worldgen/events.ts';
 import { inputSchema, parseInputArgs, type Input } from '../worldgen/input.ts';
 import { commitLabel, delivered, planIntake, renderLiveRun, type LiveCase, type LiveCheck, type LiveMeta, type LiveRow } from '../worldgen/live.ts';
 import { nodeRunner, type Runner } from '../sandboxes/backend.ts';
 import { runWorldGen, type Job } from '../worldgen/run.ts';
-import { loadExampleWorld, makeModel, mtimeOf, writeReport } from './models.ts';
+import { loadExampleWorlds, makeModel, mtimeOf, writeReport } from './models.ts';
 import { CONFIG_FILE, MODEL_OPTIONS, UsageError, modelOverrides, optionValue } from './options.ts';
 
 const CODE_DIR = path.resolve(import.meta.dirname, '../..');
@@ -72,6 +72,18 @@ export type LiveArgs = {
   readonly outDir: string | null;
   readonly overrides: Partial<Config>;
 };
+
+/**
+ * Writes `<dir>/public/world.yaml`, the public form of the verified world in `dir`, which every prod world keeps beside
+ * its world.yaml (A-392). A delivered world then passes the drift check in test/worlds.test.ts with no extra step.
+ */
+async function savePublicForm(dir: string): Promise<void> {
+  const loaded = await loadWorld(dir);
+  const report = loaded.ok ? checkWorld(loaded.value) : null;
+  if (report === null || !report.ok) return;
+  const pub = checkWorld(publicWorldOf(report.world));
+  if (pub.ok) await saveWorld(path.join(dir, 'public'), pub.world);
+}
 
 export function parseArgs(argv: readonly string[]): LiveArgs | 'help' {
   if (argv.some((a) => a === '--help' || a === '-h')) return 'help';
@@ -214,6 +226,7 @@ export async function runLive(args: LiveArgs, cases: readonly LiveCase[], meta: 
         if (check.kind === 'pass') {
           await mkdir(args.worldsDir, { recursive: true });
           await rename(staged, final);
+          await savePublicForm(final);
           dir = final;
         }
         row = { ...base, outcome: 'done', detail: check.kind === 'pass' ? '' : 'WorldGen finished but the engine rejects the world (accepted-but-invalid)', check, ms, costUsd, dir: rel(dir) };
@@ -284,7 +297,7 @@ async function main(argv: readonly string[]): Promise<number> {
   try {
     config = await loadConfig(CONFIG_FILE, args.overrides);
     const model = makeModel(config, process.env, transportOf(config));
-    const exampleWorld: World = await loadExampleWorld(config);
+    const exampleWorld: readonly World[] = await loadExampleWorlds(config);
     deps = {
       verify: verifyWorld,
       run: async (job) => {

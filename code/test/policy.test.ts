@@ -16,7 +16,7 @@ const config: Config = {
   maxOutputTokens: 16000,
   steps: { plan: budget, model: budget, workflow: budget, seed: budget, tasks: budget },
   prices: {},
-  exampleWorld: '../prod/worlds/helpdesk',
+  exampleWorld: ['../prod/worlds/helpdesk'],
 };
 
 // Owners: bad -> model (entities), cyc -> model, tf -> workflow (a test run), cv -> seed (at_path seed),

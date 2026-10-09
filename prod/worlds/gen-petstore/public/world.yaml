@@ -1,0 +1,637 @@
+format: 1
+meta:
+  name: gen_petstore
+  description: "A pet store where pets move available → pending → sold as customers place, approve and deliver orders. Placing an order reserves the pet, delivery sells it, and deleting an open order releases it. The 9 spec operations are kept under their spec paths. Three small extras make records discoverable and workflow steps explicit: list orders, categories, and approve and deliver actions."
+  resembles: "Swagger Petstore (OpenAPI 3.0 sample): pets, categories and store orders with inventory by pet status"
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-07T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      code: $status
+      type: $code
+      message: $message
+entities:
+  category:
+    description: Pet category such as Dogs or Cats. Spec schema Category.
+    idPrefix: cat
+    fields:
+      name:
+        type: string
+        description: Category name, such as Dogs.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 100
+  pet:
+    description: A pet listed for sale. Status moves available, pending, sold. Spec field names photoUrls, category, tags and status are kept.
+    idPrefix: pet
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      photoUrls:
+        type: text
+        description: Comma-separated photo URLs (spec array of strings).
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      category:
+        type: ref
+        description: The pet's category.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: category
+        onDelete: nullify
+      tags:
+        type: text
+        description: Comma-separated tag names (spec array of Tag).
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: Pet status in the store. New pets are always available.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - available
+          - pending
+          - sold
+        initial: available
+        transitions:
+          available:
+            - pending
+            - sold
+          pending:
+            - available
+            - sold
+          sold:
+            - available
+  store_order:
+    description: A purchase order for a pet. Spec schema Order. Status moves placed, approved, delivered. complete is true once delivered.
+    idPrefix: ord
+    fields:
+      petId:
+        type: ref
+        description: The ordered pet.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: pet
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      shipDate:
+        type: datetime
+        description: Planned ship date.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: Order status. Set by the place, approve and deliver actions.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - placed
+          - approved
+          - delivered
+        initial: placed
+        transitions:
+          placed:
+            - approved
+          approved:
+            - delivered
+          delivered: []
+      complete:
+        type: bool
+        description: True once the order is delivered.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+routes:
+  add_pet:
+    op: create
+    entity: pet
+    method: POST
+    path: /pet
+    description: Add a new pet. New pets are always available.
+  find_pets_by_status:
+    op: list
+    entity: pet
+    filters:
+      - status
+      - category
+    search:
+      - name
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /pet/findByStatus
+    description: List pets filtered by status and category, searchable by name with q.
+  get_pet:
+    op: get
+    entity: pet
+    method: GET
+    path: /pet/{id}
+    description: Fetch one pet.
+  delete_pet:
+    op: delete
+    entity: pet
+    method: DELETE
+    path: /pet/{id}
+    description: Delete a pet. Refused while an order references it.
+  get_order:
+    op: get
+    entity: store_order
+    method: GET
+    path: /store/orders/{id}
+    description: Fetch one order.
+  list_orders:
+    op: list
+    entity: store_order
+    filters:
+      - petId
+      - status
+      - complete
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /store/orders
+    description: List orders, filtered by pet and status.
+  list_categories:
+    op: list
+    entity: category
+    filters: []
+    search:
+      - name
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /categories
+    description: List categories, searchable by name.
+  create_category:
+    op: create
+    entity: category
+    method: POST
+    path: /categories
+    description: Create a category.
+actions:
+  update_pet:
+    method: PUT
+    path: /pet
+    description: Update an existing pet by the id in the body. A pet with an open order cannot change status.
+    input:
+      id:
+        type: string
+        description: Id of the pet to update.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      photoUrls:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      category:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: category
+        onDelete: restrict
+      tags:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - available
+          - pending
+          - sold
+    handler: |-
+      (ctx) => {
+        const pet = ctx.db.get('pet', ctx.body.id);
+        if (pet === null) ctx.fail(404, 'pet_not_found', 'pet ' + ctx.body.id + ' not found');
+        const patch = { name: ctx.body.name, photoUrls: ctx.body.photoUrls };
+        if (ctx.body.category !== undefined) patch.category = ctx.body.category;
+        if (ctx.body.tags !== undefined) patch.tags = ctx.body.tags;
+        const st = ctx.body.status;
+        if (st !== undefined && st !== null && st !== pet.status) {
+          const open = ctx.db.list('store_order', { where: { petId: pet.id } }).filter((o) => o.status === 'placed' || o.status === 'approved');
+          if (open.length > 0) ctx.fail(409, 'pet_reserved', 'pet ' + pet.id + ' has an open order and stays pending. Delete the order first.');
+          patch.status = st;
+        }
+        const updated = ctx.db.update('pet', pet.id, patch);
+        return { status: 200, body: updated };
+      }
+  place_order:
+    method: POST
+    path: /store/orders
+    description: Place an order for an available pet. The order starts placed and the pet becomes pending.
+    input:
+      petId:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: pet
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      shipDate:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - placed
+          - approved
+          - delivered
+      complete:
+        type: bool
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        if (b.status !== undefined && b.status !== null && b.status !== 'placed') ctx.fail(422, 'invalid_status', 'new orders are always placed, got ' + b.status);
+        if (b.complete === true) ctx.fail(422, 'invalid_status', 'new orders cannot be complete');
+        const pet = ctx.db.get('pet', b.petId);
+        if (pet === null) ctx.fail(400, 'input.invalid', 'pet ' + b.petId + ' not found');
+        if (pet.status !== 'available') ctx.fail(409, 'pet_not_available', 'pet ' + pet.id + ' is ' + pet.status + ', only available pets can be ordered.');
+        const data = { petId: pet.id, quantity: b.quantity, complete: false };
+        if (b.shipDate !== undefined) data.shipDate = b.shipDate;
+        const order = ctx.db.create('store_order', data);
+        ctx.db.update('pet', pet.id, { status: 'pending' });
+        return { status: 200, body: order };
+      }
+  approve_order:
+    method: POST
+    path: /store/orders/{id}/approve
+    description: Move a placed order to approved.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const o = ctx.db.get('store_order', ctx.params.id);
+        if (o === null) ctx.fail(404, 'order_not_found', 'order ' + ctx.params.id + ' not found');
+        if (o.status !== 'placed') ctx.fail(409, 'invalid_state', 'order ' + o.id + ' is ' + o.status + '. Only placed orders can be approved.');
+        const updated = ctx.db.update('store_order', o.id, { status: 'approved' });
+        return { status: 200, body: updated };
+      }
+  deliver_order:
+    method: POST
+    path: /store/orders/{id}/deliver
+    description: Move an approved order to delivered, set complete and mark the pet sold.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const o = ctx.db.get('store_order', ctx.params.id);
+        if (o === null) ctx.fail(404, 'order_not_found', 'order ' + ctx.params.id + ' not found');
+        if (o.status !== 'approved') ctx.fail(409, 'invalid_state', 'order ' + o.id + ' is ' + o.status + '. Only approved orders can be delivered.');
+        const updated = ctx.db.update('store_order', o.id, { status: 'delivered', complete: true });
+        ctx.db.update('pet', o.petId, { status: 'sold' });
+        return { status: 200, body: updated };
+      }
+  delete_order:
+    method: DELETE
+    path: /store/orders/{id}
+    description: Delete an order. A placed or approved order releases its pet back to available.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const o = ctx.db.get('store_order', ctx.params.id);
+        if (o === null) ctx.fail(404, 'order_not_found', 'order ' + ctx.params.id + ' not found');
+        if (o.status !== 'delivered') {
+          const pet = ctx.db.get('pet', o.petId);
+          if (pet !== null && pet.status === 'pending') ctx.db.update('pet', pet.id, { status: 'available' });
+        }
+        ctx.db.delete('store_order', o.id);
+        return { status: 204, body: null };
+      }
+  get_inventory:
+    method: GET
+    path: /store/inventory
+    description: Count of pets by status.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const inv = { available: 0, pending: 0, sold: 0 };
+        for (const p of ctx.db.list('pet')) inv[p.status] += 1;
+        return { status: 200, body: inv };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  category: "(ctx) => ['Dogs','Cats','Birds','Fish','Rabbits','Reptiles'].map((name, i) => { const t = ctx.time.plus('2026-06-01T09:00:00.000Z', i + 'd'); return { name, created_at: t, updated_at: t }; })"
+  pet: |-
+    (ctx) => {
+      const A = 'available', P = 'pending', S = 'sold';
+      const list = [
+        ['Biscuit',1,A,'friendly,puppy'], ['Biscuit Jr',1,A,'puppy'], ['Biscuit',2,S,'indoor'],
+        ['Rex',1,A,'guard'], ['Rexy',1,A,'small'],
+        ['Mochi',2,A,'calm'], ['Bella',1,A,'friendly'], ['Pepper',3,A,'talkative'], ['Goldie',4,A,'freshwater'],
+        ['Thumper',5,A,'fluffy'], ['Scout',1,A,'energetic'], ['Luna',2,A,'kitten'], ['Kiwi',3,A,'colorful'], ['Nibbles',5,A,'gentle'],
+        ['Daisy',1,P,'trained'], ['Oliver',2,P,'tabby'], ['Sunny',3,P,'singer'], ['Bubbles',4,P,'saltwater'],
+        ['Juniper',2,P,'calm,indoor'], ['Juniper',1,P,'playful'], ['Shadow',2,P,'black'], ['Ziggy',6,P,'lizard'],
+        ['Coco',1,S,'trained'], ['Milo',2,S,'ginger'], ['Peanut',5,S,'dwarf'], ['Spike',6,S,'iguana'],
+        ['Tweety',3,S,'canary'], ['Finn',4,S,'betta'], ['Maple',1,S,'senior'], ['Whiskers',2,S,'siamese'],
+      ];
+      const cats = ctx.rows('category');
+      return list.map(([name, c, status, tags], i) => {
+        const t = ctx.time.plus('2026-08-01T09:00:00.000Z', i + 'd');
+        return { name, photoUrls: 'https://img.petstore.example/' + name.toLowerCase().replace(/ /g, '-') + '-' + (i + 1) + '.jpg', category: cats[c - 1].id, tags, status, created_at: t, updated_at: t };
+      });
+    }
+  store_order: |-
+    (ctx) => {
+      const pets = ctx.rows('pet');
+      const spec = [
+        [15,'placed','2026-10-01T10:00:00.000Z'], [16,'placed','2026-09-28T10:00:00.000Z'],
+        [17,'placed','2026-10-20T10:00:00.000Z'], [18,'placed','2026-10-25T10:00:00.000Z'],
+        [19,'approved','2026-10-15T10:00:00.000Z'], [20,'approved','2026-10-16T10:00:00.000Z'],
+        [21,'approved','2026-10-03T10:00:00.000Z'], [22,'approved','2026-10-22T10:00:00.000Z'],
+        [23,'delivered','2026-09-20T10:00:00.000Z'], [24,'delivered','2026-09-22T10:00:00.000Z'],
+        [25,'delivered','2026-09-25T10:00:00.000Z'], [26,'delivered','2026-09-30T10:00:00.000Z'],
+      ];
+      return spec.map(([n, status, ship], i) => {
+        const t = ctx.time.plus('2026-09-10T09:00:00.000Z', i * 6 + 'h');
+        return { petId: pets[n - 1].id, quantity: 1 + (i % 3), shipDate: ship, status, complete: status === 'delivered', created_at: t, updated_at: t };
+      });
+    }
+tests:
+  pet_create_and_fetch:
+    description: POST /pet creates an available pet (201). GET returns it. Placing an order makes it pending. Creating with status sold is refused (422 state.initial). A missing name is refused (422 field.required). GET of an unknown id is 404 row.not_found.
+    script: |-
+      (ctx) => {
+        const cat = ctx.api('POST', '/categories', { name: 'Accept Category A' });
+        ctx.assert(cat.status === 201, 'create category returned ' + cat.status + ' ' + JSON.stringify(cat.body));
+        const r = ctx.api('POST', '/pet', { name: 'Accept Pet A', photoUrls: 'https://img.example/a1.jpg,https://img.example/a2.jpg', category: cat.body.id, tags: 'friendly,small' });
+        ctx.assert(r.status === 201, 'create pet returned ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(r.body.status === 'available', 'new pet is available, got ' + r.body.status);
+        ctx.assert(r.body.name === 'Accept Pet A' && r.body.category === cat.body.id && r.body.tags === 'friendly,small', 'fields stored: ' + JSON.stringify(r.body));
+        const g = ctx.api('GET', '/pet/' + r.body.id);
+        ctx.assert(g.status === 200 && g.body.id === r.body.id && g.body.photoUrls === r.body.photoUrls, 'get pet: ' + JSON.stringify(g));
+        const ord = ctx.api('POST', '/store/orders', { petId: r.body.id, quantity: 1 });
+        ctx.assert(ord.status === 200, 'order the new pet returned ' + ord.status + ' ' + JSON.stringify(ord.body));
+        ctx.assert(ctx.api('GET', '/pet/' + r.body.id).body.status === 'pending', 'ordered pet is pending');
+        const sold = ctx.api('POST', '/pet', { name: 'Accept Pet B', photoUrls: 'https://img.example/b.jpg', status: 'sold' });
+        ctx.assert(sold.status === 422 && sold.body.type === 'state.initial', 'create sold pet: ' + JSON.stringify(sold));
+        const noName = ctx.api('POST', '/pet', { photoUrls: 'https://img.example/c.jpg' });
+        ctx.assert(noName.status === 422 && noName.body.type === 'field.required', 'missing name: ' + JSON.stringify(noName));
+        const missing = ctx.api('GET', '/pet/pet_999999');
+        ctx.assert(missing.status === 404 && missing.body.type === 'row.not_found', 'unknown pet: ' + JSON.stringify(missing));
+      }
+  place_order_reserves_pet:
+    description: POST /store/orders for an available pet answers 200 with a placed, incomplete order, and the pet becomes pending. A second order is 409 pet_not_available. Unknown pet and quantity 0 are 400 input.invalid. status approved is 422 invalid_status. GET /store/orders?petId lists the order.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/pet', { name: n, photoUrls: 'https://img.example/' + n.replace(/ /g, '-') + '.jpg' }).body;
+        const pet = mk('Accept Pet Order');
+        const o = ctx.api('POST', '/store/orders', { petId: pet.id, quantity: 2, shipDate: '2026-10-20T10:00:00.000Z' });
+        ctx.assert(o.status === 200, 'place order returned ' + o.status + ' ' + JSON.stringify(o.body));
+        ctx.assert(o.body.status === 'placed' && o.body.complete === false && o.body.petId === pet.id && o.body.quantity === 2, 'order fields: ' + JSON.stringify(o.body));
+        ctx.assert(o.body.shipDate === '2026-10-20T10:00:00.000Z', 'shipDate kept, got ' + o.body.shipDate);
+        ctx.assert(ctx.api('GET', '/pet/' + pet.id).body.status === 'pending', 'pet is pending after the order');
+        const again = ctx.api('POST', '/store/orders', { petId: pet.id, quantity: 1 });
+        ctx.assert(again.status === 409 && again.body.type === 'pet_not_available', 'second order: ' + JSON.stringify(again));
+        const unknown = ctx.api('POST', '/store/orders', { petId: 'pet_999999', quantity: 1 });
+        ctx.assert(unknown.status === 400 && unknown.body.type === 'input.invalid', 'unknown pet: ' + JSON.stringify(unknown));
+        const pet2 = mk('Accept Pet Order Two');
+        const zero = ctx.api('POST', '/store/orders', { petId: pet2.id, quantity: 0 });
+        ctx.assert(zero.status === 400 && zero.body.type === 'input.invalid', 'quantity 0: ' + JSON.stringify(zero));
+        const approved = ctx.api('POST', '/store/orders', { petId: pet2.id, quantity: 1, status: 'approved' });
+        ctx.assert(approved.status === 422 && approved.body.type === 'invalid_status', 'client status approved: ' + JSON.stringify(approved));
+        ctx.assert(ctx.api('GET', '/pet/' + pet2.id).body.status === 'available', 'refused orders leave the pet available');
+        const list = ctx.api('GET', '/store/orders?petId=' + pet.id);
+        ctx.assert(list.status === 200 && list.body.data.length === 1 && list.body.data[0].id === o.body.id, 'list orders by petId: ' + JSON.stringify(list.body));
+        const byStatus = ctx.api('GET', '/store/orders?petId=' + pet.id + '&status=approved');
+        ctx.assert(byStatus.status === 200 && byStatus.body.data.length === 0, 'no approved order for the pet yet');
+      }
+  approve_and_deliver_order:
+    description: approve moves placed to approved with the pet still pending. deliver moves approved to delivered with complete true and the pet sold. Repeating a step, approving a delivered order and delivering a placed order are 409 invalid_state. Unknown order id is 404 order_not_found.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/pet', { name: n, photoUrls: 'https://img.example/' + n.replace(/ /g, '-') + '.jpg' }).body;
+        const pet = mk('Accept Pet Flow');
+        const o = ctx.api('POST', '/store/orders', { petId: pet.id, quantity: 1 }).body;
+        const a = ctx.api('POST', '/store/orders/' + o.id + '/approve', {});
+        ctx.assert(a.status === 200 && a.body.status === 'approved' && a.body.complete === false, 'approve: ' + JSON.stringify(a));
+        ctx.assert(ctx.api('GET', '/pet/' + pet.id).body.status === 'pending', 'pet still pending after approve');
+        const a2 = ctx.api('POST', '/store/orders/' + o.id + '/approve', {});
+        ctx.assert(a2.status === 409 && a2.body.type === 'invalid_state', 'approve twice: ' + JSON.stringify(a2));
+        const d = ctx.api('POST', '/store/orders/' + o.id + '/deliver', {});
+        ctx.assert(d.status === 200 && d.body.status === 'delivered' && d.body.complete === true, 'deliver: ' + JSON.stringify(d));
+        ctx.assert(ctx.api('GET', '/pet/' + pet.id).body.status === 'sold', 'pet sold after delivery');
+        const d2 = ctx.api('POST', '/store/orders/' + o.id + '/deliver', {});
+        ctx.assert(d2.status === 409 && d2.body.type === 'invalid_state', 'deliver twice: ' + JSON.stringify(d2));
+        const a3 = ctx.api('POST', '/store/orders/' + o.id + '/approve', {});
+        ctx.assert(a3.status === 409 && a3.body.type === 'invalid_state', 'approve delivered: ' + JSON.stringify(a3));
+        const pet2 = mk('Accept Pet Flow Two');
+        const o2 = ctx.api('POST', '/store/orders', { petId: pet2.id, quantity: 1 }).body;
+        const early = ctx.api('POST', '/store/orders/' + o2.id + '/deliver', {});
+        ctx.assert(early.status === 409 && early.body.type === 'invalid_state', 'deliver a placed order: ' + JSON.stringify(early));
+        ctx.assert(ctx.api('GET', '/store/orders/' + o2.id).body.status === 'placed', 'refused delivery left the order placed');
+        ctx.assert(ctx.api('GET', '/pet/' + pet2.id).body.status === 'pending', 'refused delivery left the pet pending');
+        const nf = ctx.api('POST', '/store/orders/ord_999999/approve', {});
+        ctx.assert(nf.status === 404 && nf.body.type === 'order_not_found', 'unknown order: ' + JSON.stringify(nf));
+      }
+  delete_order_releases_pet:
+    description: DELETE /store/orders/{id} answers 204. A placed or approved order returns its pet to available, so it can be ordered again. A delivered order's pet stays sold. Unknown order is 404 order_not_found and the order is then 404 row.not_found on GET.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/pet', { name: n, photoUrls: 'https://img.example/' + n.replace(/ /g, '-') + '.jpg' }).body;
+        const petA = mk('Accept Pet Del A');
+        const oa = ctx.api('POST', '/store/orders', { petId: petA.id, quantity: 1 }).body;
+        const da = ctx.api('DELETE', '/store/orders/' + oa.id);
+        ctx.assert(da.status === 204, 'delete placed order returned ' + da.status + ' ' + JSON.stringify(da.body));
+        const gone = ctx.api('GET', '/store/orders/' + oa.id);
+        ctx.assert(gone.status === 404 && gone.body.type === 'row.not_found', 'deleted order is gone: ' + JSON.stringify(gone));
+        ctx.assert(ctx.api('GET', '/pet/' + petA.id).body.status === 'available', 'pet A released');
+        const again = ctx.api('POST', '/store/orders', { petId: petA.id, quantity: 1 });
+        ctx.assert(again.status === 200, 'released pet can be ordered again: ' + JSON.stringify(again));
+        const petB = mk('Accept Pet Del B');
+        const ob = ctx.api('POST', '/store/orders', { petId: petB.id, quantity: 1 }).body;
+        ctx.api('POST', '/store/orders/' + ob.id + '/approve', {});
+        ctx.assert(ctx.api('DELETE', '/store/orders/' + ob.id).status === 204, 'delete approved order');
+        ctx.assert(ctx.api('GET', '/pet/' + petB.id).body.status === 'available', 'pet B released');
+        const petC = mk('Accept Pet Del C');
+        const oc = ctx.api('POST', '/store/orders', { petId: petC.id, quantity: 1 }).body;
+        ctx.api('POST', '/store/orders/' + oc.id + '/approve', {});
+        ctx.api('POST', '/store/orders/' + oc.id + '/deliver', {});
+        ctx.assert(ctx.api('DELETE', '/store/orders/' + oc.id).status === 204, 'delete delivered order');
+        ctx.assert(ctx.api('GET', '/pet/' + petC.id).body.status === 'sold', 'pet C stays sold');
+        const nf = ctx.api('DELETE', '/store/orders/ord_999999');
+        ctx.assert(nf.status === 404 && nf.body.type === 'order_not_found', 'unknown order: ' + JSON.stringify(nf));
+      }
+  delete_pet_restricted_by_orders:
+    description: DELETE /pet/{id} is 409 delete.restricted while an order references the pet. After the order is deleted the pet deletes with 204 and GET is 404 row.not_found. A pet that never had an order deletes with 204.
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/pet', { name: n, photoUrls: 'https://img.example/' + n.replace(/ /g, '-') + '.jpg' }).body;
+        const pet = mk('Accept Pet Remove A');
+        const o = ctx.api('POST', '/store/orders', { petId: pet.id, quantity: 1 }).body;
+        const blocked = ctx.api('DELETE', '/pet/' + pet.id);
+        ctx.assert(blocked.status === 409 && blocked.body.type === 'delete.restricted', 'delete pet with order: ' + JSON.stringify(blocked));
+        ctx.assert(ctx.api('GET', '/pet/' + pet.id).status === 200, 'pet still exists');
+        ctx.assert(ctx.api('DELETE', '/store/orders/' + o.id).status === 204, 'delete the order');
+        const ok = ctx.api('DELETE', '/pet/' + pet.id);
+        ctx.assert(ok.status === 204, 'delete pet after order removal returned ' + ok.status);
+        const gone = ctx.api('GET', '/pet/' + pet.id);
+        ctx.assert(gone.status === 404 && gone.body.type === 'row.not_found', 'pet is gone: ' + JSON.stringify(gone));
+        const lone = mk('Accept Pet Remove B');
+        ctx.assert(ctx.api('DELETE', '/pet/' + lone.id).status === 204, 'delete pet without orders');
+      }
+  update_pet_by_body_id:
+    description: PUT /pet with id, name and photoUrls answers 200 and changes the fields. Status may go available to sold and back to available. A missing name is 400 input.invalid, an unknown id is 404 pet_not_found, and a pet with an open order cannot be moved to another status (409 pet_reserved).
+    script: |-
+      (ctx) => {
+        const mk = (n) => ctx.api('POST', '/pet', { name: n, photoUrls: 'https://img.example/' + n.replace(/ /g, '-') + '.jpg' }).body;
+        const pet = mk('Accept Pet Put');
+        const u = ctx.api('PUT', '/pet', { id: pet.id, name: 'Accept Pet Put Renamed', photoUrls: 'https://img.example/new.jpg', tags: 'renamed' });
+        ctx.assert(u.status === 200, 'update returned ' + u.status + ' ' + JSON.stringify(u.body));
+        ctx.assert(u.body.id === pet.id && u.body.name === 'Accept Pet Put Renamed' && u.body.photoUrls === 'https://img.example/new.jpg' && u.body.tags === 'renamed' && u.body.status === 'available', 'updated fields: ' + JSON.stringify(u.body));
+        const sold = ctx.api('PUT', '/pet', { id: pet.id, name: 'Accept Pet Put Renamed', photoUrls: 'https://img.example/new.jpg', status: 'sold' });
+        ctx.assert(sold.status === 200 && sold.body.status === 'sold', 'mark sold: ' + JSON.stringify(sold));
+        const back = ctx.api('PUT', '/pet', { id: pet.id, name: 'Accept Pet Put Renamed', photoUrls: 'https://img.example/new.jpg', status: 'available' });
+        ctx.assert(back.status === 200 && back.body.status === 'available', 'sold back to available: ' + JSON.stringify(back));
+        const noName = ctx.api('PUT', '/pet', { id: pet.id, photoUrls: 'https://img.example/new.jpg' });
+        ctx.assert(noName.status === 400 && noName.body.type === 'input.invalid', 'missing name: ' + JSON.stringify(noName));
+        const nf = ctx.api('PUT', '/pet', { id: 'pet_999999', name: 'Ghost', photoUrls: 'https://img.example/g.jpg' });
+        ctx.assert(nf.status === 404 && nf.body.type === 'pet_not_found', 'unknown pet: ' + JSON.stringify(nf));
+        ctx.assert(ctx.api('POST', '/store/orders', { petId: pet.id, quantity: 1 }).status === 200, 'order the pet');
+        const reserved = ctx.api('PUT', '/pet', { id: pet.id, name: 'Accept Pet Put Renamed', photoUrls: 'https://img.example/new.jpg', status: 'sold' });
+        ctx.assert(reserved.status === 409 && reserved.body.type === 'pet_reserved', 'reserved pet: ' + JSON.stringify(reserved));
+        ctx.assert(ctx.api('GET', '/pet/' + pet.id).body.status === 'pending', 'reserved pet still pending');
+      }
+  inventory_tracks_status:
+    description: GET /store/inventory returns integer counts for available, pending and sold. Compared with a baseline read, adding a pet raises available by 1, ordering moves one from available to pending, approving changes nothing, and delivering moves one from pending to sold.
+    script: |-
+      (ctx) => {
+        const inv = () => {
+          const r = ctx.api('GET', '/store/inventory');
+          ctx.assert(r.status === 200, 'inventory returned ' + r.status);
+          for (const k of ['available', 'pending', 'sold']) ctx.assert(Number.isInteger(r.body[k]), 'inventory.' + k + ' is an integer, got ' + JSON.stringify(r.body));
+          return r.body;
+        };
+        const base = inv();
+        const pet = ctx.api('POST', '/pet', { name: 'Accept Pet Inventory', photoUrls: 'https://img.example/inv.jpg' }).body;
+        const s1 = inv();
+        ctx.assert(s1.available === base.available + 1 && s1.pending === base.pending && s1.sold === base.sold, 'after add: ' + JSON.stringify(s1));
+        const o = ctx.api('POST', '/store/orders', { petId: pet.id, quantity: 1 }).body;
+        const s2 = inv();
+        ctx.assert(s2.available === base.available && s2.pending === base.pending + 1 && s2.sold === base.sold, 'after order: ' + JSON.stringify(s2));
+        ctx.api('POST', '/store/orders/' + o.id + '/approve', {});
+        const s3 = inv();
+        ctx.assert(s3.available === s2.available && s3.pending === s2.pending && s3.sold === s2.sold, 'approve changes nothing: ' + JSON.stringify(s3));
+        ctx.api('POST', '/store/orders/' + o.id + '/deliver', {});
+        const s4 = inv();
+        ctx.assert(s4.available === base.available && s4.pending === base.pending && s4.sold === base.sold + 1, 'after deliver: ' + JSON.stringify(s4));
+      }
+  find_pets_by_status_filters:
+    description: GET /pet/findByStatus?status=available&q=<unique name> returns the new pet, status=sold does not, category filter returns it, status=bogus is 400 query.invalid. After placing an order the pet is found under pending and no longer under available.
+    script: |-
+      (ctx) => {
+        const cat = ctx.api('POST', '/categories', { name: 'Accept Category Find' }).body;
+        const pet = ctx.api('POST', '/pet', { name: 'Zqfind Testpet 7731', photoUrls: 'https://img.example/find.jpg', category: cat.id }).body;
+        const has = (r) => r.body.data.some((p) => p.id === pet.id);
+        const a = ctx.api('GET', '/pet/findByStatus?status=available&q=Zqfind');
+        ctx.assert(a.status === 200 && has(a), 'available search finds the pet: ' + JSON.stringify(a.body));
+        const s = ctx.api('GET', '/pet/findByStatus?status=sold&q=Zqfind');
+        ctx.assert(s.status === 200 && !has(s), 'sold filter does not return an available pet');
+        const c = ctx.api('GET', '/pet/findByStatus?category=' + cat.id);
+        ctx.assert(c.status === 200 && c.body.data.length === 1 && has(c), 'category filter returns only the new pet: ' + JSON.stringify(c.body));
+        const bad = ctx.api('GET', '/pet/findByStatus?status=bogus');
+        ctx.assert(bad.status === 400 && bad.body.type === 'query.invalid', 'bogus status: ' + JSON.stringify(bad));
+        const cats = ctx.api('GET', '/categories?q=Accept+Category+Find');
+        ctx.assert(cats.status === 200 && cats.body.data.some((x) => x.id === cat.id), 'category search finds the category');
+        const ord = ctx.api('POST', '/store/orders', { petId: pet.id, quantity: 1 });
+        ctx.assert(ord.status === 200, 'order the pet returned ' + ord.status + ' ' + JSON.stringify(ord.body));
+        const p = ctx.api('GET', '/pet/findByStatus?status=pending&q=Zqfind');
+        ctx.assert(p.status === 200 && has(p), 'ordered pet is found as pending: ' + JSON.stringify(p.body));
+        const a2 = ctx.api('GET', '/pet/findByStatus?status=available&q=Zqfind');
+        ctx.assert(a2.status === 200 && !has(a2), 'ordered pet is no longer available');
+      }
+tasks:
+  order_biscuit:
+    difficulty: easy
+    instruction: Place an order for 2 units of the available pet named Biscuit, with a ship date of 2026-10-15T12:00:00.000Z. Change nothing else.
+    decoys: []
+    alternatives: []
+  deliver_cat_juniper:
+    difficulty: medium
+    instruction: Two pets are named Juniper, one in the Cats category and one in Dogs, and each has an approved order. Mark the order for the cat named Juniper as delivered. Do not touch the dog's order or anything else.
+    decoys: []
+    alternatives: []
+  release_stale_placed_orders:
+    difficulty: hard
+    instruction: Delete every order that is still in status placed (never approved) and whose shipDate is before 2026-10-07, so that their pets return to available. Leave approved and delivered orders, and placed orders with a later ship date, alone. Change nothing else.
+    decoys: []
+    alternatives: []

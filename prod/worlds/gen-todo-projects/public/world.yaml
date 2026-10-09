@@ -1,0 +1,878 @@
+format: 1
+meta:
+  name: world
+  description: A small team to-do app. Members own tasks inside projects. Tasks move todo, in_progress, done, and each has an optional assignee and due date. A job flags overdue tasks as time passes. A project is active or archived. It can be archived only when every task in it is done, and an archived project is frozen until it is unarchived.
+  resembles: Todoist/Asana-style to-do app (projects, tasks, assignees, due dates)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-06T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  member:
+    description: A person in the single workspace who can be assigned tasks. Retired by setting active to false.
+    idPrefix: mem
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      active:
+        type: bool
+        description: Only active members can be assigned tasks.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  project:
+    description: A container of tasks. Status is changed only by the archive_project and unarchive_project actions. An archived project is frozen.
+    idPrefix: prj
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 160
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: Moves only through archive_project and unarchive_project.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - active
+          - archived
+        initial: active
+        transitions:
+          active:
+            - archived
+          archived:
+            - active
+      archived_at:
+        type: datetime
+        description: Set when archived, cleared when unarchived.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      owner_id:
+        type: ref
+        description: The member who owns the project.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: nullify
+  task:
+    description: A unit of work in one project with an optional assignee and due date. It moves todo, in_progress, done.
+    idPrefix: tsk
+    fields:
+      project_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: project
+        onDelete: restrict
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      priority:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - low
+          - normal
+          - high
+          - urgent
+        default: normal
+      status:
+        type: state
+        description: Moves through start_task, complete_task and reopen_task.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - todo
+          - in_progress
+          - done
+        initial: todo
+        transitions:
+          todo:
+            - in_progress
+            - done
+          in_progress:
+            - todo
+            - done
+          done:
+            - todo
+      assignee_id:
+        type: ref
+        description: Set or cleared by assign_task.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: member
+        onDelete: nullify
+      due_at:
+        type: datetime
+        description: UTC due timestamp.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      is_overdue:
+        type: bool
+        description: Maintained by the flag_overdue job and the task actions.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      completed_at:
+        type: datetime
+        description: Set when the task is done.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_projects:
+    op: list
+    entity: project
+    filters:
+      - status
+      - owner_id
+    search:
+      - name
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /projects
+    description: List projects.
+  get_project:
+    op: get
+    entity: project
+    method: GET
+    path: /projects/{id}
+    description: Fetch one project.
+  create_project:
+    op: create
+    entity: project
+    method: POST
+    path: /projects
+    description: Create a project. It starts active.
+  update_project:
+    op: update
+    entity: project
+    method: PATCH
+    path: /projects/{id}
+    description: Edit name, description or owner. Status stays readonly.
+  list_members:
+    op: list
+    entity: member
+    filters:
+      - active
+    search:
+      - name
+      - email
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /members
+    description: List members.
+  get_member:
+    op: get
+    entity: member
+    method: GET
+    path: /members/{id}
+    description: Fetch one member.
+  create_member:
+    op: create
+    entity: member
+    method: POST
+    path: /members
+    description: Create a member.
+  update_member:
+    op: update
+    entity: member
+    method: PATCH
+    path: /members/{id}
+    description: Edit a member, for example set active to false to retire them.
+  list_tasks:
+    op: list
+    entity: task
+    filters:
+      - project_id
+      - assignee_id
+      - status
+      - priority
+      - is_overdue
+    search:
+      - title
+    sort:
+      - due_at
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /tasks
+    description: List tasks across all projects.
+  get_task:
+    op: get
+    entity: task
+    method: GET
+    path: /tasks/{id}
+    description: Fetch one task.
+  list_project_tasks:
+    op: list
+    entity: task
+    filters:
+      - assignee_id
+      - status
+      - priority
+      - is_overdue
+    search:
+      - title
+    sort:
+      - due_at
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /projects/{project_id}/tasks
+    description: List the tasks of one project.
+actions:
+  create_task:
+    method: POST
+    path: /tasks
+    description: Create a task in an active project. It starts todo. An assignee must be an active member. is_overdue is computed from due_at and the current time.
+    input:
+      project_id:
+        type: ref
+        description: The project that holds the task. Must be active.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: project
+        onDelete: restrict
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      priority:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - low
+          - normal
+          - high
+          - urgent
+      assignee_id:
+        type: ref
+        description: Optional assignee. Must be an active member.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+      due_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        const project = ctx.db.get('project', b.project_id);
+        if (project === null) ctx.fail(404, 'not_found', 'project ' + b.project_id + ' not found');
+        if (project.status === 'archived') ctx.fail(409, 'project_archived', 'project ' + project.id + ' is archived. Unarchive it before adding tasks.');
+        const title = b.title.trim();
+        if (title === '') ctx.fail(400, 'input.invalid', 'Invalid input for create_task: title expected a non-blank string, found ""');
+        const data = { project_id: project.id, title, is_overdue: false };
+        if (b.assignee_id !== undefined && b.assignee_id !== null) {
+          const m = ctx.db.get('member', b.assignee_id);
+          if (m === null) ctx.fail(422, 'unknown_member', 'member ' + b.assignee_id + ' not found. List members with GET /members.');
+          if (!m.active) ctx.fail(409, 'member_inactive', 'member ' + m.id + ' (' + m.name + ') is inactive. Pick an active member.');
+          data.assignee_id = m.id;
+        }
+        if (b.description !== undefined) data.description = b.description;
+        if (b.priority !== undefined) data.priority = b.priority;
+        if (b.due_at !== undefined && b.due_at !== null) {
+          data.due_at = b.due_at;
+          data.is_overdue = ctx.time.minutesBetween(b.due_at, ctx.now()) > 0;
+        }
+        const t = ctx.db.create('task', data);
+        return { status: 201, body: t };
+      }
+  update_task:
+    method: PATCH
+    path: /tasks/{id}
+    description: Edit title, description, priority or due_at of a task that is not done, in an active project. Recomputes is_overdue when due_at changes.
+    input:
+      title:
+        type: string
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      priority:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - low
+          - normal
+          - high
+          - urgent
+      due_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('task', id);
+        if (t === null) ctx.fail(404, 'not_found', 'task ' + id + ' not found');
+        const project = ctx.db.get('project', t.project_id);
+        if (project.status === 'archived') ctx.fail(409, 'project_archived', 'project ' + project.id + ' is archived, so task ' + id + ' is frozen.');
+        if (t.status === 'done') ctx.fail(409, 'invalid_state', 'task ' + id + ' is done. Reopen it before editing.');
+        const b = ctx.body;
+        const patch = {};
+        if (b.title !== undefined) {
+          const title = b.title.trim();
+          if (title === '') ctx.fail(400, 'input.invalid', 'Invalid input for update_task: title expected a non-blank string, found ""');
+          patch.title = title;
+        }
+        if (b.description !== undefined) patch.description = b.description;
+        if (b.priority !== undefined) patch.priority = b.priority;
+        if (b.due_at !== undefined) {
+          patch.due_at = b.due_at;
+          patch.is_overdue = b.due_at !== null && ctx.time.minutesBetween(b.due_at, ctx.now()) > 0;
+        }
+        if (Object.keys(patch).length === 0) ctx.fail(400, 'input.invalid', 'Invalid input for update_task: send at least one of title, description, priority, due_at');
+        const updated = ctx.db.update('task', id, patch);
+        return { status: 200, body: updated };
+      }
+  assign_task:
+    method: POST
+    path: /tasks/{id}/assign
+    description: Set the assignee of a task to an active member, or clear it with member_id null. Refused for done tasks, archived projects and when nothing changes.
+    input:
+      member_id:
+        type: ref
+        description: The new assignee, or null to unassign. Must be sent.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('task', id);
+        if (t === null) ctx.fail(404, 'not_found', 'task ' + id + ' not found');
+        const project = ctx.db.get('project', t.project_id);
+        if (project.status === 'archived') ctx.fail(409, 'project_archived', 'project ' + project.id + ' is archived, so task ' + id + ' is frozen.');
+        if (ctx.body.member_id === undefined) ctx.fail(400, 'input.invalid', 'Invalid input for assign_task: member_id is required. Send a member id, or null to unassign.');
+        if (t.status === 'done') ctx.fail(409, 'invalid_state', 'task ' + id + ' is done. Reopen it before changing the assignee.');
+        const memberId = ctx.body.member_id;
+        if (memberId === null) {
+          if (t.assignee_id === null) ctx.fail(409, 'no_change', 'task ' + id + ' already has no assignee.');
+          return { status: 200, body: ctx.db.update('task', id, { assignee_id: null }) };
+        }
+        const m = ctx.db.get('member', memberId);
+        if (m === null) ctx.fail(422, 'unknown_member', 'member ' + memberId + ' not found. List members with GET /members.');
+        if (!m.active) ctx.fail(409, 'member_inactive', 'member ' + m.id + ' (' + m.name + ') is inactive. Pick an active member.');
+        if (t.assignee_id === m.id) ctx.fail(409, 'no_change', 'task ' + id + ' is already assigned to ' + m.id + '.');
+        return { status: 200, body: ctx.db.update('task', id, { assignee_id: m.id }) };
+      }
+  start_task:
+    method: POST
+    path: /tasks/{id}/start
+    description: Move a todo task to in_progress.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('task', id);
+        if (t === null) ctx.fail(404, 'not_found', 'task ' + id + ' not found');
+        const project = ctx.db.get('project', t.project_id);
+        if (project.status === 'archived') ctx.fail(409, 'project_archived', 'project ' + project.id + ' is archived, so task ' + id + ' is frozen.');
+        if (t.status !== 'todo') ctx.fail(409, 'invalid_state', 'task ' + id + ' is ' + t.status + '. Only todo tasks can be started.');
+        return { status: 200, body: ctx.db.update('task', id, { status: 'in_progress' }) };
+      }
+  complete_task:
+    method: POST
+    path: /tasks/{id}/complete
+    description: Mark a todo or in_progress task done. Sets completed_at to now and is_overdue to false.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('task', id);
+        if (t === null) ctx.fail(404, 'not_found', 'task ' + id + ' not found');
+        const project = ctx.db.get('project', t.project_id);
+        if (project.status === 'archived') ctx.fail(409, 'project_archived', 'project ' + project.id + ' is archived, so task ' + id + ' is frozen.');
+        if (t.status === 'done') ctx.fail(409, 'invalid_state', 'task ' + id + ' is already done.');
+        const updated = ctx.db.update('task', id, { status: 'done', completed_at: ctx.now(), is_overdue: false });
+        return { status: 200, body: updated };
+      }
+  reopen_task:
+    method: POST
+    path: /tasks/{id}/reopen
+    description: Move a done task back to todo. Clears completed_at and recomputes is_overdue from due_at. Refused when the project is archived.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('task', id);
+        if (t === null) ctx.fail(404, 'not_found', 'task ' + id + ' not found');
+        const project = ctx.db.get('project', t.project_id);
+        if (project.status === 'archived') ctx.fail(409, 'project_archived', 'project ' + project.id + ' is archived, so task ' + id + ' is frozen. Unarchive the project first.');
+        if (t.status !== 'done') ctx.fail(409, 'invalid_state', 'task ' + id + ' is ' + t.status + '. Only done tasks can be reopened.');
+        const overdue = t.due_at !== null && t.due_at !== undefined && ctx.time.minutesBetween(t.due_at, ctx.now()) > 0;
+        const updated = ctx.db.update('task', id, { status: 'todo', completed_at: null, is_overdue: overdue });
+        return { status: 200, body: updated };
+      }
+  archive_project:
+    method: POST
+    path: /projects/{id}/archive
+    description: Archive an active project. Allowed only when every task in it is done. A project with no tasks can be archived. Otherwise 409 open_tasks with the count of tasks not done.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const p = ctx.db.get('project', id);
+        if (p === null) ctx.fail(404, 'not_found', 'project ' + id + ' not found');
+        if (p.status !== 'active') ctx.fail(409, 'invalid_state', 'project ' + id + ' is ' + p.status + '. Only active projects can be archived.');
+        const open = ctx.db.list('task', { where: { project_id: id } }).filter((t) => t.status !== 'done');
+        if (open.length > 0) ctx.fail(409, 'open_tasks', 'project ' + id + ' has ' + open.length + ' task(s) not done. Complete them before archiving.');
+        const updated = ctx.db.update('project', id, { status: 'archived', archived_at: ctx.now() });
+        return { status: 200, body: updated };
+      }
+  unarchive_project:
+    method: POST
+    path: /projects/{id}/unarchive
+    description: Return an archived project to active and clear archived_at.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const p = ctx.db.get('project', id);
+        if (p === null) ctx.fail(404, 'not_found', 'project ' + id + ' not found');
+        if (p.status !== 'archived') ctx.fail(409, 'invalid_state', 'project ' + id + ' is ' + p.status + '. Only archived projects can be unarchived.');
+        const updated = ctx.db.update('project', id, { status: 'active', archived_at: null });
+        return { status: 200, body: updated };
+      }
+jobs:
+  flag_overdue:
+    description: Every hour. A task that is not done and has a due_at earlier than now gets is_overdue true. Done tasks, tasks without due_at and tasks not yet due get false. Only rows whose value changes are written.
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const t of ctx.db.list('task')) {
+          const want = t.status !== 'done' && t.due_at !== null && t.due_at !== undefined && ctx.time.minutesBetween(t.due_at, now) > 0;
+          if (t.is_overdue !== want) ctx.db.update('task', t.id, { is_overdue: want });
+        }
+      }
+fixtures: {}
+seed:
+  member: |-
+    (ctx) => {
+      const people = ['Priya Raman', 'Priya Shah', 'Marcus Bell', 'Dana Okafor', 'Lena Fischer', 'Omar Haddad', 'Sofia Alvarez', 'Kenji Watanabe'];
+      return people.map((name, i) => {
+        const at = ctx.time.plus('2026-02-03T09:00:00.000Z', (i * 9 + 2) + 'd');
+        return { name, email: name.toLowerCase().replace(' ', '.') + '@teamflow.example', active: name !== 'Kenji Watanabe', created_at: at, updated_at: at };
+      });
+    }
+  project: |-
+    (ctx) => {
+      const plus = (b, n, u) => (n === 0 ? b : ctx.time.plus(b, n + u));
+      const members = ctx.rows('member').filter((m) => m.active);
+      const defs = [
+        ['Q3 Marketing Launch', 'active', 'Campaign assets and announcements for the Q3 product launch.'],
+        ['Website Redesign', 'active', 'New marketing site: design, build and content migration.'],
+        ['Office Operations', 'active', 'Recurring office logistics and team events.'],
+        ['Customer Onboarding Revamp', 'active', 'Rework the first-30-days onboarding flow for new customers.'],
+        ['Q3 Marketing Planning', 'active', 'Planning work for the Q3 marketing calendar.'],
+        ['Annual Offsite 2026', 'active', 'Logistics for the annual team offsite.'],
+        ['Vendor Contract Review', 'active', 'Annual review of vendor contracts and renewals.'],
+        ['Office Move', 'active', null],
+        ['Q2 Marketing Launch', 'archived', 'Q2 launch campaign. Completed.'],
+        ['Holiday Campaign 2025', 'archived', 'Seasonal campaign. Completed.'],
+        ['Security Audit 2025', 'archived', 'Yearly security audit follow-ups.'],
+        ['Budget Planning FY26', 'archived', 'Budget cycle tasks for fiscal 2026.'],
+        ['Hiring Pipeline Q4', 'archived', 'Q4 recruiting tasks.'],
+        ['Support Docs Migration', 'archived', 'Move support docs to the new help center.'],
+      ];
+      return defs.map(([name, status, description], i) => {
+        const created = plus('2026-04-01T09:00:00.000Z', ctx.int(0, 40), 'd');
+        const archived = status === 'archived' ? plus('2026-09-12T10:00:00.000Z', ctx.int(0, 15), 'd') : null;
+        return {
+          name, description, status, archived_at: archived,
+          owner_id: i === 7 ? null : members[i % members.length].id,
+          created_at: created, updated_at: archived === null ? created : archived,
+        };
+      });
+    }
+  task: |-
+    (ctx) => {
+      const plus = (b, n, u) => (n === 0 ? b : ctx.time.plus(b, n + u));
+      const now = ctx.now();
+      const members = ctx.rows('member');
+      const projects = ctx.rows('project');
+      const pid = (n) => projects.find((p) => p.name === n).id;
+      const specs = [
+        ['Q3 Marketing Launch', 6, 1], ['Website Redesign', 63, 43], ['Office Operations', 12, 5],
+        ['Customer Onboarding Revamp', 10, 6], ['Q3 Marketing Planning', 6, 0], ['Annual Offsite 2026', 5, 0],
+        ['Vendor Contract Review', 4, 0], ['Q2 Marketing Launch', 4, 0], ['Holiday Campaign 2025', 4, 0],
+        ['Security Audit 2025', 4, 0], ['Budget Planning FY26', 4, 0], ['Hiring Pipeline Q4', 4, 0],
+        ['Support Docs Migration', 4, 0],
+      ];
+      const pool = [
+        'Write launch announcement', 'Review budget', 'Update onboarding checklist', 'Draft press release', 'Design landing page hero',
+        'Fix broken links', 'Schedule kickoff meeting', 'Collect customer quotes', 'Audit analytics tags', 'Prepare slide deck',
+        'Review legal copy', 'Book venue', 'Update pricing page', 'Run QA pass', 'Write release notes', 'Compile survey results',
+        'Refresh brand assets', 'Send status update', 'Migrate old blog posts', 'Test signup flow', 'Create social posts',
+        'Confirm vendor quote', 'Plan retro session', 'Update FAQ page', 'Review accessibility issues', 'Sync with design team',
+        'Draft email sequence', 'Check invoice totals', 'Prepare demo script', 'Renew software licenses', 'Order swag',
+        'Document handoff notes', 'Interview stakeholders', 'Optimize image sizes', 'Set up tracking dashboard',
+        'Proofread copy', 'Archive old files', 'Coordinate with finance', 'Record walkthrough video', 'Update team wiki',
+      ];
+      const rows = [];
+      let k = 0;
+      specs.forEach(([name, total, open], pi) => {
+        for (let i = 0; i < total; i++) {
+          const isOpen = i < open;
+          let title = pool[(pi * 5 + i * 7) % pool.length] + (i >= pool.length ? ' (round 2)' : '');
+          let status = 'done';
+          let anchor = null;
+          if (isOpen) { status = (k % 9) < 5 ? 'todo' : 'in_progress'; k++; }
+          if (name === 'Q3 Marketing Launch' && i === 0) { title = 'Finalize launch press kit'; anchor = 'q3'; }
+          if (name === 'Office Operations' && i === 0) { title = 'Order team lunch'; status = 'todo'; anchor = 'lunch'; }
+          if (name === 'Annual Offsite 2026' && i === 0) title = 'Order team lunch for offsite';
+          const created = plus('2026-06-02T09:00:00.000Z', ctx.int(0, 60), 'd');
+          const r = ctx.int(1, 100);
+          const priority = r <= 25 ? 'low' : r <= 70 ? 'normal' : r <= 92 ? 'high' : 'urgent';
+          let assignee = ctx.rng() < 0.7 ? ctx.pick(members).id : null;
+          if (anchor === 'lunch') assignee = null;
+          let due = ctx.rng() < 0.8 ? plus('2026-09-10T23:59:59.000Z', ctx.int(0, 60), 'd') : null;
+          if (anchor === 'lunch') due = '2026-10-17T23:59:59.000Z';
+          const overdue = status !== 'done' && due !== null && ctx.time.minutesBetween(due, now) > 0;
+          const completed = status === 'done' ? plus(created, ctx.int(1, 40), 'd') : null;
+          rows.push({
+            project_id: pid(name), title,
+            description: ctx.rng() < 0.5 ? 'Part of the ' + name + ' project.' : null,
+            priority, status, assignee_id: assignee, due_at: due, is_overdue: overdue, completed_at: completed,
+            created_at: created, updated_at: completed === null ? created : completed,
+          });
+        }
+      });
+      return rows;
+    }
+tests:
+  create_task_rules:
+    description: create_task makes a todo task with defaults, computes is_overdue, trims the title, and refuses inactive assignees, blank titles, unknown projects and archived projects.
+    script: |-
+      (ctx) => {
+        const post = (p, b) => ctx.api('POST', p, b);
+        const ok = (r, w) => ctx.assert(r.status === 200 || r.status === 201, w + ': ' + r.status + ' ' + JSON.stringify(r.body));
+        const m = post('/members', { name: 'Wf Create', email: 'wf.create@example.test' }); ok(m, 'member');
+        const off = post('/members', { name: 'Wf Off', email: 'wf.off@example.test', active: false }); ok(off, 'inactive member');
+        const p = post('/projects', { name: 'WF create project' }); ok(p, 'project');
+        const r = post('/tasks', { project_id: p.body.id, title: '  Draft brief  ', priority: 'high', assignee_id: m.body.id, due_at: '2099-01-01T00:00:00.000Z' });
+        ctx.assert(r.status === 201, 'create_task returned ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(r.body.title === 'Draft brief' && r.body.status === 'todo' && r.body.priority === 'high', 'fields: ' + JSON.stringify(r.body));
+        ctx.assert(r.body.assignee_id === m.body.id && r.body.is_overdue === false && r.body.completed_at === null, 'assignee and flags: ' + JSON.stringify(r.body));
+        const got = ctx.api('GET', '/tasks/' + r.body.id);
+        ctx.assert(got.status === 200 && got.body.project_id === p.body.id, 'GET task: ' + JSON.stringify(got.body));
+        const min = post('/tasks', { project_id: p.body.id, title: 'Minimal' });
+        ctx.assert(min.status === 201 && min.body.priority === 'normal' && min.body.assignee_id === null && min.body.due_at === null && min.body.is_overdue === false, 'defaults: ' + JSON.stringify(min.body));
+        const late = post('/tasks', { project_id: p.body.id, title: 'Already late', due_at: '2020-01-01T00:00:00.000Z' });
+        ctx.assert(late.status === 201 && late.body.is_overdue === true, 'past due is overdue: ' + JSON.stringify(late.body));
+        const inactive = post('/tasks', { project_id: p.body.id, title: 'Nope', assignee_id: off.body.id });
+        ctx.assert(inactive.status === 409 && inactive.body.error.code === 'member_inactive', 'inactive assignee: ' + JSON.stringify(inactive));
+        const blank = post('/tasks', { project_id: p.body.id, title: '   ' });
+        ctx.assert(blank.status === 400 && blank.body.error.code === 'input.invalid', 'blank title: ' + JSON.stringify(blank));
+        const noTitle = post('/tasks', { project_id: p.body.id });
+        ctx.assert(noTitle.status === 400, 'missing title: ' + noTitle.status);
+        const unknown = post('/tasks', { project_id: 'prj_9999', title: 'Ghost' });
+        ctx.assert(unknown.status >= 400 && unknown.status < 500, 'unknown project: ' + unknown.status);
+        const q = post('/projects', { name: 'WF empty archived' }); ok(q, 'second project');
+        ok(post('/projects/' + q.body.id + '/archive', {}), 'archive empty project');
+        const frozen = post('/tasks', { project_id: q.body.id, title: 'Too late' });
+        ctx.assert(frozen.status === 409 && frozen.body.error.code === 'project_archived', 'archived project: ' + JSON.stringify(frozen));
+        const listed = ctx.api('GET', '/projects/' + p.body.id + '/tasks');
+        ctx.assert(listed.status === 200 && listed.body.data.length === 3, 'three tasks in the project, got ' + JSON.stringify(listed.body));
+      }
+  task_lifecycle_moves:
+    description: start_task, complete_task and reopen_task follow todo to in_progress to done and back to todo, set and clear completed_at, recompute is_overdue, and refuse invalid moves.
+    script: |-
+      (ctx) => {
+        const post = (p, b) => ctx.api('POST', p, b);
+        const p = post('/projects', { name: 'WF lifecycle' });
+        const late = post('/tasks', { project_id: p.body.id, title: 'Late task', due_at: '2020-01-01T00:00:00.000Z' });
+        const plain = post('/tasks', { project_id: p.body.id, title: 'Plain task' });
+        ctx.assert(late.status === 201 && plain.status === 201, 'setup tasks');
+        const s = post('/tasks/' + plain.body.id + '/start');
+        ctx.assert(s.status === 200 && s.body.status === 'in_progress', 'start: ' + JSON.stringify(s));
+        const s2 = post('/tasks/' + plain.body.id + '/start');
+        ctx.assert(s2.status === 409 && s2.body.error.code === 'invalid_state', 'start twice: ' + JSON.stringify(s2));
+        const at = ctx.now();
+        const c = post('/tasks/' + plain.body.id + '/complete');
+        ctx.assert(c.status === 200 && c.body.status === 'done' && c.body.completed_at === at && c.body.is_overdue === false, 'complete: ' + JSON.stringify(c));
+        const c2 = post('/tasks/' + plain.body.id + '/complete');
+        ctx.assert(c2.status === 409 && c2.body.error.code === 'invalid_state', 'complete twice: ' + JSON.stringify(c2));
+        const s3 = post('/tasks/' + plain.body.id + '/start');
+        ctx.assert(s3.status === 409 && s3.body.error.code === 'invalid_state', 'start done: ' + JSON.stringify(s3));
+        const r = post('/tasks/' + plain.body.id + '/reopen');
+        ctx.assert(r.status === 200 && r.body.status === 'todo' && r.body.completed_at === null && r.body.is_overdue === false, 'reopen: ' + JSON.stringify(r));
+        const r2 = post('/tasks/' + plain.body.id + '/reopen');
+        ctx.assert(r2.status === 409 && r2.body.error.code === 'invalid_state', 'reopen todo: ' + JSON.stringify(r2));
+        const cl = post('/tasks/' + late.body.id + '/complete');
+        ctx.assert(cl.status === 200 && cl.body.status === 'done' && cl.body.is_overdue === false, 'complete late task from todo: ' + JSON.stringify(cl));
+        const rl = post('/tasks/' + late.body.id + '/reopen');
+        ctx.assert(rl.status === 200 && rl.body.is_overdue === true && rl.body.completed_at === null, 'reopen late task is overdue again: ' + JSON.stringify(rl));
+        const missing = post('/tasks/tsk_9999/start');
+        ctx.assert(missing.status === 404 && missing.body.error.code === 'not_found', 'missing task: ' + JSON.stringify(missing));
+        const missing2 = post('/tasks/tsk_9999/complete');
+        ctx.assert(missing2.status === 404, 'missing task complete: ' + missing2.status);
+        const missing3 = post('/tasks/tsk_9999/reopen');
+        ctx.assert(missing3.status === 404, 'missing task reopen: ' + missing3.status);
+      }
+  update_and_assign_task:
+    description: update_task edits fields and recomputes is_overdue, assign_task sets and clears the assignee, and both refuse done tasks, inactive members and no-op changes.
+    script: |-
+      (ctx) => {
+        const post = (p, b) => ctx.api('POST', p, b);
+        const a = post('/members', { name: 'Wf Alpha', email: 'wf.alpha@example.test' });
+        const b = post('/members', { name: 'Wf Beta', email: 'wf.beta@example.test' });
+        const off = post('/members', { name: 'Wf Gone', email: 'wf.gone@example.test', active: false });
+        const p = post('/projects', { name: 'WF update assign' });
+        const t = post('/tasks', { project_id: p.body.id, title: 'Write report', due_at: '2099-06-01T00:00:00.000Z' });
+        ctx.assert(t.status === 201 && a.status === 201 && b.status === 201 && off.status === 201, 'setup');
+        const id = t.body.id;
+        const u = ctx.api('PATCH', '/tasks/' + id, { title: 'Write final report', priority: 'urgent', description: 'Q3 numbers' });
+        ctx.assert(u.status === 200 && u.body.title === 'Write final report' && u.body.priority === 'urgent' && u.body.description === 'Q3 numbers', 'update: ' + JSON.stringify(u));
+        ctx.assert(u.body.status === 'todo' && u.body.due_at === '2099-06-01T00:00:00.000Z', 'update keeps status and due_at: ' + JSON.stringify(u.body));
+        const past = ctx.api('PATCH', '/tasks/' + id, { due_at: '2020-02-02T00:00:00.000Z' });
+        ctx.assert(past.status === 200 && past.body.is_overdue === true, 'past due flags overdue: ' + JSON.stringify(past));
+        const fut = ctx.api('PATCH', '/tasks/' + id, { due_at: '2099-02-02T00:00:00.000Z' });
+        ctx.assert(fut.status === 200 && fut.body.is_overdue === false, 'future due clears overdue: ' + JSON.stringify(fut));
+        const clr = ctx.api('PATCH', '/tasks/' + id, { due_at: null });
+        ctx.assert(clr.status === 200 && clr.body.due_at === null && clr.body.is_overdue === false, 'clear due: ' + JSON.stringify(clr));
+        const blank = ctx.api('PATCH', '/tasks/' + id, { title: '  ' });
+        ctx.assert(blank.status === 400 && blank.body.error.code === 'input.invalid', 'blank title: ' + JSON.stringify(blank));
+        const empty = ctx.api('PATCH', '/tasks/' + id, {});
+        ctx.assert(empty.status === 400, 'empty update: ' + empty.status);
+        const gone = ctx.api('PATCH', '/tasks/tsk_9999', { title: 'x' });
+        ctx.assert(gone.status === 404, 'missing task: ' + gone.status);
+        const as1 = post('/tasks/' + id + '/assign', { member_id: a.body.id });
+        ctx.assert(as1.status === 200 && as1.body.assignee_id === a.body.id && as1.body.status === 'todo', 'assign: ' + JSON.stringify(as1));
+        const same = post('/tasks/' + id + '/assign', { member_id: a.body.id });
+        ctx.assert(same.status === 409 && same.body.error.code === 'no_change', 'same assignee: ' + JSON.stringify(same));
+        const re = post('/tasks/' + id + '/assign', { member_id: b.body.id });
+        ctx.assert(re.status === 200 && re.body.assignee_id === b.body.id, 'reassign: ' + JSON.stringify(re));
+        const inactive = post('/tasks/' + id + '/assign', { member_id: off.body.id });
+        ctx.assert(inactive.status === 409 && inactive.body.error.code === 'member_inactive', 'inactive member: ' + JSON.stringify(inactive));
+        const unknown = post('/tasks/' + id + '/assign', { member_id: 'mem_9999' });
+        ctx.assert(unknown.status >= 400 && unknown.status < 500, 'unknown member: ' + unknown.status);
+        const noKey = post('/tasks/' + id + '/assign', {});
+        ctx.assert(noKey.status === 400, 'missing member_id: ' + noKey.status);
+        const cl = post('/tasks/' + id + '/assign', { member_id: null });
+        ctx.assert(cl.status === 200 && cl.body.assignee_id === null, 'clear: ' + JSON.stringify(cl));
+        const cl2 = post('/tasks/' + id + '/assign', { member_id: null });
+        ctx.assert(cl2.status === 409 && cl2.body.error.code === 'no_change', 'clear twice: ' + JSON.stringify(cl2));
+        ctx.assert(post('/tasks/' + id + '/complete').status === 200, 'complete');
+        const doneAssign = post('/tasks/' + id + '/assign', { member_id: a.body.id });
+        ctx.assert(doneAssign.status === 409 && doneAssign.body.error.code === 'invalid_state', 'assign done: ' + JSON.stringify(doneAssign));
+        const doneEdit = ctx.api('PATCH', '/tasks/' + id, { title: 'Late edit' });
+        ctx.assert(doneEdit.status === 409 && doneEdit.body.error.code === 'invalid_state', 'edit done: ' + JSON.stringify(doneEdit));
+        const after = ctx.api('GET', '/tasks/' + id).body;
+        ctx.assert(after.title === 'Write final report' && after.assignee_id === null, 'refused calls changed nothing: ' + JSON.stringify(after));
+      }
+  archive_and_unarchive_project:
+    description: archive_project needs every task done (empty projects count), sets archived_at, freezes the project's tasks; unarchive_project restores it. Invalid moves return 409.
+    script: |-
+      (ctx) => {
+        const post = (p, b) => ctx.api('POST', p, b);
+        const p = post('/projects', { name: 'WF archive me' });
+        ctx.assert(p.status === 201 && p.body.status === 'active' && p.body.archived_at === null, 'project: ' + JSON.stringify(p));
+        const t1 = post('/tasks', { project_id: p.body.id, title: 'Done one' });
+        const t2 = post('/tasks', { project_id: p.body.id, title: 'Still open' });
+        ctx.assert(t1.status === 201 && t2.status === 201, 'setup tasks');
+        ctx.assert(post('/tasks/' + t1.body.id + '/complete').status === 200, 'complete t1');
+        const blocked = post('/projects/' + p.body.id + '/archive');
+        ctx.assert(blocked.status === 409 && blocked.body.error.code === 'open_tasks', 'blocked: ' + JSON.stringify(blocked));
+        ctx.assert(blocked.body.error.message.includes('1 task'), 'message carries the count: ' + blocked.body.error.message);
+        ctx.assert(ctx.api('GET', '/projects/' + p.body.id).body.status === 'active', 'still active after refusal');
+        ctx.assert(post('/tasks/' + t2.body.id + '/start').status === 200, 'start t2');
+        const stillBlocked = post('/projects/' + p.body.id + '/archive');
+        ctx.assert(stillBlocked.status === 409 && stillBlocked.body.error.code === 'open_tasks', 'in_progress also blocks: ' + JSON.stringify(stillBlocked));
+        ctx.assert(post('/tasks/' + t2.body.id + '/complete').status === 200, 'complete t2');
+        const at = ctx.now();
+        const ok = post('/projects/' + p.body.id + '/archive');
+        ctx.assert(ok.status === 200 && ok.body.status === 'archived' && ok.body.archived_at === at, 'archive: ' + JSON.stringify(ok));
+        const again = post('/projects/' + p.body.id + '/archive');
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'archive twice: ' + JSON.stringify(again));
+        const checks = [
+          ['create', post('/tasks', { project_id: p.body.id, title: 'New' })],
+          ['update', ctx.api('PATCH', '/tasks/' + t1.body.id, { title: 'Edited' })],
+          ['assign', post('/tasks/' + t1.body.id + '/assign', { member_id: null })],
+          ['start', post('/tasks/' + t1.body.id + '/start')],
+          ['complete', post('/tasks/' + t1.body.id + '/complete')],
+          ['reopen', post('/tasks/' + t1.body.id + '/reopen')],
+        ];
+        for (const [name, r] of checks) ctx.assert(r.status === 409 && r.body.error.code === 'project_archived', name + ' on archived project: ' + JSON.stringify(r));
+        ctx.assert(ctx.api('GET', '/tasks/' + t1.body.id).body.status === 'done', 'task stayed done');
+        const un = post('/projects/' + p.body.id + '/unarchive');
+        ctx.assert(un.status === 200 && un.body.status === 'active' && un.body.archived_at === null, 'unarchive: ' + JSON.stringify(un));
+        const un2 = post('/projects/' + p.body.id + '/unarchive');
+        ctx.assert(un2.status === 409 && un2.body.error.code === 'invalid_state', 'unarchive active: ' + JSON.stringify(un2));
+        const re = post('/tasks/' + t1.body.id + '/reopen');
+        ctx.assert(re.status === 200 && re.body.status === 'todo', 'reopen works after unarchive: ' + JSON.stringify(re));
+        const blockedAgain = post('/projects/' + p.body.id + '/archive');
+        ctx.assert(blockedAgain.status === 409 && blockedAgain.body.error.code === 'open_tasks', 'reopened task blocks archive: ' + JSON.stringify(blockedAgain));
+        const e = post('/projects', { name: 'WF empty project' });
+        const eo = post('/projects/' + e.body.id + '/archive');
+        ctx.assert(eo.status === 200 && eo.body.status === 'archived', 'empty project archives: ' + JSON.stringify(eo));
+        const missing = post('/projects/prj_9999/archive');
+        ctx.assert(missing.status === 404 && missing.body.error.code === 'not_found', 'missing project: ' + JSON.stringify(missing));
+        const missing2 = post('/projects/prj_9999/unarchive');
+        ctx.assert(missing2.status === 404, 'missing project unarchive: ' + missing2.status);
+      }
+  flag_overdue_job:
+    description: The hourly flag_overdue job flags open tasks once their due_at passes, leaves done tasks, tasks without a due date and future tasks alone, and later edits keep the flag consistent.
+    script: |-
+      (ctx) => {
+        const post = (p, b) => ctx.api('POST', p, b);
+        const today = ctx.now().slice(0, 10) + 'T23:59:59.000Z';
+        const p = post('/projects', { name: 'WF overdue' });
+        const mk = (title, due) => { const r = post('/tasks', due === null ? { project_id: p.body.id, title } : { project_id: p.body.id, title, due_at: due }); ctx.assert(r.status === 201, 'create ' + title + ': ' + JSON.stringify(r)); return r.body.id; };
+        const todo = mk('Due tonight todo', today);
+        const prog = mk('Due tonight in progress', today);
+        const done = mk('Due tonight done', today);
+        const none = mk('No due date', null);
+        const far = mk('Due far away', '2099-01-01T00:00:00.000Z');
+        ctx.assert(post('/tasks/' + prog + '/start').status === 200, 'start');
+        ctx.assert(post('/tasks/' + done + '/complete').status === 200, 'complete');
+        const flag = (id) => ctx.api('GET', '/tasks/' + id).body.is_overdue;
+        for (const id of [todo, prog, done, none, far]) ctx.assert(flag(id) === false, id + ' not overdue before the deadline');
+        const run = ctx.advance('1d');
+        ctx.assert(run.jobsFired.includes('flag_overdue'), 'flag_overdue fired: ' + JSON.stringify(run));
+        ctx.assert(run.jobsFailed.length === 0, 'no job failed: ' + JSON.stringify(run.jobsFailed));
+        ctx.assert(flag(todo) === true && flag(prog) === true, 'open tasks past due are flagged');
+        ctx.assert(flag(done) === false && flag(none) === false && flag(far) === false, 'done, undated and future tasks stay unflagged');
+        const listed = ctx.api('GET', '/projects/' + p.body.id + '/tasks?is_overdue=true');
+        ctx.assert(listed.status === 200 && listed.body.data.length === 2, 'two overdue tasks listed: ' + JSON.stringify(listed.body));
+        const c = post('/tasks/' + todo + '/complete');
+        ctx.assert(c.status === 200 && c.body.is_overdue === false, 'completing clears the flag: ' + JSON.stringify(c));
+        const r = post('/tasks/' + done + '/reopen');
+        ctx.assert(r.status === 200 && r.body.is_overdue === true, 'reopening a past-due task flags it: ' + JSON.stringify(r));
+        const moved = ctx.api('PATCH', '/tasks/' + prog, { due_at: '2099-03-03T00:00:00.000Z' });
+        ctx.assert(moved.status === 200 && moved.body.is_overdue === false, 'moving due_at forward clears the flag: ' + JSON.stringify(moved));
+        const run2 = ctx.advance('2h');
+        ctx.assert(run2.jobsFired.includes('flag_overdue'), 'job fired again');
+        ctx.assert(flag(todo) === false && flag(prog) === false && flag(done) === true && flag(far) === false, 'second run keeps the right flags');
+      }
+  seed_timeline:
+    description: Seed creation, completion and archive timestamps are historical and internally ordered.
+    script: "(ctx) => { for (const endpoint of ['/members', '/projects', '/tasks']) { let cursor = null; do { const r = ctx.api('GET', endpoint + (cursor === null ? '' : '?cursor=' + cursor)); ctx.assert(r.status === 200, 'list ' + endpoint); for (const row of r.body.data) { ctx.assert(row.created_at <= ctx.now(), 'future creation ' + row.id); ctx.assert(row.updated_at >= row.created_at && row.updated_at <= ctx.now(), 'invalid update ' + row.id); for (const key of ['completed_at', 'archived_at']) if (row[key] !== null && row[key] !== undefined) ctx.assert(row[key] >= row.created_at && row[key] <= ctx.now(), 'invalid ' + key + ' ' + row.id); } cursor = r.body.next_cursor; } while (cursor !== null && cursor !== undefined); } }"
+tasks:
+  assign_team_lunch_task:
+    difficulty: easy
+    instruction: Assign the unassigned task called 'Order team lunch' to the team member Priya Raman. Make no other changes.
+    decoys: []
+    alternatives: []
+  archive_q3_launch_project:
+    difficulty: medium
+    instruction: Archive the project 'Q3 Marketing Launch'. Archiving is only allowed once every task in the project is done, so finish whatever is still open in that project first. Do not touch any other project or task.
+    decoys: []
+    alternatives: []
+  archive_all_finished_projects:
+    difficulty: hard
+    instruction: Archive every active project whose tasks are all done, including any active project that has no tasks at all. Leave every project that still has an open task as it is, and do not complete, reopen or edit any task.
+    decoys: []
+    alternatives: []

@@ -20,6 +20,7 @@ import { configSchema } from '../../src/worldgen/config.ts';
 import type { RunEvent } from '../../src/worldgen/events.ts';
 import type { Model, ProposeRequest } from '../../src/worldgen/llm.ts';
 import { runWorldGen } from '../../src/worldgen/run.ts';
+import { ESCALATE_HANDLER, ESCALATE_TEST } from './scripted-world.ts';
 import { minimalWorld } from './world.ts';
 
 const CUSTOMERS = `(ctx) => [
@@ -51,6 +52,7 @@ const RESOLVE_TEST = `(ctx) => {
 }`;
 const TARGET: World = minimalWorld({
   routes: { list_customers: { pageSize: 5 }, list_tickets: { pageSize: 4 } },
+  actions: { escalate_ticket: { method: 'POST', path: '/tickets/{id}/escalate', description: 'Make an unresolved ticket urgent.', handler: ESCALATE_HANDLER } },
   seed: { customer: CUSTOMERS },
 });
 const PLAN = {
@@ -63,7 +65,7 @@ const PLAN = {
     { name: 'customer', purpose: 'a company that files tickets', keyFields: ['name', 'tier'] },
     { name: 'ticket', purpose: 'a support request', keyFields: ['status', 'priority'] },
   ],
-  workflows: [{ name: 'resolution', entity: 'ticket', states: ['open', 'pending', 'resolved'], rules: ['only a pending ticket can be resolved'], actions: ['resolve_ticket'] }],
+  workflows: [{ name: 'resolution', entity: 'ticket', states: ['open', 'pending', 'resolved'], rules: ['only a pending ticket can be resolved'], actions: ['resolve_ticket', 'escalate_ticket'] }],
   jobs: [{ name: 'escalate_overdue', every: '15m', rule: 'overdue unresolved tickets become urgent' }],
   routes: [
     { id: 'list_tickets', method: 'GET', path: '/tickets', purpose: 'browse tickets' },
@@ -77,12 +79,18 @@ const PLAN = {
     actions: ['resolve_ticket'],
     description: 'a pending ticket can be resolved',
     script: RESOLVE_TEST,
+  }, {
+    id: 'escalate_open_ticket',
+    intent: 'An unresolved ticket can be escalated through the public API.',
+    actions: ['escalate_ticket'],
+    description: 'an unresolved ticket can be escalated',
+    script: ESCALATE_TEST,
   }],
   seed: { rowsPerEntity: { customer: 15, ticket: 12 }, mix: 'half the tickets pending', stateMix: { ticket: { open: 33, pending: 50, resolved: 17 } } },
   tasks: [
     { id: 'resolve_password_ticket', difficulty: 'easy', intent: 'resolve one named ticket', decoyIdea: 'resolves the wrong ticket' },
     { id: 'resolve_initech_pending', difficulty: 'medium', intent: 'resolve the pending tickets of one customer', decoyIdea: 'resolves every customer' },
-    { id: 'escalate_acme', difficulty: 'hard', intent: 'escalate and resolve the tickets of a churning customer', decoyIdea: 'forgets to resolve' },
+    { id: 'escalate_acme', difficulty: 'hard', kind: 'irreversible', intent: 'escalate and resolve the tickets of a churning customer', actions: ['escalate_ticket', 'resolve_ticket'], decoyIdea: 'forgets to resolve' },
   ],
   assumptions: [
     { decision: 'Tickets move open -> pending -> resolved, and a resolved ticket can reopen.', why: 'The description names no lifecycle.' },

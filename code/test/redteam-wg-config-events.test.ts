@@ -95,7 +95,7 @@ describe('redteam config: strictness', () => {
       {
         maxMinutes: 15, maxBacktracks: 2, maxOutputTokens: 16000,
         steps: { plan: { maxAttempts: 4 }, model: { maxAttempts: 4 }, workflow: { maxAttempts: 4 }, seed: { maxAttempts: 4 }, tasks: { maxAttempts: 4 } },
-        prices: {}, exampleWorld: '../prod/worlds/helpdesk',
+        prices: {}, exampleWorld: ['../prod/worlds/helpdesk'],
       },
     );
     const partial = configSchema.parse({ ...BASE, steps: { tasks: { maxAttempts: 7 } } });

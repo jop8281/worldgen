@@ -1,0 +1,1971 @@
+format: 1
+meta:
+  name: gen_shipments
+  description: A multi-carrier shipment tracker. The 120 imported shipments become shipment rows that link to carrier and hub rows. Operators dispatch, delay, resume, deliver, return and re-carrier shipments through lifecycle actions. Every step writes an append-only tracking event. Late or damaged parcels get claims that are reviewed and resolved. An hourly job flags in-transit shipments that pass their ETA. Tasks cover filtering, paging, state rules and collateral checks.
+  resembles: Parcel shipment-tracking and carrier-operations API (EasyPost / AfterShip / Shippo-style tracking and dispatch backend)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-15T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  carrier:
+    description: A shipping carrier such as UPS, PostNL, DHL, FedEx or DPD. transit_days is its service level and drives expected_delivery_at on dispatch.
+    idPrefix: car
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 80
+      code:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 10
+      transit_days:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+        max: 30
+        default: 3
+      active:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  hub:
+    description: A city hub that parcels leave from or arrive at. Serves as both origin and destination.
+    idPrefix: hub
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 80
+      country:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+      active:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  shipment:
+    description: One parcel moving between two hubs with one carrier. Status and lifecycle timestamps change only through lifecycle actions.
+    idPrefix: shp
+    fields:
+      reference:
+        type: string
+        description: Public shipment reference such as SH-1001.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 20
+      carrier_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: carrier
+        onDelete: restrict
+      origin_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: hub
+        onDelete: restrict
+      destination_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: hub
+        onDelete: restrict
+      weight_kg:
+        type: number
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      status:
+        type: state
+        description: Lifecycle. Moves only through the dispatch, delay, resume, deliver and return actions.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - created
+          - in_transit
+          - delayed
+          - delivered
+          - returned
+        initial: created
+        transitions:
+          created:
+            - in_transit
+            - returned
+          in_transit:
+            - delayed
+            - delivered
+            - returned
+          delayed:
+            - in_transit
+            - delivered
+            - returned
+          delivered:
+            - returned
+          returned: []
+      shipped_at:
+        type: datetime
+        description: Set when dispatched.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      expected_delivery_at:
+        type: datetime
+        description: ETA, set on dispatch and moved later by delay.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      delivered_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      delay_reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      return_reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+  shipment_event:
+    description: Append-only tracking history of a shipment. Written by the seed, actions and the overdue job.
+    idPrefix: evt
+    fields:
+      shipment_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: shipment
+        onDelete: cascade
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - created
+          - dispatched
+          - delayed
+          - resumed
+          - delivered
+          - returned
+          - carrier_changed
+          - claim_opened
+      hub_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: hub
+        onDelete: nullify
+      note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  claim:
+    description: A compensation claim on a late, damaged or lost shipment. Open until approved or rejected.
+    idPrefix: clm
+    fields:
+      shipment_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: shipment
+        onDelete: restrict
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - late
+          - damaged
+          - lost
+      status:
+        type: state
+        description: Moves only through resolve_claim.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - open
+          - approved
+          - rejected
+        initial: open
+        transitions:
+          open:
+            - approved
+            - rejected
+          approved: []
+          rejected: []
+      amount:
+        type: money
+        description: Claimed amount in EUR cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: EUR
+        min: 1
+      resolution_note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      resolved_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_shipments:
+    op: list
+    entity: shipment
+    filters:
+      - carrier_id
+      - origin_id
+      - destination_id
+      - status
+    search:
+      - reference
+    sort:
+      - shipped_at
+      - expected_delivery_at
+      - weight_kg
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /shipments
+  get_shipment:
+    op: get
+    entity: shipment
+    method: GET
+    path: /shipments/{id}
+  create_shipment:
+    op: create
+    entity: shipment
+    method: POST
+    path: /shipments
+  update_shipment:
+    op: update
+    entity: shipment
+    method: PATCH
+    path: /shipments/{id}
+  list_shipment_events:
+    op: list
+    entity: shipment_event
+    filters: []
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /shipments/{shipment_id}/events
+  list_shipment_claims:
+    op: list
+    entity: claim
+    filters: []
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /shipments/{shipment_id}/claims
+  list_carriers:
+    op: list
+    entity: carrier
+    filters:
+      - active
+    search:
+      - name
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /carriers
+  get_carrier:
+    op: get
+    entity: carrier
+    method: GET
+    path: /carriers/{id}
+  update_carrier:
+    op: update
+    entity: carrier
+    method: PATCH
+    path: /carriers/{id}
+  list_hubs:
+    op: list
+    entity: hub
+    filters:
+      - country
+      - active
+    search:
+      - name
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /hubs
+  get_hub:
+    op: get
+    entity: hub
+    method: GET
+    path: /hubs/{id}
+  list_claims:
+    op: list
+    entity: claim
+    filters:
+      - shipment_id
+      - kind
+      - status
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /claims
+  get_claim:
+    op: get
+    entity: claim
+    method: GET
+    path: /claims/{id}
+actions:
+  dispatch_shipment:
+    method: POST
+    path: /shipments/{id}/dispatch
+    description: Move a created shipment to in_transit. Sets shipped_at to now and expected_delivery_at to now plus the carrier's transit_days. The carrier must be active.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const s = ctx.db.get('shipment', id);
+        if (s === null) ctx.fail(404, 'not_found', 'shipment ' + id + ' not found');
+        if (s.status !== 'created') ctx.fail(409, 'invalid_state', 'shipment ' + id + ' is ' + s.status + '. Only created shipments can be dispatched.');
+        const carrier = ctx.db.get('carrier', s.carrier_id);
+        if (carrier === null) ctx.fail(409, 'no_carrier', 'shipment ' + id + ' has no carrier. Reassign it first.');
+        if (!carrier.active) ctx.fail(409, 'carrier_inactive', 'carrier ' + carrier.id + ' (' + carrier.name + ') is inactive. Reassign the shipment to an active carrier first.');
+        const now = ctx.now();
+        const eta = ctx.time.plus(now, carrier.transit_days + 'd');
+        const updated = ctx.db.update('shipment', id, { status: 'in_transit', shipped_at: now, expected_delivery_at: eta });
+        ctx.db.create('shipment_event', { shipment_id: id, kind: 'dispatched', hub_id: s.origin_id, note: 'dispatched with ' + carrier.name });
+        return { status: 200, body: updated };
+      }
+  delay_shipment:
+    method: POST
+    path: /shipments/{id}/delay
+    description: Move an in_transit shipment to delayed. Needs a non-blank reason and a new expected_delivery_at later than the current one.
+    input:
+      reason:
+        type: text
+        description: Why the shipment is delayed. Stored as delay_reason.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      expected_delivery_at:
+        type: datetime
+        description: The new ETA. Must be after the current expected_delivery_at.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const s = ctx.db.get('shipment', id);
+        if (s === null) ctx.fail(404, 'not_found', 'shipment ' + id + ' not found');
+        if (s.status !== 'in_transit') ctx.fail(409, 'invalid_state', 'shipment ' + id + ' is ' + s.status + '. Only in_transit shipments can be delayed.');
+        const reason = ctx.body.reason.trim();
+        if (reason === '') ctx.fail(400, 'input.invalid', 'Invalid input for delay_shipment: reason expected a non-blank text, found ""');
+        const eta = ctx.body.expected_delivery_at;
+        if (s.expected_delivery_at !== null && ctx.time.minutesBetween(s.expected_delivery_at, eta) <= 0) ctx.fail(422, 'invalid_eta', 'expected_delivery_at ' + eta + ' must be after the current ETA ' + s.expected_delivery_at + '.');
+        const updated = ctx.db.update('shipment', id, { status: 'delayed', delay_reason: reason, expected_delivery_at: eta });
+        ctx.db.create('shipment_event', { shipment_id: id, kind: 'delayed', hub_id: null, note: reason });
+        return { status: 200, body: updated };
+      }
+  resume_shipment:
+    method: POST
+    path: /shipments/{id}/resume
+    description: Move a delayed shipment back to in_transit and clear its delay_reason.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const s = ctx.db.get('shipment', id);
+        if (s === null) ctx.fail(404, 'not_found', 'shipment ' + id + ' not found');
+        if (s.status !== 'delayed') ctx.fail(409, 'invalid_state', 'shipment ' + id + ' is ' + s.status + '. Only delayed shipments can be resumed.');
+        const updated = ctx.db.update('shipment', id, { status: 'in_transit', delay_reason: null });
+        ctx.db.create('shipment_event', { shipment_id: id, kind: 'resumed', hub_id: null, note: 'resumed after delay: ' + (s.delay_reason === null ? 'no reason recorded' : s.delay_reason) });
+        return { status: 200, body: updated };
+      }
+  deliver_shipment:
+    method: POST
+    path: /shipments/{id}/deliver
+    description: Mark an in_transit or delayed shipment as delivered and set delivered_at to now.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const s = ctx.db.get('shipment', id);
+        if (s === null) ctx.fail(404, 'not_found', 'shipment ' + id + ' not found');
+        if (s.status !== 'in_transit' && s.status !== 'delayed') ctx.fail(409, 'invalid_state', 'shipment ' + id + ' is ' + s.status + '. Only in_transit and delayed shipments can be delivered.');
+        const now = ctx.now();
+        const updated = ctx.db.update('shipment', id, { status: 'delivered', delivered_at: now });
+        ctx.db.create('shipment_event', { shipment_id: id, kind: 'delivered', hub_id: s.destination_id, note: null });
+        return { status: 200, body: updated };
+      }
+  return_shipment:
+    method: POST
+    path: /shipments/{id}/return
+    description: Return a created, in_transit, delayed or delivered shipment with a required reason. A delivered shipment can be returned only within 14 days of delivered_at.
+    input:
+      reason:
+        type: text
+        description: Why the shipment is returned. Stored as return_reason.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const s = ctx.db.get('shipment', id);
+        if (s === null) ctx.fail(404, 'not_found', 'shipment ' + id + ' not found');
+        if (s.status === 'returned') ctx.fail(409, 'invalid_state', 'shipment ' + id + ' is already returned.');
+        const reason = ctx.body.reason.trim();
+        if (reason === '') ctx.fail(400, 'input.invalid', 'Invalid input for return_shipment: reason expected a non-blank text, found ""');
+        const now = ctx.now();
+        if (s.status === 'delivered' && s.delivered_at !== null && ctx.time.minutesBetween(s.delivered_at, now) > 14 * 24 * 60) ctx.fail(409, 'return_window_closed', 'shipment ' + id + ' was delivered at ' + s.delivered_at + '. Delivered shipments can be returned only within 14 days.');
+        const updated = ctx.db.update('shipment', id, { status: 'returned', return_reason: reason });
+        ctx.db.create('shipment_event', { shipment_id: id, kind: 'returned', hub_id: s.origin_id, note: reason });
+        return { status: 200, body: updated };
+      }
+  reassign_carrier:
+    method: POST
+    path: /shipments/{id}/reassign_carrier
+    description: Switch the carrier of a shipment that is still in status created. The new carrier must be active and differ from the current one. Writes a carrier_changed event.
+    input:
+      carrier_id:
+        type: ref
+        description: The new carrier. Must be active.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: carrier
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const s = ctx.db.get('shipment', id);
+        if (s === null) ctx.fail(404, 'not_found', 'shipment ' + id + ' not found');
+        if (s.status !== 'created') ctx.fail(409, 'invalid_state', 'shipment ' + id + ' is ' + s.status + '. Only created shipments can change carrier.');
+        const next = ctx.db.get('carrier', ctx.body.carrier_id);
+        if (next === null) ctx.fail(422, 'unknown_carrier', 'carrier ' + ctx.body.carrier_id + ' not found. List carriers with GET /carriers.');
+        if (next.id === s.carrier_id) ctx.fail(409, 'no_change', 'shipment ' + id + ' already uses carrier ' + next.id + '.');
+        if (!next.active) ctx.fail(409, 'carrier_inactive', 'carrier ' + next.id + ' (' + next.name + ') is inactive. Pick an active carrier.');
+        const old = ctx.db.get('carrier', s.carrier_id);
+        const oldName = old === null ? s.carrier_id : old.name;
+        const updated = ctx.db.update('shipment', id, { carrier_id: next.id });
+        ctx.db.create('shipment_event', { shipment_id: id, kind: 'carrier_changed', hub_id: null, note: 'carrier changed from ' + oldName + ' (' + s.carrier_id + ') to ' + next.name + ' (' + next.id + ')' });
+        return { status: 200, body: updated };
+      }
+  open_claim:
+    method: POST
+    path: /shipments/{id}/claim
+    description: Open a claim of kind late, damaged or lost on a delayed, delivered or returned shipment. A late claim needs the shipment to be past its expected_delivery_at. Only one open claim of the same kind per shipment.
+    input:
+      kind:
+        type: enum
+        description: The claim kind.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - late
+          - damaged
+          - lost
+      amount:
+        type: money
+        description: Claimed amount in EUR cents, greater than 0.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: EUR
+        min: 1
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const s = ctx.db.get('shipment', id);
+        if (s === null) ctx.fail(404, 'not_found', 'shipment ' + id + ' not found');
+        if (s.status !== 'delayed' && s.status !== 'delivered' && s.status !== 'returned') ctx.fail(409, 'invalid_state', 'shipment ' + id + ' is ' + s.status + '. Claims can be opened only on delayed, delivered or returned shipments.');
+        const kind = ctx.body.kind;
+        const amount = ctx.body.amount;
+        if (!(amount > 0)) ctx.fail(400, 'input.invalid', 'Invalid input for open_claim: amount expected greater than 0, found ' + amount);
+        const now = ctx.now();
+        if (kind === 'late') {
+          const seen = s.delivered_at !== null ? s.delivered_at : now;
+          if (s.expected_delivery_at === null || ctx.time.minutesBetween(s.expected_delivery_at, seen) <= 0) ctx.fail(409, 'not_late', 'shipment ' + id + ' was not later than its expected delivery time ' + s.expected_delivery_at + ', so no late claim is possible.');
+        }
+        const dup = ctx.db.list('claim', { where: { shipment_id: id, kind: kind, status: 'open' } });
+        if (dup.length > 0) ctx.fail(409, 'duplicate_claim', 'shipment ' + id + ' already has an open ' + kind + ' claim ' + dup[0].id + '.');
+        const claim = ctx.db.create('claim', { shipment_id: id, kind: kind, amount: amount });
+        ctx.db.create('shipment_event', { shipment_id: id, kind: 'claim_opened', hub_id: null, note: kind + ' claim ' + claim.id + ' for ' + amount });
+        return { status: 201, body: claim };
+      }
+  resolve_claim:
+    method: POST
+    path: /claims/{id}/resolve
+    description: Approve or reject an open claim with a non-blank note. Claims over 50000 (EUR 500.00) cannot be approved here.
+    input:
+      decision:
+        type: enum
+        description: The outcome.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - approved
+          - rejected
+      note:
+        type: text
+        description: Resolution note, stored as resolution_note.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const c = ctx.db.get('claim', id);
+        if (c === null) ctx.fail(404, 'not_found', 'claim ' + id + ' not found');
+        if (c.status !== 'open') ctx.fail(409, 'invalid_state', 'claim ' + id + ' is already ' + c.status + '. Only open claims can be resolved.');
+        const note = ctx.body.note.trim();
+        if (note === '') ctx.fail(400, 'input.invalid', 'Invalid input for resolve_claim: note expected a non-blank text, found ""');
+        const decision = ctx.body.decision;
+        if (decision === 'approved' && c.amount > 50000) ctx.fail(409, 'needs_manager_review', 'claim ' + id + ' is for ' + c.amount + ', over 50000. Claims this large cannot be approved here. Reject it or send it to a manager.');
+        const updated = ctx.db.update('claim', id, { status: decision, resolution_note: note, resolved_at: ctx.now() });
+        return { status: 200, body: updated };
+      }
+jobs:
+  flag_overdue_shipments:
+    description: "Every hour. An in_transit shipment whose expected_delivery_at is at or before now moves to delayed with delay_reason 'auto: past ETA' and a delayed event."
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const s of ctx.db.list('shipment', { where: { status: 'in_transit' } })) {
+          if (s.expected_delivery_at === null || ctx.time.minutesBetween(s.expected_delivery_at, now) < 0) continue;
+          ctx.db.update('shipment', s.id, { status: 'delayed', delay_reason: 'auto: past ETA' });
+          ctx.db.create('shipment_event', { shipment_id: s.id, kind: 'delayed', hub_id: null, note: 'auto: past ETA' });
+        }
+      }
+fixtures:
+  shipments:
+    - shipment_id: SH-1001
+      carrier: UPS
+      origin: Dublin
+      destination: Milan
+      weight_kg: 1.9
+      status: in_transit
+      shipped_at: 2026-09-28T09:00:00
+      delivered_at: null
+    - shipment_id: SH-1002
+      carrier: PostNL
+      origin: Vienna
+      destination: Prague
+      weight_kg: 32.2
+      status: delivered
+      shipped_at: 2026-09-13T06:00:00
+      delivered_at: 2026-09-15T15:00:00
+    - shipment_id: SH-1003
+      carrier: DHL
+      origin: Prague
+      destination: Madrid
+      weight_kg: 19.7
+      status: delayed
+      shipped_at: 2026-09-05T11:00:00
+      delivered_at: null
+    - shipment_id: SH-1004
+      carrier: FedEx
+      origin: Vienna
+      destination: Hamburg
+      weight_kg: 2.8
+      status: delivered
+      shipped_at: 2026-09-29T03:00:00
+      delivered_at: 2026-10-02T03:00:00
+    - shipment_id: SH-1005
+      carrier: FedEx
+      origin: Lyon
+      destination: Madrid
+      weight_kg: 7.1
+      status: created
+      shipped_at: 2026-09-13T12:00:00
+      delivered_at: null
+    - shipment_id: SH-1006
+      carrier: UPS
+      origin: Dublin
+      destination: Milan
+      weight_kg: 18.1
+      status: delivered
+      shipped_at: 2026-09-04T05:00:00
+      delivered_at: 2026-09-06T01:00:00
+    - shipment_id: SH-1007
+      carrier: FedEx
+      origin: Lyon
+      destination: Dublin
+      weight_kg: 33.2
+      status: delivered
+      shipped_at: 2026-09-10T16:00:00
+      delivered_at: 2026-09-11T19:00:00
+    - shipment_id: SH-1008
+      carrier: FedEx
+      origin: Hamburg
+      destination: Vienna
+      weight_kg: 23.6
+      status: delivered
+      shipped_at: 2026-09-29T14:00:00
+      delivered_at: 2026-10-03T17:00:00
+    - shipment_id: SH-1009
+      carrier: UPS
+      origin: Warsaw
+      destination: Prague
+      weight_kg: 18.7
+      status: in_transit
+      shipped_at: 2026-09-11T23:00:00
+      delivered_at: null
+    - shipment_id: SH-1010
+      carrier: UPS
+      origin: Milan
+      destination: Dublin
+      weight_kg: 37
+      status: delivered
+      shipped_at: 2026-09-27T10:00:00
+      delivered_at: 2026-09-28T21:00:00
+    - shipment_id: SH-1011
+      carrier: PostNL
+      origin: Hamburg
+      destination: Vienna
+      weight_kg: 19.6
+      status: delivered
+      shipped_at: 2026-09-14T16:00:00
+      delivered_at: 2026-09-19T08:00:00
+    - shipment_id: SH-1012
+      carrier: DHL
+      origin: Vienna
+      destination: Lyon
+      weight_kg: 20.9
+      status: delivered
+      shipped_at: 2026-09-03T16:00:00
+      delivered_at: 2026-09-05T08:00:00
+    - shipment_id: SH-1013
+      carrier: DPD
+      origin: Rotterdam
+      destination: Madrid
+      weight_kg: 3
+      status: created
+      shipped_at: 2026-09-09T19:00:00
+      delivered_at: null
+    - shipment_id: SH-1014
+      carrier: PostNL
+      origin: Rotterdam
+      destination: Vienna
+      weight_kg: 33.2
+      status: created
+      shipped_at: 2026-09-12T22:00:00
+      delivered_at: null
+    - shipment_id: SH-1015
+      carrier: FedEx
+      origin: Dublin
+      destination: Warsaw
+      weight_kg: 39.4
+      status: in_transit
+      shipped_at: 2026-09-03T13:00:00
+      delivered_at: null
+    - shipment_id: SH-1016
+      carrier: FedEx
+      origin: Lyon
+      destination: Dublin
+      weight_kg: 16.7
+      status: in_transit
+      shipped_at: 2026-09-09T17:00:00
+      delivered_at: null
+    - shipment_id: SH-1017
+      carrier: UPS
+      origin: Vienna
+      destination: Lyon
+      weight_kg: 30.4
+      status: in_transit
+      shipped_at: 2026-09-25T10:00:00
+      delivered_at: null
+    - shipment_id: SH-1018
+      carrier: PostNL
+      origin: Rotterdam
+      destination: Lyon
+      weight_kg: 15.1
+      status: delivered
+      shipped_at: 2026-09-03T09:00:00
+      delivered_at: 2026-09-06T07:00:00
+    - shipment_id: SH-1019
+      carrier: DPD
+      origin: Vienna
+      destination: Hamburg
+      weight_kg: 16.1
+      status: delivered
+      shipped_at: 2026-09-16T14:00:00
+      delivered_at: 2026-09-17T20:00:00
+    - shipment_id: SH-1020
+      carrier: FedEx
+      origin: Prague
+      destination: Vienna
+      weight_kg: 5.1
+      status: delivered
+      shipped_at: 2026-09-18T20:00:00
+      delivered_at: 2026-09-20T06:00:00
+    - shipment_id: SH-1021
+      carrier: UPS
+      origin: Milan
+      destination: Prague
+      weight_kg: 36.2
+      status: in_transit
+      shipped_at: 2026-09-06T04:00:00
+      delivered_at: null
+    - shipment_id: SH-1022
+      carrier: DHL
+      origin: Prague
+      destination: Hamburg
+      weight_kg: 20.4
+      status: created
+      shipped_at: 2026-09-09T21:00:00
+      delivered_at: null
+    - shipment_id: SH-1023
+      carrier: PostNL
+      origin: Milan
+      destination: Madrid
+      weight_kg: 22.2
+      status: delivered
+      shipped_at: 2026-09-20T16:00:00
+      delivered_at: 2026-09-21T23:00:00
+    - shipment_id: SH-1024
+      carrier: FedEx
+      origin: Rotterdam
+      destination: Lyon
+      weight_kg: 5
+      status: in_transit
+      shipped_at: 2026-09-23T21:00:00
+      delivered_at: null
+    - shipment_id: SH-1025
+      carrier: PostNL
+      origin: Rotterdam
+      destination: Vienna
+      weight_kg: 11
+      status: delivered
+      shipped_at: 2026-09-25T16:00:00
+      delivered_at: 2026-09-27T17:00:00
+    - shipment_id: SH-1026
+      carrier: DHL
+      origin: Hamburg
+      destination: Warsaw
+      weight_kg: 5.4
+      status: delivered
+      shipped_at: 2026-09-11T11:00:00
+      delivered_at: 2026-09-13T00:00:00
+    - shipment_id: SH-1027
+      carrier: UPS
+      origin: Prague
+      destination: Dublin
+      weight_kg: 17.7
+      status: in_transit
+      shipped_at: 2026-09-28T03:00:00
+      delivered_at: null
+    - shipment_id: SH-1028
+      carrier: PostNL
+      origin: Madrid
+      destination: Lisbon
+      weight_kg: 26.6
+      status: in_transit
+      shipped_at: 2026-09-04T18:00:00
+      delivered_at: null
+    - shipment_id: SH-1029
+      carrier: UPS
+      origin: Warsaw
+      destination: Rotterdam
+      weight_kg: 38.5
+      status: in_transit
+      shipped_at: 2026-09-16T05:00:00
+      delivered_at: null
+    - shipment_id: SH-1030
+      carrier: PostNL
+      origin: Dublin
+      destination: Warsaw
+      weight_kg: 9.7
+      status: delivered
+      shipped_at: 2026-09-22T17:00:00
+      delivered_at: 2026-09-24T18:00:00
+    - shipment_id: SH-1031
+      carrier: DHL
+      origin: Milan
+      destination: Warsaw
+      weight_kg: 37.3
+      status: in_transit
+      shipped_at: 2026-09-06T13:00:00
+      delivered_at: null
+    - shipment_id: SH-1032
+      carrier: UPS
+      origin: Vienna
+      destination: Lisbon
+      weight_kg: 18.3
+      status: delivered
+      shipped_at: 2026-09-21T02:00:00
+      delivered_at: 2026-09-24T22:00:00
+    - shipment_id: SH-1033
+      carrier: DPD
+      origin: Rotterdam
+      destination: Lyon
+      weight_kg: 13.1
+      status: delayed
+      shipped_at: 2026-09-07T05:00:00
+      delivered_at: null
+    - shipment_id: SH-1034
+      carrier: DPD
+      origin: Hamburg
+      destination: Lyon
+      weight_kg: 25
+      status: in_transit
+      shipped_at: 2026-09-29T18:00:00
+      delivered_at: null
+    - shipment_id: SH-1035
+      carrier: PostNL
+      origin: Warsaw
+      destination: Prague
+      weight_kg: 4.7
+      status: delivered
+      shipped_at: 2026-09-17T20:00:00
+      delivered_at: 2026-09-22T13:00:00
+    - shipment_id: SH-1036
+      carrier: DHL
+      origin: Madrid
+      destination: Rotterdam
+      weight_kg: 3.6
+      status: delivered
+      shipped_at: 2026-09-05T09:00:00
+      delivered_at: 2026-09-08T03:00:00
+    - shipment_id: SH-1037
+      carrier: UPS
+      origin: Madrid
+      destination: Warsaw
+      weight_kg: 25.5
+      status: in_transit
+      shipped_at: 2026-09-17T13:00:00
+      delivered_at: null
+    - shipment_id: SH-1038
+      carrier: PostNL
+      origin: Madrid
+      destination: Lisbon
+      weight_kg: 9.3
+      status: in_transit
+      shipped_at: 2026-09-16T23:00:00
+      delivered_at: null
+    - shipment_id: SH-1039
+      carrier: DHL
+      origin: Lyon
+      destination: Milan
+      weight_kg: 18.9
+      status: delivered
+      shipped_at: 2026-09-20T13:00:00
+      delivered_at: 2026-09-24T05:00:00
+    - shipment_id: SH-1040
+      carrier: UPS
+      origin: Milan
+      destination: Rotterdam
+      weight_kg: 30.7
+      status: delivered
+      shipped_at: 2026-09-24T05:00:00
+      delivered_at: 2026-09-25T14:00:00
+    - shipment_id: SH-1041
+      carrier: FedEx
+      origin: Lyon
+      destination: Lisbon
+      weight_kg: 37.9
+      status: delivered
+      shipped_at: 2026-09-14T05:00:00
+      delivered_at: 2026-09-17T08:00:00
+    - shipment_id: SH-1042
+      carrier: PostNL
+      origin: Lisbon
+      destination: Rotterdam
+      weight_kg: 35.5
+      status: delayed
+      shipped_at: 2026-09-01T19:00:00
+      delivered_at: null
+    - shipment_id: SH-1043
+      carrier: DPD
+      origin: Vienna
+      destination: Madrid
+      weight_kg: 38.1
+      status: created
+      shipped_at: 2026-09-01T22:00:00
+      delivered_at: null
+    - shipment_id: SH-1044
+      carrier: PostNL
+      origin: Lyon
+      destination: Lisbon
+      weight_kg: 26.8
+      status: in_transit
+      shipped_at: 2026-09-07T20:00:00
+      delivered_at: null
+    - shipment_id: SH-1045
+      carrier: FedEx
+      origin: Lyon
+      destination: Warsaw
+      weight_kg: 38.3
+      status: delivered
+      shipped_at: 2026-09-20T19:00:00
+      delivered_at: 2026-09-22T23:00:00
+    - shipment_id: SH-1046
+      carrier: PostNL
+      origin: Rotterdam
+      destination: Lyon
+      weight_kg: 17.8
+      status: delayed
+      shipped_at: 2026-09-01T01:00:00
+      delivered_at: null
+    - shipment_id: SH-1047
+      carrier: FedEx
+      origin: Prague
+      destination: Warsaw
+      weight_kg: 4.2
+      status: in_transit
+      shipped_at: 2026-09-05T16:00:00
+      delivered_at: null
+    - shipment_id: SH-1048
+      carrier: DHL
+      origin: Rotterdam
+      destination: Lisbon
+      weight_kg: 16.6
+      status: in_transit
+      shipped_at: 2026-09-10T22:00:00
+      delivered_at: null
+    - shipment_id: SH-1049
+      carrier: DHL
+      origin: Lisbon
+      destination: Lyon
+      weight_kg: 16
+      status: in_transit
+      shipped_at: 2026-09-13T10:00:00
+      delivered_at: null
+    - shipment_id: SH-1050
+      carrier: PostNL
+      origin: Warsaw
+      destination: Dublin
+      weight_kg: 26.5
+      status: delivered
+      shipped_at: 2026-09-14T14:00:00
+      delivered_at: 2026-09-16T12:00:00
+    - shipment_id: SH-1051
+      carrier: PostNL
+      origin: Dublin
+      destination: Prague
+      weight_kg: 6
+      status: created
+      shipped_at: 2026-09-27T01:00:00
+      delivered_at: null
+    - shipment_id: SH-1052
+      carrier: PostNL
+      origin: Rotterdam
+      destination: Dublin
+      weight_kg: 28.3
+      status: returned
+      shipped_at: 2026-09-27T05:00:00
+      delivered_at: null
+    - shipment_id: SH-1053
+      carrier: DPD
+      origin: Milan
+      destination: Rotterdam
+      weight_kg: 32.8
+      status: delivered
+      shipped_at: 2026-09-20T02:00:00
+      delivered_at: 2026-09-22T07:00:00
+    - shipment_id: SH-1054
+      carrier: DHL
+      origin: Vienna
+      destination: Rotterdam
+      weight_kg: 8.3
+      status: delivered
+      shipped_at: 2026-09-03T14:00:00
+      delivered_at: 2026-09-06T10:00:00
+    - shipment_id: SH-1055
+      carrier: FedEx
+      origin: Rotterdam
+      destination: Prague
+      weight_kg: 29.1
+      status: delivered
+      shipped_at: 2026-09-04T08:00:00
+      delivered_at: 2026-09-08T06:00:00
+    - shipment_id: SH-1056
+      carrier: FedEx
+      origin: Warsaw
+      destination: Lyon
+      weight_kg: 2.8
+      status: in_transit
+      shipped_at: 2026-09-02T06:00:00
+      delivered_at: null
+    - shipment_id: SH-1057
+      carrier: FedEx
+      origin: Prague
+      destination: Milan
+      weight_kg: 8
+      status: returned
+      shipped_at: 2026-09-04T22:00:00
+      delivered_at: null
+    - shipment_id: SH-1058
+      carrier: DHL
+      origin: Rotterdam
+      destination: Hamburg
+      weight_kg: 25.2
+      status: delivered
+      shipped_at: 2026-09-03T05:00:00
+      delivered_at: 2026-09-08T01:00:00
+    - shipment_id: SH-1059
+      carrier: PostNL
+      origin: Hamburg
+      destination: Dublin
+      weight_kg: 26.6
+      status: delivered
+      shipped_at: 2026-09-10T12:00:00
+      delivered_at: 2026-09-13T09:00:00
+    - shipment_id: SH-1060
+      carrier: PostNL
+      origin: Madrid
+      destination: Vienna
+      weight_kg: 23
+      status: in_transit
+      shipped_at: 2026-09-26T09:00:00
+      delivered_at: null
+    - shipment_id: SH-1061
+      carrier: FedEx
+      origin: Dublin
+      destination: Prague
+      weight_kg: 24.9
+      status: delayed
+      shipped_at: 2026-09-20T22:00:00
+      delivered_at: null
+    - shipment_id: SH-1062
+      carrier: UPS
+      origin: Lyon
+      destination: Vienna
+      weight_kg: 29.1
+      status: delivered
+      shipped_at: 2026-09-17T07:00:00
+      delivered_at: 2026-09-21T16:00:00
+    - shipment_id: SH-1063
+      carrier: PostNL
+      origin: Madrid
+      destination: Milan
+      weight_kg: 39.4
+      status: in_transit
+      shipped_at: 2026-09-09T15:00:00
+      delivered_at: null
+    - shipment_id: SH-1064
+      carrier: UPS
+      origin: Milan
+      destination: Dublin
+      weight_kg: 0.7
+      status: delayed
+      shipped_at: 2026-09-23T23:00:00
+      delivered_at: null
+    - shipment_id: SH-1065
+      carrier: DPD
+      origin: Lyon
+      destination: Milan
+      weight_kg: 17.4
+      status: delivered
+      shipped_at: 2026-09-06T04:00:00
+      delivered_at: 2026-09-09T14:00:00
+    - shipment_id: SH-1066
+      carrier: UPS
+      origin: Prague
+      destination: Vienna
+      weight_kg: 33.9
+      status: in_transit
+      shipped_at: 2026-09-10T20:00:00
+      delivered_at: null
+    - shipment_id: SH-1067
+      carrier: PostNL
+      origin: Madrid
+      destination: Lyon
+      weight_kg: 36.2
+      status: delivered
+      shipped_at: 2026-09-17T08:00:00
+      delivered_at: 2026-09-19T21:00:00
+    - shipment_id: SH-1068
+      carrier: UPS
+      origin: Madrid
+      destination: Milan
+      weight_kg: 18.3
+      status: delivered
+      shipped_at: 2026-09-18T18:00:00
+      delivered_at: 2026-09-20T16:00:00
+    - shipment_id: SH-1069
+      carrier: PostNL
+      origin: Lyon
+      destination: Prague
+      weight_kg: 32
+      status: delivered
+      shipped_at: 2026-09-01T09:00:00
+      delivered_at: 2026-09-04T13:00:00
+    - shipment_id: SH-1070
+      carrier: FedEx
+      origin: Dublin
+      destination: Lyon
+      weight_kg: 10.5
+      status: delivered
+      shipped_at: 2026-09-17T08:00:00
+      delivered_at: 2026-09-18T13:00:00
+    - shipment_id: SH-1071
+      carrier: DPD
+      origin: Rotterdam
+      destination: Prague
+      weight_kg: 39.3
+      status: delivered
+      shipped_at: 2026-09-16T03:00:00
+      delivered_at: 2026-09-18T23:00:00
+    - shipment_id: SH-1072
+      carrier: PostNL
+      origin: Rotterdam
+      destination: Milan
+      weight_kg: 26.7
+      status: in_transit
+      shipped_at: 2026-09-26T21:00:00
+      delivered_at: null
+    - shipment_id: SH-1073
+      carrier: FedEx
+      origin: Madrid
+      destination: Prague
+      weight_kg: 20.7
+      status: in_transit
+      shipped_at: 2026-09-15T10:00:00
+      delivered_at: null
+    - shipment_id: SH-1074
+      carrier: DPD
+      origin: Lisbon
+      destination: Prague
+      weight_kg: 11.7
+      status: in_transit
+      shipped_at: 2026-09-25T16:00:00
+      delivered_at: null
+    - shipment_id: SH-1075
+      carrier: FedEx
+      origin: Vienna
+      destination: Madrid
+      weight_kg: 5.7
+      status: delivered
+      shipped_at: 2026-09-18T03:00:00
+      delivered_at: 2026-09-22T07:00:00
+    - shipment_id: SH-1076
+      carrier: FedEx
+      origin: Dublin
+      destination: Madrid
+      weight_kg: 30.9
+      status: delivered
+      shipped_at: 2026-09-25T21:00:00
+      delivered_at: 2026-09-27T03:00:00
+    - shipment_id: SH-1077
+      carrier: DHL
+      origin: Rotterdam
+      destination: Madrid
+      weight_kg: 26.6
+      status: created
+      shipped_at: 2026-09-13T18:00:00
+      delivered_at: null
+    - shipment_id: SH-1078
+      carrier: DPD
+      origin: Hamburg
+      destination: Dublin
+      weight_kg: 23.4
+      status: delivered
+      shipped_at: 2026-09-20T04:00:00
+      delivered_at: 2026-09-22T21:00:00
+    - shipment_id: SH-1079
+      carrier: DPD
+      origin: Warsaw
+      destination: Rotterdam
+      weight_kg: 3.2
+      status: delivered
+      shipped_at: 2026-09-17T01:00:00
+      delivered_at: 2026-09-19T05:00:00
+    - shipment_id: SH-1080
+      carrier: DHL
+      origin: Warsaw
+      destination: Prague
+      weight_kg: 15.5
+      status: delivered
+      shipped_at: 2026-09-08T13:00:00
+      delivered_at: 2026-09-12T19:00:00
+    - shipment_id: SH-1081
+      carrier: FedEx
+      origin: Hamburg
+      destination: Prague
+      weight_kg: 3.6
+      status: delivered
+      shipped_at: 2026-09-06T05:00:00
+      delivered_at: 2026-09-08T17:00:00
+    - shipment_id: SH-1082
+      carrier: PostNL
+      origin: Dublin
+      destination: Prague
+      weight_kg: 21.1
+      status: delivered
+      shipped_at: 2026-09-07T14:00:00
+      delivered_at: 2026-09-09T12:00:00
+    - shipment_id: SH-1083
+      carrier: DHL
+      origin: Warsaw
+      destination: Vienna
+      weight_kg: 26.4
+      status: delivered
+      shipped_at: 2026-09-13T06:00:00
+      delivered_at: 2026-09-14T15:00:00
+    - shipment_id: SH-1084
+      carrier: PostNL
+      origin: Lisbon
+      destination: Warsaw
+      weight_kg: 36.3
+      status: in_transit
+      shipped_at: 2026-09-09T04:00:00
+      delivered_at: null
+    - shipment_id: SH-1085
+      carrier: FedEx
+      origin: Milan
+      destination: Prague
+      weight_kg: 26.8
+      status: delayed
+      shipped_at: 2026-09-25T23:00:00
+      delivered_at: null
+    - shipment_id: SH-1086
+      carrier: UPS
+      origin: Hamburg
+      destination: Madrid
+      weight_kg: 15.5
+      status: delivered
+      shipped_at: 2026-09-20T20:00:00
+      delivered_at: 2026-09-25T06:00:00
+    - shipment_id: SH-1087
+      carrier: FedEx
+      origin: Hamburg
+      destination: Lisbon
+      weight_kg: 25.6
+      status: delivered
+      shipped_at: 2026-09-23T18:00:00
+      delivered_at: 2026-09-26T22:00:00
+    - shipment_id: SH-1088
+      carrier: PostNL
+      origin: Madrid
+      destination: Lyon
+      weight_kg: 4.2
+      status: delivered
+      shipped_at: 2026-09-21T17:00:00
+      delivered_at: 2026-09-26T05:00:00
+    - shipment_id: SH-1089
+      carrier: DPD
+      origin: Hamburg
+      destination: Milan
+      weight_kg: 35.2
+      status: returned
+      shipped_at: 2026-09-14T10:00:00
+      delivered_at: null
+    - shipment_id: SH-1090
+      carrier: UPS
+      origin: Rotterdam
+      destination: Lyon
+      weight_kg: 0.9
+      status: in_transit
+      shipped_at: 2026-09-14T20:00:00
+      delivered_at: null
+    - shipment_id: SH-1091
+      carrier: FedEx
+      origin: Madrid
+      destination: Lyon
+      weight_kg: 35.4
+      status: delivered
+      shipped_at: 2026-09-14T17:00:00
+      delivered_at: 2026-09-19T04:00:00
+    - shipment_id: SH-1092
+      carrier: PostNL
+      origin: Vienna
+      destination: Prague
+      weight_kg: 16.1
+      status: in_transit
+      shipped_at: 2026-09-11T02:00:00
+      delivered_at: null
+    - shipment_id: SH-1093
+      carrier: DPD
+      origin: Lyon
+      destination: Lisbon
+      weight_kg: 13.2
+      status: in_transit
+      shipped_at: 2026-09-28T12:00:00
+      delivered_at: null
+    - shipment_id: SH-1094
+      carrier: PostNL
+      origin: Vienna
+      destination: Milan
+      weight_kg: 18.3
+      status: delivered
+      shipped_at: 2026-09-26T20:00:00
+      delivered_at: 2026-09-30T10:00:00
+    - shipment_id: SH-1095
+      carrier: DPD
+      origin: Warsaw
+      destination: Lisbon
+      weight_kg: 17.2
+      status: delivered
+      shipped_at: 2026-09-11T14:00:00
+      delivered_at: 2026-09-16T05:00:00
+    - shipment_id: SH-1096
+      carrier: DPD
+      origin: Rotterdam
+      destination: Madrid
+      weight_kg: 37
+      status: created
+      shipped_at: 2026-09-29T20:00:00
+      delivered_at: null
+    - shipment_id: SH-1097
+      carrier: FedEx
+      origin: Madrid
+      destination: Lyon
+      weight_kg: 30.4
+      status: delivered
+      shipped_at: 2026-09-01T04:00:00
+      delivered_at: 2026-09-03T12:00:00
+    - shipment_id: SH-1098
+      carrier: UPS
+      origin: Dublin
+      destination: Warsaw
+      weight_kg: 15.7
+      status: delivered
+      shipped_at: 2026-09-25T07:00:00
+      delivered_at: 2026-09-29T21:00:00
+    - shipment_id: SH-1099
+      carrier: DPD
+      origin: Lyon
+      destination: Rotterdam
+      weight_kg: 37.2
+      status: created
+      shipped_at: 2026-09-05T04:00:00
+      delivered_at: null
+    - shipment_id: SH-1100
+      carrier: PostNL
+      origin: Warsaw
+      destination: Prague
+      weight_kg: 1.4
+      status: delivered
+      shipped_at: 2026-09-07T08:00:00
+      delivered_at: 2026-09-08T14:00:00
+    - shipment_id: SH-1101
+      carrier: PostNL
+      origin: Rotterdam
+      destination: Dublin
+      weight_kg: 8.3
+      status: in_transit
+      shipped_at: 2026-09-24T07:00:00
+      delivered_at: null
+    - shipment_id: SH-1102
+      carrier: PostNL
+      origin: Hamburg
+      destination: Dublin
+      weight_kg: 34.9
+      status: created
+      shipped_at: 2026-09-27T18:00:00
+      delivered_at: null
+    - shipment_id: SH-1103
+      carrier: PostNL
+      origin: Rotterdam
+      destination: Vienna
+      weight_kg: 3.6
+      status: in_transit
+      shipped_at: 2026-09-19T04:00:00
+      delivered_at: null
+    - shipment_id: SH-1104
+      carrier: FedEx
+      origin: Lyon
+      destination: Prague
+      weight_kg: 4
+      status: delivered
+      shipped_at: 2026-09-07T18:00:00
+      delivered_at: 2026-09-10T03:00:00
+    - shipment_id: SH-1105
+      carrier: DPD
+      origin: Vienna
+      destination: Hamburg
+      weight_kg: 28.1
+      status: in_transit
+      shipped_at: 2026-09-20T06:00:00
+      delivered_at: null
+    - shipment_id: SH-1106
+      carrier: PostNL
+      origin: Lyon
+      destination: Madrid
+      weight_kg: 25.7
+      status: delayed
+      shipped_at: 2026-09-27T14:00:00
+      delivered_at: null
+    - shipment_id: SH-1107
+      carrier: PostNL
+      origin: Dublin
+      destination: Warsaw
+      weight_kg: 14
+      status: in_transit
+      shipped_at: 2026-09-29T12:00:00
+      delivered_at: null
+    - shipment_id: SH-1108
+      carrier: UPS
+      origin: Prague
+      destination: Rotterdam
+      weight_kg: 36.2
+      status: delivered
+      shipped_at: 2026-09-22T20:00:00
+      delivered_at: 2026-09-27T18:00:00
+    - shipment_id: SH-1109
+      carrier: DPD
+      origin: Dublin
+      destination: Hamburg
+      weight_kg: 38.7
+      status: created
+      shipped_at: 2026-09-25T07:00:00
+      delivered_at: null
+    - shipment_id: SH-1110
+      carrier: PostNL
+      origin: Warsaw
+      destination: Lisbon
+      weight_kg: 9.6
+      status: delivered
+      shipped_at: 2026-09-24T17:00:00
+      delivered_at: 2026-09-28T01:00:00
+    - shipment_id: SH-1111
+      carrier: UPS
+      origin: Hamburg
+      destination: Lisbon
+      weight_kg: 3.2
+      status: returned
+      shipped_at: 2026-09-22T07:00:00
+      delivered_at: null
+    - shipment_id: SH-1112
+      carrier: DPD
+      origin: Lisbon
+      destination: Dublin
+      weight_kg: 38.6
+      status: delayed
+      shipped_at: 2026-09-06T08:00:00
+      delivered_at: null
+    - shipment_id: SH-1113
+      carrier: FedEx
+      origin: Hamburg
+      destination: Madrid
+      weight_kg: 33.8
+      status: in_transit
+      shipped_at: 2026-09-16T12:00:00
+      delivered_at: null
+    - shipment_id: SH-1114
+      carrier: DPD
+      origin: Madrid
+      destination: Lisbon
+      weight_kg: 34.1
+      status: delivered
+      shipped_at: 2026-09-27T18:00:00
+      delivered_at: 2026-09-29T08:00:00
+    - shipment_id: SH-1115
+      carrier: DHL
+      origin: Dublin
+      destination: Lisbon
+      weight_kg: 22.8
+      status: delivered
+      shipped_at: 2026-09-03T21:00:00
+      delivered_at: 2026-09-06T21:00:00
+    - shipment_id: SH-1116
+      carrier: FedEx
+      origin: Milan
+      destination: Vienna
+      weight_kg: 33.2
+      status: in_transit
+      shipped_at: 2026-09-04T19:00:00
+      delivered_at: null
+    - shipment_id: SH-1117
+      carrier: FedEx
+      origin: Lyon
+      destination: Lisbon
+      weight_kg: 8.5
+      status: delivered
+      shipped_at: 2026-09-03T02:00:00
+      delivered_at: 2026-09-07T06:00:00
+    - shipment_id: SH-1118
+      carrier: FedEx
+      origin: Dublin
+      destination: Hamburg
+      weight_kg: 32.2
+      status: in_transit
+      shipped_at: 2026-09-10T11:00:00
+      delivered_at: null
+    - shipment_id: SH-1119
+      carrier: FedEx
+      origin: Prague
+      destination: Lisbon
+      weight_kg: 15.7
+      status: in_transit
+      shipped_at: 2026-09-25T10:00:00
+      delivered_at: null
+    - shipment_id: SH-1120
+      carrier: UPS
+      origin: Vienna
+      destination: Milan
+      weight_kg: 8.5
+      status: delivered
+      shipped_at: 2026-09-06T23:00:00
+      delivered_at: 2026-09-10T05:00:00
+seed:
+  carrier: "(ctx) => [['UPS','UPS',3,true],['PostNL','POSTNL',4,true],['DHL','DHL',2,true],['FedEx','FEDEX',3,false],['DPD','DPD',5,true]].map(([name, code, transit_days, active]) => ({ name, code, transit_days, active, created_at: '2025-01-06T09:00:00.000Z', updated_at: '2025-01-06T09:00:00.000Z' }))"
+  hub: "(ctx) => [['Dublin','Ireland'],['Milan','Italy'],['Vienna','Austria'],['Prague','Czechia'],['Madrid','Spain'],['Hamburg','Germany'],['Lyon','France'],['Warsaw','Poland'],['Rotterdam','Netherlands'],['Lisbon','Portugal']].map(([name, country]) => ({ name, country, active: true, created_at: '2025-01-10T09:00:00.000Z', updated_at: '2025-01-10T09:00:00.000Z' }))"
+  shipment: |-
+    (ctx) => {
+      const NOW = ctx.now();
+      const EP = '2026-08-01T00:00:00.000Z';
+      const iso = (v) => { let s = String(v); if (s.length === 19) s += '.000Z'; return s; };
+      const back = (t, m) => ctx.time.plus(EP, (ctx.time.minutesBetween(EP, t) - m) + 'm');
+      const cmap = {};
+      for (const c of ctx.rows('carrier')) cmap[c.name] = c;
+      const hmap = {};
+      for (const h of ctx.rows('hub')) hmap[h.name] = h.id;
+      const reasons = ['Weather disruption at sorting hub', 'Customs inspection backlog', 'Vehicle breakdown on linehaul', 'Missed connection at transfer hub', 'Address verification pending'];
+      const returnReasons = ['Recipient refused delivery', 'Address could not be located', 'Customer requested return to sender'];
+      const Ls = [-6, 12, 30, 60, 100, 47, 75, -20, 55, 36];
+      const rows = [];
+      let k = 0;
+      let r = 0;
+      for (const f of ctx.fixtures.shipments) {
+        let status = f.status;
+        let carrierName = f.carrier;
+        if (status === 'created' && (f.shipment_id === 'SH-1022' || f.shipment_id === 'SH-1077')) carrierName = 'PostNL';
+        const car = cmap[carrierName];
+        let T = iso(f.shipped_at);
+        if (ctx.time.minutesBetween(T, NOW) < 60) T = back(NOW, 1440);
+        const created = back(T, 1440);
+        const row = {
+          reference: f.shipment_id, carrier_id: car.id, origin_id: hmap[f.origin], destination_id: hmap[f.destination],
+          weight_kg: Number(f.weight_kg), status, shipped_at: null, expected_delivery_at: null, delivered_at: null,
+          delay_reason: null, return_reason: null, created_at: created, updated_at: created,
+        };
+        if (status === 'in_transit') {
+          row.shipped_at = T;
+          row.expected_delivery_at = ctx.time.plus(NOW, ctx.int(20, 150) + 'h');
+          row.updated_at = T;
+        } else if (status === 'delayed') {
+          row.shipped_at = T;
+          row.expected_delivery_at = ctx.time.plus(T, (car.transit_days + ctx.int(1, 3)) + 'd');
+          row.delay_reason = ctx.pick(reasons);
+          row.updated_at = ctx.time.plus(T, '2d');
+        } else if (status === 'delivered') {
+          let D = f.delivered_at === null || f.delivered_at === undefined ? ctx.time.plus(T, '3d') : iso(f.delivered_at);
+          if (ctx.time.minutesBetween(D, NOW) < 60) D = ctx.time.plus(T, '3d');
+          let eta = back(D, Ls[k % 10] * 60 + 17);
+          k++;
+          if (ctx.time.minutesBetween(T, eta) < 6 * 60 + 13) eta = ctx.time.plus(T, '373m');
+          row.shipped_at = T;
+          row.expected_delivery_at = eta;
+          row.delivered_at = D;
+          row.updated_at = D;
+        } else if (status === 'returned') {
+          row.shipped_at = T;
+          row.expected_delivery_at = ctx.time.plus(T, car.transit_days + 'd');
+          row.return_reason = returnReasons[r % 3];
+          r++;
+          row.updated_at = ctx.time.plus(T, '36h');
+        }
+        rows.push(row);
+      }
+      return rows;
+    }
+  shipment_event: |-
+    (ctx) => {
+      const out = [];
+      for (const s of ctx.rows('shipment')) {
+        const ev = (kind, at, hub, note) => out.push({ at, row: { shipment_id: s.id, kind, hub_id: hub, note, created_at: at, updated_at: at } });
+        ev('created', s.created_at, s.origin_id, 'shipment registered');
+        if (s.status === 'created') continue;
+        ev('dispatched', s.shipped_at, s.origin_id, 'dispatched');
+        if (s.status === 'delayed') ev('delayed', ctx.time.plus(s.shipped_at, '2d'), null, s.delay_reason);
+        if (s.status === 'delivered') ev('delivered', s.delivered_at, s.destination_id, null);
+        if (s.status === 'returned') ev('returned', ctx.time.plus(s.shipped_at, '36h'), s.origin_id, s.return_reason);
+      }
+      out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      return out.map((e) => e.row);
+    }
+  claim: |-
+    (ctx) => {
+      const ships = ctx.rows('shipment');
+      const lateMin = (s) => ctx.time.minutesBetween(s.expected_delivery_at, s.delivered_at);
+      const del = ships.filter((s) => s.status === 'delivered');
+      const big = del.filter((s) => lateMin(s) > 48 * 60);
+      const dl = ships.filter((s) => s.status === 'delayed');
+      const rt = ships.filter((s) => s.status === 'returned');
+      const plan = [];
+      for (const i of [0, 3, 6, 9]) if (big[i]) plan.push({ s: big[i], kind: 'late', at: ctx.time.plus(big[i].delivered_at, '2h') });
+      dl.slice(0, 4).forEach((s) => plan.push({ s, kind: 'late', at: ctx.time.plus(s.expected_delivery_at, '3h') }));
+      if (dl[4]) plan.push({ s: dl[4], kind: 'lost', at: ctx.time.plus(dl[4].expected_delivery_at, '3h') });
+      del.filter((s, i) => i % 9 === 4).slice(0, 5).forEach((s) => plan.push({ s, kind: 'damaged', at: ctx.time.plus(s.delivered_at, '5h') }));
+      rt.forEach((s, i) => plan.push({ s, kind: i < 2 ? 'lost' : 'damaged', at: ctx.time.plus(s.shipped_at, '39h') }));
+      plan.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      const notesOk = ['Carrier confirmed the delay', 'Photos confirm the damage', 'Tracking history supports the claim'];
+      const notesNo = ['Parcel was located and delivered', 'Evidence insufficient', 'Claim exceeds the policy limit'];
+      return plan.map((p, i) => {
+        const amount = p.kind === 'late' ? ctx.int(15, 60) * 100 : p.kind === 'damaged' ? ctx.int(10, 100) * 100 : ctx.int(30, 90) * 1000;
+        let status = 'open';
+        if (i % 5 >= 3) status = amount > 50000 ? 'rejected' : i % 2 === 0 ? 'approved' : 'rejected';
+        const done = status !== 'open';
+        const resolved = done ? ctx.time.plus(p.at, '1d') : null;
+        return {
+          shipment_id: p.s.id, kind: p.kind, status, amount,
+          resolution_note: done ? (status === 'approved' ? notesOk[i % 3] : notesNo[i % 3]) : null,
+          resolved_at: resolved, created_at: p.at, updated_at: done ? resolved : p.at,
+        };
+      });
+    }
+tests:
+  dispatch_sets_eta_and_refusals:
+    description: dispatch_shipment moves a created shipment to in_transit with shipped_at and a later ETA, writes a dispatched event, and refuses unknown ids, repeats and inactive carriers.
+    script: |-
+      (ctx) => {
+        const missing = ctx.api('POST', '/shipments/shp_9999/dispatch', {});
+        ctx.assert(missing.status === 404 && missing.body.error.code === 'not_found', 'unknown shipment: ' + JSON.stringify(missing));
+        const all = ctx.api('GET', '/carriers').body.data;
+        const cs = all.filter((c) => c.active);
+        const hs = ctx.api('GET', '/hubs').body.data.filter((h) => h.active);
+        if (cs.length < 1 || hs.length < 2) return;
+        const make = (ref, carrier) => {
+          const r = ctx.api('POST', '/shipments', { reference: ref, carrier_id: carrier.id, origin_id: hs[0].id, destination_id: hs[1].id, weight_kg: 4.5 });
+          ctx.assert(r.status >= 200 && r.status < 300, 'create shipment: ' + JSON.stringify(r));
+          return r.body;
+        };
+        const s = make('TST-DSP-1', cs[0]);
+        ctx.assert(s.status === 'created', 'new shipment is created, got ' + s.status);
+        const at = ctx.now();
+        const r = ctx.api('POST', '/shipments/' + s.id + '/dispatch', {});
+        ctx.assert(r.status === 200, 'dispatch: ' + JSON.stringify(r));
+        ctx.assert(r.body.status === 'in_transit' && r.body.shipped_at === at, 'in_transit shipped at ' + at + ', got ' + JSON.stringify(r.body));
+        ctx.assert(r.body.expected_delivery_at > r.body.shipped_at, 'ETA after shipped_at, got ' + r.body.expected_delivery_at);
+        const ev = ctx.api('GET', '/shipments/' + s.id + '/events').body.data.map((e) => e.kind);
+        ctx.assert(ev.includes('dispatched'), 'dispatched event, got ' + JSON.stringify(ev));
+        const again = ctx.api('POST', '/shipments/' + s.id + '/dispatch', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second dispatch: ' + JSON.stringify(again));
+        const off = all.find((c) => !c.active);
+        if (off) {
+          const t = make('TST-DSP-2', off);
+          const bad = ctx.api('POST', '/shipments/' + t.id + '/dispatch', {});
+          ctx.assert(bad.status === 409 && bad.body.error.code === 'carrier_inactive', 'inactive carrier: ' + JSON.stringify(bad));
+          const still = ctx.api('GET', '/shipments/' + t.id).body;
+          ctx.assert(still.status === 'created' && still.shipped_at === null, 'refused dispatch changed the shipment');
+        }
+      }
+  delay_and_resume_flow:
+    description: delay_shipment needs in_transit, a reason and a later ETA. resume_shipment moves delayed back to in_transit and clears the reason. Both write events and refuse wrong states.
+    script: |-
+      (ctx) => {
+        const dm = ctx.api('POST', '/shipments/shp_9999/delay', { reason: 'x', expected_delivery_at: '2030-01-01T00:00:00.000Z' });
+        ctx.assert(dm.status === 404, 'delay unknown: ' + JSON.stringify(dm));
+        const rm = ctx.api('POST', '/shipments/shp_9999/resume', {});
+        ctx.assert(rm.status === 404, 'resume unknown: ' + JSON.stringify(rm));
+        const cs = ctx.api('GET', '/carriers').body.data.filter((c) => c.active);
+        const hs = ctx.api('GET', '/hubs').body.data.filter((h) => h.active);
+        if (cs.length < 1 || hs.length < 2) return;
+        const r0 = ctx.api('POST', '/shipments', { reference: 'TST-DLY-1', carrier_id: cs[0].id, origin_id: hs[0].id, destination_id: hs[1].id, weight_kg: 3 });
+        ctx.assert(r0.status >= 200 && r0.status < 300, 'create: ' + JSON.stringify(r0));
+        const id = r0.body.id;
+        const early = ctx.api('POST', '/shipments/' + id + '/delay', { reason: 'storm', expected_delivery_at: '2030-01-01T00:00:00.000Z' });
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'delay of created: ' + JSON.stringify(early));
+        const early2 = ctx.api('POST', '/shipments/' + id + '/resume', {});
+        ctx.assert(early2.status === 409 && early2.body.error.code === 'invalid_state', 'resume of created: ' + JSON.stringify(early2));
+        const d = ctx.api('POST', '/shipments/' + id + '/dispatch', {});
+        ctx.assert(d.status === 200, 'dispatch: ' + JSON.stringify(d));
+        const eta = d.body.expected_delivery_at;
+        const later = (parseInt(eta.slice(0, 4), 10) + 1) + eta.slice(4);
+        const blank = ctx.api('POST', '/shipments/' + id + '/delay', { reason: '   ', expected_delivery_at: later });
+        ctx.assert(blank.status === 400 && blank.body.error.code === 'input.invalid', 'blank reason: ' + JSON.stringify(blank));
+        const same = ctx.api('POST', '/shipments/' + id + '/delay', { reason: 'storm', expected_delivery_at: eta });
+        ctx.assert(same.status === 422 && same.body.error.code === 'invalid_eta', 'same ETA: ' + JSON.stringify(same));
+        const ok = ctx.api('POST', '/shipments/' + id + '/delay', { reason: 'storm at hub', expected_delivery_at: later });
+        ctx.assert(ok.status === 200, 'delay: ' + JSON.stringify(ok));
+        ctx.assert(ok.body.status === 'delayed' && ok.body.delay_reason === 'storm at hub' && ok.body.expected_delivery_at === later, 'delayed with reason and new ETA, got ' + JSON.stringify(ok.body));
+        const twice = ctx.api('POST', '/shipments/' + id + '/delay', { reason: 'again', expected_delivery_at: later.replace(/^\d{4}/, (y) => String(parseInt(y, 10) + 1)) });
+        ctx.assert(twice.status === 409 && twice.body.error.code === 'invalid_state', 'delay of delayed: ' + JSON.stringify(twice));
+        const res = ctx.api('POST', '/shipments/' + id + '/resume', {});
+        ctx.assert(res.status === 200 && res.body.status === 'in_transit' && res.body.delay_reason === null, 'resume: ' + JSON.stringify(res));
+        const res2 = ctx.api('POST', '/shipments/' + id + '/resume', {});
+        ctx.assert(res2.status === 409 && res2.body.error.code === 'invalid_state', 'resume of in_transit: ' + JSON.stringify(res2));
+        const kinds = ctx.api('GET', '/shipments/' + id + '/events').body.data.map((e) => e.kind);
+        ctx.assert(kinds.includes('dispatched') && kinds.includes('delayed') && kinds.includes('resumed'), 'events, got ' + JSON.stringify(kinds));
+      }
+  deliver_and_return_flow:
+    description: deliver_shipment sets delivered_at and refuses created or finished shipments. return_shipment needs a reason, works from created, in_transit and delivered, and refuses a delivered shipment after 14 days.
+    script: |-
+      (ctx) => {
+        const dm = ctx.api('POST', '/shipments/shp_9999/deliver', {});
+        ctx.assert(dm.status === 404, 'deliver unknown: ' + JSON.stringify(dm));
+        const rm = ctx.api('POST', '/shipments/shp_9999/return', { reason: 'refused' });
+        ctx.assert(rm.status === 404, 'return unknown: ' + JSON.stringify(rm));
+        const cs = ctx.api('GET', '/carriers').body.data.filter((c) => c.active);
+        const hs = ctx.api('GET', '/hubs').body.data.filter((h) => h.active);
+        if (cs.length < 1 || hs.length < 2) return;
+        let n = 0;
+        const make = () => {
+          n += 1;
+          const r = ctx.api('POST', '/shipments', { reference: 'TST-DLV-' + n, carrier_id: cs[0].id, origin_id: hs[0].id, destination_id: hs[1].id, weight_kg: 2 });
+          ctx.assert(r.status >= 200 && r.status < 300, 'create: ' + JSON.stringify(r));
+          return r.body.id;
+        };
+        const a = make();
+        const early = ctx.api('POST', '/shipments/' + a + '/deliver', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'deliver of created: ' + JSON.stringify(early));
+        ctx.assert(ctx.api('POST', '/shipments/' + a + '/dispatch', {}).status === 200, 'dispatch a');
+        const at = ctx.now();
+        const del = ctx.api('POST', '/shipments/' + a + '/deliver', {});
+        ctx.assert(del.status === 200 && del.body.status === 'delivered' && del.body.delivered_at === at, 'deliver at ' + at + ': ' + JSON.stringify(del));
+        const del2 = ctx.api('POST', '/shipments/' + a + '/deliver', {});
+        ctx.assert(del2.status === 409 && del2.body.error.code === 'invalid_state', 'deliver twice: ' + JSON.stringify(del2));
+        const blank = ctx.api('POST', '/shipments/' + a + '/return', { reason: '  ' });
+        ctx.assert(blank.status === 400 && blank.body.error.code === 'input.invalid', 'blank return reason: ' + JSON.stringify(blank));
+        const ret = ctx.api('POST', '/shipments/' + a + '/return', { reason: 'Customer sent it back' });
+        ctx.assert(ret.status === 200 && ret.body.status === 'returned' && ret.body.return_reason === 'Customer sent it back', 'return delivered: ' + JSON.stringify(ret));
+        const ret2 = ctx.api('POST', '/shipments/' + a + '/return', { reason: 'again' });
+        ctx.assert(ret2.status === 409 && ret2.body.error.code === 'invalid_state', 'return twice: ' + JSON.stringify(ret2));
+        const kinds = ctx.api('GET', '/shipments/' + a + '/events').body.data.map((e) => e.kind);
+        ctx.assert(kinds.includes('delivered') && kinds.includes('returned'), 'events, got ' + JSON.stringify(kinds));
+        const b = make();
+        const rb = ctx.api('POST', '/shipments/' + b + '/return', { reason: 'Address invalid' });
+        ctx.assert(rb.status === 200 && rb.body.status === 'returned', 'return of created: ' + JSON.stringify(rb));
+        const c = make();
+        ctx.api('POST', '/shipments/' + c + '/dispatch', {});
+        const rc = ctx.api('POST', '/shipments/' + c + '/return', { reason: 'Recalled by sender' });
+        ctx.assert(rc.status === 200 && rc.body.status === 'returned', 'return of in_transit: ' + JSON.stringify(rc));
+        const d = make();
+        ctx.api('POST', '/shipments/' + d + '/dispatch', {});
+        ctx.assert(ctx.api('POST', '/shipments/' + d + '/deliver', {}).status === 200, 'deliver d');
+        ctx.advance('15d');
+        const late = ctx.api('POST', '/shipments/' + d + '/return', { reason: 'Too late to return' });
+        ctx.assert(late.status === 409 && late.body.error.code === 'return_window_closed', 'return after 14 days: ' + JSON.stringify(late));
+        const still = ctx.api('GET', '/shipments/' + d).body;
+        ctx.assert(still.status === 'delivered' && still.return_reason === null, 'refused return changed the shipment');
+      }
+  reassign_carrier_rules:
+    description: reassign_carrier switches the carrier of a created shipment and writes a carrier_changed event naming both carriers. It refuses the same carrier, an inactive carrier, an unknown carrier and a dispatched shipment.
+    script: |-
+      (ctx) => {
+        const all = ctx.api('GET', '/carriers').body.data;
+        const cs = all.filter((c) => c.active);
+        const hs = ctx.api('GET', '/hubs').body.data.filter((h) => h.active);
+        const missing = ctx.api('POST', '/shipments/shp_9999/reassign_carrier', { carrier_id: cs.length > 0 ? cs[0].id : 'car_0001' });
+        ctx.assert(missing.status === 404 || missing.status === 400, 'unknown shipment: ' + JSON.stringify(missing));
+        if (cs.length < 2 || hs.length < 2) return;
+        ctx.assert(missing.status === 404, 'unknown shipment is 404: ' + JSON.stringify(missing));
+        const r0 = ctx.api('POST', '/shipments', { reference: 'TST-CAR-1', carrier_id: cs[0].id, origin_id: hs[0].id, destination_id: hs[1].id, weight_kg: 6 });
+        ctx.assert(r0.status >= 200 && r0.status < 300, 'create: ' + JSON.stringify(r0));
+        const id = r0.body.id;
+        const same = ctx.api('POST', '/shipments/' + id + '/reassign_carrier', { carrier_id: cs[0].id });
+        ctx.assert(same.status === 409 && same.body.error.code === 'no_change', 'same carrier: ' + JSON.stringify(same));
+        const unknown = ctx.api('POST', '/shipments/' + id + '/reassign_carrier', { carrier_id: 'car_9999' });
+        ctx.assert(unknown.status === 400 || unknown.status === 422, 'unknown carrier: ' + JSON.stringify(unknown));
+        const off = all.find((c) => !c.active);
+        if (off) {
+          const bad = ctx.api('POST', '/shipments/' + id + '/reassign_carrier', { carrier_id: off.id });
+          ctx.assert(bad.status === 409 && bad.body.error.code === 'carrier_inactive', 'inactive carrier: ' + JSON.stringify(bad));
+        }
+        const ok = ctx.api('POST', '/shipments/' + id + '/reassign_carrier', { carrier_id: cs[1].id });
+        ctx.assert(ok.status === 200 && ok.body.carrier_id === cs[1].id && ok.body.status === 'created', 'reassign: ' + JSON.stringify(ok));
+        const ev = ctx.api('GET', '/shipments/' + id + '/events').body.data.filter((e) => e.kind === 'carrier_changed');
+        ctx.assert(ev.length === 1, 'one carrier_changed event, got ' + ev.length);
+        ctx.assert(ev[0].note.includes(cs[0].name) && ev[0].note.includes(cs[1].name), 'event names both carriers, got ' + ev[0].note);
+        ctx.assert(ctx.api('POST', '/shipments/' + id + '/dispatch', {}).status === 200, 'dispatch');
+        const late = ctx.api('POST', '/shipments/' + id + '/reassign_carrier', { carrier_id: cs[0].id });
+        ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'reassign of dispatched: ' + JSON.stringify(late));
+        const after = ctx.api('GET', '/shipments/' + id).body;
+        ctx.assert(after.carrier_id === cs[1].id, 'refused reassign changed the carrier');
+      }
+  claim_open_and_resolve:
+    description: open_claim needs a delayed, delivered or returned shipment, refuses a late claim on an on-time shipment and duplicate open claims of one kind. resolve_claim needs a note, refuses approving claims over 50000 and refuses resolving twice.
+    script: |-
+      (ctx) => {
+        const om = ctx.api('POST', '/shipments/shp_9999/claim', { kind: 'damaged', amount: 1000 });
+        ctx.assert(om.status === 404, 'claim on unknown shipment: ' + JSON.stringify(om));
+        const rm = ctx.api('POST', '/claims/clm_9999/resolve', { decision: 'approved', note: 'ok' });
+        ctx.assert(rm.status === 404, 'resolve unknown claim: ' + JSON.stringify(rm));
+        const cs = ctx.api('GET', '/carriers').body.data.filter((c) => c.active);
+        const hs = ctx.api('GET', '/hubs').body.data.filter((h) => h.active);
+        if (cs.length < 1 || hs.length < 2) return;
+        let n = 0;
+        const make = () => {
+          n += 1;
+          const r = ctx.api('POST', '/shipments', { reference: 'TST-CLM-' + n, carrier_id: cs[0].id, origin_id: hs[0].id, destination_id: hs[1].id, weight_kg: 7 });
+          ctx.assert(r.status >= 200 && r.status < 300, 'create: ' + JSON.stringify(r));
+          return r.body.id;
+        };
+        const id = make();
+        const early = ctx.api('POST', '/shipments/' + id + '/claim', { kind: 'damaged', amount: 1500 });
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'claim on created: ' + JSON.stringify(early));
+        ctx.api('POST', '/shipments/' + id + '/dispatch', {});
+        ctx.assert(ctx.api('POST', '/shipments/' + id + '/deliver', {}).status === 200, 'deliver');
+        const notLate = ctx.api('POST', '/shipments/' + id + '/claim', { kind: 'late', amount: 2500 });
+        ctx.assert(notLate.status === 409 && notLate.body.error.code === 'not_late', 'late claim on on-time shipment: ' + JSON.stringify(notLate));
+        const zero = ctx.api('POST', '/shipments/' + id + '/claim', { kind: 'damaged', amount: 0 });
+        ctx.assert(zero.status === 400, 'zero amount: ' + JSON.stringify(zero));
+        const c1 = ctx.api('POST', '/shipments/' + id + '/claim', { kind: 'damaged', amount: 1500 });
+        ctx.assert(c1.status === 201 && c1.body.status === 'open' && c1.body.kind === 'damaged' && c1.body.amount === 1500, 'damaged claim: ' + JSON.stringify(c1));
+        const dup = ctx.api('POST', '/shipments/' + id + '/claim', { kind: 'damaged', amount: 900 });
+        ctx.assert(dup.status === 409 && dup.body.error.code === 'duplicate_claim', 'duplicate: ' + JSON.stringify(dup));
+        const lost = ctx.api('POST', '/shipments/' + id + '/claim', { kind: 'lost', amount: 60000 });
+        ctx.assert(lost.status === 201, 'lost claim of another kind: ' + JSON.stringify(lost));
+        const kinds = ctx.api('GET', '/shipments/' + id + '/events').body.data.filter((e) => e.kind === 'claim_opened');
+        ctx.assert(kinds.length === 2, 'two claim_opened events, got ' + kinds.length);
+        const claims = ctx.api('GET', '/shipments/' + id + '/claims').body.data;
+        ctx.assert(claims.length === 2, 'two claims on the shipment, got ' + claims.length);
+        const big = ctx.api('POST', '/claims/' + lost.body.id + '/resolve', { decision: 'approved', note: 'Looks fine' });
+        ctx.assert(big.status === 409 && big.body.error.code === 'needs_manager_review', 'approve over 50000: ' + JSON.stringify(big));
+        const blank = ctx.api('POST', '/claims/' + lost.body.id + '/resolve', { decision: 'rejected', note: '   ' });
+        ctx.assert(blank.status === 400 && blank.body.error.code === 'input.invalid', 'blank note: ' + JSON.stringify(blank));
+        const at = ctx.now();
+        const rej = ctx.api('POST', '/claims/' + lost.body.id + '/resolve', { decision: 'rejected', note: 'Parcel was found' });
+        ctx.assert(rej.status === 200 && rej.body.status === 'rejected' && rej.body.resolution_note === 'Parcel was found' && rej.body.resolved_at === at, 'reject: ' + JSON.stringify(rej));
+        const again = ctx.api('POST', '/claims/' + lost.body.id + '/resolve', { decision: 'approved', note: 'changed my mind' });
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'resolve twice: ' + JSON.stringify(again));
+        const app = ctx.api('POST', '/claims/' + c1.body.id + '/resolve', { decision: 'approved', note: 'Photos confirm damage' });
+        ctx.assert(app.status === 200 && app.body.status === 'approved', 'approve: ' + JSON.stringify(app));
+        const r2 = make();
+        ctx.api('POST', '/shipments/' + r2 + '/return', { reason: 'Refused at door' });
+        const rc = ctx.api('POST', '/shipments/' + r2 + '/claim', { kind: 'damaged', amount: 800 });
+        ctx.assert(rc.status === 201, 'claim on returned: ' + JSON.stringify(rc));
+      }
+  overdue_job_and_late_claim:
+    description: "flag_overdue_shipments moves an in_transit shipment past its ETA to delayed with 'auto: past ETA' and a delayed event, leaves earlier and delivered shipments alone, and the delayed shipment then supports a late claim."
+    script: |-
+      (ctx) => {
+        const cs = ctx.api('GET', '/carriers').body.data.filter((c) => c.active);
+        const hs = ctx.api('GET', '/hubs').body.data.filter((h) => h.active);
+        if (cs.length < 1 || hs.length < 2) return;
+        const days = cs[0].transit_days;
+        const make = (ref) => {
+          const r = ctx.api('POST', '/shipments', { reference: ref, carrier_id: cs[0].id, origin_id: hs[0].id, destination_id: hs[1].id, weight_kg: 5 });
+          ctx.assert(r.status >= 200 && r.status < 300, 'create: ' + JSON.stringify(r));
+          return r.body.id;
+        };
+        const a = make('TST-JOB-1');
+        const b = make('TST-JOB-2');
+        const c = make('TST-JOB-3');
+        ctx.assert(ctx.api('POST', '/shipments/' + a + '/dispatch', {}).status === 200, 'dispatch a');
+        ctx.assert(ctx.api('POST', '/shipments/' + b + '/dispatch', {}).status === 200, 'dispatch b');
+        ctx.assert(ctx.api('POST', '/shipments/' + b + '/deliver', {}).status === 200, 'deliver b');
+        const first = ctx.advance((days * 24 - 3) + 'h');
+        ctx.assert(first.jobsFailed.length === 0, 'job failed: ' + JSON.stringify(first.jobsFailed));
+        ctx.assert(ctx.api('GET', '/shipments/' + a).body.status === 'in_transit', 'not flagged before its ETA');
+        const second = ctx.advance('5h');
+        ctx.assert(second.jobsFailed.length === 0, 'job failed: ' + JSON.stringify(second.jobsFailed));
+        ctx.assert(second.jobsFired.includes('flag_overdue_shipments'), 'job fired, got ' + JSON.stringify(second.jobsFired));
+        const after = ctx.api('GET', '/shipments/' + a).body;
+        ctx.assert(after.status === 'delayed' && after.delay_reason === 'auto: past ETA', 'flagged delayed, got ' + JSON.stringify(after));
+        const kinds = ctx.api('GET', '/shipments/' + a + '/events').body.data.filter((e) => e.kind === 'delayed');
+        ctx.assert(kinds.length === 1 && kinds[0].note === 'auto: past ETA', 'one delayed event, got ' + JSON.stringify(kinds));
+        ctx.assert(ctx.api('GET', '/shipments/' + b).body.status === 'delivered', 'delivered shipment untouched');
+        ctx.assert(ctx.api('GET', '/shipments/' + c).body.status === 'created', 'created shipment untouched');
+        const late = ctx.api('POST', '/shipments/' + a + '/claim', { kind: 'late', amount: 2500 });
+        ctx.assert(late.status === 201 && late.body.kind === 'late' && late.body.status === 'open', 'late claim on overdue shipment: ' + JSON.stringify(late));
+        const dup = ctx.api('POST', '/shipments/' + a + '/claim', { kind: 'late', amount: 2500 });
+        ctx.assert(dup.status === 409 && dup.body.error.code === 'duplicate_claim', 'duplicate late claim: ' + JSON.stringify(dup));
+        const res = ctx.api('POST', '/claims/' + late.body.id + '/resolve', { decision: 'approved', note: 'Carrier missed the ETA' });
+        ctx.assert(res.status === 200 && res.body.status === 'approved', 'approve late claim: ' + JSON.stringify(res));
+        const del = ctx.api('POST', '/shipments/' + a + '/deliver', {});
+        ctx.assert(del.status === 200 && del.body.status === 'delivered', 'deliver a delayed shipment: ' + JSON.stringify(del));
+      }
+tasks:
+  dispatch_heaviest_created_shipment:
+    difficulty: easy
+    instruction: Dispatch the heaviest shipment that is still in status created. Use the shipment's dispatch action. Do not change any other shipment.
+    decoys: []
+    alternatives: []
+  move_postnl_created_to_dpd:
+    difficulty: medium
+    instruction: PostNL has suspended pickups. Move every shipment that is still in status created and uses the carrier PostNL over to the carrier DPD. Use the carrier reassignment action so each change is recorded in the tracking history. Leave PostNL shipments that are already in transit, delayed, delivered or returned alone.
+    decoys: []
+    alternatives: []
+  claim_for_late_delivered_shipments:
+    difficulty: hard
+    instruction: Open a 'late' claim of 2500 (EUR 25.00) for every delivered shipment that arrived more than 48 hours after its expected delivery time and has no late claim yet, open or resolved. Do not open claims on any other shipment, and change nothing else.
+    decoys: []
+    alternatives: []
