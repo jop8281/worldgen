@@ -1,8 +1,8 @@
-name: billing-duplicate-charge
-description: Acme Logistics was charged $149.00 twice for order O-7301, so the agent refunds the duplicate once, though the first refund response is lost, and resolves the support ticket with a note that cites the refund. Payments notifies the ticket of each refund, twice.
+name: billing-duplicate-charge-race
+description: Acme Logistics was charged $149.00 twice for order O-7301, and an operator refunds the duplicate just before the agent does, so the agent's refund is refused with 409 and the agent must find the operator's refund and cite it on the support ticket.
 worlds:
-  support: worlds/support
-  payments: worlds/payments
+  support: ../billing-duplicate-charge/worlds/support
+  payments: ../billing-duplicate-charge/worlds/payments
 gates:
   - world: support
     task: resolve_acme_double_charge
@@ -13,23 +13,13 @@ faults:
     method: POST
     path: /v1/refunds
     nth: 1
-    kind: drop_response
-events:
-  - name: a refund notifies the billing ticket
-    on:
-      world: payments
+    kind: operator
+    request:
       method: POST
       path: /v1/refunds
-      status: 200
-    deliver:
-      world: support
-      method: POST
-      path: /tickets/tkt_0321/payment_events
       body:
-        kind: charge.refunded
-        refund: ${response.id}
-        charge: ${response.charge}
-    fault: duplicate
+        charge: ch_0142
+        reason: duplicate
 links:
   - name: the ticket note cites the refund payments created
     from:
