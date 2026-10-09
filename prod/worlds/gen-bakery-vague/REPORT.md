@@ -117,11 +117,11 @@ World id (WID): `wid_32dd36aa840229272114b3fc280e3c8b3c468b37032083b2f932c595a63
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| mark_marias_order_ready | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 4/7 | `tid_8f391aed306efd541dc0e32c21ce2014cb876f85890f7b19246d84129f5e1337` |
-| bake_croissants_after_restock | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | 0.000 | legacy; mutants 4/7 | `tid_04b34f37c5200ffb5ff5f502c0d45472ed077e4dbdb2286c6831a0014503a9d2` |
-| cancel_tomorrows_orders_for_discontinued_product | hard | 1.000 | 0.000 | 0.750, 0.000, 0.000, 0.000, 0.500, 0.000 | 0.750 | legacy; mutants 4/7 | `tid_d3222690524ffb86a3b2f1c2de0db242624a5641d207e0eb3032dbf14596a4f8` |
+| mark_marias_order_ready | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 5/8 | `tid_8f391aed306efd541dc0e32c21ce2014cb876f85890f7b19246d84129f5e1337` |
+| bake_croissants_after_restock | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | 0.000 | legacy; mutants 5/8 | `tid_04b34f37c5200ffb5ff5f502c0d45472ed077e4dbdb2286c6831a0014503a9d2` |
+| cancel_tomorrows_orders_for_discontinued_product | hard | 1.000 | 0.000 | 0.750, 0.000, 0.000, 0.000, 0.500, 0.000 | 0.750 | legacy; mutants 5/8 | `tid_d3222690524ffb86a3b2f1c2de0db242624a5641d207e0eb3032dbf14596a4f8` |
 
-Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/8* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 

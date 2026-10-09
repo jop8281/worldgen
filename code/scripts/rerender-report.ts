@@ -23,6 +23,7 @@ import { checkWorld, contentDigest, diffWorlds, loadWorld, saveWorld, worldIdOf,
 import { CAPSULE_FILE, capsuleSchema, runCapsule, type InputSource, type RunCapsule } from '../src/worldgen/capsule.ts';
 import type { RunEvent } from '../src/worldgen/events.ts';
 import { digestInput, parseInputArgs, type Input } from '../src/worldgen/input.ts';
+import { admissibleIssues } from '../src/worldgen/iterate.ts';
 import { parsePlanYaml } from '../src/worldgen/plan.ts';
 import { renderReport } from '../src/worldgen/report.ts';
 
@@ -33,10 +34,13 @@ class Refused extends Error {}
 
 type Overrides = { readonly before?: string | undefined; readonly inputArgs: readonly string[]; readonly record: boolean };
 
-async function checked(dir: string): Promise<Extract<CheckReport, { ok: true }>> {
+/** A world's ok check. An iterate's old world may instead fail only on issues A-395 admits, checked as that run did. */
+async function checked(dir: string, old = false): Promise<Extract<CheckReport, { ok: true }>> {
   const loaded = await loadWorld(dir);
   if (!loaded.ok) throw new Refused(`${dir} does not load: ${loaded.error[0].code}`);
-  const report = checkWorld(loaded.value);
+  const first = checkWorld(loaded.value);
+  const owed = old ? admissibleIssues(first) : null;
+  const report = owed === null ? first : checkWorld(loaded.value, undefined, { tolerate: new Set(owed.map((i) => i.code)) });
   if (!report.ok) throw new Refused(`${dir} does not check: ${report.issues.map((i) => i.code).slice(0, 5).join(', ')}`);
   return report;
 }
@@ -79,7 +83,7 @@ async function rerender(dir: string, o: Overrides): Promise<string> {
   if (capsule.mode === 'iterate') {
     const beforeDir = o.before ?? (recorded?.kind === 'change_request' ? path.join(dir, recorded.before) : undefined);
     if (beforeDir === undefined) throw new Refused('capsule.json records no input (A-351): pass --before, the world this change started from');
-    const before = await checked(beforeDir);
+    const before = await checked(beforeDir, true);
     text = renderReport({ plan, report, delta: diffWorlds(before.world, report.world), events });
     if (o.record) {
       const committed = await readFile(path.join(dir, 'REPORT.md'), 'utf8');

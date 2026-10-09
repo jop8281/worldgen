@@ -150,7 +150,7 @@ Paging exemptions:
 | close_out_epic_with_sub_issues | hard | 1.000 | 0.000 | 0.000, 0.000, 0.340, 0.000, 0.000 | 0.670 | legacy; mutants 3/8 | `tid_f694082b959c015c6b7e1a0a5d7a16de8aa265c102fd454897f6d88f0673d21e` |
 | merge_duplicate_issues | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000, 0.000 | 0.500 | legacy; mutants 5/8 | `tid_d9666d276e95e7e4ef50b9509afe20325a7ed3213dfb8bd50f58a7b4569c99d3` |
 
-Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/8* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 

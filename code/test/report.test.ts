@@ -223,7 +223,7 @@ describe('renderReport: a finished run', () => {
       '| resolve_password_ticket | easy | 1.000 | 0.000 | none | n/a | legacy; mutants 6/8 | `tid_<sha256>` |',
       '| escalate_acme | hard | 1.000 | 0.000 | 0.500, 0.250 | 0.750 | legacy; mutants 6/8 | `tid_<sha256>` |',
       '',
-      "Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).",
+      "Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/8* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).",
       '',
       'Decoys:',
       '',

@@ -66,6 +66,8 @@ const MUTANT_TEXT: Readonly<Record<MutantKind, { readonly expected: string; read
     hint: (call) => `The solution's calls with ${call} still score 1: the grader accepts a wrong value. Check the exact value the instruction asks for.`,
   },
 };
+/** Every engine mutant kind, in catalog order. The report counts its probe cells against this, so a new kind moves it. */
+export const MUTANT_KINDS: readonly MutantKind[] = Object.keys(MUTANT_TEXT).filter((k): k is MutantKind => Object.hasOwn(MUTANT_TEXT, k));
 
 export const ISSUES = {
   // Format and references
