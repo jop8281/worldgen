@@ -18,7 +18,7 @@ import type { RunEvent } from '../src/worldgen/events.ts';
 import { applyPlanPatch, changedSections, iteratePlanSchema, planPatchSchema, planWithWorldTests } from '../src/worldgen/iterate.ts';
 import { ModelError, type Model, type ProposeRequest } from '../src/worldgen/llm.ts';
 import { parsePlanYaml, renderPlanYaml, workflowIssues, type Plan } from '../src/worldgen/plan.ts';
-import { runWorldGen, stagePrompt, systemPrompt, type RunFs, type RunResult } from '../src/worldgen/run.ts';
+import { runWorldGen, stagePrompt, systemPrompt, stepBrief, type RunFs, type RunResult } from '../src/worldgen/run.ts';
 import { minimalWorld } from './helpers/world.ts';
 
 const HELPDESK = resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
@@ -378,7 +378,7 @@ describe('runWorldGen iterate: add refunds to a copy of the golden helpdesk', ()
   });
 
   it('asks the iterate plan step for open_questions with default answers, as create does (YOS-97)', () => {
-    const text = systemPrompt('plan', minimalWorld(), 'iterate');
+    const text = stepBrief('plan', minimalWorld(), 'iterate');
     assert.equal(text.includes('list each question you would ask a human about the request in open_questions, each with a question and a default_answer'), true);
   });
 
@@ -391,11 +391,12 @@ describe('runWorldGen iterate: add refunds to a copy of the golden helpdesk', ()
     assert.ok(plan.includes(`## Change request\n\n${REQUEST}`));
     assert.ok(plan.includes('## Existing world') && plan.includes('This world has no usable plan.yaml.'));
     assert.ok(plan.includes('name: helpdesk') && !plan.includes('## Existing plan'));
-    assert.equal(calls[0]?.system, systemPrompt('plan', minimalWorld(), 'iterate'));
-    assert.ok((calls[0]?.system ?? '').includes('An existing world must change to meet a change request.'));
+    assert.equal(calls[0]?.system, systemPrompt(minimalWorld()));
+    assert.ok((calls[0]?.prompt ?? '').startsWith(`${stepBrief('plan', minimalWorld(), 'iterate')}\n\n`));
+    assert.ok((calls[0]?.prompt ?? '').includes('An existing world must change to meet a change request.'));
     for (const c of calls.slice(1)) assert.ok(c.prompt.includes(`## Change request\n\n${REQUEST}`), c.tool.name);
     const frozen = { ...golden, tests: { ...golden.tests, issue_refund_on_resolved: ISSUE_REFUND_TEST } };
-    assert.equal(calls[1]?.prompt, stagePrompt('model', planFor(golden, REFUND_PLAN_OVER), frozen, null, REQUEST));
+    assert.equal(calls[1]?.prompt, `${stepBrief('model', minimalWorld(), 'iterate')}\n\n${stagePrompt('model', planFor(golden, REFUND_PLAN_OVER), frozen, null, REQUEST)}`);
   });
 });
 

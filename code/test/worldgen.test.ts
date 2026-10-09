@@ -22,7 +22,7 @@ import type { Input, InputDigest } from '../src/worldgen/input.ts';
 import { claudeCliModel, CallStalled, ModelError, StepShareExpired, type Model, type ProposeRequest } from '../src/worldgen/llm.ts';
 import { planCoverage, planSchemaFor } from '../src/worldgen/plan.ts';
 import { renderReport } from '../src/worldgen/report.ts';
-import { partialDir, pickExample, runWorldGen, scopeIssues, stagePrompt, systemPrompt, type RunResult } from '../src/worldgen/run.ts';
+import { partialDir, pickExample, runWorldGen, scopeIssues, stagePrompt, stepBrief, systemPrompt, type RunResult } from '../src/worldgen/run.ts';
 import { PLAN_BRIEF, STAGES } from '../src/worldgen/stages.ts';
 import { CUSTOMERS, EDITS, ESCALATE_TEST, PLAN, RESOLVE_TEST, TARGET } from './helpers/scripted-world.ts';
 import { minimalWorld } from './helpers/world.ts';
@@ -515,8 +515,7 @@ describe('runWorldGen create: the plan step', () => {
     assert.deepEqual(plan?.tool.inputSchema, z.toJSONSchema(planSchemaFor('description'), { io: 'input' }));
     assert.equal(plan?.system.includes(formatReference().trimEnd()), true);
     assert.equal(plan?.system.includes(renderWorldYaml(minimalWorld()).trimEnd()), true);
-    assert.equal(plan?.system.endsWith(PLAN_BRIEF), true);
-    assert.equal(plan?.prompt.startsWith('## Input (description)\n\nA helpdesk where overdue tickets escalate'), true);
+    assert.equal(plan?.prompt.startsWith(`## This step: plan\n\n${PLAN_BRIEF}\n\n## Input (description)\n\nA helpdesk where overdue tickets escalate`), true);
   });
 
   it('feeds plan schema errors back and accepts the corrected plan', async () => {
@@ -610,21 +609,32 @@ describe('runWorldGen create: an infeasible request is refused at plan (A-104)',
 
   it('asks the plan step to decide feasibility before anything else', async () => {
     const { calls } = await run([{ input: CODEC }]);
-    assert.match(calls[0]?.system ?? '', /stateful records/);
-    assert.match(calls[0]?.system ?? '', /feasibleIf/);
+    assert.match(calls[0]?.prompt ?? '', /stateful records/);
+    assert.match(calls[0]?.prompt ?? '', /feasibleIf/);
   });
 });
 
 describe('runWorldGen create: stage tools and scope', () => {
-  it('gives each stage the edit schema for exactly the sections it owns', async () => {
+  // A-409: the cache prefix runs tools, then system, so one edit tool and one system prompt let the four stages share a cached prefix.
+  it('gives every stage one edit tool over every stage\'s sections, and names each stage\'s own sections in its prompt', async () => {
     const { calls } = await run(HAPPY);
-    assert.deepEqual(calls[1]?.tool.inputSchema, editJsonSchema(['entities', 'routes']));
-    assert.deepEqual(calls[2]?.tool.inputSchema, editJsonSchema(['actions', 'jobs']));
-    assert.deepEqual(calls[3]?.tool.inputSchema, editJsonSchema(['seed']));
-    assert.deepEqual(calls[4]?.tool.inputSchema, editJsonSchema(['tasks']));
-    assert.equal(calls[1]?.system.endsWith(STAGES.model.brief), true);
-    assert.equal(calls[4]?.system.endsWith(STAGES.tasks.brief), true);
-    assert.equal(calls[1]?.prompt.includes('It may write only entities, routes.'), true);
+    for (const c of calls.slice(1)) {
+      assert.deepEqual(c.tool, {
+        name: 'edit_world', description: "Propose one WorldEdit for this stage. Write only the sections this step's prompt names: any other is refused.",
+        inputSchema: editJsonSchema(['entities', 'routes', 'actions', 'jobs', 'seed', 'tasks']),
+      });
+    }
+    assert.equal(calls[1]?.prompt.startsWith(`## This step: model\n\n${STAGES.model.brief}\n\n`), true);
+    assert.equal(calls[4]?.prompt.startsWith(`## This step: tasks\n\n${STAGES.tasks.brief}\n\n`), true);
+    assert.deepEqual(['It may write only entities, routes.', 'It may write only tasks.'].map((line, i) => calls[i === 0 ? 1 : 4]?.prompt.includes(line)), [true, true]);
+  });
+
+  it('sends every step of a run one system prompt with no step in it, and opens each prompt with its step (A-409)', async () => {
+    const { calls } = await run(HAPPY);
+    assert.deepEqual([...new Set(calls.map((c) => c.system))], [systemPrompt(minimalWorld())]);
+    assert.equal(calls[0]?.system.includes('## This step:'), false);
+    assert.deepEqual(calls.map((c) => c.prompt.split('\n')[0]), ['## This step: plan', '## This step: model', '## This step: workflow', '## This step: seed', '## This step: tasks']);
+    assert.notDeepEqual(calls[0]?.tool, calls[1]?.tool);
   });
 
   it('rejects edits to meta, to sections another stage owns, and to fixtures as edit.out_of_scope', async () => {
@@ -1643,7 +1653,7 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
   it('the workflow-stage prompt lists planned actions and the paths routes already own', () => {
     const prompt = stagePrompt('workflow', plan, TARGET, null);
     assert.deepEqual(listed(prompt, 'Required keys'), ['- actions.resolve_ticket (exists)', '- actions.escalate_ticket (exists)', '- jobs.escalate_overdue (exists)']);
-    assert.equal(systemPrompt('workflow', TARGET).includes('never edit, remove or replace a test'), true);
+    assert.equal(stepBrief('workflow', TARGET).includes('never edit, remove or replace a test'), true);
     assert.equal(prompt.includes('- POST /tickets (routes.create_ticket)'), true);
     assert.equal(prompt.includes('- PATCH /tickets/{id} (routes.update_ticket)'), true);
   });
@@ -1653,7 +1663,7 @@ describe('stage briefs name what the judge checks (YOS-45)', () => {
     const report = checkWorld(loaded.ok ? loaded.value : null);
     assert.equal(report.ok, true);
     if (!report.ok) return;
-    const system = systemPrompt('workflow', report.world);
+    const system = stepBrief('workflow', report.world);
     assert.equal(system.includes("an action's method and path, with every {param} segment counted as the same, must differ from every route's, or the engine raises route.duplicate_path"), true);
     assert.equal(system.includes('Example from the example world: routes.create_ticket declares POST /tickets, so no action may use POST /tickets. actions.assign_ticket uses POST /tickets/{id}/assign instead.'), true);
   });
@@ -2181,7 +2191,7 @@ describe('runWorldGen create: an OpenAPI operation a workflow action builds is p
   /** Replies as the live model did (YOS-244): a plan without the action's route, then a plain route for any operation the judge says is uncovered. */
   const liveLike = (req: ProposeRequest): Reply => {
     if (req.tool.name === 'submit_plan') return { input: req.prompt.includes(`input operation ${RESOLVE}`) ? { ...PLAN, routes: [...PLAN.routes, ACTION_ROUTE] } : PLAN };
-    const stage = /for the (\w+) stage/.exec(req.tool.description)?.[1];
+    const stage = /^## This step: (\w+)/.exec(req.prompt)?.[1];
     if (stage === 'model') {
       if (!req.prompt.includes(`input operation ${RESOLVE}`)) return { input: EDITS.model };
       return { input: { note: 'cover the resolve operation with a route', upsert: { entities: TARGET.entities, routes: { ...TARGET.routes, resolve_route: { op: 'update', entity: 'ticket', method: 'POST', path: '/tickets/{id}/resolve' } } } } };
