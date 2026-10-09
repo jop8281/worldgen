@@ -10,10 +10,14 @@ meta:
     tick: 0s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -1077,9 +1081,10 @@ tasks:
             ctx.api('POST', '/orders/' + paid[0].id + '/ship', {});
             ctx.api('PATCH', '/orders/' + paid[0].id, { item_count: paid[0].item_count + 1 });
           }
+    alternatives: []
   cancel_customer_unpaid_orders:
     difficulty: medium
-    instruction: The customer with the email edsger.dijkstra@example.com wants all of their unpaid (pending) orders cancelled. Cancel every pending order of that customer, with a reason. Leave their orders in any other status and every other customer's orders untouched.
+    instruction: The customer with the email edsger.dijkstra@example.com wants all of their unpaid (pending) orders cancelled. Cancel every pending order of that customer, and give each cancellation a reason that contains the word 'unpaid'. Leave their orders in any other status and every other customer's orders untouched.
     grader: |-
       (ctx) => {
         const c = ctx.seed.list('customer', { where: { email: 'edsger.dijkstra@example.com' } })[0];
@@ -1089,14 +1094,19 @@ tasks:
         ctx.guardChanges('only the status and note of the pending orders changed', targets.map((t) => (
           { entity: 'shop_order', id: t.id, kind: 'updated', fields: ['status', 'note'] }
         )));
-        let done = 0;
+        let cancelled = 0;
+        let reasoned = 0;
         for (const t of targets) {
           const end = ctx.db.get('shop_order', t.id);
-          if (end.status === 'cancelled') done += 1;
+          if (end.status !== 'cancelled') continue;
+          cancelled += 1;
+          if (typeof end.note === 'string' && /\bunpaid\b/i.test(end.note)) reasoned += 1;
         }
-        return done / targets.length;
+        ctx.goal(0.5, 'every pending order is cancelled', cancelled === targets.length);
+        ctx.goal(0.5, 'every cancellation reason mentions unpaid', reasoned === targets.length);
+        return ctx.score();
       }
-    solution: "(ctx) => { const cs = ctx.api('GET', '/customers?q=edsger.dijkstra'); ctx.assert(cs.status === 200, 'customer search failed'); const cust = cs.body.data.find((c) => c.email === 'edsger.dijkstra@example.com'); ctx.assert(cust, 'customer not found'); const ids = []; let cursor = null; do { const r = ctx.api('GET', '/customers/' + cust.id + '/orders?status=pending' + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'list orders failed: ' + JSON.stringify(r.body)); for (const o of r.body.data) ids.push(o.id); cursor = r.body.next_cursor; } while (cursor !== null && cursor !== undefined); ctx.assert(ids.length > 0, 'no pending orders found'); for (const id of ids) { const r = ctx.api('POST', '/orders/' + id + '/cancel', { reason: 'Cancelled at customer request' }); ctx.assert(r.status === 200, 'cancel ' + id + ' failed: ' + JSON.stringify(r.body)); } }"
+    solution: "(ctx) => { const cs = ctx.api('GET', '/customers?q=edsger.dijkstra'); ctx.assert(cs.status === 200, 'customer search failed'); const cust = cs.body.data.find((c) => c.email === 'edsger.dijkstra@example.com'); ctx.assert(cust, 'customer not found'); const ids = []; let cursor = null; do { const r = ctx.api('GET', '/customers/' + cust.id + '/orders?status=pending' + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'list orders failed: ' + JSON.stringify(r.body)); for (const o of r.body.data) ids.push(o.id); cursor = r.body.next_cursor; } while (cursor !== null && cursor !== undefined); ctx.assert(ids.length > 0, 'no pending orders found'); for (const id of ids) { const r = ctx.api('POST', '/orders/' + id + '/cancel', { reason: 'Cancelled: unpaid order, customer request' }); ctx.assert(r.status === 200, 'cancel ' + id + ' failed: ' + JSON.stringify(r.body)); } }"
     decoys:
       - why: tries to cancel every order of the customer, including the paid one, which is a change the task did not ask for
         script: "(ctx) => { const cust = ctx.api('GET', '/customers?q=edsger.dijkstra').body.data.find((c) => c.email === 'edsger.dijkstra@example.com'); const orders = ctx.api('GET', '/customers/' + cust.id + '/orders').body.data; for (const o of orders) ctx.api('POST', '/orders/' + o.id + '/cancel', { reason: 'Cancelled' }); }"
@@ -1112,6 +1122,7 @@ tasks:
             for (const o of pending) ctx.api('POST', '/orders/' + o.id + '/cancel', { reason: 'Cancelled at customer request' });
             ctx.api('PATCH', '/orders/' + pending[0].id, { item_count: pending[0].item_count + 1 });
           }
+    alternatives: []
   refund_large_gb_pro_orders:
     difficulty: hard
     instruction: Refund every delivered order worth more than $100 (more than 10000 cents) that belongs to a customer on the team plan. Orders of customers on other plans, orders in other statuses and orders of $100 or less must not change. The store has several pages of orders, so check them all.
@@ -1159,3 +1170,4 @@ tasks:
             for (const o of targets) ctx.api('POST', '/orders/' + o.id + '/refund', {});
             ctx.api('PATCH', '/orders/' + targets[0].id, { item_count: targets[0].item_count + 1 });
           }
+    alternatives: []

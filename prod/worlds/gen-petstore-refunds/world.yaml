@@ -1140,7 +1140,7 @@ tasks:
           status: pending
   request_refund_mochi:
     difficulty: easy
-    instruction: "The customer who bought the pet named Mochi wants money back: 6000 (USD minor units), because the pet was not as described. Earlier requests for that order were rejected, but file a new refund request for it with that reason. Change nothing else."
+    instruction: 'The customer who bought the pet named Mochi wants money back: 6000 (USD minor units), because the pet was not as described. Earlier requests for that order were rejected, but file a new refund request for it. The refund reason must include the phrase "not as described". Change nothing else.'
     grader: |-
       (ctx) => {
         const pets = ctx.seed.list('pet', { where: { name: 'Mochi' } });
@@ -1152,8 +1152,8 @@ tasks:
         ctx.guardChanges('only new refund rows on the Mochi order were created', mine.map((r) => ({ entity: 'refund', id: r.id, kind: 'created', fields: ['orderId', 'amount', 'reason', 'status', 'restock', 'decision_note', 'decided_at'] })));
         const one = mine.length === 1 ? mine[0] : null;
         ctx.goal(0.4, 'one new requested refund on the Mochi order', one !== null && one.status === 'requested');
-        ctx.goal(0.4, 'amount is 6000', one !== null && one.amount === 6000);
-        ctx.goal(0.2, 'reason is given', one !== null && typeof one.reason === 'string' && one.reason.trim().length > 0);
+        ctx.goal(0.3, 'amount is 6000', one !== null && one.amount === 6000);
+        ctx.goal(0.3, 'reason includes the phrase not as described', one !== null && typeof one.reason === 'string' && /not as described/i.test(one.reason));
         return ctx.score();
       }
     solution: |-
@@ -1274,7 +1274,7 @@ tasks:
           status: sold
   settle_requested_refunds:
     difficulty: hard
-    instruction: Go through every refund that is still in status requested. Reject each one above 10000 (USD minor units) with a note that says why, and approve each one at or below 10000 without restocking the pet. Refunds that are already approved or rejected stay as they are, and no pet or order changes.
+    instruction: Go through every refund that is still in status requested. Reject each one above 10000 (USD minor units) with a note that says why and includes the limit number 10000, and approve each one at or below 10000 without restocking the pet. Each rejection note must include the number 10000. Refunds that are already approved or rejected stay as they are, and no pet or order changes.
     grader: |-
       (ctx) => {
         const targets = ctx.seed.list('refund', { where: { status: 'requested' } });
@@ -1285,7 +1285,7 @@ tasks:
           const end = ctx.db.get('refund', t.id);
           let ok = false;
           if (end !== null) {
-            if (t.amount > 10000) ok = end.status === 'rejected' && typeof end.decision_note === 'string' && end.decision_note.trim().length > 0;
+            if (t.amount > 10000) ok = end.status === 'rejected' && typeof end.decision_note === 'string' && end.decision_note.includes('10000');
             else ok = end.status === 'approved' && end.restock === false;
           }
           ctx.goal(1 / targets.length, 'refund ' + t.id + ' decided by the amount rule', ok);

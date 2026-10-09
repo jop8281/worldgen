@@ -1,3 +1,4 @@
+revision: 2
 software: Linear-style issue tracker (Linear issues, projects, milestones and labels, exposed as a REST API)
 summary: A single-team issue tracker seeded from a real 123-issue Linear backlog (team key YOS, project WorldGen). Issues move through Backlog, In Progress, In Review, Done, Canceled and Duplicate. They carry a priority, a project, a milestone, labels, an optional parent and a completion time. Agents triage, move, relabel, re-milestone, close out and de-duplicate issues. Status changes go through actions that enforce the workflow rules and write an audit history. Two jobs auto-close parents and archive old done issues.
 clock:
@@ -96,6 +97,7 @@ workflows:
       - add_label
       - remove_label
 jobs: []
+acceptanceTests: []
 routes:
   - id: list_issues
     method: GET
@@ -231,8 +233,8 @@ tasks:
     decoyIdea: Moves a different issue with a similar 'Get familiar' style title, or PATCHes status (refused) and then cancels it instead of starting it.
   - id: cancel_stale_backlog_in_milestone
     difficulty: medium
-    intent: "Cancel every Backlog issue in the milestone named in the instruction (a seeded later-stage milestone such as 'Later: Fidelity and factory operations') that carries the label named in the instruction (such as 'factory'). Give a reason. Leave issues in other milestones, issues with other statuses and issues with a different label alone. The list spans more than one page, so the agent has to read milestones and labels first and then page issues and issue_labels."
-    decoyIdea: Cancels every backlog issue in that milestone and ignores the label, or filters by label but reads only page 1, or cancels the issues in all milestones with that label.
+    intent: "Cancel every Backlog issue in the milestone named in the instruction (a seeded later-stage milestone such as 'Later: Fidelity and factory operations') that carries the label named in the instruction (such as 'factory'). Give each cancellation a reason, and the instruction states the reason must contain the keyword 'stale'. The grader checks that each cancel comment (comment.body) on a target issue contains 'stale' (case-insensitive), so nonsense such as 'bananas' scores below 1. Leave issues in other milestones, issues with other statuses and issues with a different label alone. The list spans more than one page, so the agent has to read milestones and labels first and then page issues and issue_labels."
+    decoyIdea: Cancels every backlog issue in that milestone and ignores the label, or filters by label but reads only page 1, or cancels the issues in all milestones with that label, or cancels the right issues with a reason that does not contain 'stale'.
   - id: close_out_epic_with_sub_issues
     difficulty: hard
     intent: 'Close out the parent issue YOS-91 (a seeded parent that has open sub-issues): complete each sub-issue that is in_review or in_progress, cancel each sub-issue still in backlog with a reason, then complete the parent. complete_issue on the parent is refused until every child is closed, so order matters. The grader checks the ending statuses, that no unrelated issue changed, and through ctx.trace that every child was closed before the parent was completed.'
@@ -293,6 +295,8 @@ assumptions:
     why: Linear auto-archives closed issues. The imported data spans only one day, so the job is quiet at the start and only tests move the clock.
   - decision: 'The list envelope uses the engine defaults: data, next_cursor, limit and cursor. The error body is {error:{code,message}}.'
     why: No source API spec was given, so nothing contradicts the defaults.
+  - decision: The required keyword in the cancel reason is 'stale', matching the task name, checked case-insensitively against the new comment.body on each target issue.
+    why: The request asks for a keyword the task already gives; the task id says stale backlog.
 outOfScope:
   - what: Users, assignees, authentication, permissions and workspace membership
     why: The CSV has no people columns. Inventing them would be unsourced.
@@ -306,4 +310,5 @@ outOfScope:
     why: The CSV holds a single team. Fixtures are loaded by code, not by an API.
   - what: Hard delete of issues
     why: Linear archives or cancels instead of deleting, so there is no delete route for issue. Only comments can be deleted.
-changes: []
+changes:
+  - tasks.cancel_stale_backlog_in_milestone

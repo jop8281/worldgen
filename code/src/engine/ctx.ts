@@ -158,11 +158,11 @@ export const GRADER_CTX = {
   seed: { sig: DB_SIG, doc: 'Start state, read-only.' },
   changes: {
     sig: '({ ignore?: entity[], includeJobs?: boolean }?) => { entity, id, kind, fields, origin }[]',
-    doc: 'Every row created, updated or deleted since seed, over all entities. Excludes engine fields (updated_at) and, by default, changes made by jobs. Use it for collateral checks.',
+    doc: 'Every row created, updated or deleted since seed, over all entities. A call change counts every field a call wrote, so a reverted call edit now appears as an updated change (A-387); a job change is the net change. Excludes engine fields (updated_at) and, by default, changes made by jobs. Use it for collateral checks.',
   },
   guardChanges: {
     sig: '(name: string, allowed: { entity: string; id: string; kind: "created" | "updated" | "deleted"; fields: readonly string[] }[]) => boolean',
-    doc: 'Hard collateral guard over ctx.changes(): every change must match an exact entity, row id and kind, and every changed field must be explicitly allowed for that match. No wildcards. An empty list permits no changes. Engine fields and job changes are excluded, as in ctx.changes(). A failed guard makes the grade 0 even if the grader returns 1. Declare target fields and legitimate side effects separately; use ctx.trace() guards for history, including edits later undone.',
+    doc: 'Hard collateral guard over ctx.changes(): every change must match an exact entity, row id and kind, and every changed field must be explicitly allowed for that match. No wildcards. An empty list permits no changes. Engine fields and job changes are excluded, and a reverted call edit counts, as in ctx.changes() (A-387). A failed guard makes the grade 0 even if the grader returns 1. Declare target fields and legitimate side effects separately; use ctx.trace() guards for history such as call order.',
   },
   trace: {
     sig: '() => { seq, method, path, status, routeId, at, body, writes }[]',

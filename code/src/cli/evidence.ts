@@ -15,11 +15,11 @@ const DEFAULT_EXPORTS = path.join(REPO_DIR, 'eval/dataset');
 const USAGE = `usage: bun run evidence [<export-dir>...]
 
 Re-checks each dataset export from the repository alone (A-392). An export dir holds one folder per world, each with
-manifest.json, dataset.jsonl, failures.jsonl and the frozen world the episodes ran on, in world/world.yaml.
+manifest.json, dataset.jsonl (and a version 1 export's failures.jsonl) and the frozen world the episodes ran on, in world/world.yaml.
 With no argument it checks every export under ../eval/dataset.
 
 For every folder it prints:
-  files      dataset.jsonl and failures.jsonl against the sha-256 in manifest.json
+  files      dataset.jsonl, and a version 1 export's failures.jsonl, against the sha-256 in manifest.json
   world      the sha-256 of the frozen world's canonical render against the manifest's world_version
   episodes   each episode replayed on that world and graded by the verifier: recorded score, replayed score,
              the seed hash, how many calls answered as recorded, and the end-state hash
@@ -41,7 +41,8 @@ function print(f: FolderCheck, out: (line: string) => void): void {
   for (const r of f.replays) {
     out(`  ${r.agrees ? 'ok  ' : 'DIFF'} ${r.episode}  recorded ${r.recorded ?? 'none'}  replayed ${r.replayed}  task ${r.taskOk ? 'ok' : 'DIFF'}  seed ${r.seedOk ? 'ok' : 'DIFF'}  calls ${r.calls - r.mismatches}/${r.calls}  final ${r.finalOk ? 'ok' : 'DIFF'}`);
   }
-  if (f.failedRuns > 0) out(`  ${f.failedRuns} failed run(s) in failures.jsonl, with no score to check`);
+  for (const g of f.gaps) out(`  note   frozen world predates A-388: ${g}`);
+  if (f.failedRuns > 0) out(`  ${f.failedRuns} run(s) that are not a complete success, counted and not replayed`);
 }
 
 export async function main(argv: readonly string[], out: (line: string) => void = (l) => process.stdout.write(`${l}\n`)): Promise<number> {

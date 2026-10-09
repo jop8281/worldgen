@@ -40,12 +40,10 @@ Jobs: none.
 
 ## Changes
 
-- item_changed `tasks.deliver_cat_juniper.allows`
-- item_changed `tasks.order_biscuit.allows`
-- item_changed `tasks.release_stale_placed_orders.allows`
-- item_changed `tasks.request_refund_mochi.allows`
-- item_changed `tasks.restock_pepper_refund.allows`
-- item_changed `tasks.settle_requested_refunds.allows`
+- snippet_changed `tasks.request_refund_mochi.grader`
+- item_changed `tasks.request_refund_mochi.instruction`
+- snippet_changed `tasks.settle_requested_refunds.grader`
+- item_changed `tasks.settle_requested_refunds.instruction`
 
 ## Assumed and why
 
@@ -89,6 +87,8 @@ Jobs: none.
   - Why: The allows where has no comparison operators, and the instruction gives names, not ids.
 - Side effects the instruction implies are allowed: place_order moves the pet to pending, deliver_order sets the pet sold, delete_order releases the pet, approve_refund with restock moves the pet to available. Fields set by actions (status, complete, restock, decided_at, decision_note) are listed on the updated entity.
   - Why: The allows is derived from what the instruction asks for, and these are the effects of the actions that carry it out.
+- request_refund_mochi must put the phrase "not as described" in refund.reason, and settle_requested_refunds must put the number 10000 in each rejection's decision_note. The instructions state this and the graders check those fields.
+  - Why: The instruction already gives the reason (not as described) and the threshold (10000), and the free-text gate needs the graders to read the text the solution writes.
 
 ## Questions asked of the input
 
@@ -144,16 +144,16 @@ Jobs: none.
 
 The engine check passed: 11 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_d35309768d6d3c8d49388536a5858bdaccd577d36ba6a26a586eb2d97764c045`.
+World id (WID): `wid_85e8202efcc6de904dbc9c530b90aa69d61252526060917bb223242d9bf81f2d`.
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| order_biscuit | easy | 1.000 | 0.000 | 0.000, 0.700 | n/a | declared (2); mutants 4/7 | `tid_e2b44620abb9d67d0534e82120517f67640a166b75fa1b1e883d9c19b7a92488` |
-| deliver_cat_juniper | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.500 | n/a | declared (2); mutants 5/7 | `tid_90105d0f2da3d241fd87f390b6a64aed7b1c1259abb4b115477c33ffab4ba2d7` |
-| release_stale_placed_orders | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000 | 0.500 | declared (2); mutants 4/7 | `tid_0e6d4c8073e4316dae3646efc90d3b0824b872193a4e29183969dac160d2bec2` |
-| request_refund_mochi | easy | 1.000 | 0.000 | 0.000 | n/a | declared (1); mutants 3/7 | `tid_2147be8cf95c07e1eeb6299623960c8f35fb0e0bf411c49bf4fc6cebbfa01bc9` |
-| restock_pepper_refund | medium | 1.000 | 0.000 | 0.300, 0.700, 0.000, 0.000 | n/a | declared (2); mutants 4/7 | `tid_3b48a19874c3a397e25819cda8de970e6fb6d2261b568dccd97e84e5d8646ea4` |
-| settle_requested_refunds | hard | 1.000 | 0.000 | 0.500, 0.500, 0.500, 0.000 | 0.500 | declared (1); mutants 2/7 | `tid_ef6e9f00ee77846dea62c9f66e40f32f41426dd63ee1fc7e2b9a21df7dc7ef53` |
+| order_biscuit | easy | 1.000 | 0.000 | 0.000, 0.700 | n/a | declared (2); mutants 4/8 | `tid_e2b44620abb9d67d0534e82120517f67640a166b75fa1b1e883d9c19b7a92488` |
+| deliver_cat_juniper | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.500 | n/a | declared (2); mutants 5/8 | `tid_90105d0f2da3d241fd87f390b6a64aed7b1c1259abb4b115477c33ffab4ba2d7` |
+| release_stale_placed_orders | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000 | 0.500 | declared (2); mutants 4/8 | `tid_0e6d4c8073e4316dae3646efc90d3b0824b872193a4e29183969dac160d2bec2` |
+| request_refund_mochi | easy | 1.000 | 0.000 | 0.000 | n/a | declared (1); mutants 3/8 | `tid_3b27db78d383125627cf46ace6e278760645d85a4943046f0086943f154751ae` |
+| restock_pepper_refund | medium | 1.000 | 0.000 | 0.300, 0.700, 0.000, 0.000 | n/a | declared (2); mutants 4/8 | `tid_3b48a19874c3a397e25819cda8de970e6fb6d2261b568dccd97e84e5d8646ea4` |
+| settle_requested_refunds | hard | 1.000 | 0.000 | 0.500, 0.500, 0.000, 0.000 | 0.500 | declared (1); mutants 2/8 | `tid_cb7f1b74f7f16ea51574074fd2e13dc84ebb2b859fd6b2185c3b2b1bdafab9a7` |
 
 Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
@@ -175,7 +175,7 @@ Decoys:
 - `restock_pepper_refund` 0.000: rejects the Pepper refund instead of approving it
 - `settle_requested_refunds` 0.500: decides only the first requested refund and stops, leaving the others
 - `settle_requested_refunds` 0.500: approves every requested refund regardless of amount
-- `settle_requested_refunds` 0.500: rejects every requested refund regardless of amount
+- `settle_requested_refunds` 0.000: rejects every requested refund regardless of amount
 - `settle_requested_refunds` 0.000: decides each refund by the rule but approves the small ones with restock true, which puts sold pets back on sale
 
 ## Coverage
@@ -193,13 +193,13 @@ From each reference solution's trace. A hard task must change more than one row 
 
 ## Run
 
-Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $1.60.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $3.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 1.81 | 0.3399 |
-| tasks | 1 | 0.24 | 0.2432 |
-| Total | 2 | 2.05 | 0.5831 |
+| plan | 1 | 0.16 | 0.1197 |
+| tasks | 1 | 0.21 | 0.2447 |
+| Total | 2 | 0.37 | 0.3644 |
 
 Skipped:
 
@@ -207,4 +207,4 @@ Skipped:
 - `workflow`: no planned change reaches actions, jobs, entities, routes, tests
 - `seed`: no planned change reaches seed, entities, fixtures
 
-Run total: 2.08 minutes, $0.5831.
+Run total: 0.39 minutes, $0.3644.

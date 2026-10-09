@@ -715,7 +715,7 @@ tests:
 tasks:
   cancel_marias_far_appointment:
     difficulty: easy
-    instruction: Cancel the upcoming appointment of the patient Maria Lopez that is more than 24 hours away, and give a cancel reason. Her other appointments must stay as they are.
+    instruction: Cancel the upcoming appointment of the patient Maria Lopez that is more than 24 hours away. The cancel reason must mention the word 'rescheduling'. Her other appointments must stay as they are.
     decoys: []
     alternatives: []
   book_earliest_cardiology_slot:
@@ -730,6 +730,6 @@ tasks:
     alternatives: []
   clear_dr_patel_calendar_for_leave:
     difficulty: hard
-    instruction: Dr. Priya Patel is going on leave starting now. Deactivate her. Cancel every one of her booked appointments that can still be cancelled under the clinic's 24-hour cancellation rule, giving each a cancel reason. Appointments that cannot be cancelled must stay booked. Then close all of her open slots, including the ones freed by those cancellations, so nobody else can book them. Leave every other doctor, patient and slot alone.
+    instruction: Dr. Priya Patel is going on leave starting now. Deactivate her. Cancel every one of her booked appointments that can still be cancelled under the clinic's 24-hour cancellation rule, giving each a cancel reason that includes the words 'on leave'. Appointments that cannot be cancelled must stay booked. Then close all of her open slots, including the ones freed by those cancellations, so nobody else can book them. Leave every other doctor, patient and slot alone.
     decoys: []
     alternatives: []

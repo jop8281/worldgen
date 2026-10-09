@@ -141,6 +141,14 @@ export const BAD_TASKS: readonly BadTask[] = [
     },
   },
   {
+    id: 'GR-freetext-unchecked', note: 'easy task also renames the ticket; the grader allows the subject but never reads it (A-388)', code: 'task.freetext_unchecked',
+    expect: 'present', taskId: 'pend_hd1005',
+    mutate: (w) => {
+      task(w, 'pend_hd1005').solution = SNIPPETS.easySolution.replace("{ status: 'pending' }", "{ status: 'pending', subject: 'Printer jammed again' }");
+      task(w, 'pend_hd1005').grader = SNIPPETS.easyGrader.replace("c.fields.some((f) => f !== 'status')", "c.fields.some((f) => f !== 'status' && f !== 'subject')");
+    },
+  },
+  {
     id: 'GR-decoy-full', note: 'medium decoy does the work and also rewrites a target subject; the grader allows it', code: 'task.decoy_full_marks',
     expect: 'present', taskId: 'pend_open_urgent', accept: ['task.mutant_full_marks'],
     mutate: (w) => {

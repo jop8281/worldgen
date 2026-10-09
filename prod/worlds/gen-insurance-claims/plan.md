@@ -2,7 +2,7 @@
 
 An insurance claims world. Policyholders hold policies with per-coverage limits and per-claim deductibles. Claims are filed against a coverage, reviewed by an adjuster, approved with the deductible and the remaining limit applied (reserving money on the coverage), then paid out, or denied. Adjusters raise fraud flags that block approval and payout until they are cleared or confirmed. Confirming fraud denies the claim and releases the reserve. Jobs expire policies and auto-close old paid claims.
 
-- Revision: 1
+- Revision: 2
 - Verdict: proceed
 - Clock: starts 2026-10-07T09:00:00.000Z, tick 0s
 
@@ -184,8 +184,8 @@ An insurance claims world. Policyholders hold policies with per-coverage limits 
 
 - `start_review_newest_submitted_claim` (easy): Assign adjuster Priya Nair to the most recently submitted claim, still in submitted status, on a named policyholder's policy, moving it to under_review.
   - Decoy idea: Reviews the oldest submitted claim of that policyholder, or uses a claim on another policy.
-- `confirm_high_severity_fraud_flag` (medium): One policyholder has an under-review claim carrying an open high-severity fraud flag, alongside a medium-severity open flag on another of their claims. Confirm the high-severity flag with a note, so that claim is denied for fraud and the other claim is left alone.
-  - Decoy idea: Denies the claim directly with deny_claim, which leaves the flag open. Or confirms the medium flag, or clears the high flag.
+- `confirm_high_severity_fraud_flag` (medium): One policyholder has an under-review claim carrying an open high-severity fraud flag, alongside a medium-severity open flag on another of their claims. Confirm the high-severity flag with a resolution note that contains the word 'forged', so that claim is denied for fraud and the other claim is left alone. The grader checks that fraud_flag.resolution_note contains 'forged'.
+  - Decoy idea: Denies the claim directly with deny_claim, which leaves the flag open. Or confirms the medium flag, or clears the high flag. Or confirms the right flag with a note that lacks the keyword.
 - `approve_and_pay_clean_claim` (medium): A named policyholder's under-review collision claim has no fraud flags. Approve it, then pay it by bank transfer, so the deductible is applied and the coverage paid_amount rises by the approved amount.
   - Decoy idea: Approves but never pays. Or pays a different under-review claim of the same policyholder on another coverage.
 - `approve_unflagged_water_damage_claims` (hard): Approve every under-review claim on a water_damage coverage that has no open fraud flag. The matching claims span several policies and more than one page of coverages and claims. Flagged claims must stay under review, and nothing else may change.
@@ -238,6 +238,8 @@ An insurance claims world. Policyholders hold policies with per-coverage limits 
   - Why: Fixes the contract the acceptance tests assert.
 - Error bodies use the default world template {error:{code,message}}. An unknown ref in an action input is refused by input validation with 400 input.invalid.
   - Why: Matches the engine defaults.
+- The confirm_high_severity_fraud_flag instruction will require the resolution note to contain the keyword 'forged', and the grader checks fraud_flag.resolution_note for it, case-insensitively.
+  - Why: A-388 free-text gate: the grader must read the text the solution writes, so nonsense scores below 1.
 
 ## Out of scope
 
@@ -258,4 +260,4 @@ An insurance claims world. Policyholders hold policies with per-coverage limits 
 
 ## Changes
 
-None. The plan changes no existing item.
+- tasks.confirm_high_severity_fraud_flag

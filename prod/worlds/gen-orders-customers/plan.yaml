@@ -1,3 +1,4 @@
+revision: 2
 software: 'Shopify-style Admin orders and customers API (order lifecycle: pending, paid, shipped, delivered, cancelled, refunded)'
 summary: A small storefront back office. Customers (18) place orders (72) that move through a payment and fulfilment lifecycle. Agents list and filter orders, then pay, ship, deliver, cancel or refund them. A nightly job cancels stale unpaid orders. Seed rows come from the two imported CSV fixtures, with ids and timestamps kept as given.
 clock:
@@ -54,6 +55,7 @@ jobs:
   - name: cancel_stale_pending
     every: 1d
     rule: Cancel each pending order whose placed_at is at least 7 days (10080 minutes) before engine time. Leave every other status alone. The seed has several pending orders older than 7 days, so the first run changes data.
+acceptanceTests: []
 routes:
   - id: list_customers
     method: GET
@@ -123,8 +125,8 @@ tasks:
     decoyIdea: Mark it shipped with a plain PATCH (rejected, as status is readonly), or ship a paid order of a different customer with a similar name.
   - id: cancel_customer_unpaid_orders
     difficulty: medium
-    intent: Cancel every pending order of the customer with a given email (a customer with 4 or more orders in mixed states). Orders in other statuses and other customers' pending orders stay untouched. The agent must look up the customer by email, list that customer's orders and filter by status.
-    decoyIdea: Cancel all of that customer's orders including paid ones (the action refuses these, so partial), or cancel every pending order in the store, or list only the first page of /orders and miss some.
+    intent: Cancel every pending order of the customer with a given email (a customer with 4 or more orders in mixed states). Each cancellation must pass a reason that contains the word 'unpaid', and the instruction says so. The grader checks that each cancelled order's note contains 'unpaid', so nonsense text scores below 1. Orders in other statuses and other customers' pending orders stay untouched. The agent must look up the customer by email, list that customer's orders and filter by status.
+    decoyIdea: Cancel all of that customer's orders including paid ones (the action refuses these, so partial), or cancel every pending order in the store, or list only the first page of /orders and miss some, or cancel the right orders with a reason that does not mention 'unpaid'.
   - id: refund_large_gb_pro_orders
     difficulty: hard
     intent: Refund every delivered order over $100 (10000 cents) that belongs to a customer in country GB on the pro plan. Orders of other countries or plans, and orders under the limit, must not change. It needs a customer lookup with filters, then orders from all 3 pages. Seed anchors place targets on page 2 and 3, and one near-miss order sits at exactly 10000 cents.
@@ -171,6 +173,8 @@ assumptions:
     why: All seeded rows must be in the past. 72 orders then give 3 pages, so paging matters.
   - decision: Customer lists use pageSize 10 (18 customers gives 2 pages). Customer sort and search are on name and email.
     why: With only 18 customers, a default 25 would never page.
+  - decision: The required cancel reason keyword is 'unpaid', matched case-insensitively in shop_order.note.
+    why: The task is about unpaid (pending) orders, so the word comes from the task itself and a free-text check can reject nonsense such as 'bananas'.
 outOfScope:
   - what: Payments, card capture, payment gateways and real refund amounts
     why: The data holds only an order total and status. Pay and refund are state changes only.
@@ -182,4 +186,5 @@ outOfScope:
     why: All orders are USD and have one total.
   - what: Authentication, webhooks and customer deletion
     why: They add no graded behaviour for this order lifecycle, and orders restrict customer deletion.
-changes: []
+changes:
+  - tasks.cancel_customer_unpaid_orders

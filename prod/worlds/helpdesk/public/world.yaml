@@ -1610,6 +1610,6 @@ tasks:
     alternatives: []
   escalate_breached_enterprise_tickets:
     difficulty: hard
-    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason. Change nothing else.
+    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason that names the SLA breach. Change nothing else.
     decoys: []
     alternatives: []

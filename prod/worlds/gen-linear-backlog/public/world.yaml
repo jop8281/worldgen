@@ -2525,7 +2525,7 @@ tasks:
     alternatives: []
   cancel_stale_backlog_in_milestone:
     difficulty: medium
-    instruction: "Clean up the backlog of the milestone 'Later: Fidelity and factory operations': cancel every issue in it that is still in Backlog and carries the label 'area:engine'. Give each cancellation a short reason. Leave all other issues alone, including issues in other statuses, in other milestones, or with other labels."
+    instruction: "Clean up the backlog of the milestone 'Later: Fidelity and factory operations': cancel every issue in it that is still in Backlog and carries the label 'area:engine'. Give each cancellation a short reason that contains the word 'stale'. Leave all other issues alone, including issues in other statuses, in other milestones, or with other labels."
     decoys: []
     alternatives: []
   close_out_epic_with_sub_issues:

@@ -4,10 +4,17 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { finishAtOnce, runLocalEpisode } from '../src/dataset/local.ts';
-import { isCompleteSuccess, redactor, type Episode } from '../src/dataset/schema.ts';
+import { isCompleteSuccess, outcomeOf, redactor, type Episode } from '../src/dataset/schema.ts';
 import { NO_MODEL, summarizeEpisodes } from '../src/studio/analytics.ts';
 
 const HELPDESK = path.resolve(import.meta.dirname, '../../prod/worlds/helpdesk');
+
+/** `ep` with `over` applied and its outcome derived again, as a record with those fields would carry it (A-389). */
+function edited(ep: Episode, over: Partial<Episode>): Episode {
+  const merged = { ...ep, ...over };
+  const { goals, guards } = merged.outcome;
+  return { ...merged, outcome: outcomeOf(merged, goals === null || guards === null ? null : { goals, guards }) };
+}
 
 describe('summarizeEpisodes: agent-episode analytics (YOS-190)', () => {
   let out: string;
@@ -36,15 +43,15 @@ describe('summarizeEpisodes: agent-episode analytics (YOS-190)', () => {
 
   it('computes success rate and cost per success once a group holds a complete success', () => {
     // An edited copy stands in for a paid run here, so only the arithmetic is tested, never a mocked UI success.
-    const success: Episode = { ...real[0]!, episode_id: 'paid__assign_newest_acme_ticket__1', run_id: 'paid', model: 'claude-sonnet-5-5', score: 1, usage: { ...real[0]!.usage, cost_usd: 0.02, model_calls: 1 } };
-    const missed: Episode = { ...success, episode_id: 'paid__assign_newest_acme_ticket__2', score: 0 };
+    const success = edited(real[0]!, { episode_id: 'paid__assign_newest_acme_ticket__1', run_id: 'paid', model: 'claude-sonnet-5-5', score: 1, usage: { ...real[0]!.usage, cost_usd: 0.02, model_calls: 1 } });
+    const missed = edited(success, { episode_id: 'paid__assign_newest_acme_ticket__2', score: 0 });
     assert.equal(isCompleteSuccess(success), true);
     const sonnet = summarizeEpisodes([...real, success, missed]).find((x) => x.model === 'claude-sonnet-5-5');
     assert.deepEqual([sonnet?.runs, sonnet?.successes, sonnet?.successRate, sonnet?.costUsd, sonnet?.costPerSuccessUsd, sonnet?.failures], [2, 1, 0.5, 0.04, 0.04, { 'scored 0': 1 }]);
   });
 
   it('keeps free noop runs out of a Sonnet group, so they never count as Sonnet failures', () => {
-    const paid: Episode = { ...real[0]!, episode_id: 'paid__assign_newest_acme_ticket__1', run_id: 'paid', model: 'claude-sonnet-5-5', score: 1, usage: { ...real[0]!.usage, cost_usd: 0.02, model_calls: 1 } };
+    const paid = edited(real[0]!, { episode_id: 'paid__assign_newest_acme_ticket__1', run_id: 'paid', model: 'claude-sonnet-5-5', score: 1, usage: { ...real[0]!.usage, cost_usd: 0.02, model_calls: 1 } });
     assert.deepEqual(summarizeEpisodes([...real, paid]).map((g) => [g.model, g.runs, g.successes, g.successRate]), [
       ['claude-sonnet-5-5', 1, 1, 1],
       [NO_MODEL, 2, 0, 0],
@@ -52,7 +59,17 @@ describe('summarizeEpisodes: agent-episode analytics (YOS-190)', () => {
   });
 
   it('names a run that stopped early by its stop reason', () => {
-    const limited: Episode = { ...real[0]!, episode_id: 'cut__assign_newest_acme_ticket__1', run_id: 'cut', stop_reason: 'turn_limit', score: null };
+    const limited = edited(real[0]!, { episode_id: 'cut__assign_newest_acme_ticket__1', run_id: 'cut', stop_reason: 'turn_limit', score: null });
     assert.deepEqual(summarizeEpisodes([limited])[0]?.failures, { turn_limit: 1 });
+  });
+
+  it('names a failure by the public counts the verifier gave: a broken guard, or goals met of total, never a grader string', () => {
+    const counted = (score: number, goals: [number, number], guards: [number, number]): Episode => edited(
+      { ...real[0]!, outcome: { ...real[0]!.outcome, goals: { met: goals[0], total: goals[1] }, guards: { held: guards[0], total: guards[1] } } },
+      { episode_id: `g${score}${goals.join('')}${guards.join('')}__assign_newest_acme_ticket__1`, run_id: `g${score}${goals.join('')}${guards.join('')}`, score },
+    );
+    assert.deepEqual(summarizeEpisodes([counted(0, [2, 2], [0, 1]), counted(0.5, [1, 2], [1, 1]), counted(0, [0, 2], [1, 1])])[0]?.failures, {
+      'guard broken': 1, '1 of 2 goals met': 1, '0 of 2 goals met': 1,
+    });
   });
 });

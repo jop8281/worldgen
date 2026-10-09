@@ -1260,11 +1260,11 @@ tasks:
     alternatives: []
   escalate_breached_enterprise_tickets:
     difficulty: hard
-    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason. Change nothing else.
+    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason that contains the word SLA. Change nothing else.
     decoys: []
     alternatives: []
   resolve_and_reopen_stale_ticket:
     difficulty: medium
-    instruction: Northwind Health has a ticket that we resolved within the last few days, but the customer has since written back on it saying the problem is not fixed. Reopen that ticket with a reason. Leave every other ticket alone.
+    instruction: Northwind Health has a ticket that we resolved within the last few days, but the customer has since written back on it saying the problem is not fixed. Reopen that ticket with a reason that contains the word "replied". Leave every other ticket alone.
     decoys: []
     alternatives: []

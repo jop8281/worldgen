@@ -1,3 +1,4 @@
+revision: 2
 software: Zendesk Support-style helpdesk (tickets API) with SLA policies and PagerDuty-style on-call escalation
 summary: A customer-support helpdesk. Customers on standard, premium or enterprise tiers file tickets. Agents work them through a fixed lifecycle (new, open, pending, escalated, resolved, closed). Each (tier, priority) pair has an SLA resolution target that sets a due time and a breach flag. Escalation hands a ticket to the agent on call at level 1 right now, and a timeout can push urgent tickets to level 2. Background jobs flag SLA breaches, auto-escalate breached urgent tickets, time out level 1 escalations and auto-close old resolved tickets.
 clock:
@@ -106,6 +107,7 @@ jobs:
   - name: auto_close
     every: 1h
     rule: 'Close each resolved ticket whose resolved_at is 72 hours or more before now and write a closed event noted auto: 72h after resolution.'
+acceptanceTests: []
 routes:
   - id: list_tickets
     method: GET
@@ -204,12 +206,12 @@ tasks:
     decoyIdea: Escalates the newest printer ticket without checking the breach flag, gives a reason with no SLA mention, PATCHes the status instead of calling the action, or assigns the on-call agent by hand before escalating.
   - id: escalate_breached_enterprise_tickets
     difficulty: hard
-    intent: Escalate every ticket that is open, high priority, belongs to an enterprise customer and has breached its SLA, each with a reason, and change nothing else. The matching tickets are spread across two pages of the list, and near-miss tickets (not breached, other tiers, other statuses) are in the seed. The agent must page through, join tickets to customer tier and use the escalate action. Score is the share of targets correctly escalated to the on-call agent, and any collateral change scores 0.
-    decoyIdea: Reads only page 1, ignores customer tier, treats open as new, open or pending, skips the breach filter, or PATCHes the status to escalated so no on-call agent is assigned.
+    intent: Escalate every ticket that is open, high priority, belongs to an enterprise customer and has breached its SLA, each with a reason that contains the word SLA (stored as the escalated ticket_event note), and change nothing else. The matching tickets are spread across two pages of the list, and near-miss tickets (not breached, other tiers, other statuses) are in the seed. The agent must page through, join tickets to customer tier and use the escalate action. Score is the share of targets correctly escalated to the on-call agent with a reason mentioning SLA, and any collateral change scores 0.
+    decoyIdea: Reads only page 1, ignores customer tier, treats open as new, open or pending, skips the breach filter, PATCHes the status to escalated so no on-call agent is assigned, or escalates correctly with a reason that does not mention the SLA.
   - id: resolve_and_reopen_stale_ticket
     difficulty: medium
-    intent: Reopen the one recently resolved ticket (resolved within the last 72 hours) from Northwind Health whose customer replied after resolution, with a reason. Then check that the ticket is open, keeps its assignee and has the SLA restarted from the enterprise policy for its priority. Do not touch closed tickets.
-    decoyIdea: Picks an older closed ticket (which answers 409), reopens a different Northwind ticket, or PATCHes status to open, which leaves the SLA clock unchanged and the SLA fields stale.
+    intent: Reopen the one recently resolved ticket (resolved within the last 72 hours) from Northwind Health whose customer replied after resolution, with a reason that contains the word replied (stored as the reopened ticket_event note). Then check that the ticket is open, keeps its assignee and has the SLA restarted from the enterprise policy for its priority. Do not touch closed tickets.
+    decoyIdea: Picks an older closed ticket (which answers 409), reopens a different Northwind ticket, PATCHes status to open leaving the SLA clock stale, or reopens the right ticket with a reason that does not mention the customer reply.
 open_questions:
   - question: Which real helpdesk should the API resemble?
     default_answer: Zendesk Support tickets API, simplified.
@@ -225,6 +227,8 @@ open_questions:
     default_answer: 2026-03-02T09:00:00.000Z, with a 1s tick per committed call. Jobs fire only when the clock is advanced.
   - question: Can on-call shifts, SLA policies or tickets be deleted or edited through the API?
     default_answer: Shifts and policies are read-only. Tickets cannot be deleted. Customers can be created and edited.
+  - question: Which keywords must the reasons contain?
+    default_answer: SLA for the escalation reason and replied for the reopen reason.
 assumptions:
   - decision: Mirror Zendesk Support's ticket API shape (tickets, requesters as customers, agents, comments, audit events) with a simplified REST surface, not its real field names or auth.
     why: The input names no product, so the closest well-known helpdesk is the best reference for agents to generalize from.
@@ -246,6 +250,8 @@ assumptions:
     why: Scope control.
   - decision: List endpoints use cursor paging with data and next_cursor, a page size of 25 and q search across the listed search fields.
     why: Matches the engine's default list envelope. Seed volumes exceed 25 rows so paging matters.
+  - decision: Required keywords are SLA for the enterprise escalation reason and replied for the reopen reason, matched case-insensitively on ticket_event.note.
+    why: The keywords come from the task wording already given, so the instruction can state them without leaking ids.
 outOfScope:
   - what: Authentication, roles and per-agent permissions
     why: Not needed for SLA and escalation behaviour, and it adds failure modes unrelated to the tasks.
@@ -259,4 +265,6 @@ outOfScope:
     why: Not related to the lifecycle under test.
   - what: Creating, editing or deleting on-call shifts and SLA policies through the API
     why: They are reference data. Read-only routes keep escalation targets stable for graders.
-changes: []
+changes:
+  - tasks.escalate_breached_enterprise_tickets
+  - tasks.resolve_and_reopen_stale_ticket

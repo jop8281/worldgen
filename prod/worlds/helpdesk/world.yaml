@@ -1735,7 +1735,7 @@ tasks:
     alternatives: []
   escalate_breached_enterprise_tickets:
     difficulty: hard
-    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason. Change nothing else.
+    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason that names the SLA breach. Change nothing else.
     grader: |-
       (ctx) => {
         const tierOf = {};
@@ -1755,6 +1755,8 @@ tasks:
         for (const t of targets) {
           const end = ctx.db.get('ticket', t.id);
           if (end.status !== 'escalated' || end.escalation_level !== 1 || end.escalated_at === null) continue;
+          // The reason must name the SLA breach the instruction asks for, so nonsense in it scores below 1 (A-388).
+          if (!events.some((e) => e.ticket_id === t.id && /\bSLA\b/i.test(e.note ?? ''))) continue;
           const at = end.escalated_at;
           const shift = shifts.find((s) => ctx.time.minutesBetween(s.starts_at, at) >= 0 && ctx.time.minutesBetween(at, s.ends_at) > 0);
           if (shift && end.assignee_id === shift.agent_id) done += 1;

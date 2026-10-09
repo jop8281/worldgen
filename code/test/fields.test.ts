@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { FIELD_TYPE_ORDER, FIELD_TYPES, choicesOf, fieldSchema, initialOf, machineOf, refOf } from '../src/engine/fields.ts';
+import { FIELD_TYPE_ORDER, FIELD_TYPES, choicesOf, fieldSchema, initialOf, machineOf, nonsenseOf, refOf } from '../src/engine/fields.ts';
 import type { FieldType } from '../src/engine/fields.ts';
 import { checkWorld } from '../src/engine/index.ts';
 import { fromZod } from '../src/engine/issues.ts';
@@ -375,5 +375,17 @@ describe('capability members read through refOf, machineOf, choicesOf and initia
     assert.equal(initialOf(pick, NOW), 'low');
     assert.equal(initialOf(plain, NOW), 7);
     assert.equal(initialOf(ref, NOW), undefined);
+  });
+
+  it('nonsenseOf gives free text the same length of nonsense, and nothing for a patterned, formatted or closed field (A-388)', () => {
+    const text = (extra: object = {}) => def('string', extra) as Parameters<typeof refOf>[0];
+    assert.equal(nonsenseOf(def('text') as Parameters<typeof refOf>[0], 'a long note'), 'bananas ban');
+    assert.equal(nonsenseOf(text(), 'Refund approved'), 'bananas bananas');
+    assert.equal(nonsenseOf(text(), 'ok'), 'bananas');
+    assert.equal(nonsenseOf(text({ maxLength: 5 }), 'abc'), 'banan');
+    assert.equal(nonsenseOf(text(), 'bananas'), 'zebras ');
+    assert.equal(nonsenseOf(text({ pattern: '^[A-Z]+$' }), 'ABC'), undefined);
+    assert.equal(nonsenseOf(text({ format: 'email' }), 'a@b.co'), undefined);
+    for (const d of [ref, state, pick, stamp, plain]) assert.equal(nonsenseOf(d, 'x'), undefined);
   });
 });

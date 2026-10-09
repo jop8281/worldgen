@@ -10,10 +10,14 @@ meta:
     tick: 1s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -1310,6 +1314,7 @@ tasks:
             ctx.api('POST', '/tickets/' + newest.id + '/assign', { agent_id: priya.id });
             ctx.api('PATCH', '/tickets/' + newest.id, { subject: newest.subject + ' (edited)' });
           }
+    alternatives: []
   escalate_breached_printer_ticket:
     difficulty: medium
     instruction: Acme Logistics says one of their label printer tickets has blown its SLA. Escalate that ticket to the on-call agent, with a reason that mentions the SLA. Do not reassign or edit the ticket yourself before the escalation.
@@ -1381,9 +1386,10 @@ tasks:
             ctx.api('POST', '/tickets/' + hit.id + '/assign', { agent_id: shift.agent_id });
             ctx.api('POST', '/tickets/' + hit.id + '/escalate', { reason: 'SLA breached on a label printer ticket' });
           }
+    alternatives: []
   escalate_breached_enterprise_tickets:
     difficulty: hard
-    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason. Change nothing else.
+    instruction: Escalate every ticket that is in status open, has high priority, belongs to an enterprise customer and has breached its SLA. Give each escalation a reason that contains the word SLA. Change nothing else.
     grader: |-
       (ctx) => {
         const tierOf = {};
@@ -1403,6 +1409,7 @@ tasks:
         for (const t of targets) {
           const end = ctx.db.get('ticket', t.id);
           if (end.status !== 'escalated' || end.escalation_level !== 1 || end.escalated_at === null) continue;
+          if (!events.some((e) => e.ticket_id === t.id && e.kind === 'escalated' && /\bSLA\b/i.test(e.note ?? ''))) continue;
           const at = end.escalated_at;
           const shift = shifts.find((s) => ctx.time.minutesBetween(s.starts_at, at) >= 0 && ctx.time.minutesBetween(at, s.ends_at) > 0);
           if (shift && end.assignee_id === shift.agent_id) done += 1;
@@ -1511,9 +1518,10 @@ tasks:
             for (const t of targets) ctx.api('POST', '/tickets/' + t.id + '/escalate', { reason: 'SLA breached on a high-priority enterprise ticket' });
             ctx.api('PATCH', '/tickets/' + targets[0].id, { subject: targets[0].subject + ' (edited)' });
           }
+    alternatives: []
   resolve_and_reopen_stale_ticket:
     difficulty: medium
-    instruction: Northwind Health has a ticket that we resolved within the last few days, but the customer has since written back on it saying the problem is not fixed. Reopen that ticket with a reason. Leave every other ticket alone.
+    instruction: Northwind Health has a ticket that we resolved within the last few days, but the customer has since written back on it saying the problem is not fixed. Reopen that ticket with a reason that contains the word "replied". Leave every other ticket alone.
     grader: |-
       (ctx) => {
         const nw = ctx.seed.list('customer', { where: { name: 'Northwind Health' } })[0];
@@ -1539,7 +1547,7 @@ tasks:
         ctx.goal(0.4, 'SLA clock restarted from the enterprise policy', restarted);
         const old = new Set(ctx.seed.list('ticket_event', { where: { ticket_id: target.id } }).map((e) => e.id));
         const ev = ctx.db.list('ticket_event', { where: { ticket_id: target.id, kind: 'reopened' } }).filter((e) => !old.has(e.id));
-        ctx.goal(0.2, 'a reopened event records the reason', reopened && ev.some((e) => typeof e.note === 'string' && e.note.trim() !== ''));
+        ctx.goal(0.2, 'the reopened event reason contains the word replied', reopened && ev.some((e) => typeof e.note === 'string' && /\breplied\b/i.test(e.note)));
         return ctx.score();
       }
     solution: |-
@@ -1579,3 +1587,4 @@ tasks:
             const resolved = ctx.api('GET', '/tickets?customer_id=' + nw.id + '&status=resolved').body.data;
             for (const t of resolved) ctx.api('POST', '/tickets/' + t.id + '/reopen', { reason: 'Reopening resolved Northwind tickets' });
           }
+    alternatives: []
