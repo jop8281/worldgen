@@ -357,8 +357,9 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
     ]);
     assert.deepEqual(heads('research/studio-demo-runbook.md'), ['bun run studio', 'bun scripts/studio-rehearse.ts', 'scripts/studio-deploy.sh']);
     assert.deepEqual(heads('prod/evidence/README.md'), [
-      '../scripts/demo-all.sh', 'bun run difficulty', 'bun run evidence', 'bun run live', 'bun run worldplay',
-      'bun scripts/analyze-eval.ts', 'bun scripts/freeze-export-world.ts', 'bun scripts/render-public-worlds.ts',
+      '../scripts/demo-all.sh', 'bun run dataset', 'bun run difficulty', 'bun run evidence', 'bun run live', 'bun run scenario',
+      'bun run worldplay', 'bun scripts/analyze-eval.ts', 'bun scripts/freeze-export-world.ts', 'bun scripts/probe-coverage.ts',
+      'bun scripts/render-public-worlds.ts',
     ]);
   });
 
