@@ -32,8 +32,8 @@ declare const verdictBrand: unique symbol;
 /** One engine mutant kind on one task. `call` and `score` are null when the kind found nothing to probe: unprobed, not passed. */
 export type MutantProbe = { readonly kind: MutantKind; readonly call: string | null; readonly score: number | null };
 /**
- * One check of a task's grader (A-393): a goal or guard its run on the solution recorded, or `return`, the score
- * itself, when it records none. `flippedBy` names each probe whose run turned it from met or held to unmet or
+ * One check of a task's grader (A-393): a goal or guard its run on the solution recorded, or `return`, the number it
+ * returns, when it records no goal. `flippedBy` names each probe whose run turned it from met or held to unmet or
  * failed; an empty list means no probe did, so the check is unprobed, not proven.
  */
 export type CheckProbe = { readonly check: string; readonly flippedBy: readonly string[] };
@@ -63,7 +63,7 @@ export type TaskVerdict = {
   readonly collateral: readonly MutantProbe[];
   /** Each grader check and the probes that flipped it: decoys, prefixes and engine mutants. Doing nothing is not a probe. */
   readonly checks: readonly CheckProbe[];
-  /** Probes that scored below 1 without flipping a recorded check: the grader's own code outside its goals and guards lowered the score. */
+  /** Probes that scored below 1 without flipping a goal or guard of a grader whose goals make its score, such as one an early `return 0` caught. */
   readonly unattributedProbes: readonly string[];
   readonly endStateHash: string;
   readonly [verdictBrand]: true;
