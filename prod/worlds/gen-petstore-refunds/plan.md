@@ -2,7 +2,7 @@
 
 A pet store where pets move available → pending → sold as customers place, approve and deliver orders. Placing an order reserves the pet, delivery sells it, and deleting an open order releases it. A customer can ask for a refund on a delivered order. A refund is requested, then approved (optionally putting the pet back on sale) or rejected. The 9 spec operations are kept under their spec paths. Extras: list orders, categories, approve and deliver actions, and the refund actions and reads. This revision declares an allows list on every task, taken from the task instruction: which entities may be created, updated or deleted, the exact fields of updates, and a where of field values that picks the target rows. Nothing else is changed.
 
-- Revision: 3
+- Revision: 4
 - Verdict: proceed
 - Clock: starts 2026-10-07T09:00:00.000Z, tick 0s
 
@@ -442,12 +442,12 @@ None. The plan declares no job.
   - Decoy idea: Delivers the dog Juniper's order, delivers both orders, or deletes the cat's order, which frees the pet and delivers nothing.
 - `release_stale_placed_orders` (hard): Delete every order that is still placed (never approved) and whose shipDate is before 2026-10-07, so their pets return to available. Leave approved and delivered orders and all future-dated placed orders alone. Success is exactly the stale placed orders deleted, their pets available, and no other row changed. Allows (from the instruction): store_order deleted, where status placed (the shipDate cutoff is checked by the grader on the exact rows); pet updated, fields status only, where status pending (the pets of those orders, moving back to available).
   - Decoy idea: Deletes every order with a past shipDate including the approved one, deletes all placed orders including future-dated ones, or deletes only the first page of matches.
-- `request_refund_mochi` (easy): The customer who bought the pet named Mochi wants money back for 6000 (USD minor units) because the pet was not as described. Mochi's earlier refund requests were rejected, but file a new request for that order with a reason. Success is exactly one new requested refund of 6000 on Mochi's order, with the pet and order unchanged. Allows (from the instruction): refund created only, where status requested, amount 6000 and orderId Mochi's delivered order; no updates or deletes of any entity.
-  - Decoy idea: Files the refund on the order of a similarly named pet, uses the wrong amount, or approves or edits the old rejected refunds instead of filing a new one.
+- `request_refund_mochi` (easy): The customer who bought the pet named Mochi wants money back for 6000 (USD minor units) because the pet was not as described. Mochi's earlier refund requests were rejected, but file a new request for that order. The instruction must say that the refund reason has to include the phrase "not as described". Success is exactly one new requested refund of 6000 on Mochi's order whose reason contains "not as described" (case-insensitive), with the pet and order unchanged. The grader reads refund.reason for that phrase, so a nonsense reason such as "bananas" scores below 1. Allows (from the instruction): refund created only, where status requested, amount 6000 and orderId Mochi's delivered order; no updates or deletes of any entity.
+  - Decoy idea: Files the refund on the order of a similarly named pet, uses the wrong amount, gives a reason without the required phrase, or approves or edits the old rejected refunds instead of filing a new one.
 - `restock_pepper_refund` (medium): A refund request is waiting for the delivered order of the pet named Pepper (not Pepperoni). Approve it and put Pepper back on sale. Success is that refund approved with restock true, Pepper available, and the Pepperoni refund, its pet and every other row untouched. Allows (from the instruction): refund updated, fields status, restock and decided_at only, where the row is the requested refund of 4000 on Pepper's order; pet updated, fields status only, where the row is the sold pet named Pepper.
   - Decoy idea: Approves Pepperoni's refund, approves Pepper's refund without restock, rejects it, or sets the pet to available by hand with update_pet instead of restocking through the refund.
-- `settle_requested_refunds` (hard): Go through every refund that is still requested. Reject each one above 10000 (USD minor units) with a note that says why, and approve each one at or below 10000 without restocking. Refunds already approved or rejected stay as they are, and no pet or order changes. Success is every requested refund decided by that rule. Allows (from the instruction): refund updated, fields status, decision_note and decided_at only, where status requested (the amount threshold is checked by the grader per row); no pet or order changes and no creates or deletes.
-  - Decoy idea: Handles only the first refund on the page, approves everything, rejects everything, restocks the approved pets, or re-decides the already approved and rejected refunds.
+- `settle_requested_refunds` (hard): Go through every refund that is still requested. Reject each one above 10000 (USD minor units) with a note that says why and includes the limit number 10000, and approve each one at or below 10000 without restocking. Refunds already approved or rejected stay as they are, and no pet or order changes. The instruction must say that each rejection note has to include the number 10000. Success is every requested refund decided by that rule, and each rejected refund's decision_note contains "10000". The grader reads refund.decision_note for it, so a nonsense note such as "bananas" scores below 1. Allows (from the instruction): refund updated, fields status, decision_note and decided_at only, where status requested (the amount threshold is checked by the grader per row); no pet or order changes and no creates or deletes.
+  - Decoy idea: Handles only the first refund on the page, approves everything, rejects everything, restocks the approved pets, re-decides the already approved and rejected refunds, or rejects with a note that does not mention the limit.
 
 ## Open questions
 
@@ -520,6 +520,8 @@ None. The plan declares no job.
   - Why: The allows where has no comparison operators, and the instruction gives names, not ids.
 - Side effects the instruction implies are allowed: place_order moves the pet to pending, deliver_order sets the pet sold, delete_order releases the pet, approve_refund with restock moves the pet to available. Fields set by actions (status, complete, restock, decided_at, decision_note) are listed on the updated entity.
   - Why: The allows is derived from what the instruction asks for, and these are the effects of the actions that carry it out.
+- request_refund_mochi must put the phrase "not as described" in refund.reason, and settle_requested_refunds must put the number 10000 in each rejection's decision_note. The instructions state this and the graders check those fields.
+  - Why: The instruction already gives the reason (not as described) and the threshold (10000), and the free-text gate needs the graders to read the text the solution writes.
 
 ## Out of scope
 
@@ -544,9 +546,5 @@ None. The plan declares no job.
 
 ## Changes
 
-- tasks.order_biscuit
-- tasks.deliver_cat_juniper
-- tasks.release_stale_placed_orders
 - tasks.request_refund_mochi
-- tasks.restock_pepper_refund
 - tasks.settle_requested_refunds

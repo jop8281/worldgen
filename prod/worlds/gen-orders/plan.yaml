@@ -1,4 +1,4 @@
-revision: 1
+revision: 2
 software: 'Shopify-style order desk (Shopify Admin / WooCommerce orders API): customers place orders that are paid, shipped, delivered, cancelled or refunded.'
 summary: An order-management desk built around the imported orders table. Customers own orders. Each order moves through pending, paid, shipped, delivered, with cancellation and refund exits. Status changes happen only through guarded actions (pay, ship, deliver, cancel, refund) that stamp timestamps and write an audit trail, and an hourly job cancels orders left unpaid for 72 hours.
 clock:
@@ -340,16 +340,16 @@ tasks:
     decoyIdea: Pays the newest pending order, or the first pending order in id order instead of the oldest by placed_at, or PATCHes status directly.
   - id: refund_delivered_big_orders_for_customer
     difficulty: medium
-    intent: For one customer, refund every delivered order whose total is above a stated dollar threshold, with a reason on each, leaving their other orders (shipped, paid, smaller delivered) untouched.
-    decoyIdea: Refunds all of the customer's delivered orders ignoring the threshold, or also refunds shipped orders, or misreads the threshold in dollars versus total_cents.
+    intent: For one customer, refund every delivered order whose total is above a stated dollar threshold, leaving their other orders (shipped, paid, smaller delivered) untouched. The instruction states that each refund reason must contain the keyword 'damaged'; the grader checks that each refunded order's new refunded order_event.note contains it (case-insensitive), so nonsense reasons score below 1.
+    decoyIdea: Refunds all of the customer's delivered orders ignoring the threshold, or also refunds shipped orders, or misreads the threshold in dollars versus total_cents, or refunds the right orders with a reason that lacks the keyword.
   - id: cancel_stale_pending_with_gift_note
     difficulty: medium
-    intent: Cancel every pending order placed before a stated date whose note is a given text (for example 'Gift wrap, no receipt'), with a reason, and leave pending orders with other notes or later dates alone.
-    decoyIdea: Cancels all pending orders before the date regardless of note, or cancels paid orders with that note as well.
+    intent: Cancel every pending order placed before a stated date whose note is a given text (for example 'Gift wrap, no receipt'), and leave pending orders with other notes or later dates alone. The instruction states that each cancel reason must contain the keyword 'stale'; the grader checks that each cancelled order's new cancelled order_event.note contains it (case-insensitive), so nonsense reasons score below 1.
+    decoyIdea: Cancels all pending orders before the date regardless of note, or cancels paid orders with that note as well, or cancels the right orders with a reason that lacks the keyword.
   - id: ship_all_paid_large_orders
     difficulty: hard
-    intent: Ship every paid order that has at least a stated item_count and a total above a stated amount, across more than one page of results, giving each a tracking number, without touching other paid orders.
-    decoyIdea: Reads only the first page of paid orders, ignores one of the two conditions, delivers instead of ships, or marks them shipped by PATCH so shipped_at stays empty.
+    intent: Ship every paid order that has at least a stated item_count and a total above a stated amount, across more than one page of results, without touching other paid orders. The instruction states that each tracking number must start with the prefix 'TRK-'; the grader checks each shipped target's tracking_number starts with it, so nonsense tracking numbers score below 1.
+    decoyIdea: Reads only the first page of paid orders, ignores one of the two conditions, delivers instead of ships, marks them shipped by PATCH so shipped_at stays empty, or ships with a tracking number lacking the prefix.
 open_questions:
   - question: Should the orders table be the seed source exactly, including its statuses and ids?
     default_answer: Yes. The fixture is loaded as the order seed unchanged, and customers and events are generated around it.
@@ -363,6 +363,8 @@ open_questions:
     default_answer: Yes, pending orders are auto-cancelled after 72 hours by an hourly job.
   - question: How should the clock behave?
     default_answer: Start 2026-04-08T09:00:00Z, no per-call tick, time moves only on explicit advance.
+  - question: Which keywords should the instructions require?
+    default_answer: "'damaged' for refunds, 'stale' for cancels, and a 'TRK-' prefix for tracking numbers."
 assumptions:
   - decision: clock.start is 2026-04-08T09:00:00Z and tick is 0s.
     why: The latest imported timestamp is shipped_at 2026-04-07T14:00Z, so the world starts after all imported history. Time moves only by explicit advance, so timestamp assertions are exact.
@@ -382,6 +384,8 @@ assumptions:
     why: Gives a time-driven rule. Old seeded pending orders will be cancelled the first time the clock advances, which only tests (not tasks) can trigger.
   - decision: Acceptance tests create their own customers with emails ending @acceptance.example and orders through the API, and never read seed rows. The job test lists only workflow actions in its actions field; the job is exercised through ctx.advance.
     why: The workflow stage runs tests before any seed exists, and the actions field accepts only workflow action keys.
+  - decision: "Required text: refund reason contains 'damaged', cancel reason contains 'stale', tracking numbers start with 'TRK-'."
+    why: The request asks for a keyword the instruction gives; these are simple, checkable and need no seed change.
 outOfScope:
   - what: Payment gateway, card capture, partial refunds, and refund amounts
     why: The value here is order state and workflow, not payment processing; refunds are full and just change state.
@@ -391,4 +395,7 @@ outOfScope:
     why: The CSV has USD only.
   - what: Authentication, webhooks and an admin UI
     why: Agents talk to the REST API directly; no user interface is part of the world.
-changes: []
+changes:
+  - tasks.refund_delivered_big_orders_for_customer because the refund reason, stored as order_event.note, must say what the instruction requires
+  - tasks.cancel_stale_pending_with_gift_note because the cancel reason, stored as order_event.note, must say what the instruction requires
+  - tasks.ship_all_paid_large_orders because order.tracking_number must contain what the instruction requires

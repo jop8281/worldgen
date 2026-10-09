@@ -44,10 +44,11 @@ Jobs (2):
 
 ## Changes
 
-- item_changed `tasks.book_earliest_cardiology_slot.allows`
-- item_changed `tasks.cancel_marias_far_appointment.allows`
-- item_changed `tasks.clear_dr_patel_calendar_for_leave.allows`
-- item_changed `tasks.record_yesterdays_no_shows.allows`
+- snippet_changed `tasks.cancel_marias_far_appointment.grader`
+- item_changed `tasks.cancel_marias_far_appointment.instruction`
+- snippet_changed `tasks.cancel_marias_far_appointment.solution`
+- snippet_changed `tasks.clear_dr_patel_calendar_for_leave.grader`
+- item_changed `tasks.clear_dr_patel_calendar_for_leave.instruction`
 
 ## Assumed and why
 
@@ -79,6 +80,8 @@ Jobs (2):
   - Why: The request asks only for allows declared from each instruction. The seed, entities, routes, actions and jobs stay as they are.
 - Allows 'where' values use seed values of the target rows (status, patient_id, doctor_id), and a solution's own side effects such as the slot reopening on cancel are listed as separate allowed changes.
   - Why: The engine matches where against seed values for updates and end values for creates, and the allowed set must come from the instruction, not from what the solution writes.
+- cancel_marias_far_appointment requires cancel_reason to contain 'rescheduling'; clear_dr_patel_calendar_for_leave requires it to contain 'doctor on leave'. Both are stated in the instruction and checked case-insensitively by the grader.
+  - Why: The free-text gate needs the graders to read appointment.cancel_reason against text the instruction gives.
 
 ## Questions asked of the input
 
@@ -124,14 +127,14 @@ Jobs (2):
 
 The engine check passed: 6 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_83103e3df39c3b240e30baf5891b83b34ddd562d882db2aecbcaeac37fcd9cc3`.
+World id (WID): `wid_b23e23658a8e42438c46f4a4a3790577ad5194902e0e87c144b1b8c00c1e136e`.
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| cancel_marias_far_appointment | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | declared (2); mutants 2/7 | `tid_432341a6ee034b2c5cde80de45e66c698dc39e2de7a67a36bc374857bc5d5007` |
-| book_earliest_cardiology_slot | medium | 1.000 | 0.000 | 0.000, 0.000, 0.500, 0.000 | n/a | declared (2); mutants 6/7 | `tid_199c243f462fa0f3cbb0a3075bb9e422511f56878de8a3d1b0b61e88b5eda4a4` |
-| record_yesterdays_no_shows | hard | 1.000 | 0.000 | 0.700, 0.000, 0.000 | 0.967 | declared (2); mutants 2/7 | `tid_2ef5d61ee9b684e329d4bfd24e2fd7d61e4ff7115c2acd8862968dcbc191d56e` |
-| clear_dr_patel_calendar_for_leave | hard | 1.000 | 0.000 | 0.667, 0.578, 0.912, 0.000, 0.690, 0.000 | 0.990 | declared (3); mutants 2/7 | `tid_a7487149f99100f423d2ec1b74de8fbb80d831b1dcd7daa96d5da91cfa364872` |
+| cancel_marias_far_appointment | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | declared (2); mutants 3/8 | `tid_b4e1a5bb09b62729c6bf60cdc200f3087ecafe07eece7213b8949e250d3fc7ea` |
+| book_earliest_cardiology_slot | medium | 1.000 | 0.000 | 0.000, 0.000, 0.500, 0.000 | n/a | declared (2); mutants 7/8 | `tid_199c243f462fa0f3cbb0a3075bb9e422511f56878de8a3d1b0b61e88b5eda4a4` |
+| record_yesterdays_no_shows | hard | 1.000 | 0.000 | 0.700, 0.000, 0.000 | 0.967 | declared (2); mutants 3/8 | `tid_2ef5d61ee9b684e329d4bfd24e2fd7d61e4ff7115c2acd8862968dcbc191d56e` |
+| clear_dr_patel_calendar_for_leave | hard | 1.000 | 0.000 | 0.667, 0.578, 0.912, 0.000, 0.690, 0.000 | 0.990 | declared (3); mutants 3/8 | `tid_9d02d7002371a2c4e5e9e1fde1f8e5877857650641c883dfae4fe5effb33c865` |
 
 Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
@@ -166,13 +169,13 @@ From each reference solution's trace. A hard task must change more than one row 
 
 ## Run
 
-Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $1.60.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $3.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 0.75 | 0.1210 |
-| tasks | 1 | 0.25 | 0.2083 |
-| Total | 2 | 0.99 | 0.3293 |
+| plan | 1 | 0.13 | 0.0547 |
+| tasks | 1 | 0.34 | 0.2250 |
+| Total | 2 | 0.47 | 0.2797 |
 
 Skipped:
 
@@ -180,4 +183,4 @@ Skipped:
 - `workflow`: no planned change reaches actions, jobs, entities, routes, tests
 - `seed`: no planned change reaches seed, entities, fixtures
 
-Run total: 1.17 minutes, $0.3293.
+Run total: 0.68 minutes, $0.2797.

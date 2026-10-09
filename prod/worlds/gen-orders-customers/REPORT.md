@@ -33,6 +33,12 @@ Jobs (1):
 
 - `cancel_stale_pending`: every 1d
 
+## Changes
+
+- snippet_changed `tasks.cancel_customer_unpaid_orders.grader`
+- item_changed `tasks.cancel_customer_unpaid_orders.instruction`
+- snippet_changed `tasks.cancel_customer_unpaid_orders.solution`
+
 ## Assumed and why
 
 - The real product is a Shopify-style Admin API for orders and customers, with a simplified single-currency model.
@@ -59,6 +65,8 @@ Jobs (1):
   - Why: All seeded rows must be in the past. 72 orders then give 3 pages, so paging matters.
 - Customer lists use pageSize 10 (18 customers gives 2 pages). Customer sort and search are on name and email.
   - Why: With only 18 customers, a default 25 would never page.
+- The required cancel reason keyword is 'unpaid', matched case-insensitively in shop_order.note.
+  - Why: The task is about unpaid (pending) orders, so the word comes from the task itself and a free-text check can reject nonsense such as 'bananas'.
 
 ## Questions asked of the input
 
@@ -73,7 +81,7 @@ Jobs (1):
 - Should the world track payments, stock or refund amounts?
   - Default answer: No. Status changes only.
 - Should anything happen with time?
-  - Default answer: Yes. A daily job cancels pending orders older than 7 days. The clock starts at 2026-02-01T09:00:00Z and only moves when a test advances it.
+  - Default answer: Yes. A daily job cancels pending orders older than 7 days. The clock starts at 2026-04-08T09:00:00Z and only moves when a test advances it.
 - Should the CSV ids and timestamps be kept?
   - Default answer: Yes. Ids, refs, totals and timestamps load as given, and the clock starts after the latest one.
 - Can clients set status or shipped_at directly?
@@ -94,13 +102,17 @@ Jobs (1):
 
 ## Proof
 
-The engine check passed: 6 world tests, 0 warnings. Each row is one engine TaskVerdict.
+The engine check passed: 7 world tests, 0 warnings. Each row is one engine TaskVerdict.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix |
-|---|---|---|---|---|---|
-| ship_ada_paid_order | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a |
-| cancel_customer_unpaid_orders | medium | 1.000 | 0.000 | 0.000, 0.000, 0.500, 0.000 | 0.500 |
-| refund_large_gb_pro_orders | hard | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.000, 0.000 | 0.667 |
+World id (WID): `wid_3dc988108779ad6dde9231e0a956a0527b2d040dfb62f4666ccae324131ea7be`.
+
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| ship_ada_paid_order | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 6/8 | `tid_5086474f6bea293e26635c78607994fa7e14f47f5a3a73c6f2c97772bd819e24` |
+| cancel_customer_unpaid_orders | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.000 | 0.000 | legacy; mutants 5/8 | `tid_3e64ebec4cf304d72daea1baad6d762a2565c0f8686ebf6da0c04a0d3fb5e909` |
+| refund_large_gb_pro_orders | hard | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.000, 0.000 | 0.667 | legacy; mutants 5/8 | `tid_d2f78eb9d985ffd242aac5d1006fe27419e73f957364a1b67ba33cfb816ae228` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
@@ -108,7 +120,7 @@ Decoys:
 - `ship_ada_paid_order` 0.000: ships Ada's paid order correctly, then also changes its item_count
 - `cancel_customer_unpaid_orders` 0.000: tries to cancel every order of the customer, including the paid one, which is a change the task did not ask for
 - `cancel_customer_unpaid_orders` 0.000: cancels every pending order in the store instead of only that customer's
-- `cancel_customer_unpaid_orders` 0.500: cancels only the first pending order of the customer and stops
+- `cancel_customer_unpaid_orders` 0.000: cancels only the first pending order of the customer and stops
 - `cancel_customer_unpaid_orders` 0.000: cancels every pending order of the customer correctly, then also changes one order's item_count
 - `refund_large_gb_pro_orders` 0.333: reads only page 1 of the unfiltered orders list and so misses the targets on later pages
 - `refund_large_gb_pro_orders` 0.000: ignores the customer plan and refunds every delivered order over $100
@@ -116,23 +128,30 @@ Decoys:
 - `refund_large_gb_pro_orders` 0.000: also refunds shipped orders of team customers over $100, not only delivered ones
 - `refund_large_gb_pro_orders` 0.000: refunds every matching order correctly, then also changes one refunded order item_count
 
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| ship_ada_paid_order | easy | 1 | none | none | none declared |
+| cancel_customer_unpaid_orders | medium | 2 | none | none | none declared |
+| refund_large_gb_pro_orders | hard | 3 | none | shop_order | hard: met |
+
 ## Run
 
-Mode: create from csv. Model: claude-sonnet-5-5. Budget: $3.50.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $3.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 0.68 | 0.0697 |
-| model | 1 | 0.22 | 0.0849 |
-| workflow | 1 | 0.81 | 0.1557 |
-| seed | 2 | 0.30 | 0.2110 |
-| tasks | 1 | 1.04 | 0.1871 |
-| Total | 6 | 3.05 | 0.7084 |
+| plan | 1 | 0.09 | 0.0407 |
+| tasks | 1 | 0.24 | 0.1404 |
+| Total | 2 | 0.33 | 0.1811 |
 
-Run total: 3.06 minutes, $0.7084.
+Skipped:
 
-## Post-generation clock correction
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures
 
-The original run used January 5 as world time while importing order history through April 7. Public API play could ship an imported order before it was placed and still receive full credit. The current world and plan now start at April 8, 2026 at 09:00 UTC, after the imported history. Imported CSV ids and timestamps are unchanged. A chronology test covers all imported orders, and the shipping task grader requires shipping to follow placement. The daily-job test retains its seven-day boundary and younger-order assertions with dates aligned to this clock.
-
-This is a post-generation artifact correction. The original run events, model, duration and cost totals above remain historical evidence; no new model run is claimed.
+Run total: 0.35 minutes, $0.1811.

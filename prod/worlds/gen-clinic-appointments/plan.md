@@ -2,7 +2,7 @@
 
 A single-clinic scheduling system. Doctors publish time slots. Patients book one open slot at a time, so a slot can never be double booked. A booked appointment can be cancelled only if the visit starts at least 24 hours from now, and cancelling frees the slot. After the visit time the front desk checks patients in and completes them, or marks them as no-show. No-shows are counted per patient, and 3 of them block further booking. Time-based jobs auto-close expired open slots and auto-mark no-shows. The clock moves only through jobs and explicit advances. Every task now declares an allows list, taken from its instruction, that names the entities, change kinds, exact update fields and target rows it may change.
 
-- Revision: 4
+- Revision: 5
 - Verdict: proceed
 - Clock: starts 2026-10-06T09:00:00.000Z, tick 0s
 
@@ -74,14 +74,14 @@ None. The plan records no acceptance test.
 
 ## Tasks
 
-- `cancel_marias_far_appointment` (easy): Cancel the upcoming appointment of patient Maria Lopez that is more than 24 hours away, with a cancel_reason. She also has one inside the 24h window, which must stay untouched. Graded on: that appointment is cancelled with a reason, its slot is open again, and nothing else changed. Allows, from the instruction: appointment updated, fields status, cancel_reason, cancelled_at, where status booked and patient_id is Maria Lopez (the far one is the only target; the grader guards the in-window one); slot updated, fields status, where status booked (only the slot of that appointment, reopened). Nothing created or deleted, and no patient, doctor or other change.
-  - Decoy idea: Maria's other appointment starts in about 20h, so cancelling it is refused and she ends up with no change. A second decoy PATCHes the appointment status to cancelled, which is blocked because status is readonly, and the slot stays booked.
+- `cancel_marias_far_appointment` (easy): Cancel the upcoming appointment of patient Maria Lopez that is more than 24 hours away. The instruction now says the cancel_reason must contain the word 'rescheduling'. She also has one inside the 24h window, which must stay untouched. Graded on: that appointment is cancelled, its cancel_reason contains 'rescheduling' (case-insensitive), its slot is open again, and nothing else changed. Allows, from the instruction: appointment updated, fields status, cancel_reason, cancelled_at, where status booked and patient_id is Maria Lopez; slot updated, fields status, where status booked. Nothing created or deleted, and no patient, doctor or other change.
+  - Decoy idea: Maria's other appointment starts in about 20h, so cancelling it is refused. A second decoy PATCHes status, which is readonly. A third cancels the right appointment with a reason like 'bananas' that lacks the keyword.
 - `book_earliest_cardiology_slot` (medium): Book patient Daniel Okoye into the earliest open slot, on or after the current time, with any active cardiologist, with the reason 'follow-up consultation'. The agent must list cardiologists, skip the inactive one, page through open slots sorted by starts_at, and call book. The grader checks one new appointment on the correct slot, for the right patient, with the slot booked. Allows, from the instruction: appointment created, where patient_id is Daniel Okoye, status booked and reason 'follow-up consultation' (end values); slot updated, fields status, where status open (only the chosen slot, open to booked). No patient, doctor or other updates, and nothing deleted.
   - Decoy idea: Takes the first open slot by id order instead of the earliest starts_at. Books the earliest slot of the inactive cardiologist, which is refused. Books only a slot from page 1 of an unsorted list. Books the earliest slot of any specialty.
 - `record_yesterdays_no_shows` (hard): Yesterday's appointments that are still in status booked were never recorded. Staff say those patients did not come and nobody checked them in. Mark every appointment from yesterday that is still booked as no-show, and leave the ones checked in, completed or cancelled alone. There are more than one page of them, and a few older booked appointments are distractors that must not be touched. The patients' no-show counts and booking blocks follow from the action. The grader checks the exact set of appointments and the patient counters. Allows, from the instruction: appointment updated, fields status, where status booked (only yesterday's ones); patient updated, fields no_show_count and booking_blocked (only the patients of those appointments). Slots stay unchanged, and nothing is created or deleted.
   - Decoy idea: Handles only page 1 of the list. Marks every past booked appointment, including the older distractors. Marks the appointment as completed or checked in instead. Also marks today's future appointments, which the action refuses.
-- `clear_dr_patel_calendar_for_leave` (hard): Dr. Priya Patel is going on leave. Deactivate her, and cancel every one of her booked appointments that can still be cancelled under the 24-hour rule, each with a cancel_reason. Appointments inside 24 hours cannot be cancelled and must stay booked. Also close her open slots so nobody else can book them. Leave every other doctor alone. The grader checks the doctor's active flag, the set of cancelled appointments, the untouched in-window ones, the closed open slots, and no collateral changes. Allows, from the instruction: doctor updated, fields active, where name Priya Patel; appointment updated, fields status, cancel_reason, cancelled_at, where doctor_id is Priya Patel and status booked (only the ones outside 24h); slot updated, fields status, where doctor_id is Priya Patel (her cancelled slots reopen and her open slots close). Nothing created or deleted, no patient changes, and no other doctor touched.
-  - Decoy idea: Cancels only the first page of her appointments. Deactivates her but leaves her open slots bookable. Cancels another doctor's appointments sharing a patient or name prefix. Skips the cancel_reason, or tries to force the in-window ones and leaves them half done.
+- `clear_dr_patel_calendar_for_leave` (hard): Dr. Priya Patel is going on leave. Deactivate her, and cancel every one of her booked appointments that can still be cancelled under the 24-hour rule, each with a cancel_reason that must contain the phrase 'doctor on leave' (stated in the instruction, case-insensitive). Appointments inside 24 hours cannot be cancelled and must stay booked. Also close her open slots so nobody else can book them. Leave every other doctor alone. The grader checks the doctor's active flag, the set of cancelled appointments and that each cancel_reason contains the phrase, the untouched in-window ones, the closed open slots, and no collateral changes. Allows, from the instruction: doctor updated, fields active, where name Priya Patel; appointment updated, fields status, cancel_reason, cancelled_at, where doctor_id is Priya Patel and status booked; slot updated, fields status, where doctor_id is Priya Patel. Nothing created or deleted, no patient changes, no other doctor touched.
+  - Decoy idea: Cancels only the first page of her appointments. Deactivates her but leaves her open slots bookable. Cancels another doctor's appointments. Cancels with a nonsense reason lacking the phrase, or forces in-window ones.
 
 ## Open questions
 
@@ -136,6 +136,8 @@ None. The plan records no acceptance test.
   - Why: The request asks only for allows declared from each instruction. The seed, entities, routes, actions and jobs stay as they are.
 - Allows 'where' values use seed values of the target rows (status, patient_id, doctor_id), and a solution's own side effects such as the slot reopening on cancel are listed as separate allowed changes.
   - Why: The engine matches where against seed values for updates and end values for creates, and the allowed set must come from the instruction, not from what the solution writes.
+- cancel_marias_far_appointment requires cancel_reason to contain 'rescheduling'; clear_dr_patel_calendar_for_leave requires it to contain 'doctor on leave'. Both are stated in the instruction and checked case-insensitively by the grader.
+  - Why: The free-text gate needs the graders to read appointment.cancel_reason against text the instruction gives.
 
 ## Out of scope
 
@@ -157,6 +159,4 @@ None. The plan records no acceptance test.
 ## Changes
 
 - tasks.cancel_marias_far_appointment
-- tasks.book_earliest_cardiology_slot
-- tasks.record_yesterdays_no_shows
 - tasks.clear_dr_patel_calendar_for_leave
