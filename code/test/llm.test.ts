@@ -363,6 +363,13 @@ describe('anthropicModel per-request model and effort', () => {
     );
   });
 
+  it('sends append-only blocks as text blocks, the cache breakpoint on the last (A-400)', async () => {
+    const seen: Record<string, unknown>[] = [];
+    const client = fakeClient(ok([{ type: 'tool_use', name: 'submit_plan', input: {} }]), seen);
+    await anthropicModel(twoModels, { apiKey: FAKE_KEY, client, now: ticker() }).propose({ ...req, prompt: 'Task\n\nturn 1', blocks: ['Task', 'turn 1'] });
+    assert.deepEqual(seen[0]?.['messages'], [{ role: 'user', content: [{ type: 'text', text: 'Task' }, { type: 'text', text: 'turn 1', cache_control: { type: 'ephemeral' } }] }]);
+  });
+
   it('sends exactly these request params, with output_config only when an effort is set', async () => {
     const seen: Record<string, unknown>[] = [];
     const client = fakeClient(ok([{ type: 'tool_use', name: 'submit_plan', input: {} }]), seen);
@@ -546,6 +553,18 @@ describe('claudeArgs', () => {
 });
 
 describe('claudeCliModel', () => {
+  it('sends append-only blocks as one stream-json user message on stdin, so each call reads the cache the last one wrote (A-400)', async () => {
+    const seen: SpawnCall[] = [];
+    const model = claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker());
+    await model.propose({ ...req, prompt: 'Task\n\nturn 1', blocks: ['Task', 'turn 1'] });
+    await model.propose(req);
+    assert.equal(seen[0]?.stdin, '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Task"},{"type":"text","text":"turn 1"}]}}\n');
+    const args = seen[0]?.args ?? [];
+    assert.equal(args[args.indexOf('--input-format') + 1], 'stream-json');
+    assert.equal(seen[1]?.stdin, 'make a world');
+    assert.equal(seen[1]?.args.includes('--input-format'), false);
+  });
+
   it('sends the prompt on stdin and returns structured_output, usage, total_cost_usd and wall ms', async () => {
     const seen: SpawnCall[] = [];
     const p = await claudeCliModel(cliConfig, fakeSpawn(exit0(CLI_SUCCESS), seen), ticker()).propose({ ...req, effort: 'low' });
