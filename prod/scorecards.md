@@ -23,6 +23,7 @@ The denominator is every case of the suite (A-341), so a targeted rerun's rate c
 | `eval/runs/2026-10-08-stress-5` | stress (`eval/suite.yaml`) | 6 of 29 | 5 | 17.2% | 5 | 0 | 1 | 0 | 5.0 | 6.3 | 6.96 |
 | `eval/runs/2026-10-08-stress-6` | stress (`eval/suite.yaml`) | 29 of 29 | 27 | 93.1% | 24 | 3 | 2 | 0 | 4.5 | 8.2 | 25.32 |
 | `eval/runs/2026-10-08-stress-7-targeted` | stress (`eval/suite.yaml`) | 5 of 29 | 5 | 17.2% | 5 | 0 | 0 | 0 | 5.1 | 7.1 | 5.74 |
+| `eval/runs/2026-10-09-stress-8-v2` | stress (`eval/suite.yaml`) | 8 of 29 | 6 | 20.7% | 6 | 0 | 2 | 0 | 6.8 | 8.4 | 14.03 |
 
 - `eval/runs/2026-10-07-live-segment` also holds `giftcards-openapi-rerun2`, which `eval/live-segment.yaml` does not list, so it is not scored.
 - `eval/runs/2026-10-07-stress-2` has a measured cost for 28 of its 29 cases run.
@@ -32,7 +33,7 @@ Limits: a success says the engine accepted the world and verify passed, and an e
 
 ## 2. Environment fidelity: does a world resemble the software it names?
 
-A description case with a frozen reference in `eval/fidelity/` (`helpdesk-sla`, `linear-description`, `retail-tau2-known`) is gated at its run's last step by `fidelityScore()` against the 0.80 floor (A-258): a world below the floor is sent back for repair, never saved. A finished create run records its check as a `fidelity` event in the case's `events.jsonl`, so every recorded score is at or above the floor by construction. What varies is the score, and whether the run got that far. The denominator is each run of a referenced case, in the runs that record fidelity events at all: 7 of 7 recorded a score.
+A description case with a frozen reference in `eval/fidelity/` (`helpdesk-sla`, `linear-description`, `retail-tau2-known`) is gated at its run's last step by `fidelityScore()` against the 0.80 floor (A-258): a world below the floor is sent back for repair, never saved. A finished create run records its check as a `fidelity` event in the case's `events.jsonl`, so every recorded score is at or above the floor by construction. What varies is the score, and whether the run got that far. The denominator is each run of a referenced case, in the runs that record fidelity events at all: 8 of 9 recorded a score.
 
 | Run | Case | Reference | Score | Floor | Source |
 |---|---|---|--:|--:|---|
@@ -43,6 +44,8 @@ A description case with a frozen reference in `eval/fidelity/` (`helpdesk-sla`, 
 | `eval/runs/2026-10-08-stress-6` | linear-description | linear-description | 0.9634 | 0.8 | `eval/runs/2026-10-08-stress-6/linear-description/events.jsonl` |
 | `eval/runs/2026-10-08-stress-6` | retail-tau2-known | retail-tau2-known | 0.9865 | 0.8 | `eval/runs/2026-10-08-stress-6/retail-tau2-known/events.jsonl` |
 | `eval/runs/2026-10-08-stress-7-targeted` | helpdesk-sla | helpdesk-sla | 0.9577 | 0.8 | `eval/runs/2026-10-08-stress-7-targeted/helpdesk-sla/events.jsonl` |
+| `eval/runs/2026-10-09-stress-8-v2` | helpdesk-sla | helpdesk-sla | none recorded | 0.8 | `eval/runs/2026-10-09-stress-8-v2/helpdesk-sla/events.jsonl` |
+| `eval/runs/2026-10-09-stress-8-v2` | linear-description | linear-description | 1 | 0.8 | `eval/runs/2026-10-09-stress-8-v2/linear-description/events.jsonl` |
 
 How every suite case of each run was checked, from the same `fidelity` events. An OpenAPI check means the world passed the gate against its source spec: paths, request shapes and error codes within the chosen scope. It records no score.
 
@@ -59,6 +62,7 @@ How every suite case of each run was checked, from the same `fidelity` events. A
 | `eval/runs/2026-10-08-stress-5` | 0 | 2 | 3 | 1 | `eval/runs/2026-10-08-stress-5/**/events.jsonl` |
 | `eval/runs/2026-10-08-stress-6` | 3 | 6 | 15 | 5 | `eval/runs/2026-10-08-stress-6/**/events.jsonl` |
 | `eval/runs/2026-10-08-stress-7-targeted` | 1 | 2 | 2 | 0 | `eval/runs/2026-10-08-stress-7-targeted/**/events.jsonl` |
+| `eval/runs/2026-10-09-stress-8-v2` | 1 | 1 | 4 | 2 | `eval/runs/2026-10-09-stress-8-v2/**/events.jsonl` |
 
 Limits: the references cover only the cases named above, so every other description world is unchecked, and a case that recorded `unchecked` ran before its reference existed. A run records no fidelity event when it stopped before saving a world, when it was an impossible case WorldGen refused, or when it predates the event. A change case's check describes its world before the change: an iterate records none.
 
