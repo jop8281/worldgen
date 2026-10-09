@@ -126,12 +126,12 @@ World id (WID): `wid_651b175b652a265cba7d9859dab882e8bcb5869c759c52f148a04058bce
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| cancel_distant_reservation | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | declared (1); mutants 1/7 | `tid_b1eff6e5e6406cca6a376091c01eed4509faa3ba8312de75a0daff9de5532edb` |
-| cancel_arriving_tomorrow_with_fee | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | declared (2); mutants 1/7 | `tid_d8590664dc963bcda3fa3b5d2cb1fd97a1fd9a66946b9b5c781bec5dae3d1da8` |
-| move_booking_to_free_room | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | declared (1); mutants 3/7 | `tid_90eca8272f5c234f23c2632d429bcceaa280d54f20c570f346db556885e5cd53` |
-| relocate_all_from_maintenance_room | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000 | 0.833 | declared (1); mutants 3/7 | `tid_03eabfa0e5b01a3f8221b9f790b20b05bafb8793160bbe8a3928afda0c95359c` |
+| cancel_distant_reservation | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | declared (1); mutants 2/8 | `tid_b1eff6e5e6406cca6a376091c01eed4509faa3ba8312de75a0daff9de5532edb` |
+| cancel_arriving_tomorrow_with_fee | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | declared (2); mutants 2/8 | `tid_d8590664dc963bcda3fa3b5d2cb1fd97a1fd9a66946b9b5c781bec5dae3d1da8` |
+| move_booking_to_free_room | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | declared (1); mutants 4/8 | `tid_90eca8272f5c234f23c2632d429bcceaa280d54f20c570f346db556885e5cd53` |
+| relocate_all_from_maintenance_room | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000 | 0.833 | declared (1); mutants 4/8 | `tid_03eabfa0e5b01a3f8221b9f790b20b05bafb8793160bbe8a3928afda0c95359c` |
 
-Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/8* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 

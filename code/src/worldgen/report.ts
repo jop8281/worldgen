@@ -11,7 +11,7 @@
  *   rendered.
  */
 import { assertNever } from '#lib/never';
-import { DESTRUCTIVE, taskIdOf, worldIdOf, type CheckIssue, type CheckReport, type Task, type TaskVerdict, type World, type WorldChange, type WorldDelta } from '#engine';
+import { DESTRUCTIVE, MUTANT_KINDS, taskIdOf, worldIdOf, type CheckIssue, type CheckReport, type Task, type TaskVerdict, type World, type WorldChange, type WorldDelta } from '#engine';
 import { capReached, unenforceable } from '../costs/ledger.ts';
 import { fixtureFed } from './input-coverage.ts';
 import { refusedText, type AttemptOutcome, type CutProgress, type FidelityCheck, type RunEvent, type StopReason } from './events.ts';
@@ -212,7 +212,7 @@ function proof(report: ReportInput['report'], stopped: boolean): string[] {
   const verdicts = Object.values(report.verdicts);
   if (verdicts.length === 0) return [...head, 'No tasks were verified.'];
   const table = ['| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |', '|---|---|---|---|---|---|---|---|', ...verdicts.map((v) => verdictRow(v, report.world.tasks[v.taskId])),
-    '', 'Collateral: *declared (n)* means the task\'s `allows` contract is enforced by the engine (A-224); *legacy* means only its grader\'s own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).'];
+    '', 'Collateral: *declared (n)* means the task\'s `allows` contract is enforced by the engine (A-224); *legacy* means only its grader\'s own guards and the engine mutants judge it (YOS-156). *mutants k/' + MUTANT_KINDS.length + '* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).'];
   const decoys = verdicts.flatMap((v) => v.decoys.map((d) => item(`\`${v.taskId}\` ${score(d.score)}: ${d.why}`)));
   return [...head, table.join('\n'), ...(decoys.length === 0 ? [] : ['Decoys:', decoys.join('\n')])];
 }

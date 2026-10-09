@@ -27,7 +27,7 @@ export {
 export type { World, WorldEdit, Section, Task, Difficulty } from './format.ts';
 export { FIELD_TYPES, FIELD_TYPE_ORDER, choicesOf, machineOf, refOf, temporalOf } from './fields.ts';
 export type { Field, FieldType, Value } from './fields.ts';
-export { ISSUES, issue } from './issues.ts';
+export { ISSUES, MUTANT_KINDS, issue } from './issues.ts';
 export { lowerRules } from './rules.ts';
 export type { Expression, Lowered, Step } from './rules.ts';
 export type { CheckIssue, IssueCode, IssuePath, IssueOwner, NonEmpty, SourceLine } from './issues.ts';

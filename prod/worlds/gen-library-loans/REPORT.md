@@ -121,11 +121,11 @@ World id (WID): `wid_14b93ec57fdb9839d5023a5aa1069ed87f3c187d8afbe2c27e563fb3bd6
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| return_longest_overdue_loan | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 1/7 | `tid_88310ae562d39f80f23ee74e2caf4f809b0cd6a54e541ec656ffca32ac8c905c` |
-| collect_top_fines_member | medium | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.000 | 0.667 | legacy; mutants 2/7 | `tid_3eb45ce6caebd4486b54cf6eacc493788d5709be37643ca93cacd04595ba5f74` |
-| clear_riverside_overdue | hard | 1.000 | 0.000 | 0.833, 0.500, 0.000, 0.000 | 0.917 | legacy; mutants 2/7 | `tid_97133acd03ff1ba2f30eb6751849509813b54b731e3414dd894bb74725107a7d` |
+| return_longest_overdue_loan | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 2/8 | `tid_88310ae562d39f80f23ee74e2caf4f809b0cd6a54e541ec656ffca32ac8c905c` |
+| collect_top_fines_member | medium | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.000 | 0.667 | legacy; mutants 3/8 | `tid_3eb45ce6caebd4486b54cf6eacc493788d5709be37643ca93cacd04595ba5f74` |
+| clear_riverside_overdue | hard | 1.000 | 0.000 | 0.833, 0.500, 0.000, 0.000 | 0.917 | legacy; mutants 3/8 | `tid_97133acd03ff1ba2f30eb6751849509813b54b731e3414dd894bb74725107a7d` |
 
-Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/8* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 

@@ -100,11 +100,11 @@ World id (WID): `wid_8b4f536d43dae5d8e738b442917f60bde262c74c59aa5b8d043ac070154
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| drop_student_from_course | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | declared (2); mutants 2/7 | `tid_9b1fbb28202ce753e98afd51576333bad53fb82ba51e4910f5875ff10facf4ab` |
-| enroll_into_full_course | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.750 | 0.400 | declared (4); mutants 4/7 | `tid_9a43798a95b530d2dda7f67759096c4dceb1cdd6cc0b24de5523e70a4bb13382` |
-| grade_completed_department_courses | hard | 1.000 | 0.000 | 0.571, 0.000, 0.000, 0.000, 0.143 | 0.929 | declared (3); mutants 2/7 | `tid_0a7ef6983085dfa92c9c893e53a8ee5caea696a178293cc9d4393265019ba871` |
+| drop_student_from_course | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | declared (2); mutants 3/8 | `tid_9b1fbb28202ce753e98afd51576333bad53fb82ba51e4910f5875ff10facf4ab` |
+| enroll_into_full_course | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.750 | 0.400 | declared (4); mutants 5/8 | `tid_9a43798a95b530d2dda7f67759096c4dceb1cdd6cc0b24de5523e70a4bb13382` |
+| grade_completed_department_courses | hard | 1.000 | 0.000 | 0.571, 0.000, 0.000, 0.000, 0.143 | 0.929 | declared (3); mutants 3/8 | `tid_0a7ef6983085dfa92c9c893e53a8ee5caea696a178293cc9d4393265019ba871` |
 
-Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/8* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
