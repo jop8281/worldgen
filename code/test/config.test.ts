@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { configSchema, loadConfig, stepModel, transportOf } from '../src/worldgen/config.ts';
+import { loadExampleWorlds } from '../src/cli/models.ts';
 
 const REAL = resolve(import.meta.dirname, '../worldgen.config.json');
 
@@ -62,7 +63,22 @@ describe('loadConfig', () => {
   it('resolves the default exampleWorld against the config dir when the key is omitted', async () => {
     const f = tmpConfig({ model: 'claude-sonnet-5-5', maxCostUsd: 1 });
     const c = await loadConfig(f, {});
-    assert.equal(c.exampleWorld, resolve(dirname(f), '../prod/worlds/helpdesk'));
+    assert.deepEqual(c.exampleWorld, [resolve(dirname(f), '../prod/worlds/helpdesk')]);
+  });
+
+  it('reads exampleWorld as one path, the older form, or a list, each resolved against the config dir (A-390)', async () => {
+    for (const [given, want] of [
+      ['../prod/worlds/helpdesk', ['../prod/worlds/helpdesk']],
+      [['../prod/worlds/helpdesk', '/abs/worlds/retail-tau2'], ['../prod/worlds/helpdesk', '/abs/worlds/retail-tau2']],
+    ] as const) {
+      const f = tmpConfig({ model: 'claude-sonnet-5-5', maxCostUsd: 1, exampleWorld: given });
+      assert.deepEqual((await loadConfig(f, {})).exampleWorld, want.map((p) => resolve(dirname(f), p)));
+    }
+    const f = tmpConfig({ model: 'claude-sonnet-5-5', maxCostUsd: 1 });
+    assert.deepEqual((await loadConfig(f, { exampleWorld: ['worlds/a'] })).exampleWorld, [resolve(process.cwd(), 'worlds/a')]);
+    for (const bad of [[], [''], [3], '']) {
+      await assert.rejects(loadConfig(tmpConfig({ model: 'claude-sonnet-5-5', maxCostUsd: 1, exampleWorld: bad }), {}), /exampleWorld/, JSON.stringify(bad));
+    }
   });
 
   it('errors on a missing file and on bad JSON', async () => {
@@ -77,11 +93,21 @@ describe('loadConfig', () => {
     process.chdir(tmpdir());
     try {
       const c = await loadConfig(REAL, {});
-      assert.equal(c.exampleWorld, resolve(import.meta.dirname, '../../prod/worlds/helpdesk'));
-      assert.ok(c.exampleWorld.endsWith('/prod/worlds/helpdesk'));
+      assert.deepEqual(c.exampleWorld, [
+        resolve(import.meta.dirname, '../../prod/worlds/helpdesk'),
+        resolve(import.meta.dirname, '../../prod/worlds/retail-tau2'),
+        resolve(import.meta.dirname, '../../prod/worlds/gen-hotel-booking'),
+      ]);
     } finally {
       process.chdir(before);
     }
+  });
+});
+
+describe('the shipped example worlds (A-390)', () => {
+  it('each loads and checks, and gen-hotel-booking is a generated world with a job', async () => {
+    const worlds = await loadExampleWorlds(await loadConfig(REAL, {}));
+    assert.deepEqual(worlds.map((w) => [Object.keys(w.jobs).length > 0, Object.keys(w.actions).length >= 2]), [[true, true], [false, true], [true, true]]);
   });
 });
 

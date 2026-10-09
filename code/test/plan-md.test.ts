@@ -373,7 +373,7 @@ describe('runWorldGen writes plan.md beside plan.yaml (YOS-182)', () => {
     assert.ok(md.includes('```js\n' + RESOLVE_TEST + '\n```\n'));
     assert.ok(md.includes('- Rows per entity: customer: 15, ticket: 12\n'));
     assert.ok(md.includes('- State mix: ticket: open 33%, pending 50%, resolved 17%\n'));
-    assert.ok(md.includes('- `escalate_acme` (hard): escalate and resolve the tickets of a churning customer\n'));
+    assert.ok(md.includes('- `escalate_acme` (hard, irreversible): escalate and resolve the tickets of a churning customer\n  - Actions: `escalate_ticket`, `resolve_ticket`\n  - Decoy idea: forgets to resolve\n'));
     assert.ok(md.includes('## Changes\n\nNone. The plan changes no existing item.\n'));
   });
 

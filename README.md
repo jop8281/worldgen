@@ -7,6 +7,8 @@ Two tools for building **worlds**. A world is a stateful, deterministic replica 
 
 The task is in [research/spec.md](research/spec.md). [prod/README.md](prod/README.md) maps every spec item to the file that implements it and the command that shows it. The design doc is [prod/design.md](prod/design.md), and [prod/system.md](prod/system.md) shows how the parts fit together, with diagrams.
 
+[prod/evidence/README.md](prod/evidence/README.md) gives the command that re-checks each number below from a clone, with no model call. It also names the few numbers that rest on a Linear receipt or a GitHub CI run instead.
+
 ## Run it
 
 You need Bun 1.4.2 (`curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2`). WorldGen also needs the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), logged in. Commands run from `code/`.
@@ -84,6 +86,8 @@ On main `e034036c`, `bun run live` ran three stand-in prompts: a description, an
 
 `prod/worlds/` holds 25 worlds and 95 tasks. Two were built by hand: [helpdesk](prod/worlds/helpdesk/) and [retail-tau2](prod/worlds/retail-tau2/), the second mapped from τ²-bench retail. WorldGen generated the other 23, `prod/worlds/gen-*`: 11 from a description, 4 from an OpenAPI spec, 6 from CSVs and 2 from iterate runs. Each one carries its `plan.yaml` and `REPORT.md`. `bun run test` checks and verifies every world.
 
+These worlds are a development set, and they include the answers: each `world.yaml` holds its graders, reference solutions and decoys. Each folder also keeps `public/world.yaml`, the public form a sandboxed agent gets, with none of them. A clean test set is generated fresh by WorldGen from prompts nobody has seen, as the live run does.
+
 ## Studio screenshots
 
 These screenshots come from the real app, with no model call. [prod/screenshots/README.md](prod/screenshots/README.md) gives the command, viewport, runtime and digest of each one, and keeps the 27 frames of the browser E2E.
@@ -99,3 +103,4 @@ These screenshots come from the real app, with no model call. [prod/screenshots/
 - [research/readme-reference.md](research/readme-reference.md) holds the longer reference: every world with its task scores, the engine and Docker details, the other CLIs, checks and costs, and Boat recovery.
 - [research/architecture.md](research/architecture.md) gives the reasoning, [research/decisions.md](research/decisions.md) logs every design call, and [AGENTS.md](AGENTS.md) holds the working rules.
 - Work is tracked in the [WorldGen Linear project](https://linear.app/yossi-zozo123/project/worldgen-f83badd4a2c7).
+- WorldGen is MIT licensed: see [LICENSE](LICENSE).

@@ -36,7 +36,7 @@ import { createEmitter } from '../worldgen/events.ts';
 import { digestInput } from '../worldgen/input.ts';
 import { stopLiveClaudes, type Model } from '../worldgen/llm.ts';
 import type { World } from '#engine';
-import { loadExampleWorld, makeModel } from './models.ts';
+import { loadExampleWorlds, makeModel } from './models.ts';
 import { runWorldGen } from '../worldgen/run.ts';
 import { withEvalAttempt } from './eval-retention.ts';
 
@@ -145,12 +145,12 @@ async function collect(runDir: string, suite: Suite, refs: ReadonlyMap<string, F
 async function runSuite(args: EvalArgs, suiteFile: string, suite: Suite, cases: readonly SuiteCase[]): Promise<number> {
   let config: Config;
   let model: Model;
-  let exampleWorld: World;
+  let exampleWorld: readonly World[];
   try {
     const setup = await evalConfig(CONFIG_FILE, args.overrides);
     config = setup.config;
     model = makeModel(config, process.env, setup.transport);
-    exampleWorld = await loadExampleWorld(config);
+    exampleWorld = await loadExampleWorlds(config);
   } catch (e) {
     err(message(e));
     return 1;

@@ -10,7 +10,7 @@
  */
 import { z } from 'zod';
 import { SECTIONS, renderWorldYaml, type Section, type World } from '#engine';
-import { changeItem, jobActionIssues, planSchema, plannedItems, renderPlanYaml, untestedActions, type Plan } from './plan.ts';
+import { changeItem, jobActionIssues, planSchema, plannedItems, renderPlanYaml, taskVarietyIssues, untestedActions, type Plan } from './plan.ts';
 import { stagesToRun } from './stages.ts';
 
 /**
@@ -31,7 +31,7 @@ export const ITERATE_PLAN_BRIEF =
   'Fill `changes` with every EXISTING item the request alters or removes, as dotted paths rooted at the section or at the item key, such as ticket.fields.status or tasks.resolve_ticket; ' +
   'name a removed state or enum value by its value. Leave out anything the request does not touch: the judge rejects each destructive change to an item that `changes` does not name. ' +
   'Name a new item by the exact key it will have in the world. ' +
-  'Keep each existing task\'s pressure as the existing plan has it, and none where it has none. Add or change a pressure claim only when the request asks for harder tasks, and then name seed.<entity> in `changes` for each entity the claim presses, so the seed step reruns and can seed what it needs. ' +
+  'Keep each existing task\'s kind, actions and pressure as the existing plan has them, and none where it has none. Add or change a pressure claim only when the request asks for harder tasks, and then name seed.<entity> in `changes` for each entity the claim presses, so the seed step reruns and can seed what it needs. ' +
   'Set revision one above the existing plan\'s, and raise it again whenever the plan step runs again. ' +
   'List an acceptance test in acceptanceTests for every new workflow action; it is written into the world\'s tests exactly as given, and no later stage can edit tests. ' +
   'Each new or rewritten acceptance test must create every prerequisite row through ctx.api and check the public behavior with ctx.assert, without relying on rows the later seed stage will create, because workflow runs these tests before seed. ' +
@@ -227,6 +227,7 @@ export function iteratePlanSchema(world: World, oldPlan: Plan | null): typeof pl
     }
     if (plan.verdict.kind !== 'proceed') return;
     jobActionIssues(plan, ctx);
+    taskVarietyIssues(plan, ctx, false);
     for (const action of untestedActions(plan).filter((a) => !Object.hasOwn(world.actions, a))) {
       ctx.addIssue({ code: 'custom', path: ['acceptanceTests'], message: `acceptance tests must cover new workflow action ${action}` });
     }
@@ -235,6 +236,19 @@ export function iteratePlanSchema(world: World, oldPlan: Plan | null): typeof pl
       const old = Object.hasOwn(world.tests, t.id) ? world.tests[t.id] : undefined;
       if (old === undefined || (old.description === t.description && old.script === t.script) || named.has(`tests.${t.id}`)) return;
       ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i], message: `acceptance test ${t.id} rewrites the existing tests.${t.id}: copy it unchanged, or name tests.${t.id} in changes` });
+    });
+    // An existing task keeps the kind and actions the existing plan gave it unless changes names it (A-390).
+    const prior = new Map((oldPlan?.tasks ?? []).map((t) => [t.id, t]));
+    plan.tasks.forEach((t, i) => {
+      const old = prior.get(t.id);
+      if (old === undefined || [...named].some((n) => n === `tasks.${t.id}` || n.startsWith(`tasks.${t.id}.`))) return;
+      const lost = [
+        ...(old.kind !== undefined && t.kind !== old.kind ? ['kind'] : []),
+        ...(old.actions !== undefined && JSON.stringify(t.actions) !== JSON.stringify(old.actions) ? ['actions'] : []),
+      ];
+      if (lost.length > 0) {
+        ctx.addIssue({ code: 'custom', path: ['tasks', i], message: `task ${t.id} changes its ${lost.join(' and ')} from the existing plan: keep ${lost.length > 1 ? 'them' : 'it'} as the existing plan has ${lost.length > 1 ? 'them' : 'it'}, or name tasks.${t.id} in changes` });
+      }
     });
     if (stagesToRun(changedSections(plan, world)).includes('seed')) return;
     const before = new Map((oldPlan?.tasks ?? []).map((t) => [t.id, t.pressure]));

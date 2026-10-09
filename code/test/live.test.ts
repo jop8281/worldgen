@@ -238,6 +238,7 @@ describe('runLive', () => {
     assert.equal(code, 1);
     assert.deepEqual(rows.map((r) => [r.id, r.outcome, r.check.kind]), [['01-ok', 'done', 'pass'], ['02-stop', 'stopped', 'not_run'], ['03-bad', 'done', 'fail']]);
     assert.equal(existsSync(path.join(root, 'worlds/gen-ok/world.yaml')), true);
+    assert.equal(existsSync(path.join(root, 'worlds/gen-ok/public/world.yaml')), true);
     assert.equal(existsSync(path.join(root, 'runs/gen-ok')), false);
     assert.equal(existsSync(path.join(root, 'runs/gen-stop/REPORT.md')), true);
     assert.equal(existsSync(path.join(root, 'worlds/gen-stop')), false);

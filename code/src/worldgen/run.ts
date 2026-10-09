@@ -55,8 +55,11 @@ export type RunResult =
 
 export type RunDeps = {
   readonly model: Model;
-  /** The few-shot world rendered into every system prompt. Reading config.exampleWorld from disk is the caller's job. */
-  readonly exampleWorld: World;
+  /**
+   * The few-shot world rendered into every system prompt, or the config's list of them, of which the run renders the
+   * one `pickExample` takes for its input digest (A-390). Reading config.exampleWorld from disk is the caller's job.
+   */
+  readonly exampleWorld: World | readonly World[];
   /** Sees every event too. events.jsonl is always written; this is for a console view or a test. */
   readonly emit?: Emit;
   /** Wall clock in ms for event times, budgets and durations. Defaults to Date.now. */
@@ -216,6 +219,17 @@ function debtOf(report: CheckReport, world: CheckedWorld, plan: Plan, toRun: Rea
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * The few-shot world for an input: the entry its content digest picks, the first eight hex digits modulo the list
+ * length, so the same input always gets the same example and different inputs spread over the list (A-390).
+ */
+export function pickExample<T>(examples: readonly T[], digest: string): T {
+  const n = Number.parseInt(digest.slice(0, 8), 16);
+  const pick = examples[(Number.isNaN(n) ? 0 : n) % examples.length];
+  if (pick === undefined) throw new Error('no example world to pick from');
+  return pick;
+}
 
 /**
  * The system prompt for a step. The shared part (role, format reference, example world) comes
@@ -747,7 +761,9 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
   const systemFor = (step: StepId): string => {
     const hit = systems.get(step);
     if (hit !== undefined) return hit;
-    const text = systemPrompt(step, deps.exampleWorld, job.kind);
+    if (inputDigest === null) throw new Error(`the ${step} system prompt needs the input digest, which picks the example world`);
+    // concat flattens a list one level and wraps a single world, so both forms give the list to pick from.
+    const text = systemPrompt(step, pickExample(([] as World[]).concat(deps.exampleWorld), inputDigest), job.kind);
     systems.set(step, text);
     return text;
   };
