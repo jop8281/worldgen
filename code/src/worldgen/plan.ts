@@ -111,11 +111,6 @@ export const planSchema = planBase
     const known = new Set(plan.workflows.flatMap((w) => w.actions.map(actionKey)));
     const jobs = new Set(plan.jobs.map((j) => j.name));
     const enforcers = new Set([...known, ...jobs]);
-    const asJob = (key: string): string => `${key} is a job: a job runs on the clock, so list it only under jobs and in a rule's by, and let the test call the workflow action that sets up the job's rows through ctx.api, name that action in its actions, then reach the job with ctx.advance`;
-    plan.workflows.forEach((w, wi) => w.actions.forEach((a, ai) => {
-      const key = actionKey(a);
-      if (jobs.has(key)) ctx.addIssue({ code: 'custom', path: ['workflows', wi, 'actions', ai], message: `workflow ${w.name} lists ${key} in its actions, but ${asJob(key)}` });
-    }));
     /** The first rule that binds each acceptance test, so a later binding of the same test names it. */
     const bound = new Map<string, { readonly workflow: string; readonly rule: string }>();
     plan.workflows.forEach((w, wi) => w.rules.forEach((r, ri) => {
@@ -170,8 +165,7 @@ export const planSchema = planBase
         ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i], message: 'acceptance test id, intent, description and script must not be blank' });
       }
       for (const action of t.actions.map(actionKey)) {
-        if (jobs.has(action)) ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i, 'actions'], message: `acceptance test ${t.id} names ${action} in its actions, but ${asJob(action)}` });
-        else if (!known.has(action)) ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i, 'actions'], message: `acceptance test ${t.id} names ${action}, which no workflow declares in its actions: add ${action} to the actions of the workflow it belongs to, or name an action a workflow declares` });
+        if (!known.has(action) && !jobs.has(action)) ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i, 'actions'], message: `acceptance test ${t.id} names ${action}, which no workflow declares in its actions: add ${action} to the actions of the workflow it belongs to, or name an action a workflow declares` });
       }
     });
   });
@@ -185,6 +179,25 @@ export function untestedActions(plan: Plan): readonly string[] {
   return [...new Set(plan.workflows.flatMap((w) => w.actions.map(actionKey)))].filter((a) => !tested.has(a));
 }
 
+const asJob = (key: string): string => `${key} is a job: a job runs on the clock, so list it only under jobs and in a rule's by, and let the test call the workflow action that sets up the job's rows through ctx.api, name that action in its actions, then reach the job with ctx.advance`;
+
+/**
+ * A proposed plan that lists a plan job as a workflow or test action, which the workflow step would build twice (A-382).
+ * Only the proposal schemas (`planSchemaFor`, `iteratePlanSchema`) refuse it, so `parsePlanYaml` still loads an older plan.
+ */
+export function jobActionIssues(plan: Plan, ctx: z.RefinementCtx): void {
+  const jobs = new Set(plan.jobs.map((j) => j.name));
+  plan.workflows.forEach((w, wi) => w.actions.forEach((a, ai) => {
+    const key = actionKey(a);
+    if (jobs.has(key)) ctx.addIssue({ code: 'custom', path: ['workflows', wi, 'actions', ai], message: `workflow ${w.name} lists ${key} in its actions, but ${asJob(key)}` });
+  }));
+  plan.acceptanceTests.forEach((t, i) => {
+    for (const action of t.actions.map(actionKey).filter((key) => jobs.has(key))) {
+      ctx.addIssue({ code: 'custom', path: ['acceptanceTests', i, 'actions'], message: `acceptance test ${t.id} names ${action} in its actions, but ${asJob(action)}` });
+    }
+  });
+}
+
 /**
  * planSchema plus the rules of a plan that builds a new world: its acceptance tests exist before
  * implementation and cover every workflow action, a description plan asks at least one open
@@ -196,6 +209,7 @@ export function untestedActions(plan: Plan): readonly string[] {
 export function planSchemaFor(inputKind: InputKind) {
   return planSchema.superRefine((plan, ctx) => {
     if (plan.verdict.kind !== 'proceed') return;
+    jobActionIssues(plan, ctx);
     if (plan.acceptanceTests.length === 0) {
       ctx.addIssue({ code: 'too_small', origin: 'array', minimum: 1, inclusive: true, path: ['acceptanceTests'], message: 'a plan to build needs acceptance tests before implementation begins' });
     }
