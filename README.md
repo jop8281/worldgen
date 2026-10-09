@@ -9,7 +9,7 @@ The task is in [research/spec.md](research/spec.md). [prod/README.md](prod/READM
 
 ## Run it
 
-You need Bun 1.4.2 (`npm i -g bun@1.4.2`). WorldGen also needs the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), logged in. Commands run from `code/`.
+You need Bun 1.4.2 (`curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2`). WorldGen also needs the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), logged in. Commands run from `code/`.
 
 ```sh
 cd code && bun install --frozen-lockfile
@@ -43,7 +43,7 @@ A WorldGen run writes into `prod/worlds/gen-<slug>/` unless `--out` names a dire
 
 ## Release
 
-The release is **v1.1.1**. Its code is `71f84d45` ([#149](https://github.com/jop8281/worldgen/pull/149)), and the tag adds no code over it. Its verdict runs are [37860510831](https://github.com/jop8281/worldgen/actions/runs/37860510831) and [37860513520](https://github.com/jop8281/worldgen/actions/runs/37860513520), also linked from the [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1). VERDICT_STATUS CI runs on Bun only: typecheck, every test and the end-to-end check, with no model call.
+The release is **v1.1.1**. Its code is `71f84d45` ([#149](https://github.com/jop8281/worldgen/pull/149)), and the tag adds no code over it. Its verdict runs are [37860510831](https://github.com/jop8281/worldgen/actions/runs/37860510831) and [37860513520](https://github.com/jop8281/worldgen/actions/runs/37860513520), also linked from the [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1). Both passed the test suite and the end-to-end check. CI runs on Bun only: typecheck, every test and the end-to-end check, with no model call.
 
 | v1.1.1 carries fixes for the four tracked limits of v1.1.0 | PRs |
 |---|---|
@@ -72,7 +72,7 @@ The `stress` suite has 29 cases: descriptions, OpenAPI specs, CSV files, change 
 
 stress-6 reran the whole 29-case suite on `42ab9ca9` with the same settings ([#129](https://github.com/jop8281/worldgen/pull/129)): 27 of 29 (93%), 24 succeeded and 3 impossible inputs were refused. Per case, p50 was 4.5 min, p95 8.2 min and the max 8.8 min, and the suite cost $25.32. stripe-customers now finishes. Its source is [eval/runs/2026-10-08-stress-6/summary.md](eval/runs/2026-10-08-stress-6/summary.md). Its two stops, bookmarks and stripe-charges, have fixes in v1.1.1 (YOS-257 [#145](https://github.com/jop8281/worldgen/pull/145), YOS-258 [#144](https://github.com/jop8281/worldgen/pull/144)).
 
-STRESS7_LINE
+stress-7 reran those two cases and three stress-6 passes as controls on `2da7dd17`, the v1.1.1 code, with the same settings ([#152](https://github.com/jop8281/worldgen/pull/152)). All 5 ended done with verify passing, in 24.7 min for $5.74. bookmarks now builds its scheduled jobs as jobs, and stripe-charges passed the model step on its first attempt. No case backtracked, so YOS-258's fresh attempt budget after a backtrack rests on its unit tests. Its source is [eval/runs/2026-10-08-stress-7-targeted/summary.md](eval/runs/2026-10-08-stress-7-targeted/summary.md).
 
 ### The live-run dress rehearsal
 
