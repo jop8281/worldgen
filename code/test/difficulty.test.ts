@@ -13,7 +13,7 @@ import { parse } from '../src/cli/difficulty.ts';
 import { CostUnenforceableError, openLedger, SpendCapError } from '../src/costs/ledger.ts';
 import { meteredModel } from '../src/costs/meter.ts';
 import {
-  difficultyMatrix, isBudgetStop, isCostRefusal, localRunner, measuredTier, modelCapLeft, renderDifficultyMd, runDifficulty, wilson,
+  difficultyMatrix, isBudgetStop, isCostRefusal, isTrial, localRunner, measuredTier, modelCapLeft, renderDifficultyMd, runDifficulty, wilson,
   type DifficultyRunOptions, type DifficultyTask, type EpisodeJob, type EpisodeOutcome,
 } from '../src/dataset/difficulty.ts';
 import { redactor, type StopReason } from '../src/dataset/schema.ts';
@@ -37,7 +37,7 @@ after(() => {
 });
 
 const outcome = (score: number | null, costUsd: number, stopReason: StopReason = 'done', refusal: string | null = null, unaccountedCalls = 0): Omit<EpisodeOutcome, 'episodeId'> => ({
-  score, stopReason, costUsd, unaccountedCalls, refusal,
+  score, stopReason, costUsd, unaccountedCalls, refusal, budgetTooSmall: false,
 });
 
 /** A runner that answers each job from `script`, keyed `task model index`, and records the jobs it was given. */
@@ -163,7 +163,7 @@ describe('runDifficulty and difficultyMatrix', () => {
 
   it('stops as failed when an episode cannot run, and as interrupted when the operator stops it', async () => {
     const failed = await runDifficulty({ ...base, tasks: [EASY], episodes: 1, run: scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: new Error('the world did not start serving') }).run });
-    assert.deepEqual(failed.stop, { kind: 'failed', message: `episode d1.1 (helpdesk ${EASY.task}, ${SONNET}) could not run to the end: the world did not start serving` });
+    assert.deepEqual(failed.stop, { kind: 'failed', message: `episode d1.1 (helpdesk ${EASY.task}, ${SONNET}) could not run to the end, so it is charged its whole $0.5 budget: the world did not start serving` });
     assert.equal(failed.spentUsd, 0.5);
     const stopped = new AbortController();
     stopped.abort();
@@ -178,6 +178,24 @@ describe('runDifficulty and difficultyMatrix', () => {
     const r = await runDifficulty({ ...base, tasks: [EASY], episodes: 1, run, capLeftUsd: () => left.shift() ?? null });
     assert.deepEqual(r.stop, { kind: 'cost_refused', message: "the spend caps leave $0.3 for model calls, less than one episode's $0.5 budget" });
     assert.deepEqual([jobs.length, r.spentUsd], [1, 0.2]);
+  });
+
+  it('reads a budget stop as the caps running out when they no longer fit an episode, so it is no trial', async () => {
+    const left = [2, 0.3];
+    const { run } = scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: outcome(0, 0.2, 'budget_limit') });
+    const options = { ...base, tasks: [EASY], episodes: 1 };
+    const r = await runDifficulty({ ...options, run, capLeftUsd: () => left.shift() ?? null });
+    const message = "the spend caps ran low during the episode and leave $0.3 for model calls, less than one episode's $0.5 budget";
+    assert.deepEqual(r.stop, { kind: 'cost_refused', message });
+    const cell = difficultyMatrix(options, r).cells[0];
+    assert.deepEqual([cell?.episodes, cell?.trials, cell?.refused], [1, 0, 1]);
+  });
+
+  it('stops as failed when a model cannot make one call within the episode budget', async () => {
+    const { run, jobs } = scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: { ...outcome(0, 0, 'model_error'), budgetTooSmall: true } });
+    const r = await runDifficulty({ ...base, tasks: [EASY], episodes: 2, run });
+    assert.deepEqual(r.stop, { kind: 'failed', message: `episode d1.1: ${SONNET} could not make one call within the $0.5 episode budget; raise --episode-budget-usd` });
+    assert.deepEqual([jobs.length, r.rows[0] === undefined ? null : isTrial(r.rows[0])], [1, false]);
   });
 
   it('charges an episode with a call of unknown billing its whole budget', async () => {
@@ -267,16 +285,22 @@ describe('localRunner over helpdesk with a fake Model', () => {
     assert.deepEqual([existsSync(path.join(out, 'episodes/loc.1/dataset.jsonl')), existsSync(path.join(out, 'episodes/loc.2/failures.jsonl'))], [true, true]);
   });
 
-  it('reads a call its allowance stopped as budget_limit, a trial, with its billed cost', async () => {
+  it('reads a later call its allowance stopped as budget_limit, a trial, and a first one as a budget too small', async () => {
     const out = tmp('budget');
-    const budgetStop = Object.assign(new Error('claude -p failed (exit 1): error_max_budget_usd: Reached maximum budget'), {
+    const budgetStop = (): Error => Object.assign(new Error('claude -p failed (exit 1): error_max_budget_usd: Reached maximum budget'), {
       usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0 }, costUsd: 0.02, ms: 1,
     });
-    const spender: SolverProposer = { propose: async () => { throw budgetStop; } };
-    const run = localRunner({ out, engineCommit: 'abcdef1', maxTurns: 8, maxMinutes: 2, maxOutputTokens: 4096, redact: redactor([]), proposers: new Map([[SONNET, spender]]) });
-    const r = await runDifficulty({ runId: 'bud', tasks: [EASY], models: [SONNET], episodes: 1, budgetUsd: 1, episodeBudgetUsd: 0.1, run });
-    assert.deepEqual(r.rows.map((e) => [e.stopReason, e.score, e.costUsd, e.unaccountedCalls, e.refusal]), [['budget_limit', 0, 0.02, 0, null]]);
-    assert.deepEqual(r.stop, { kind: 'complete' });
+    const answers = fakeModel(SOLVE_EASY, 0.001);
+    let calls = 0;
+    const spendsOut: SolverProposer = { propose: async (req) => (++calls === 1 ? answers.propose(req) : Promise.reject(budgetStop())) };
+    const tooSmall: SolverProposer = { propose: async () => { throw budgetStop(); } };
+    const run = localRunner({ out, engineCommit: 'abcdef1', maxTurns: 8, maxMinutes: 2, maxOutputTokens: 4096, redact: redactor([]), proposers: new Map([[SONNET, spendsOut], [OPUS, tooSmall]]) });
+    const r = await runDifficulty({ runId: 'bud', tasks: [EASY], models: [SONNET, OPUS], episodes: 1, budgetUsd: 1, episodeBudgetUsd: 0.1, run });
+    assert.deepEqual(r.rows.map((e) => [e.model, e.stopReason, e.score, e.costUsd, e.budgetTooSmall, isTrial(e)]), [
+      [SONNET, 'budget_limit', 0, 0.021, false, true],
+      [OPUS, 'model_error', 0, 0.02, true, false],
+    ]);
+    assert.deepEqual(r.stop, { kind: 'failed', message: `episode bud.2: ${OPUS} could not make one call within the $0.1 episode budget; raise --episode-budget-usd` });
   });
 
   it('stops the run when the spend ledger refuses the first call, before the fake Model is called', async () => {
@@ -290,7 +314,8 @@ describe('localRunner over helpdesk with a fake Model', () => {
     const r = await runDifficulty({ runId: 'ref', tasks: [EASY], models: [SONNET, OPUS], episodes: 2, budgetUsd: 1, episodeBudgetUsd: 0.1, run });
     assert.equal(r.stop.kind, 'cost_refused');
     assert.match(r.stop.kind === 'cost_refused' ? r.stop.message : '', /^total spend cap WORLDGEN_MAX_TOTAL_USD=\$1\.00 reached/);
-    assert.deepEqual(r.rows.map((e) => [e.runId, e.model, e.stopReason, e.costUsd]), [['ref.1', SONNET, 'model_error', 0]]);
+    assert.deepEqual(r.rows.map((e) => [e.runId, e.model, e.stopReason, e.costUsd, e.unaccountedCalls, e.chargedUsd]), [['ref.1', SONNET, 'model_error', 0, 0, 0]]);
+    assert.equal(r.spentUsd, 0);
     assert.deepEqual([inner.calls(), other.calls()], [0, 0]);
   });
 });

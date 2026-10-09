@@ -29,9 +29,11 @@ export type EpisodeOutcome = {
   readonly stopReason: StopReason;
   /** The billed cost of the episode's calls. */
   readonly costUsd: number;
-  /** Calls whose billing is unknown, such as one cut off by the time limit. */
+  /** Calls whose billing is unknown, such as one cut off by the time limit. A refused call is not one: it was never made. */
   readonly unaccountedCalls: number;
   readonly refusal: string | null;
+  /** The episode's first call did not fit its budget, so the agent never acted. */
+  readonly budgetTooSmall: boolean;
 };
 
 export type EpisodeRunner = (job: EpisodeJob) => Promise<EpisodeOutcome>;
@@ -100,7 +102,12 @@ export async function runDifficulty(o: DifficultyRunOptions): Promise<Difficulty
         } catch (e) {
           // What it spent before it failed is unknown, so it counts at its whole budget.
           spent += o.episodeBudgetUsd;
-          return done({ kind: 'failed', message: `episode ${runId} (${t.world} ${t.task}, ${model}) could not run to the end: ${messageOf(e)}` });
+          return done({ kind: 'failed', message: `episode ${runId} (${t.world} ${t.task}, ${model}) could not run to the end, so it is charged its whole $${o.episodeBudgetUsd} budget: ${messageOf(e)}` });
+        }
+        if (outcome.stopReason === 'budget_limit' && outcome.refusal === null) {
+          // The caps are shared by every session, so one can run out mid-episode and cut a call short. In doubt, the caps did it: no trial.
+          const after = o.capLeftUsd?.() ?? null;
+          if (after !== null && after < o.episodeBudgetUsd) outcome = { ...outcome, refusal: `the spend caps ran low during the episode and leave $${after} for model calls, less than one episode's $${o.episodeBudgetUsd} budget` };
         }
         const chargedUsd = usd(outcome.unaccountedCalls > 0 ? Math.max(outcome.costUsd, o.episodeBudgetUsd) : outcome.costUsd);
         spent += chargedUsd;
@@ -108,6 +115,7 @@ export async function runDifficulty(o: DifficultyRunOptions): Promise<Difficulty
         rows.push(row);
         o.onEpisode?.(row);
         if (outcome.refusal !== null) return done({ kind: 'cost_refused', message: outcome.refusal });
+        if (outcome.budgetTooSmall) return done({ kind: 'failed', message: `episode ${runId}: ${model} could not make one call within the $${o.episodeBudgetUsd} episode budget; raise --episode-budget-usd` });
         if (outcome.stopReason === 'interrupted') return done({ kind: 'interrupted' });
       }
     }
@@ -163,7 +171,9 @@ export type LocalRunnerOptions = {
 /**
  * An EpisodeRunner over runLocalEpisode. The episode files any failed model call as model_error,
  * and the failed call is always the last, so the proposer is watched here: a cost refusal is noted,
- * and a call its allowance stopped makes the episode read as budget_limit.
+ * and a call its allowance stopped makes the episode read as budget_limit, unless it was the first
+ * call, when the budget was too small for the agent to act at all. The episode's own export keeps
+ * model_error and the call's error.
  */
 export function localRunner(o: LocalRunnerOptions): EpisodeRunner {
   return async (job) => {
@@ -171,10 +181,13 @@ export function localRunner(o: LocalRunnerOptions): EpisodeRunner {
     if (proposer === undefined) throw new Error(`no proposer was built for ${job.model}`);
     let refusal: string | null = null;
     let budgetStop = false;
+    let answered = 0;
     const watched: SolverProposer = {
       async propose(req) {
         try {
-          return await proposer.propose(req);
+          const p = await proposer.propose(req);
+          answered += 1;
+          return p;
         } catch (e) {
           if (isCostRefusal(e)) refusal ??= messageOf(e);
           else if (isBudgetStop(e, o.maxOutputTokens)) budgetStop = true;
@@ -190,8 +203,13 @@ export function localRunner(o: LocalRunnerOptions): EpisodeRunner {
       ...(o.spawner === undefined ? {} : { spawner: o.spawner }),
       ...(o.env === undefined ? {} : { env: o.env }),
     });
-    const stopReason = episode.stop_reason === 'model_error' && budgetStop && refusal === null ? 'budget_limit' : episode.stop_reason;
-    return { episodeId: episode.episode_id, score: episode.score, stopReason, costUsd: episode.usage.cost_usd, unaccountedCalls: episode.usage.unaccounted_calls, refusal };
+    const spentOut = episode.stop_reason === 'model_error' && budgetStop && refusal === null;
+    return {
+      episodeId: episode.episode_id, score: episode.score, stopReason: spentOut && answered > 0 ? 'budget_limit' : episode.stop_reason, costUsd: episode.usage.cost_usd,
+      // The episode counts a refused call as one of unknown billing, but the ledger refused it before it was made.
+      unaccountedCalls: Math.max(0, episode.usage.unaccounted_calls - (refusal === null ? 0 : 1)),
+      refusal, budgetTooSmall: spentOut && answered === 0,
+    };
   };
 }
 

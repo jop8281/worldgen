@@ -35,7 +35,8 @@ Every model call is metered through the spend ledger. An episode starts only whi
 fits in what is left of --budget-usd and under the spend caps; the first refused call stops the run,
 and no other model stands in.
   --budget-usd <n>          the whole run's model spend; required. The claude CLI checks a call's
-                            allowance after the call, so the last episode can pass it by part of a call
+                            allowance only after the call, so each episode can pass its budget by
+                            part of one call; the SDK bounds every call before it is made
   --out <dir>               where the matrix and every episode go; must not hold a difficulty run
   --run-id <id>             this run's name, at most ${MAX_RUN_ID} characters; episode k runs as <id>.k
   --engine-commit <sha>     the engine commit the episodes run, 7 to 64 hex digits
