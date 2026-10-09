@@ -29,4 +29,4 @@ links:
         ticket_id: tkt_0321
         kind: resolved
       field: note
-    rule: contains
+    rule: cites

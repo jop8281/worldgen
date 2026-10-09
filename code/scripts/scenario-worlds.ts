@@ -29,9 +29,9 @@ const SUPPORT_TASK = {
     ...resolved.map((e) => ({ entity: 'ticket_event', id: e.id, kind: 'created', fields: ['ticket_id', 'kind', 'note', 'actor_id'] })),
   ]);
   ctx.goal(0.5, 'the ticket is resolved, with one resolved event', ctx.db.get('ticket', ticket.id).status === 'resolved' && resolved.length === 1);
-  // The note must name the order and a refund id as the payments world writes them (re_ and at least four digits), so a note of nonsense scores below 1 (A-388).
+  // The note must name the order and exactly one refund id as the payments world writes them (re_ and at least four digits), so a note of nonsense or a list of ids scores below 1 (A-388, A-397).
   const note = resolved.length === 1 && typeof resolved[0].note === 'string' ? resolved[0].note : '';
-  ctx.goal(0.5, 'the resolution note names order O-7301 and a refund id', note.includes('O-7301') && /\\bre_\\d{4,}\\b/.test(note));
+  ctx.goal(0.5, 'the resolution note names order O-7301 and exactly one refund id', note.includes('O-7301') && (note.match(/\\bre_\\d{4,}\\b/g) || []).length === 1);
   return ctx.score();
 }`,
   solution: `(ctx) => {
@@ -57,6 +57,15 @@ const SUPPORT_TASK = {
   const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
   const ticket = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&q=O-7301').body.data[0];
   ctx.api('POST', '/tickets/' + ticket.id + '/resolve', { note: 'Refunded the duplicate O-7301 charge.' });
+}`,
+    },
+    {
+      why: 'resolves the ticket with a note that lists refund ids re_0001 to re_0099, so it cites no one refund',
+      script: `(ctx) => {
+  const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
+  const ticket = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&q=O-7301').body.data[0];
+  const ids = Array.from({ length: 99 }, (_, i) => 're_' + String(i + 1).padStart(4, '0'));
+  ctx.api('POST', '/tickets/' + ticket.id + '/resolve', { note: 'Refunded the duplicate O-7301 charge, refund ' + ids.join(' ') + '.' });
 }`,
     },
     {
@@ -187,7 +196,7 @@ const DERIVED = {
       note: 'acme_support: the helpdesk plus Acme Logistics\' O-7301 duplicate-charge ticket and the task that resolves it (A-397)',
       meta: {
         name: 'acme_support',
-        description: `Derived from the helpdesk world for the flagship scenario billing-duplicate-charge (A-397). ${source.meta.description} Acme Logistics has an open ticket about a $149.00 charge for order O-7301 taken twice.`,
+        description: `${source.meta.description} Acme Logistics has an open billing ticket about order O-7301.`,
       },
       upsert: { seed: { ticket: ticketSeed(seedOf(source, 'ticket')) }, tasks: { resolve_acme_double_charge: SUPPORT_TASK } },
     }),
@@ -198,7 +207,7 @@ const DERIVED = {
       note: 'acme_payments: the Stripe charges world plus Acme Logistics, its duplicate O-7301 charge, and the task that refunds it (A-397)',
       meta: {
         name: 'acme_payments',
-        description: `Derived from gen_stripe_charges for the flagship scenario billing-duplicate-charge (A-397). ${source.meta.description} Acme Logistics has three $149.00 charges: order O-7301 twice, minutes apart, and order O-7302.`,
+        description: `${source.meta.description} Acme Logistics is a customer with card charges for orders O-7301 and O-7302.`,
       },
       upsert: {
         seed: { customer: customerSeed(seedOf(source, 'customer')), charge: chargeSeed(seedOf(source, 'charge')), refund: refundSeed(seedOf(source, 'refund')) },

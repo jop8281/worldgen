@@ -3,24 +3,34 @@ import { z } from 'zod';
 export const alias = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 const value = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 const end = z.strictObject({ world: alias, entity: z.string().min(1), where: z.record(z.string(), value), field: z.string().min(1) });
-export const linkSchema = z.strictObject({ name: z.string().min(1), from: end, to: end, rule: z.enum(['contains', 'equals']) });
+export const linkSchema = z.strictObject({ name: z.string().min(1), from: end, to: end, rule: z.enum(['cites', 'equals']) });
 export type Link = z.output<typeof linkSchema>;
 export type LinkEnd = Link['from'];
 export type LinkResult = { readonly name: string; readonly held: boolean; readonly found: string };
 type Row = Readonly<Record<string, unknown>>;
 
-const WORD = '[A-Za-z0-9_]';
-const escaped = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** An id such as re_0051: a run of letters and "_", which is its prefix, then letters or digits. */
+const ID_SHAPE = /^([A-Za-z]+_)[A-Za-z0-9]+$/;
+const escaped = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const RULES: Readonly<Record<Link['rule'], (text: string, value: string) => boolean>> = {
-  contains: (text, value) => new RegExp(`(?<!${WORD})${escaped(value)}(?!${WORD})`).test(text),
-  equals: (text, value) => text === value,
+/** Why the citing row's `text` fails the rule for `value`, as the end of a sentence about that row, or null when it holds. */
+const RULES: Readonly<Record<Link['rule'], (text: unknown, value: string, kind: string) => string | null>> = {
+  cites: (text, value, kind) => {
+    const prefix = ID_SHAPE.exec(value)?.[1];
+    if (prefix === undefined) return `cannot cite ${value}, which is not letters and "_" then letters or digits`;
+    const shaped = new RegExp(`(?<![A-Za-z0-9_])${escaped(prefix)}[A-Za-z0-9]+(?![A-Za-z0-9_])`, 'g');
+    const tokens = typeof text === 'string' ? (text.match(shaped) ?? []) : [];
+    if (tokens.length === 0) return `cites no ${kind} id`;
+    if (tokens.length > 1) return `cites ${tokens.length} ${kind} ids, not exactly 1`;
+    return tokens[0] === value ? null : `cites ${tokens[0]}, not ${value}`;
+  },
+  equals: (text, value) => (text === value ? null : `does not equal ${value}`),
 };
 
 /**
  * Whether `link` holds over the worlds' rows. `from.where` must select exactly one row, whose `from.field` is the link
- * value, a non-empty string or a number. `to.where` must select a row whose `to.field` is a string that contains that
- * value as a whole token, or equals it, by `rule`. `found` says why in one sentence.
+ * value, a non-empty string or a number. A row that `to.where` selects must hold, in `to.field`, exactly one token shaped
+ * like that value and equal to it (`cites`), or the value itself (`equals`). `found` says why in one sentence.
  */
 export function linkResult(link: Link, tables: (world: string, entity: string) => readonly Row[]): LinkResult {
   const { from, to } = link;
@@ -36,20 +46,12 @@ export function linkResult(link: Link, tables: (world: string, entity: string) =
   const linked = String(raw);
   const targets = select(to);
   if (targets.length === 0) return result(false, `1 ${from.entity} row matched; 0 ${to.entity} rows matched where ${JSON.stringify(to.where)}`);
-  const textOf = (r: Row): string | null => {
-    const text = r[to.field];
-    return typeof text === 'string' ? text : null;
-  };
-  const hit = targets.find((r) => {
-    const text = textOf(r);
-    return text !== null && RULES[link.rule](text, linked);
-  });
-  if (hit !== undefined) return result(true, `1 ${from.entity} row matched; ${to.entity} ${String(hit['id'])} ${to.field} ${link.rule} ${linked}`);
-  if (link.rule === 'contains') {
-    for (const r of targets) {
-      const token = textOf(r)?.match(new RegExp(`${WORD}*${escaped(linked)}${WORD}*`))?.[0];
-      if (token !== undefined) return result(false, `1 ${from.entity} row matched; ${to.entity} ${String(r['id'])} ${to.field} has ${linked} only inside ${token}`);
-    }
+  const misses: string[] = [];
+  for (const row of targets) {
+    const at = `${to.entity} ${String(row['id'])} ${to.field}`;
+    const why = RULES[link.rule](row[to.field], linked, from.entity);
+    if (why === null) return result(true, `1 ${from.entity} row matched; ${at} ${link.rule} ${linked}`);
+    misses.push(`${at} ${why}`);
   }
-  return result(false, `1 ${from.entity} row matched; no ${to.entity} ${to.field} ${link.rule} ${linked}`);
+  return result(false, misses.join('; '));
 }

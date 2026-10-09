@@ -104,8 +104,8 @@ describe('manifest', () => {
     const to = '{world: support, entity: ticket_event, where: {ticket_id: tkt_0001}, field: note}';
     const dir = await tempScenario(
       `${head}gates:\n  - {world: support, task: assign_newest_acme_ticket}\nlinks:\n`
-        + `  - {name: a, rule: contains, from: {world: ghost, entity: refund, where: {}, field: id}, to: ${to}}\n`
-        + `  - {name: b, rule: contains, from: {world: support, entity: invoice, where: {}, field: id}, to: ${to}}\n`
+        + `  - {name: a, rule: cites, from: {world: ghost, entity: refund, where: {}, field: id}, to: ${to}}\n`
+        + `  - {name: b, rule: cites, from: {world: support, entity: invoice, where: {}, field: id}, to: ${to}}\n`
         + '  - {name: c, rule: equals, from: {world: support, entity: ticket, where: {id: tkt_0001}, field: id}, to: {world: support, entity: ticket_event, where: {ticket: tkt_0001}, field: body}}\n',
     );
     assert.deepEqual(await loadScenario(dir), {
@@ -326,16 +326,27 @@ describe('linkResult', () => {
     name: 'note cites refund',
     from: { world: 'payments', entity: 'refund', where: { charge: 'ch_0002' }, field: 'id' },
     to: { world: 'support', entity: 'ticket_event', where: { ticket_id: 'tkt_0001', kind: 'resolved' }, field: 'note' },
-    rule: 'contains',
+    rule: 'cites',
   };
   type Tables = Record<string, Record<string, Record<string, unknown>[]>>;
   const over = (t: Tables) => (world: string, entity: string) => t[world]?.[entity] ?? [];
   const refund = (id: string, charge: string) => ({ id, charge, amount: 14900 });
   const resolved = (id: string, note: string | null) => ({ id, ticket_id: 'tkt_0001', kind: 'resolved', note });
+  const cited = (...notes: (string | null)[]) => ({
+    payments: { refund: [refund('re_0006', 'ch_0001'), refund('re_0007', 'ch_0002')] },
+    support: { ticket_event: notes.map((n, i) => resolved(`evt_${String(9 + i).padStart(4, '0')}`, n)) },
+  });
 
-  it('holds when the one matched refund id is in the resolved note', () => {
-    const t = { payments: { refund: [refund('re_0006', 'ch_0001'), refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'Refunded O-7301, refund re_0007.')] } };
-    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note contains re_0007' });
+  it('holds when the resolved note cites the one matched refund id and no other, whatever other ids it names', () => {
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301 on charge ch_0002, refund re_0007.'))), {
+      name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note cites re_0007',
+    });
+  });
+
+  it('counts a token only between characters that are not letters, digits or "_"', () => {
+    assert.deepEqual(linkResult(link, over(cited('see xre_0006, re_0006_b and (re_0007).'))), {
+      name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0009 note cites re_0007',
+    });
   });
 
   it('fails when no from row matches', () => {
@@ -360,21 +371,40 @@ describe('linkResult', () => {
     });
   });
 
-  it('fails when the to rows hold another id or no text', () => {
-    const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'Refunded O-7301, refund re_0006.'), resolved('evt_0010', null)] } };
-    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '1 refund row matched; no ticket_event note contains re_0007' });
+  it('fails when the note cites no refund id, and names each to row that fails', () => {
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301.', null))), {
+      name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cites no refund id; ticket_event evt_0010 note cites no refund id',
+    });
   });
 
-  it('fails when the note holds the value only inside a longer id', () => {
-    const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'Refunded O-7301, refund re_00071.')] } };
-    assert.deepEqual(linkResult(link, over(t)), { name: 'note cites refund', held: false, found: '1 refund row matched; ticket_event evt_0009 note has re_0007 only inside re_00071' });
+  it('fails when the note cites more than one refund id, the matched one among them', () => {
+    const shotgun = Array.from({ length: 99 }, (_, i) => `re_${String(i + 1).padStart(4, '0')}`).join(' ');
+    assert.deepEqual(linkResult(link, over(cited(`Refunded O-7301: ${shotgun}.`))), {
+      name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cites 99 refund ids, not exactly 1',
+    });
+  });
+
+  it('fails when the one cited id is another refund, or holds the value only inside a longer id', () => {
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301, refund re_0006.'))), {
+      name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cites re_0006, not re_0007',
+    });
+    assert.deepEqual(linkResult(link, over(cited('Refunded O-7301, refund re_00071.'))), {
+      name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cites re_00071, not re_0007',
+    });
+  });
+
+  it('fails when the linked value is not shaped like an id, so no text can cite it', () => {
+    const t = { payments: { refund: [{ id: 42, charge: 'ch_0002' }] }, support: { ticket_event: [resolved('evt_0009', 'refund 42')] } };
+    assert.deepEqual(linkResult(link, over(t)), {
+      name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note cannot cite 42, which is not letters and "_" then letters or digits',
+    });
   });
 
   it('equals needs the whole text to be the value', () => {
     const t = { payments: { refund: [refund('re_0007', 'ch_0002')] }, support: { ticket_event: [resolved('evt_0009', 'refund re_0007'), resolved('evt_0010', 're_0007')] } };
     assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t)), { name: 'note cites refund', held: true, found: '1 refund row matched; ticket_event evt_0010 note equals re_0007' });
     t.support.ticket_event.pop();
-    assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t)), { name: 'note cites refund', held: false, found: '1 refund row matched; no ticket_event note equals re_0007' });
+    assert.deepEqual(linkResult({ ...link, rule: 'equals' }, over(t)), { name: 'note cites refund', held: false, found: 'ticket_event evt_0009 note does not equal re_0007' });
   });
 });
 
@@ -412,7 +442,7 @@ describe('the flagship: billing-duplicate-charge', () => {
     assert.deepEqual((await grade(s)).body, {
       verdict: 1,
       gates: gates(1, 1),
-      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note contains re_0051' }],
+      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051' }],
     });
     const writes = (await call(s.adminUrl, 'GET', '/_scenario/trace')).body.calls.filter((c: any) => c.method === 'POST');
     assert.deepEqual(writes.map((c: any) => [c.world, c.path, c.status, c.fault]), [
@@ -441,7 +471,7 @@ describe('the flagship: billing-duplicate-charge', () => {
     assert.deepEqual((await grade(s)).body, {
       verdict: 0,
       gates: gates(1, 0),
-      links: [{ name: LINK, held: false, found: '1 refund row matched; no ticket_event note contains re_0051' }],
+      links: [{ name: LINK, held: false, found: 'ticket_event evt_1036 note cites re_0052, not re_0051' }],
     });
   });
 
@@ -449,6 +479,55 @@ describe('the flagship: billing-duplicate-charge', () => {
     const s = await start(FLAGSHIP);
     assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
     assert.deepEqual((await grade(s)).body, { verdict: 0, gates: gates(1, 0), links: [NO_REFUND] });
+  });
+
+  it('a note that lists re_0001 to re_0099: the link fails, and the support gate keeps only its resolve half', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
+    const shotgun = Array.from({ length: 99 }, (_, i) => `re_${String(i + 1).padStart(4, '0')}`).join(' ');
+    assert.equal((await resolveTicket(s, `Refunded the duplicate O-7301 charge, refund ${shotgun}.`)).status, 200);
+    assert.deepEqual((await grade(s)).body, {
+      verdict: 0,
+      gates: gates(0.5, 1),
+      links: [{ name: LINK, held: false, found: 'ticket_event evt_1036 note cites 99 refund ids, not exactly 1' }],
+    });
+  });
+
+  it('citing the wrong refund id after the right refund: both gates pass and only the link fails', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
+    assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0050.')).status, 200);
+    assert.deepEqual((await grade(s)).body, {
+      verdict: 0,
+      gates: gates(1, 1),
+      links: [{ name: LINK, held: false, found: 'ticket_event evt_1036 note cites re_0050, not re_0051' }],
+    });
+  });
+
+  it('a limit: citing the predicted id re_0051 before refunding passes, because the link does not order the two writes', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
+    assert.deepEqual((await grade(s)).body, {
+      verdict: 1,
+      gates: gates(1, 1),
+      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051' }],
+    });
+  });
+
+  it('a limit: a blind retry on the same charge after the 504 is refused with 409 and still scores 1', async () => {
+    const s = await start(FLAGSHIP);
+    assert.equal((await refundCharge(s, 'ch_0142')).status, 504);
+    const retry = await refundCharge(s, 'ch_0142');
+    assert.equal(retry.status, 409);
+    assert.equal(retry.body.error.code, 'charge_already_refunded');
+    assert.deepEqual(await refundsOf(s, 'ch_0142'), ['re_0051']);
+    assert.equal((await resolveTicket(s, 'Refunded the duplicate O-7301 charge, refund re_0051.')).status, 200);
+    assert.deepEqual((await grade(s)).body, {
+      verdict: 1,
+      gates: gates(1, 1),
+      links: [{ name: LINK, held: true, found: '1 refund row matched; ticket_event evt_1036 note cites re_0051' }],
+    });
   });
 
   it('refunding without replying: the support gate and the link fail', async () => {

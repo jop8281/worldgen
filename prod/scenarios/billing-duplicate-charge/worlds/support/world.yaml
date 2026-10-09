@@ -1,7 +1,7 @@
 format: 1
 meta:
   name: acme_support
-  description: Derived from the helpdesk world for the flagship scenario billing-duplicate-charge (A-397). A customer-support helpdesk with SLA tiers and on-call escalation. Customers file tickets, agents work them through a fixed lifecycle, and urgent work escalates to the on-call agent. Acme Logistics has an open ticket about a $149.00 charge for order O-7301 taken twice.
+  description: A customer-support helpdesk with SLA tiers and on-call escalation. Customers file tickets, agents work them through a fixed lifecycle, and urgent work escalates to the on-call agent. Acme Logistics has an open billing ticket about order O-7301.
   resembles: Zendesk Support tickets API
   source: hand
   seed: 1337
@@ -1897,9 +1897,9 @@ tasks:
           ...resolved.map((e) => ({ entity: 'ticket_event', id: e.id, kind: 'created', fields: ['ticket_id', 'kind', 'note', 'actor_id'] })),
         ]);
         ctx.goal(0.5, 'the ticket is resolved, with one resolved event', ctx.db.get('ticket', ticket.id).status === 'resolved' && resolved.length === 1);
-        // The note must name the order and a refund id as the payments world writes them (re_ and at least four digits), so a note of nonsense scores below 1 (A-388).
+        // The note must name the order and exactly one refund id as the payments world writes them (re_ and at least four digits), so a note of nonsense or a list of ids scores below 1 (A-388, A-397).
         const note = resolved.length === 1 && typeof resolved[0].note === 'string' ? resolved[0].note : '';
-        ctx.goal(0.5, 'the resolution note names order O-7301 and a refund id', note.includes('O-7301') && /\bre_\d{4,}\b/.test(note));
+        ctx.goal(0.5, 'the resolution note names order O-7301 and exactly one refund id', note.includes('O-7301') && (note.match(/\bre_\d{4,}\b/g) || []).length === 1);
         return ctx.score();
       }
     solution: |-
@@ -1925,6 +1925,14 @@ tasks:
             const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
             const ticket = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&q=O-7301').body.data[0];
             ctx.api('POST', '/tickets/' + ticket.id + '/resolve', { note: 'Refunded the duplicate O-7301 charge.' });
+          }
+      - why: resolves the ticket with a note that lists refund ids re_0001 to re_0099, so it cites no one refund
+        script: |-
+          (ctx) => {
+            const acme = ctx.api('GET', '/customers?q=Acme').body.data.find((c) => c.name === 'Acme Logistics');
+            const ticket = ctx.api('GET', '/tickets?customer_id=' + acme.id + '&q=O-7301').body.data[0];
+            const ids = Array.from({ length: 99 }, (_, i) => 're_' + String(i + 1).padStart(4, '0'));
+            ctx.api('POST', '/tickets/' + ticket.id + '/resolve', { note: 'Refunded the duplicate O-7301 charge, refund ' + ids.join(' ') + '.' });
           }
       - why: PATCHes the ticket status to resolved instead of calling the resolve action, so no resolved event carries a note
         script: |-
