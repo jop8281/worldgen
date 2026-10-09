@@ -210,11 +210,13 @@ function tradedSide(tried: readonly TriedAttempt[], issues: readonly CheckIssue[
 }
 
 /**
- * What the plan is told on a traded backtrack: the step's last issues, then the other side (`tradedSide`), each failing test
- * and each input issue kept only when it concerns a traded operation, one an input issue names and a failing test
- * exercises on either side. So whichever side decides, the plan sees only the conflict (A-416, J193). When no other side
- * is found, the step's issues go whole. The step that backtracked still gets its whole last rejection when it runs again
- * (J192).
+ * What the plan is told on a traded backtrack (A-416): the step's last issues narrowed to the conflict, then the other side
+ * (`tradedSide`). A failing test or an input issue is kept only when it concerns a traded operation, one an input issue
+ * names and a failing test exercises on either side, so whichever side decides, the plan sees only the conflict (J193).
+ * Any other issue is kept only when the plan owns it: the step's own errors, such as an action rule left unanswered, are
+ * its rerun's to fix, and `layer.blocked` only says another issue came first (J194). The other side is never empty here,
+ * so neither is the result. When no other side is found the step's issues go whole (J192). The step that backtracked
+ * still gets its whole last rejection when it runs again.
  */
 function tradedForTarget(tried: readonly TriedAttempt[], issues: readonly CheckIssue[], tests: ReadonlyMap<string, readonly string[]>): readonly CheckIssue[] {
   const other = tradedSide(tried, issues, tests);
@@ -224,9 +226,11 @@ function tradedForTarget(tried: readonly TriedAttempt[], issues: readonly CheckI
   const named = new Set(both.map(namedOperation).filter((op): op is string => op !== null));
   const traded = new Set(both.filter(failedTest).flatMap((i) => exercisedBy(i, tests)).filter((op) => named.has(op)));
   const kept = (i: CheckIssue): boolean => {
+    if (i.code === 'layer.blocked') return false;
     const op = namedOperation(i);
     if (op !== null) return traded.has(op);
-    return !failedTest(i) || exercisedBy(i, tests).some((o) => traded.has(o));
+    if (failedTest(i)) return exercisedBy(i, tests).some((o) => traded.has(o));
+    return ownerOf(i) === 'plan';
   };
   return [...issues.filter(kept), ...other];
 }
