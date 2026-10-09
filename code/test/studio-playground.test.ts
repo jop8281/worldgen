@@ -4,7 +4,7 @@
  * the engine's own `worldplay verify`. Only the noop agent runs here, so no test makes a model call.
  */
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, rm, stat, symlink } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -110,6 +110,15 @@ describe('studio agent playground (YOS-190)', () => {
     const groups = analytics['groups'] as Json[];
     assert.deepEqual(groups.filter((g) => g['task'] === 'assign_newest_acme_ticket').map((g) => [g['world'], g['model'], g['successes'], g['failures']]), [['helpdesk', 'noop (no model)', 0, { 'scored 0': 1 }]]);
     assert.deepEqual(analytics['unreadable'], []);
+
+    // A version 1 failures.jsonl left beside the new dataset.jsonl holds the same episode: it still counts once (A-389).
+    const dir = path.join(repo, 'eval', 'episodes', runId);
+    const row = JSON.parse((await readFile(path.join(dir, 'dataset.jsonl'), 'utf8')).trim()) as Json;
+    const { outcome: _, ...v1 } = row;
+    await writeFile(path.join(dir, 'failures.jsonl'), `${JSON.stringify({ ...v1, schema_version: 1 })}\n`);
+    const again = (await json(studio.url, 'GET', '/api/episodes/analytics')).body;
+    assert.deepEqual((again['groups'] as Json[]).filter((g) => g['task'] === 'assign_newest_acme_ticket').map((g) => g['runs']), [1]);
+    assert.deepEqual(again['unreadable'], []);
   });
 
   it('refuses an unknown agent and an unsafe world name before spawning anything', async () => {

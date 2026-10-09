@@ -230,6 +230,7 @@ describe('outcome labels (A-389)', () => {
     assert.deepEqual(at({ score: null, stop_reason: 'grade_error', error: 'grading failed' }, null), { reward: 0, verdict: 'infra', failure_cause: 'grade_error', goals: null, guards: null });
     assert.deepEqual(at({ score: null }, null), { reward: 0, verdict: 'infra', failure_cause: 'scored none', goals: null, guards: null });
     assert.deepEqual(at({ usage: { ...episode().usage, unaccounted_calls: 1 } }, counts(1, 1, 0, 0)), { reward: 1, verdict: 'partial', failure_cause: 'incomplete record', goals: { met: 1, total: 1 }, guards: { held: 0, total: 0 } });
+    assert.deepEqual(at(failure({ stop_reason: 'invalid_turn', error: 'not a valid turn' }), counts(0, 1, 1, 1)), { reward: 0, verdict: 'failure', failure_cause: 'invalid_turn', goals: { met: 0, total: 1 }, guards: { held: 1, total: 1 } });
   });
 
   it('refuses an outcome the record does not imply, half-counted grades and a count above its total', () => {
@@ -241,6 +242,11 @@ describe('outcome labels (A-389)', () => {
     assert.equal(ok({ ...episode(), outcome: { ...episode().outcome, guards: null } }), false, 'goals without guards');
     assert.equal(ok(episode({}, counts(3, 2, 0, 0))), false, 'more goals met than there are');
     assert.equal(ok({ ...episode(), outcome: { ...episode().outcome, goals: { met: 1, total: 1, names: ['x'] } } }), false, 'counts only, no names');
+    const ungraded = episode({ score: null }, null);
+    assert.equal(ok(ungraded), true);
+    assert.equal(ok({ ...ungraded, outcome: { ...ungraded.outcome, goals: { met: 1, total: 1 }, guards: { held: 1, total: 1 } } }), false, 'an ungraded row has no counts');
+    assert.equal(ok(episode({}, counts(1, 1, 0, 1))), false, 'a broken guard scores 0, never 1');
+    assert.equal(ok(episode({ score: 0 }, counts(1, 1, 0, 1))), true);
   });
 
   it('reads a version 1 row as version 2, with the outcome derived and no verifier counts', () => {

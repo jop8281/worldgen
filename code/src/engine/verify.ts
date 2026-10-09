@@ -7,8 +7,9 @@
  * world.yaml, the engine revision), the ordered trace of successful calls, a deterministic hash
  * chain over that trace, and the final state snapshot. The verifier that holds the private world
  * replays the trace from seed on a fresh runtime and grades the state the trace reached. The
- * answer is only the bounded verdict: task, wid, score, stop. Nothing else, so no grader source
- * can leave through an error string, a log line or a rejected request's echo.
+ * answer is only the bounded verdict: task, wid, score, stop, and for a graded one the goal and
+ * guard counts as two integer pairs (A-389). Nothing else, never a goal's or guard's name, so no
+ * grader source can leave through an error string, a log line or a rejected request's echo.
  *
  * Rejections, in check order: `request.too_large` (the message text or the trace is over
  * VERIFIER_LIMITS), `request.invalid` (not JSON, not the message shape, or a state snapshot that

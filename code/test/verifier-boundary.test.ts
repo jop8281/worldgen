@@ -233,6 +233,30 @@ describe('the verifier protocol against the private world', () => {
     assert.equal(noop.ledger, 'sub-1');
   });
 
+  it('counts missed goals and a broken guard, and the verdict carries none of the names the grader recorded (A-389)', () => {
+    const PRINTER = 'escalate_breached_printer_ticket';
+    const seed = createRuntime(prep.world).dump();
+    // Nothing done on the medium task: its goals are missed.
+    const missed = verify(requestOf({ submission: 'sub-missed', task: PRINTER, trace: [], chain: chainOf([]), state: seed }));
+    // A write the easy task does not allow: its guard breaks.
+    const rt = createRuntime(prep.world);
+    assert.equal(rt.call({ method: 'PATCH', path: '/tickets/tkt_0001', query: {}, body: { subject: 'x' } }).status, 200);
+    const trace = traceOf(rt.log());
+    const end = rt.dump();
+    const broken = verify(requestOf({ submission: 'sub-broken', trace, chain: chainOf(trace), state: end }));
+    assert.deepEqual([missed.verdict, broken.verdict], [
+      { task: PRINTER, wid: prep.wid, score: 0, stop: 'graded', goals: { met: 0, total: 2 }, guards: { held: 2, total: 2 } },
+      { task: EASY, wid: prep.wid, score: 0, stop: 'graded', goals: { met: 0, total: 0 }, guards: { held: 0, total: 1 } },
+    ]);
+    // Every goal and guard name the grader recorded for these two states, as the engine reports them.
+    const names = ([[PRINTER, seed], [EASY, end]] as const).flatMap(([task, dump]) => {
+      const g = gradeDump(prep.world, task, dump);
+      return g.ok ? [...(g.goals ?? []).map((x) => x.name), ...(g.guards ?? []).map((x) => x.name)] : [];
+    });
+    assert.equal(names.length >= 3, true, JSON.stringify(names));
+    for (const v of [missed.verdict, broken.verdict]) for (const name of names) assert.equal(JSON.stringify(v).includes(name), false, name);
+  });
+
   it('rejects unknown task ids and identity mismatches with literal stops, burning the submission', () => {
     const table: readonly [string, Record<string, unknown>, string][] = [
       ['task.unknown', { task: 'no_such_task' }, 'no_such_task'],
@@ -305,7 +329,10 @@ describe('the verifier protocol against the private world', () => {
   it('widens a graded verdict by two integer pairs only: goal and guard counts, never a name or any string (A-389)', () => {
     const fields = (v: unknown): Record<string, unknown> => (typeof v === 'object' && v !== null ? { ...v } : {});
     const graded = verdicts.map(fields).filter((v) => v['stop'] === 'graded');
-    assert.equal(graded.length >= 2, true, 'the earlier tests recorded no graded verdict');
+    assert.equal(graded.length >= 4, true, 'the earlier tests recorded too few graded verdicts');
+    // Not vacuous: the scan covers a verdict with goals and one with a broken guard, where a name would most likely leak.
+    assert.equal(graded.some((v) => fields(v['goals'])['total'] !== 0), true, 'no graded verdict counted a goal');
+    assert.equal(graded.some((v) => fields(v['guards'])['held'] !== fields(v['guards'])['total']), true, 'no graded verdict counted a broken guard');
     for (const v of graded) {
       assert.deepEqual(Object.keys(v).sort(), ['goals', 'guards', 'score', 'stop', 'task', 'wid'], JSON.stringify(v));
       for (const [pair, keys] of [[fields(v['goals']), ['met', 'total']], [fields(v['guards']), ['held', 'total']]] as const) {

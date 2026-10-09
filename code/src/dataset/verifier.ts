@@ -22,6 +22,7 @@ import {
 } from '#engine';
 import { isolatedEnv, lastLines, nodeRunner, type Runner, type RunResult } from '../sandboxes/backend.ts';
 import type { EpisodeGrader, EpisodeSubmission, GradeResult } from './episode.ts';
+import { gradeCountsOf } from './schema.ts';
 
 /** What a grader factory receives: the run's identities and the frozen private world's directory. No CheckedWorld, so a controller that never loaded the world can grade. */
 export type HeldWorld = {
@@ -125,21 +126,12 @@ function verdictOf(text: string): GradeResult | null {
   const o = v as { task?: unknown; stop?: unknown; score?: unknown; goals?: unknown; guards?: unknown } | null;
   if (o === null || typeof o !== 'object' || typeof o.task !== 'string' || typeof o.stop !== 'string') return null;
   if (o.stop === 'graded') {
-    const goals = countPair(o.goals, 'met');
-    const guards = countPair(o.guards, 'held');
-    const ok = typeof o.score === 'number' && Number.isFinite(o.score) && o.score >= 0 && o.score <= 1 && goals !== null && guards !== null;
-    return ok ? { ok: true, score: o.score as number, goals: { met: goals.n, total: goals.total }, guards: { held: guards.n, total: guards.total } } : null;
+    const counts = gradeCountsOf(o.goals, o.guards);
+    const ok = typeof o.score === 'number' && Number.isFinite(o.score) && o.score >= 0 && o.score <= 1 && counts !== null;
+    return ok ? { ok: true, score: o.score as number, ...counts } : null;
   }
   const stop = REJECT_STOPS.find((s) => s === o.stop);
   return stop === undefined ? null : { ok: false, reason: reasonOf(stop) };
-}
-
-/** `{ <key>: n, total }` with two non-negative integers and n at most total, and nothing else; null otherwise. */
-function countPair(v: unknown, key: 'met' | 'held'): { n: number; total: number } | null {
-  if (v === null || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join(',') !== [key, 'total'].sort().join(',')) return null;
-  const n = (v as Record<string, unknown>)[key];
-  const total = (v as Record<string, unknown>)['total'];
-  return Number.isSafeInteger(n) && Number.isSafeInteger(total) && (n as number) >= 0 && (n as number) <= (total as number) ? { n: n as number, total: total as number } : null;
 }
 
 export type ChildGraderOptions = {

@@ -38,7 +38,7 @@ export type { TaskVerdict, TaskProof, GradedDump, GoalResult, GuardResult, Mutan
 export { publicWorldOf, taskPrivacy, privacySplit } from './split.ts';
 export type { TaskPrivacy } from './split.ts';
 export { VERIFIER_PROTOCOL, VERIFIER_LIMITS, VERIFIER_STOPS, verifierRequestSchema } from './verify.ts';
-export type { GradeCounts, VerifierHeld, VerifierVerdict, VerifiedSubmission, VerifierRequest, RejectStop } from './verify.ts';
+export type { VerifierHeld, VerifierVerdict, VerifiedSubmission, VerifierRequest, RejectStop } from './verify.ts';
 export type { TraceCall, TraceWrite } from './ctx.ts';
 export { diffWorlds, DESTRUCTIVE } from './diff.ts';
 export type { WorldDelta, WorldChange, ChangeKind } from './diff.ts';

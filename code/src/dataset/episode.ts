@@ -15,7 +15,7 @@
 import { z } from 'zod';
 import { traceOf, type CallRecord, type Difficulty, type OpenApiDocument, type StateDump, type TraceCall } from '#engine';
 import {
-  PROVIDER, SCHEMA_VERSION, hashState, outcomeOf, parseEpisode,
+  PROVIDER, SCHEMA_VERSION, gradeCountsOf, hashState, outcomeOf, parseEpisode,
   type Episode, type EpisodeUsage, type GradeCounts, type PublicMessage, type PublicRequest, type Redactor, type StopReason,
 } from './schema.ts';
 
@@ -47,7 +47,6 @@ export type EpisodeSubmission = {
   readonly state: StateDump;
 };
 
-/** The verifier's answer: a score, or a safe reason it refused to give one. */
 /** A grade: the score and the verifier's goal and guard counts (integers, A-389), or why it could not be graded. */
 export type GradeResult = ({ readonly ok: true; readonly score: number } & GradeCounts) | { readonly ok: false; readonly reason: string };
 export type EpisodeGrader = (submission: EpisodeSubmission) => Promise<GradeResult>;
@@ -325,7 +324,7 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
       account(res.usage, res.costUsd);
       const parsed = decisionSchema.safeParse(res.decision);
       if (!parsed.success) {
-        fail('model_error', `the solver's answer is not a valid turn: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
+        fail('invalid_turn', `the solver's answer is not a valid turn: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
         break;
       }
       const decision = parsed.data;
@@ -382,8 +381,11 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
       if (!graded.ok) throw new Error(graded.reason);
       const s = graded.score;
       if (typeof s !== 'number' || !Number.isFinite(s) || s < 0 || s > 1) throw new Error(`the verifier returned the score ${String(s)}, not a number from 0 to 1`);
+      const c = gradeCountsOf(graded.goals, graded.guards);
+      if (c === null) throw new Error('the verifier returned goal or guard counts that are not two integer pairs');
+      if (c.guards.held < c.guards.total && s !== 0) throw new Error(`the verifier scored ${s} with a broken guard, which the engine scores 0`);
       score = s;
-      counts = { goals: graded.goals, guards: graded.guards };
+      counts = c;
     } catch (e) {
       score = null;
       counts = null;

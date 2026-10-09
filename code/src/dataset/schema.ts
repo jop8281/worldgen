@@ -102,7 +102,8 @@ export function redactor(secrets: readonly string[]): Redactor {
 // ---------------------------------------------------------------------------------------------
 // Episode record
 
-export const STOP_REASONS = ['done', 'turn_limit', 'budget_limit', 'time_limit', 'model_error', 'world_error', 'grade_error', 'interrupted'] as const;
+/** `model_error` is a model call that failed; `invalid_turn` is an answer the agent gave that is not a valid turn (A-389). */
+export const STOP_REASONS = ['done', 'turn_limit', 'budget_limit', 'time_limit', 'model_error', 'invalid_turn', 'world_error', 'grade_error', 'interrupted'] as const;
 export type StopReason = (typeof STOP_REASONS)[number];
 
 const sha = z.string().regex(/^[0-9a-f]{64}$/, 'a lowercase hex sha-256');
@@ -233,6 +234,24 @@ export type Outcome = z.output<typeof outcomeSchema>;
 /** The verifier's goal and guard counts for a graded row: integers only (A-389). */
 export type GradeCounts = { readonly goals: { readonly met: number; readonly total: number }; readonly guards: { readonly held: number; readonly total: number } };
 
+/** `{ <key>: n, total }` with two non-negative safe integers, n at most total, and no other key; null otherwise. */
+function countPair(v: unknown, key: 'met' | 'held'): { n: number; total: number } | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join(',') !== [key, 'total'].sort().join(',')) return null;
+  const n = (v as Record<string, unknown>)[key];
+  const total = (v as Record<string, unknown>)['total'];
+  return Number.isSafeInteger(n) && Number.isSafeInteger(total) && (n as number) >= 0 && (n as number) <= (total as number) ? { n: n as number, total: total as number } : null;
+}
+
+/**
+ * Untrusted goal and guard counts as GradeCounts, or null when either is not exactly its integer pair. Whatever a
+ * verifier answered, only these numbers reach a record, never a name (A-389).
+ */
+export function gradeCountsOf(goals: unknown, guards: unknown): GradeCounts | null {
+  const g = countPair(goals, 'met');
+  const h = countPair(guards, 'held');
+  return g === null || h === null ? null : { goals: { met: g.n, total: g.total }, guards: { held: h.n, total: h.total } };
+}
+
 /** The fields a row's verdict is read from, the same in every schema version. */
 type Graded = {
   readonly stop_reason: StopReason; readonly score: number | null; readonly final_reply: string | null; readonly error: string | null;
@@ -259,6 +278,9 @@ export const episodeSchema = z.strictObject({ schema_version: z.literal(SCHEMA_V
   checkEpisode(ep, ctx);
   const { goals, guards } = ep.outcome;
   if ((goals === null) !== (guards === null)) ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'goals and guards are both counted or both null' });
+  if (ep.score === null && goals !== null) ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'an ungraded row has no counts' });
+  // The engine scores a run with a broken guard 0 (tasks.ts), so a row that says otherwise did not come from it.
+  if (guards !== null && guards.held < guards.total && ep.score !== 0) ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'a broken guard scores 0' });
   if ((goals !== null && goals.met > goals.total) || (guards !== null && guards.held > guards.total)) ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'a count is above its total' });
   const want = outcomeOf(ep, goals === null || guards === null ? null : { goals, guards });
   if (canonicalJson(ep.outcome) !== canonicalJson(want)) ctx.addIssue({ code: 'custom', path: ['outcome'], message: `must be ${canonicalJson(want)}` });
@@ -287,10 +309,11 @@ export function isCompleteSuccess(ep: Graded): boolean {
 export function failureCauseOf(ep: Graded, counts: GradeCounts | null): string | null {
   if (isCompleteSuccess(ep)) return null;
   if (ep.stop_reason !== 'done') return ep.stop_reason;
+  if (ep.score === null) return 'scored none';
   if (ep.score !== 1) {
     if (counts !== null && counts.guards.held < counts.guards.total) return 'guard broken';
     if (counts !== null && counts.goals.met < counts.goals.total) return `${counts.goals.met} of ${counts.goals.total} goals met`;
-    return `scored ${ep.score === null ? 'none' : ep.score}`;
+    return `scored ${ep.score}`;
   }
   if (ep.error !== null) return 'error';
   return 'incomplete record';
