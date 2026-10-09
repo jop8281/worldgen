@@ -8,7 +8,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { checkWorld, createRuntime, loadWorld, openApiOf, renderWorldYaml, traceOf, verifySubmission, worldIdOf, type CheckedWorld, type StateDump } from '#engine';
+import { checkWorld, createRuntime, loadWorld, openApiOf, renderWorldYaml, traceOf, verifySubmission, worldIdOf, type CheckedWorld, type IssueCode, type StateDump } from '#engine';
 import { checkRequest, routesOf } from './episode.ts';
 import { hashState, isCompleteSuccess, parseEpisode, parseManifest, sha256Hex, type Episode, type Manifest, type ManifestV1 } from './schema.ts';
 import { verifierRequestOf } from './verifier.ts';
@@ -89,13 +89,25 @@ export type FolderCheck = {
   readonly replays: readonly EpisodeReplay[];
   /** Episodes that are not complete successes, counted but not replayed: failures.jsonl in a version 1 export, the other rows of dataset.jsonl in a version 2 one (A-389). */
   readonly failedRuns: number;
+  /** Grader gaps the frozen world has under a gate newer than the export, as `<task> grader never reads <field>` (A-388). */
+  readonly gaps: readonly string[];
 };
+
+/**
+ * Codes a frozen world may fail only because the gate came after the export (A-388). A replay checks that a recorded
+ * episode reproduces its score on the world that produced it, and a grader that never reads its free text does not change
+ * that score, so the world is accepted for replay and each such gap is reported. Every other issue still refuses it.
+ */
+const POSTDATED: ReadonlySet<IssueCode> = new Set<IssueCode>(['task.freetext_unchecked']);
+
+/** `<task> grader never reads <field>`, from a task.freetext_unchecked issue, whose found starts with the field. */
+const gapOf = (found: string, task: string): string => `${task} grader never reads ${found.slice(0, found.indexOf(':'))}`;
 
 const linesOf = (text: string): string[] => text.split('\n').filter((l) => l.trim() !== '');
 
 /** Checks `<folder>/manifest.json`, `dataset.jsonl` (and a version 1 export's `failures.jsonl`) against the frozen world in `worldDir`. */
 export async function checkExportFolder(folder: string, worldDir = path.join(folder, 'world')): Promise<FolderCheck> {
-  const none = { changedFiles: [], worldVersion: null, worldOk: false, replays: [], failedRuns: 0 };
+  const none = { changedFiles: [], worldVersion: null, worldOk: false, replays: [], failedRuns: 0, gaps: [] };
   let manifest: Manifest | ManifestV1;
   try {
     manifest = parseManifest(JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8')), 'manifest.json');
@@ -123,11 +135,12 @@ export async function checkExportFolder(folder: string, worldDir = path.join(fol
   const replayed = rows.map((line, i) => ({ line, i })).filter(({ line }) => manifest.manifest_version === 1 || success(line));
   const failedRuns = manifest.manifest_version === 1 ? linesOf(texts[manifest.files.failures.path] ?? '').length : rows.length - replayed.length;
   const loaded = await loadWorld(worldDir);
-  const report = loaded.ok ? checkWorld(loaded.value) : null;
-  if (report === null || !report.ok) return { folder, error: null, changedFiles, worldVersion: null, worldOk: false, replays: [], failedRuns };
+  const report = loaded.ok ? checkWorld(loaded.value, undefined, { tolerate: POSTDATED }) : null;
+  if (report === null || !report.ok) return { folder, error: null, changedFiles, worldVersion: null, worldOk: false, replays: [], failedRuns, gaps: [] };
+  const gaps = report.warnings.filter((i) => POSTDATED.has(i.code)).map((i) => gapOf(i.found, String(i.path[1])));
   const worldVersion = sha256Hex(renderWorldYaml(report.world));
   const worldOk = manifest.worlds[0]!.world_version === worldVersion;
-  if (!worldOk) return { folder, error: null, changedFiles, worldVersion, worldOk, replays: [], failedRuns };
+  if (!worldOk) return { folder, error: null, changedFiles, worldVersion, worldOk, replays: [], failedRuns, gaps };
   const replays = replayed.map(({ line, i }): EpisodeReplay => {
     const where = `${manifest.files.dataset.path}:${i + 1}`;
     let ep: Episode;
@@ -141,7 +154,7 @@ export async function checkExportFolder(folder: string, worldDir = path.join(fol
     }
     return replayEpisode(report.world, ep);
   });
-  return { folder, error: null, changedFiles, worldVersion, worldOk, replays, failedRuns };
+  return { folder, error: null, changedFiles, worldVersion, worldOk, replays, failedRuns, gaps };
 }
 
 const subdirs = async (dir: string): Promise<string[]> =>

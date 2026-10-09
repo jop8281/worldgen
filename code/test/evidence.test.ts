@@ -86,6 +86,12 @@ describe('checkExportFolder', () => {
     assert.equal(f.worldVersion, 'cf95a05bc09eea7f17f2a1a5b090d9e1a42e0f293bee0520553937ba7b66c956');
     assert.equal(f.worldOk, true);
     assert.equal(f.failedRuns, 0);
+    // The frozen world predates A-388: its graders never read these texts, and the replay still reproduces every score.
+    assert.deepEqual(f.gaps, [
+      'refund_delivered_big_orders_for_customer grader never reads order_event.note',
+      'cancel_stale_pending_with_gift_note grader never reads order_event.note',
+      'ship_all_paid_large_orders grader never reads order.tracking_number',
+    ]);
     assert.deepEqual(f.replays.map((r) => [r.episode, r.recorded, r.replayed, r.taskOk, r.seedOk, r.calls, r.mismatches, r.finalOk, r.agrees]), [
       ['gen-orders-w2__cancel_stale_pending_with_gift_note__1', 1, 1, true, true, 3, 0, true, true],
       ['gen-orders-w2__pay_oldest_pending_for_customer__1', 1, 1, true, true, 3, 0, true, true],
@@ -176,6 +182,11 @@ describe('bun run evidence', () => {
     assert.equal(await main([path.join(tmp, 'clean')], (l) => void lines.push(l)), 0);
     assert.equal(lines.at(-1), '4 of 4 episodes replay to their recorded score; 1 of 1 folders agree');
     assert.equal(lines[2], '  world  cf95a05bc09e ok, the version the episodes ran on');
+    assert.deepEqual(lines.filter((l) => l.startsWith('  note')), [
+      '  note   frozen world predates A-388: refund_delivered_big_orders_for_customer grader never reads order_event.note',
+      '  note   frozen world predates A-388: cancel_stale_pending_with_gift_note grader never reads order_event.note',
+      '  note   frozen world predates A-388: ship_all_paid_large_orders grader never reads order.tracking_number',
+    ]);
   });
 
   it('answers 1 when a folder differs', async () => {
