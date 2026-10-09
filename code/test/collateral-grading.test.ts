@@ -282,7 +282,7 @@ describe('free text a grader never reads (A-388)', () => {
     const r = verifyRename(graderThat("subject !== ctx.seed.get('ticket', 'tkt_0002').subject"));
     if (r.ok) assert.fail('a grader that never reads the subject must fail the free-text probe');
     assert.deepEqual(r.issues.map((i) => [i.code, i.path.join('.'), i.found]), [
-      ['task.freetext_unchecked', `tasks.${RENAME}.grader`, 'the solution with PATCH /tickets/tkt_0002 with subject "bananas bananas bananas b" scored 1'],
+      ['task.freetext_unchecked', `tasks.${RENAME}.grader`, 'ticket.subject: the solution with PATCH /tickets/tkt_0002 with subject "bananas bananas bananas b" scored 1'],
     ]);
     assert.equal(r.issues[0]?.hint.includes('the grader never reads ticket.subject'), true);
   });
