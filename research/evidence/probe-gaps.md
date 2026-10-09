@@ -7,7 +7,7 @@
 - **(c)** a weak grader check that accepts wrong states;
 - **(d)** unreachable by design.
 
-Each verdict was checked against the grader source, the world's routes, actions and readonly fields, and replays from seed. No world was edited.
+Each verdict was checked against the grader source, the world's routes, actions and readonly fields, and replays from seed. No world was edited. Since A-401, `omit_write` flips the three checks marked for it below, so [probe-coverage.md](probe-coverage.md) now lists 21: 278 of 299 are flipped.
 
 | Class | Checks |
 |---|--:|
@@ -52,10 +52,10 @@ The (d) checks and the two status goals in (b) are not dead weight. Each guards 
 
 | Probe kind | Checks | Sound as a gate | Proposal |
 |---|--:|---|---|
-| `omit_write`: the solution's successful calls replayed with one write left out (every write but the last, which prefixes already cut) | 3 | Yes. Over all 95 prod tasks it graded no full marks, and it is the prefix gate (every write matters) applied to any single write | Implement as a verify gate, next to the prefixes |
-| `perturb_each`: every seed-id value in a write's body, each element of a comma-joined id list included, swapped for another row of that entity | 2 | **No.** It gave full marks to gen-warehouse-inventory `restock_pick_bins` for a different source bin, and that instruction lets any bulk bin that holds the SKU be the source. That is a correct answer, the reason A-199 keeps perturb to one swap | Coverage only, if at all: record its flips, never fail verify on it |
-| Action with filled input: an action the solution did not call, on a target or another row, with each required input filled from seed values of its declared type | 8 | Not measured. It needs input synthesis (ids of the right entity, choices, plausible strings) | Later, as its own decision |
+| `omit_write`: the solution's successful calls replayed with one write left out (every write but the last, which prefixes already cut) | 3 | Yes. Over all 95 prod tasks it graded no full marks, and it is the prefix gate (every write matters) applied to any single write | **Implemented (A-401):** a verify gate next to the prefixes; a score of 1 is `task.omission_full_marks` |
+| `perturb_each`: every seed-id value in a write's body, each element of a comma-joined id list included, swapped for another row of that entity | 2 | **No.** It gave full marks to gen-warehouse-inventory `restock_pick_bins` for a different source bin, and that instruction lets any bulk bin that holds the SKU be the source. That is a correct answer, the reason A-199 keeps perturb to one swap | Kept out (A-199): never a verify gate |
+| Action with filled input: an action the solution did not call, on a target or another row, with each required input filled from seed values of its declared type | 8 | Not measured. It needs input synthesis (ids of the right entity, choices, plausible strings) | A future decision |
 
-The prototype was a scratch script outside the engine. It replayed each task's solution from seed and graded every candidate that committed and ended unlike the solution, 384 runs in all. It flipped the 5 checks marked `omit_write` and `perturb_each` above. One probe kind, `omit_write`, covers 3 checks at no verify cost, and it is the one this page proposes to implement.
+The prototype was a scratch script outside the engine. It replayed each task's solution from seed and graded every candidate that committed and ended unlike the solution, 384 runs in all. It flipped the 5 checks marked `omit_write` and `perturb_each` above. One probe kind, `omit_write`, covers 3 checks at no verify cost, and A-401 implements it in `verifyTask`.
 
 Measured with `bun scripts/probe-coverage.ts ../prod/worlds` at `5600d0f3`; the per-check dossiers and the prototype were scratch scripts, not committed.

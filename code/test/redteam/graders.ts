@@ -141,6 +141,16 @@ export const BAD_TASKS: readonly BadTask[] = [
     },
   },
   {
+    id: 'GR-omission-last-only', note: 'medium grader checks only the last target, so leaving out the first write still scores 1 (A-401)', code: 'task.omission_full_marks',
+    expect: 'present', taskId: 'pend_open_urgent', accept: ['task.decoy_full_marks'],
+    mutate: (w) => {
+      task(w, 'pend_open_urgent').grader = SNIPPETS.mediumGrader.replace(
+        "  const done = ids.filter((id) => { const r = ctx.db.get('ticket', id); return r && r.status === 'pending'; }).length;\n  return done / ids.length;\n",
+        "  const last = ctx.db.get('ticket', ids[ids.length - 1]);\n  return last && last.status === 'pending' ? 1 : 0;\n",
+      );
+    },
+  },
+  {
     id: 'GR-freetext-unchecked', note: 'easy task also renames the ticket; the grader allows the subject but never reads it (A-388)', code: 'task.freetext_unchecked',
     expect: 'present', taskId: 'pend_hd1005',
     mutate: (w) => {

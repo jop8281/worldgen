@@ -58,7 +58,7 @@ const out = [
   ...rows.map((r) => line(r.world, count(r.verdicts))),
   line('**Total**', count(all)),
   '',
-  `Probe runs graded, free-text swaps aside: ${runs.decoys + runs.prefixes + runs.mutants} (${runs.decoys} decoys, ${runs.prefixes} prefixes, ${runs.mutants} mutants). Full marks among them: ${fullMarks}; verify allows one only for a mutant inside its task's declared \`allows\`.`,
+  `Probe runs graded, free-text swaps and one-write omissions aside: ${runs.decoys + runs.prefixes + runs.mutants} (${runs.decoys} decoys, ${runs.prefixes} prefixes, ${runs.mutants} mutants). Full marks among them: ${fullMarks}; verify allows one only for a mutant inside its task's declared \`allows\`.`,
   '',
   '| Probe | Checks it flipped |',
   '|---|--:|',
