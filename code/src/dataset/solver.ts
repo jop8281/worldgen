@@ -31,6 +31,8 @@ export interface SolverProposer {
   propose(req: {
     readonly system: string;
     readonly prompt: string;
+    /** `prompt` as append-only blocks, so a transport can send each turn as a cache extension (A-400). */
+    readonly blocks?: readonly string[] | undefined;
     readonly tool: { readonly name: string; readonly description: string; readonly inputSchema: object };
     readonly signal?: AbortSignal | undefined;
     readonly maxCostUsd?: number | undefined;
@@ -81,18 +83,25 @@ function renderMessage(m: PublicMessage): string {
 /** The system prompt for a view: the fixed instructions and the public API documentation. */
 export const systemOf = (view: TurnView): string => `${SYSTEM}\n${json(view.openapi)}`;
 
-/** The user prompt for a view: the task and the conversation so far. */
-export function promptOf(view: TurnView): string {
-  const history = view.messages.map(renderMessage).filter((s) => s !== '');
-  return [
-    `Task (${view.difficulty}):`,
-    view.instruction,
-    '',
-    history.length === 0 ? 'No requests yet.' : `So far:\n${history.join('\n')}`,
-    '',
-    `This is turn ${view.turn} of at most ${view.maxTurns}. Call solver_turn.`,
-  ].join('\n');
+/**
+ * The user prompt for a view as append-only blocks: the task, then per turn its counter and the request and result it
+ * made. Turn k's blocks are a prefix of turn k+1's, so each call reads the cache the previous one wrote (A-400).
+ */
+export function blocksOf(view: TurnView): string[] {
+  const counter = (k: number): string => `This is turn ${k} of at most ${view.maxTurns}. Call solver_turn.`;
+  const blocks = [`Task (${view.difficulty}):\n${view.instruction}`];
+  let turn = 1;
+  for (const m of view.messages) {
+    if (m.type === 'instruction') continue;
+    if (m.type === 'tool_call' || m.type === 'final_reply') blocks.push(counter(turn++));
+    blocks.push(renderMessage(m));
+  }
+  blocks.push(counter(view.turn));
+  return blocks;
 }
+
+/** The user prompt for a view as one text: its blocks joined. */
+export const promptOf = (view: TurnView): string => blocksOf(view).join('\n\n');
 
 const pick = (o: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> =>
   Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
@@ -119,6 +128,7 @@ export function solverTurn(proposer: SolverProposer, runId?: string): NextTurn {
     const p = await proposer.propose({
       system: systemOf(view),
       prompt: promptOf(view),
+      blocks: blocksOf(view),
       tool: { name: SOLVER_TOOL, description: 'Send one API request, or finish the task with your final reply.', inputSchema: SOLVER_TOOL_SCHEMA },
       signal,
       maxCostUsd: view.budgetLeftUsd,

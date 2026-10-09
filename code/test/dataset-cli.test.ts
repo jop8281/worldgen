@@ -323,7 +323,7 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     const proposer: SolverProposer = {
       async propose(req) {
         seen.push(req);
-        const turn = Number(/This is turn (\d+) of/.exec(req.prompt)?.[1]);
+        const turn = Number([...req.prompt.matchAll(/This is turn (\d+) of/g)].at(-1)?.[1]);
         const input = req.prompt.startsWith('Task (easy)') ? easy[turn - 1] : { action: 'finish', final_reply: 'I could not do this.' };
         return { input, advice: [`thinking aloud about ${KEYS.LLM_KEY}`], usage: { inputTokens: 1000, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0 }, costUsd: 0.002, ms: 3 };
       },
