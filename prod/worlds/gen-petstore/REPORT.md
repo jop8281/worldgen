@@ -101,9 +101,9 @@ World id (WID): `wid_f119814c616eb24dae058f683feadaede880f80030d9d624601058c97d9
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| order_biscuit | easy | 1.000 | 0.000 | 0.000, 0.700 | n/a | legacy; mutants 4/7 | `tid_4549cbb2c5747ba370c83c6feada75318f92e70c91a7998974e148be58a31be1` |
-| deliver_cat_juniper | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.500 | n/a | legacy; mutants 5/7 | `tid_1fcddd015a39124188e3d3f0a3b6ec0af453ea6d930b3b20fa517de4b767e9a3` |
-| release_stale_placed_orders | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000 | 0.500 | legacy; mutants 4/7 | `tid_25289cca1e683ff73ed211cd99d1e2ba963471d1201c902113b0872289926dc4` |
+| order_biscuit | easy | 1.000 | 0.000 | 0.000, 0.700 | n/a | legacy; mutants 4/8 | `tid_4549cbb2c5747ba370c83c6feada75318f92e70c91a7998974e148be58a31be1` |
+| deliver_cat_juniper | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000, 0.500 | n/a | legacy; mutants 5/8 | `tid_1fcddd015a39124188e3d3f0a3b6ec0af453ea6d930b3b20fa517de4b767e9a3` |
+| release_stale_placed_orders | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000 | 0.500 | legacy; mutants 4/8 | `tid_25289cca1e683ff73ed211cd99d1e2ba963471d1201c902113b0872289926dc4` |
 
 Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 

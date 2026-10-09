@@ -125,10 +125,10 @@ World id (WID): `wid_b08be9165ac58f426bf48279f9de0a5f9405a35b5906fdf9736cc017573
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| cycle_count_adjustment | easy | 1.000 | 0.000 | 0.400, 0.000, 0.400 | n/a | legacy; mutants 2/7 | `tid_dfcbb4e3fc67af25ad4c2658e2fac4c0efbf94e86efed8b9e89d30b1aa14897f` |
-| receive_rest_of_harbor_po | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | 0.000 | legacy; mutants 2/7 | `tid_e748acd50e735392740bb76c72d246c2597e07f1386c5db2ad3fdc0ab28ea9db` |
-| cancel_unstarted_northgate_pos | medium | 1.000 | 0.000 | 0.000, 0.000, 0.333 | 0.667 | legacy; mutants 4/7 | `tid_718f557b55a1ce09167ae74b294565c5cdc0d9762ed223d92f94acb6523ccc96` |
-| restock_pick_bins | hard | 1.000 | 0.000 | 0.000, 0.000, 0.154 | 0.923 | legacy; mutants 2/7 | `tid_efbb892a077d82c649c6688e516acb7d853cfc8eecd9e5960c8f1affa87d5c00` |
+| cycle_count_adjustment | easy | 1.000 | 0.000 | 0.400, 0.000, 0.400 | n/a | legacy; mutants 3/8 | `tid_dfcbb4e3fc67af25ad4c2658e2fac4c0efbf94e86efed8b9e89d30b1aa14897f` |
+| receive_rest_of_harbor_po | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | 0.000 | legacy; mutants 3/8 | `tid_e748acd50e735392740bb76c72d246c2597e07f1386c5db2ad3fdc0ab28ea9db` |
+| cancel_unstarted_northgate_pos | medium | 1.000 | 0.000 | 0.000, 0.000, 0.333 | 0.667 | legacy; mutants 5/8 | `tid_718f557b55a1ce09167ae74b294565c5cdc0d9762ed223d92f94acb6523ccc96` |
+| restock_pick_bins | hard | 1.000 | 0.000 | 0.000, 0.000, 0.154 | 0.923 | legacy; mutants 3/8 | `tid_efbb892a077d82c649c6688e516acb7d853cfc8eecd9e5960c8f1affa87d5c00` |
 
 Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 

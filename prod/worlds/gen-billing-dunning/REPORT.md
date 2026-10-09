@@ -138,9 +138,9 @@ World id (WID): `wid_f1ab4b835b50b73aacdea8192b6e7ff0b2e1ac745ba09a5086621dbb0fc
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| cancel_harbor_dental_subscription | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 3/7 | `tid_9fb55867c2764862e2831b5f2f3fe30e3bebfdde8e1dfc3dd63ebbb0147fa3f0` |
-| recover_bluefin_labs_with_backup_card | medium | 1.000 | 0.000 | 0.000, 0.300, 0.000, 0.000 | 0.300 | legacy; mutants 3/7 | `tid_e7d7247850627631246ad12bb1342a0bb1073897a6a1d6e92e6e18519e24fee7` |
-| cancel_final_retry_business_subscriptions | hard | 1.000 | 0.000 | 0.750, 0.000, 0.000, 0.000, 0.000 | 0.750 | legacy; mutants 3/7 | `tid_7cb3b0529af197657ad6623172e75413a173bf5cd82f8e1e83876050e9a1bc34` |
+| cancel_harbor_dental_subscription | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a | legacy; mutants 4/8 | `tid_9fb55867c2764862e2831b5f2f3fe30e3bebfdde8e1dfc3dd63ebbb0147fa3f0` |
+| recover_bluefin_labs_with_backup_card | medium | 1.000 | 0.000 | 0.000, 0.300, 0.000, 0.000 | 0.300 | legacy; mutants 4/8 | `tid_e7d7247850627631246ad12bb1342a0bb1073897a6a1d6e92e6e18519e24fee7` |
+| cancel_final_retry_business_subscriptions | hard | 1.000 | 0.000 | 0.750, 0.000, 0.000, 0.000, 0.000 | 0.750 | legacy; mutants 4/8 | `tid_7cb3b0529af197657ad6623172e75413a173bf5cd82f8e1e83876050e9a1bc34` |
 
 Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
