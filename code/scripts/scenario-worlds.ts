@@ -6,7 +6,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { applyEdit, checkWorld, loadWorld, renderWorldYaml, saveWorld, type CheckedWorld, type TaskVerdict, type World } from '#engine';
+import { applyEdit, checkWorld, choicesOf, loadWorld, renderWorldYaml, saveWorld, type CheckedWorld, type TaskVerdict, type World } from '#engine';
 
 const USAGE = 'usage: bun scripts/scenario-worlds.ts [--check]\n';
 const REPO = path.resolve(import.meta.dirname, '../..');
@@ -24,9 +24,15 @@ const SUPPORT_TASK = {
   if (!ticket) return 0;
   const old = new Set(ctx.seed.list('ticket_event', { where: { ticket_id: ticket.id } }).map((e) => e.id));
   const resolved = ctx.db.list('ticket_event', { where: { ticket_id: ticket.id, kind: 'resolved' } }).filter((e) => !old.has(e.id));
-  ctx.guardChanges('only the resolve fields of the ticket and its resolved event changed', [
+  // The payments system's refund event reaches the ticket through receive_payment_event, which writes this note with no actor (A-410).
+  const perRefund = new Map();
+  for (const e of ctx.db.list('ticket_event', { where: { ticket_id: ticket.id, kind: 'payment_refunded' } })) {
+    const m = e.actor_id === null && typeof e.note === 'string' ? /^Refund (re_[A-Za-z0-9]+) of charge ch_[A-Za-z0-9]+ \\(charge\\.refunded\\)\\.$/.exec(e.note) : null;
+    if (m && !perRefund.has(m[1])) perRefund.set(m[1], e.id);
+  }
+  ctx.guardChanges('only the resolve fields of the ticket, its resolved event and one payment event per refund changed', [
     { entity: 'ticket', id: ticket.id, kind: 'updated', fields: ['status', 'resolved_at'] },
-    ...resolved.map((e) => ({ entity: 'ticket_event', id: e.id, kind: 'created', fields: ['ticket_id', 'kind', 'note', 'actor_id'] })),
+    ...[...resolved.map((e) => e.id), ...perRefund.values()].map((id) => ({ entity: 'ticket_event', id, kind: 'created', fields: ['ticket_id', 'kind', 'note', 'actor_id'] })),
   ]);
   ctx.goal(0.5, 'the ticket is resolved, with one resolved event', ctx.db.get('ticket', ticket.id).status === 'resolved' && resolved.length === 1);
   // The note must name the order and exactly one refund id as the payments world writes them (re_ and at least four digits), so a note of nonsense or a list of ids scores below 1 (A-388, A-397).
@@ -77,6 +83,43 @@ const SUPPORT_TASK = {
 }`,
     },
   ],
+};
+
+const RECEIVE_PAYMENT_EVENT = {
+  method: 'POST',
+  path: '/tickets/{id}/payment_events',
+  description: 'Record a refund event from the payments system on a ticket, as a payment_refunded event whose note names the refund and the charge. A second event for a refund already recorded on any ticket answers 200 with the recorded event and writes nothing.',
+  input: {
+    kind: { type: 'enum', values: ['charge.refunded'], required: true, description: 'The payments event type.' },
+    refund: { type: 'string', pattern: '^re_[A-Za-z0-9]+$', required: true, description: 'The refund id, such as re_0051.' },
+    charge: { type: 'string', pattern: '^ch_[A-Za-z0-9]+$', required: true, description: 'The refunded charge id, such as ch_0142.' },
+  },
+  handler: `(ctx) => {
+  const id = ctx.params.id;
+  const t = ctx.db.get('ticket', id);
+  if (t === null) ctx.fail(404, 'not_found', 'ticket ' + id + ' not found');
+  const named = 'Refund ' + ctx.body.refund + ' of charge ';
+  const seen = ctx.db.list('ticket_event', { where: { kind: 'payment_refunded' } }).find((e) => typeof e.note === 'string' && e.note.startsWith(named));
+  if (seen) return { status: 200, body: seen };
+  const event = ctx.db.create('ticket_event', { ticket_id: id, kind: 'payment_refunded', note: named + ctx.body.charge + ' (' + ctx.body.kind + ').', actor_id: null });
+  return { status: 200, body: event };
+}`,
+};
+
+const PAYMENT_EVENT_TEST = {
+  description: 'receive_payment_event records one payment_refunded event per refund: a repeat answers 200 with the same event and writes nothing, and an unknown ticket is 404.',
+  script: `(ctx) => {
+  const body = { kind: 'charge.refunded', refund: 're_9001', charge: 'ch_9001' };
+  const first = ctx.api('POST', '/tickets/tkt_0001/payment_events', body);
+  ctx.assert(first.status === 200, 'first event returned ' + first.status + ' ' + JSON.stringify(first.body));
+  ctx.assert(first.body.kind === 'payment_refunded' && first.body.note === 'Refund re_9001 of charge ch_9001 (charge.refunded).' && first.body.actor_id === null, 'recorded ' + JSON.stringify(first.body));
+  const again = ctx.api('POST', '/tickets/tkt_0001/payment_events', body);
+  ctx.assert(again.status === 200 && again.body.id === first.body.id, 'repeat returned ' + again.status + ' ' + JSON.stringify(again.body));
+  const recorded = ctx.api('GET', '/tickets/tkt_0001/events?sort=-created_at&limit=5').body.data.filter((e) => e.kind === 'payment_refunded');
+  ctx.assert(recorded.length === 1, 'one payment_refunded event, got ' + recorded.length);
+  const missing = ctx.api('POST', '/tickets/tkt_9999/payment_events', body);
+  ctx.assert(missing.status === 404, 'unknown ticket returned ' + missing.status);
+}`,
 };
 
 const ticketSeed = (original: string): string => `(ctx) => {
@@ -189,16 +232,29 @@ const seedOf = (world: World, entity: string): string => {
   return source;
 };
 
+const eventKinds = (world: World): readonly string[] => {
+  const field = world.entities['ticket_event']?.fields['kind'];
+  const kinds = field === undefined ? undefined : choicesOf(field);
+  if (kinds === undefined) throw new Error(`${world.meta.name} has no ticket_event.kind enum`);
+  return kinds;
+};
+
 const DERIVED = {
   support: {
     from: 'prod/worlds/helpdesk',
     edit: (source) => ({
-      note: 'acme_support: the helpdesk plus Acme Logistics\' O-7301 duplicate-charge ticket and the task that resolves it (A-397)',
+      note: 'acme_support: the helpdesk plus Acme Logistics\' O-7301 duplicate-charge ticket, the task that resolves it (A-397), and the action that records a refund event (A-410)',
       meta: {
         name: 'acme_support',
         description: `${source.meta.description} Acme Logistics has an open billing ticket about order O-7301.`,
       },
-      upsert: { seed: { ticket: ticketSeed(seedOf(source, 'ticket')) }, tasks: { resolve_acme_double_charge: SUPPORT_TASK } },
+      upsert: {
+        actions: { receive_payment_event: RECEIVE_PAYMENT_EVENT },
+        seed: { ticket: ticketSeed(seedOf(source, 'ticket')) },
+        tests: { payment_event_once_per_refund: PAYMENT_EVENT_TEST },
+        tasks: { resolve_acme_double_charge: SUPPORT_TASK },
+      },
+      patch: { entities: { ticket_event: { fields: { kind: { values: [...eventKinds(source), 'payment_refunded'] } } } } },
     }),
   },
   payments: {
