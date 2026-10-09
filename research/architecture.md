@@ -103,11 +103,11 @@ worldgen/
     src/costs/     basis boat-receipts ledger meter pricing
     src/boat/      client
     src/sandboxes/ backend files openshell sbx boat registry
-    src/dataset/   episode solver pipeline local difficulty store schema verifier evidence
+    src/dataset/   episode solver pipeline local difficulty redteam store schema verifier evidence
     src/scenario/  manifest gateway links
     src/scorecards/ cards
     src/studio/    page explorer analytics runstore reconcile server uploads watch
-    src/cli/       worldplay worldgen eval eval-args eval-analysis-files eval-retention costs sandbox dataset difficulty episode live models options verifier studio-check episode-prepare studio studio-watch scenario evidence scorecards
+    src/cli/       worldplay worldgen eval eval-args eval-analysis-files eval-retention costs sandbox dataset difficulty episode redteam live models options verifier studio-check episode-prepare studio studio-watch scenario evidence scorecards
     src/lib/       never
     test/          architecture engine fields ctx sandbox worlds policy worldgen (*.test.ts)
   eval/        suite.yaml  inputs/  runs/<date>-<suite>/
