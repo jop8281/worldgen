@@ -1,0 +1,104 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T162050Z_c2f5c19d",
+  "mode": "iterate",
+  "input": {
+    "kind": "change_request",
+    "digest": "49eb27826f43619e1da4decaf45d6b663711a8c871f6c5f393025a16a19b4810",
+    "source": {
+      "kind": "change_request",
+      "before": "runs/run_20261009T162050Z_c2f5c19d/before"
+    }
+  },
+  "worldId": "wid_6b3d50671c9b55f678ab9aa51268b0af15eb13d9b9c08c18a1438bd261c166ef",
+  "model": "claude-sonnet-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 52415,
+      "costUsd": 0.32962199999999997
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 13858,
+      "costUsd": 0.148119
+    },
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 8571,
+      "costUsd": 0.1163018
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 27864,
+      "costUsd": 0.1188498
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 11944,
+      "costUsd": 0.152633
+    },
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 3270,
+      "costUsd": 0.1141798
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 10504,
+      "costUsd": 0.0757938
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 14162,
+      "costUsd": 0.151371
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 17238,
+      "costUsd": 0.16150779999999998
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 27275,
+      "costUsd": 0.17663679999999998
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 41826,
+      "costUsd": 0.20847680000000002
+    },
+    {
+      "step": "tasks",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 30274,
+      "costUsd": 0.2062948
+    }
+  ],
+  "ms": 260295,
+  "costUsd": 1.9597863999999998
+}

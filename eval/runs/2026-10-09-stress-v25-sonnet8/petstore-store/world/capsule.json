@@ -1,0 +1,58 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T160828Z_6f3cf9c0",
+  "mode": "create",
+  "input": {
+    "kind": "openapi",
+    "digest": "cf4cbdd468f046e27ddd53cc99efb8c9a35c884dafc2c5dfd2c7ec85c864afe1",
+    "source": {
+      "kind": "openapi",
+      "path": "eval/inputs/petstore.openapi.yaml",
+      "only": [
+        "/store"
+      ]
+    }
+  },
+  "worldId": "wid_9ecb4d40ad5b2f1f327c4766065b356b6d7a78d966dcce94795918e1dbb18c0c",
+  "model": "claude-sonnet-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 83589,
+      "costUsd": 0.1445026
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 22020,
+      "costUsd": 0.10770099999999999
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 15734,
+      "costUsd": 0.0837778
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 21971,
+      "costUsd": 0.09416479999999999
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 125529,
+      "costUsd": 0.2569508
+    }
+  ],
+  "ms": 269238,
+  "costUsd": 0.687097
+}

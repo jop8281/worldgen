@@ -1,0 +1,101 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T160623Z_046100da",
+  "mode": "create",
+  "input": {
+    "kind": "openapi",
+    "digest": "6b99260b428acaa8adcbfaf818ed2effcd749f4448954c01b88f421a055e4dee",
+    "source": {
+      "kind": "openapi",
+      "path": "eval/inputs/stripe.openapi.yaml",
+      "only": [
+        "/v1/charges",
+        "/v1/charges/{charge}"
+      ]
+    }
+  },
+  "worldId": "wid_416655ed26bbdb16cc534e22665761b109d9c11755391d4df0c84455e12b3f9e",
+  "model": "claude-sonnet-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 77952,
+      "costUsd": 0.13784860000000002
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 27781,
+      "costUsd": 0.099361
+    },
+    {
+      "step": "model",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 12021,
+      "costUsd": 0.09091099999999999
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 23108,
+      "costUsd": 0.10426579999999999
+    },
+    {
+      "step": "workflow",
+      "n": 2,
+      "outcome": "rejected",
+      "ms": 25419,
+      "costUsd": 0.1134098
+    },
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 39893,
+      "costUsd": 0.1693806
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 11899,
+      "costUsd": 0.080345
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 16585,
+      "costUsd": 0.1039958
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 42769,
+      "costUsd": 0.1360108
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 157942,
+      "costUsd": 0.32062880000000005
+    },
+    {
+      "step": "tasks",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 54635,
+      "costUsd": 0.2117228
+    }
+  ],
+  "ms": 490919,
+  "costUsd": 1.5678800000000002
+}

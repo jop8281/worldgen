@@ -1,0 +1,503 @@
+revision: 4
+software: Zendesk-style helpdesk (tickets, comments, agents, customers)
+summary: A helpdesk where customers open tickets about their orders, agents are assigned and reply, and tickets move open -> pending -> resolved (and back when the customer replies or the ticket is reopened). A daily job auto-resolves pending tickets that have gone quiet.
+clock:
+  start: 2026-10-09T09:00:00Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: customer
+    purpose: A shopper who opens tickets.
+    keyFields:
+      - name
+      - email
+  - name: agent
+    purpose: A support agent. New field role (agent or supervisor, default agent); only an active supervisor may approve or reject a refund.
+    keyFields:
+      - name
+      - email
+      - active
+      - role
+  - name: ticket
+    purpose: A support request about an order, with a state, an optional assignee and last activity time.
+    keyFields:
+      - subject
+      - customer_id
+      - order_number
+      - status
+      - assignee_id
+      - priority
+      - last_activity_at
+  - name: comment
+    purpose: A reply on a ticket, from an agent or the customer.
+    keyFields:
+      - ticket_id
+      - author_kind
+      - agent_id
+      - body
+  - name: order
+    purpose: A customer's purchase, identified by order_number, with a total in USD. Tickets link to it by matching order_number.
+    keyFields:
+      - order_number
+      - customer_id
+      - total
+  - name: refund
+    purpose: A refund of part or all of an order, requested by an agent against a ticket. Above $500 it stays pending until a supervisor decides.
+    keyFields:
+      - ticket_id
+      - order_id
+      - amount
+      - status
+      - requested_by
+      - approved_by
+      - reason
+workflows:
+  - name: ticket_lifecycle
+    entity: ticket
+    states:
+      - open
+      - pending
+      - resolved
+    rules:
+      - rule: A ticket may be assigned only to an active agent and only while not resolved.
+        by:
+          - assign_ticket
+        test: t_assign
+      - rule: An agent reply must come from an active agent, adds an agent comment, moves an open ticket to pending, and is refused on a resolved ticket.
+        by:
+          - agent_reply
+        test: t_agent_reply
+      - rule: A customer reply adds a customer comment, moves a pending ticket back to open, and is refused on a resolved ticket.
+        by:
+          - customer_reply
+        test: t_customer_reply
+      - rule: A ticket can be resolved only when it has an assignee and is not already resolved.
+        by:
+          - resolve_ticket
+        test: t_resolve
+      - rule: A ticket cannot be resolved while any of its refunds is pending; resolve is refused with 409 refund_pending until the refund is approved or rejected.
+        by:
+          - resolve_ticket
+        test: t_resolve_blocked
+      - rule: Only a resolved ticket can be reopened; it returns to open.
+        by:
+          - reopen_ticket
+        test: t_reopen
+      - rule: Pending tickets with no activity for more than 3 days are resolved automatically.
+        by:
+          - auto_resolve_stale_pending
+        test: t_auto_resolve
+      - rule: A new ticket starts open and unassigned.
+        schema: The ticket status field is a state machine with initial open and assignee_id is nullable.
+    actions:
+      - assign_ticket
+      - agent_reply
+      - customer_reply
+      - resolve_ticket
+      - reopen_ticket
+  - name: refund_lifecycle
+    entity: refund
+    states:
+      - pending
+      - approved
+      - rejected
+    rules:
+      - rule: An active agent can request a refund on a ticket for an order whose order_number and customer match the ticket. Amount must be positive and, with other non-rejected refunds of that order, within the order total (409 amount_exceeds_order); wrong order 409 order_mismatch; inactive agent 409 agent_inactive. A refund of $500 (50000 minor units) or less is approved immediately.
+        by:
+          - request_refund
+        test: t_refund_small
+      - rule: A refund above $500 stays pending and needs an active supervisor to approve or reject it; a non-supervisor is refused with 409 not_supervisor; only a pending refund can be decided (409 invalid_state otherwise). Approval records approved_by.
+        by:
+          - approve_refund
+          - reject_refund
+          - request_refund
+        test: t_refund_approval
+      - rule: A refund moves only pending to approved or rejected; approved and rejected are final.
+        schema: The refund status state machine declares only those transitions.
+    actions:
+      - request_refund
+      - approve_refund
+      - reject_refund
+jobs:
+  - name: auto_resolve_stale_pending
+    every: 1d
+    rule: Resolve every pending ticket whose last_activity_at is more than 3 days before now.
+acceptanceTests:
+  - id: t_assign
+    intent: Assigning requires an active agent and an unresolved ticket.
+    actions:
+      - assign_ticket
+    description: Inactive agent refused with agent_inactive, active agent accepted, resolved ticket refused.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Assign Cust',email:'assign.cust@accept.invalid'});
+      ctx.assert(c.status===201,'customer create '+JSON.stringify(c.body));
+      const a = ctx.api('POST','/agents',{name:'Assign Active',email:'assign.active@accept.invalid',active:true}).body;
+      const i = ctx.api('POST','/agents',{name:'Assign Inactive',email:'assign.inactive@accept.invalid',active:false}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Where is my parcel',description:'Late',customer_id:c.body.id,order_number:'#A1001'});
+      ctx.assert(t.status===201 && t.body.status==='open' && t.body.assignee_id===null,'ticket create '+JSON.stringify(t.body));
+      const bad = ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:i.id});
+      ctx.assert(bad.status===409 && bad.body.error.code==='agent_inactive','inactive agent: '+JSON.stringify(bad.body));
+      const ok = ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:a.id});
+      ctx.assert(ok.status===200 && ok.body.assignee_id===a.id && ok.body.status==='open','assign: '+JSON.stringify(ok.body));
+      ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/resolve',{}).status===200,'resolve');
+      const late = ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:a.id});
+      ctx.assert(late.status===409 && late.body.error.code==='invalid_state','assign resolved: '+JSON.stringify(late.body));
+      }
+  - id: t_agent_reply
+    intent: Agent reply records a comment and moves open to pending.
+    actions:
+      - agent_reply
+    description: Active agent reply creates a comment and sets pending; inactive agent refused; resolved ticket refused.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Reply Cust',email:'reply.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Reply Active',email:'reply.active@accept.invalid',active:true}).body;
+      const i = ctx.api('POST','/agents',{name:'Reply Inactive',email:'reply.inactive@accept.invalid',active:false}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Damaged item',description:'Broken',customer_id:c.id,order_number:'#A2001'}).body;
+      const bad = ctx.api('POST','/tickets/'+t.id+'/reply',{agent_id:i.id,body:'hi'});
+      ctx.assert(bad.status===409 && bad.body.error.code==='agent_inactive','inactive: '+JSON.stringify(bad.body));
+      const r = ctx.api('POST','/tickets/'+t.id+'/reply',{agent_id:a.id,body:'We are sending a replacement.'});
+      ctx.assert(r.status===200 && r.body.status==='pending','reply: '+JSON.stringify(r.body));
+      const cm = ctx.api('GET','/comments?ticket_id='+t.id).body.data;
+      ctx.assert(cm.length===1 && cm[0].author_kind==='agent' && cm[0].agent_id===a.id && cm[0].body==='We are sending a replacement.','comment: '+JSON.stringify(cm));
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      const late = ctx.api('POST','/tickets/'+t.id+'/reply',{agent_id:a.id,body:'again'});
+      ctx.assert(late.status===409 && late.body.error.code==='invalid_state','resolved reply: '+JSON.stringify(late.body));
+      }
+  - id: t_customer_reply
+    intent: Customer reply moves pending back to open.
+    actions:
+      - agent_reply
+      - customer_reply
+    description: After an agent reply the customer replies and the ticket returns to open; a resolved ticket refuses the reply.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Cust Reply',email:'custreply.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'CR Agent',email:'custreply.agent@accept.invalid',active:true}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Wrong size',description:'Too small',customer_id:c.id,order_number:'#A3001'}).body;
+      ctx.assert(ctx.api('POST','/tickets/'+t.id+'/reply',{agent_id:a.id,body:'Which size?'}).body.status==='pending','pending');
+      const r = ctx.api('POST','/tickets/'+t.id+'/customer-reply',{body:'Size M please.'});
+      ctx.assert(r.status===200 && r.body.status==='open','customer reply: '+JSON.stringify(r.body));
+      const cm = ctx.api('GET','/comments?ticket_id='+t.id+'&author_kind=customer').body.data;
+      ctx.assert(cm.length===1 && cm[0].body==='Size M please.','customer comment');
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      const late = ctx.api('POST','/tickets/'+t.id+'/customer-reply',{body:'hello?'});
+      ctx.assert(late.status===409 && late.body.error.code==='invalid_state','resolved: '+JSON.stringify(late.body));
+      }
+  - id: t_resolve
+    intent: Resolving needs an assignee and an unresolved ticket.
+    actions:
+      - assign_ticket
+      - resolve_ticket
+    description: Unassigned ticket refused with not_assigned; assigned ticket resolves; second resolve refused.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Resolve Cust',email:'resolve.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Resolve Agent',email:'resolve.agent@accept.invalid',active:true}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Refund status',description:'Where is it',customer_id:c.id,order_number:'#A4001'}).body;
+      const bad = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(bad.status===409 && bad.body.error.code==='not_assigned','unassigned: '+JSON.stringify(bad.body));
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      const ok = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(ok.status===200 && ok.body.status==='resolved','resolve: '+JSON.stringify(ok.body));
+      const again = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(again.status===409 && again.body.error.code==='invalid_state','again: '+JSON.stringify(again.body));
+      }
+  - id: t_reopen
+    intent: Only resolved tickets can be reopened.
+    actions:
+      - assign_ticket
+      - resolve_ticket
+      - reopen_ticket
+    description: Reopen on open ticket refused; reopen on resolved ticket returns it to open.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Reopen Cust',email:'reopen.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Reopen Agent',email:'reopen.agent@accept.invalid',active:true}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Missing item',description:'Box empty',customer_id:c.id,order_number:'#A5001'}).body;
+      const bad = ctx.api('POST','/tickets/'+t.id+'/reopen',{});
+      ctx.assert(bad.status===409 && bad.body.error.code==='invalid_state','open reopen: '+JSON.stringify(bad.body));
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      const ok = ctx.api('POST','/tickets/'+t.id+'/reopen',{});
+      ctx.assert(ok.status===200 && ok.body.status==='open','reopen: '+JSON.stringify(ok.body));
+      }
+  - id: t_auto_resolve
+    intent: The daily job resolves pending tickets quiet for more than 3 days and leaves open ones.
+    actions:
+      - assign_ticket
+      - agent_reply
+    description: A pending ticket stays pending at 2 days and becomes resolved after 4; an open ticket is untouched.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Auto Cust',email:'auto.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Auto Agent',email:'auto.agent@accept.invalid',active:true}).body;
+      const p = ctx.api('POST','/tickets',{subject:'Auto pending',description:'x',customer_id:c.id,order_number:'#A6001'}).body;
+      const o = ctx.api('POST','/tickets',{subject:'Auto open',description:'x',customer_id:c.id,order_number:'#A6002'}).body;
+      ctx.api('POST','/tickets/'+p.id+'/assign',{agent_id:a.id});
+      ctx.assert(ctx.api('POST','/tickets/'+p.id+'/reply',{agent_id:a.id,body:'Any update?'}).body.status==='pending','pending');
+      ctx.advance('2d');
+      ctx.assert(ctx.api('GET','/tickets/'+p.id).body.status==='pending','still pending at 2d');
+      ctx.advance('2d');
+      ctx.assert(ctx.api('GET','/tickets/'+p.id).body.status==='resolved','resolved at 4d');
+      ctx.assert(ctx.api('GET','/tickets/'+o.id).body.status==='open','open untouched');
+      }
+  - id: t_refund_small
+    intent: Refunds up to $500 are approved immediately and validated against the ticket and order.
+    actions:
+      - request_refund
+    description: Small refunds approve at once (including exactly $500); mismatched order, inactive agent and over-total amounts are refused.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Refund Cust',email:'refund.cust@accept.invalid'}).body;
+      const c2 = ctx.api('POST','/customers',{name:'Refund Other',email:'refund.other@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Refund Agent',email:'refund.agent@accept.invalid',active:true}).body;
+      const i = ctx.api('POST','/agents',{name:'Refund Inactive',email:'refund.inactive@accept.invalid',active:false}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Item broken',description:'x',customer_id:c.id,order_number:'#R1001'}).body;
+      const o = ctx.api('POST','/orders',{order_number:'#R1001',customer_id:c.id,total:80000});
+      ctx.assert(o.status===201,'order create '+JSON.stringify(o.body));
+      const other = ctx.api('POST','/orders',{order_number:'#R1002',customer_id:c2.id,total:80000}).body;
+      const r1 = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.body.id,amount:20000,reason:'Damaged'});
+      ctx.assert(r1.status===201 && r1.body.status==='approved' && r1.body.amount===20000 && r1.body.requested_by===a.id,'small: '+JSON.stringify(r1.body));
+      const r2 = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.body.id,amount:50000,reason:'Boundary'});
+      ctx.assert(r2.status===201 && r2.body.status==='approved','boundary 500: '+JSON.stringify(r2.body));
+      const over = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.body.id,amount:20000,reason:'Too much'});
+      ctx.assert(over.status===409 && over.body.error.code==='amount_exceeds_order','over: '+JSON.stringify(over.body));
+      const mm = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:other.id,amount:1000,reason:'Wrong'});
+      ctx.assert(mm.status===409 && mm.body.error.code==='order_mismatch','mismatch: '+JSON.stringify(mm.body));
+      const ia = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:i.id,order_id:o.body.id,amount:1000,reason:'x'});
+      ctx.assert(ia.status===409 && ia.body.error.code==='agent_inactive','inactive: '+JSON.stringify(ia.body));
+      }
+  - id: t_refund_approval
+    intent: Refunds above $500 stay pending until an active supervisor approves or rejects them.
+    actions:
+      - request_refund
+      - approve_refund
+      - reject_refund
+    description: A $600 refund is pending; a plain agent cannot approve; a supervisor approves one and rejects another; decided refunds cannot be decided again.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Approve Cust',email:'approve.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Approve Agent',email:'approve.agent@accept.invalid',active:true}).body;
+      const s = ctx.api('POST','/agents',{name:'Approve Sup',email:'approve.sup@accept.invalid',active:true,role:'supervisor'});
+      ctx.assert(s.status===201 && s.body.role==='supervisor','supervisor create '+JSON.stringify(s.body));
+      const t = ctx.api('POST','/tickets',{subject:'Big refund',description:'x',customer_id:c.id,order_number:'#R2001'}).body;
+      const o = ctx.api('POST','/orders',{order_number:'#R2001',customer_id:c.id,total:200000}).body;
+      const r1 = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.id,amount:60000,reason:'Defective'});
+      ctx.assert(r1.status===201 && r1.body.status==='pending' && r1.body.approved_by===null,'pending: '+JSON.stringify(r1.body));
+      const no = ctx.api('POST','/refunds/'+r1.body.id+'/approve',{agent_id:a.id});
+      ctx.assert(no.status===409 && no.body.error.code==='not_supervisor','non supervisor: '+JSON.stringify(no.body));
+      const ok = ctx.api('POST','/refunds/'+r1.body.id+'/approve',{agent_id:s.body.id});
+      ctx.assert(ok.status===200 && ok.body.status==='approved' && ok.body.approved_by===s.body.id,'approve: '+JSON.stringify(ok.body));
+      const again = ctx.api('POST','/refunds/'+r1.body.id+'/approve',{agent_id:s.body.id});
+      ctx.assert(again.status===409 && again.body.error.code==='invalid_state','again: '+JSON.stringify(again.body));
+      const r2 = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.id,amount:60000,reason:'Second'}).body;
+      const rej = ctx.api('POST','/refunds/'+r2.id+'/reject',{agent_id:s.body.id});
+      ctx.assert(rej.status===200 && rej.body.status==='rejected','reject: '+JSON.stringify(rej.body));
+      const nr = ctx.api('POST','/refunds/'+r2.id+'/reject',{agent_id:a.id});
+      ctx.assert(nr.status===409,'agent reject refused');
+      }
+  - id: t_resolve_blocked
+    intent: A ticket with a pending refund cannot be resolved until the refund is decided.
+    actions:
+      - assign_ticket
+      - request_refund
+      - approve_refund
+      - resolve_ticket
+    description: Resolve is refused with refund_pending while a refund is pending, and succeeds after a supervisor approves it.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Block Cust',email:'block.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Block Agent',email:'block.agent@accept.invalid',active:true}).body;
+      const s = ctx.api('POST','/agents',{name:'Block Sup',email:'block.sup@accept.invalid',active:true,role:'supervisor'}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Refund then resolve',description:'x',customer_id:c.id,order_number:'#R3001'}).body;
+      const o = ctx.api('POST','/orders',{order_number:'#R3001',customer_id:c.id,total:100000}).body;
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      const r = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.id,amount:70000,reason:'Lost parcel'}).body;
+      ctx.assert(r.status==='pending','refund pending '+JSON.stringify(r));
+      const bad = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(bad.status===409 && bad.body.error.code==='refund_pending','blocked: '+JSON.stringify(bad.body));
+      ctx.assert(ctx.api('GET','/tickets/'+t.id).body.status==='open','ticket unchanged');
+      ctx.assert(ctx.api('POST','/refunds/'+r.id+'/approve',{agent_id:s.id}).status===200,'approve');
+      const ok = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(ok.status===200 && ok.body.status==='resolved','resolve after approval: '+JSON.stringify(ok.body));
+      }
+routes:
+  - id: list_customers
+    method: GET
+    path: /customers
+    purpose: List/filter customers by email or name.
+  - id: get_customer
+    method: GET
+    path: /customers/{id}
+    purpose: Read a customer.
+  - id: create_customer
+    method: POST
+    path: /customers
+    purpose: Create a customer.
+  - id: list_agents
+    method: GET
+    path: /agents
+    purpose: List/filter agents by name, email, active.
+  - id: get_agent
+    method: GET
+    path: /agents/{id}
+    purpose: Read an agent.
+  - id: create_agent
+    method: POST
+    path: /agents
+    purpose: Create an agent.
+  - id: list_tickets
+    method: GET
+    path: /tickets
+    purpose: List tickets filtered by status, assignee, customer, order number, priority.
+  - id: get_ticket
+    method: GET
+    path: /tickets/{id}
+    purpose: Read a ticket.
+  - id: create_ticket
+    method: POST
+    path: /tickets
+    purpose: Open a ticket (starts open, unassigned).
+  - id: list_comments
+    method: GET
+    path: /comments
+    purpose: List comments filtered by ticket_id and author_kind.
+  - id: list_orders
+    method: GET
+    path: /orders
+    purpose: List/filter orders by order_number and customer_id.
+  - id: get_order
+    method: GET
+    path: /orders/{id}
+    purpose: Read an order.
+  - id: create_order
+    method: POST
+    path: /orders
+    purpose: Create an order (order_number unique, total in USD minor units).
+  - id: list_refunds
+    method: GET
+    path: /refunds
+    purpose: List refunds filtered by ticket_id, order_id, status, requested_by.
+  - id: get_refund
+    method: GET
+    path: /refunds/{id}
+    purpose: Read a refund.
+seed:
+  rowsPerEntity:
+    customer: 8
+    agent: 5
+    ticket: 32
+    comment: 40
+    order: 24
+    refund: 10
+  mix: "Existing mix, plus one active supervisor among the agents. Orders cover the tickets' order numbers (same customer, totals $40-$2000, order numbers never starting with #R). About 10 refunds on tickets: small ones approved, a few above $500 pending (only on unresolved tickets), some approved by the supervisor, a couple rejected."
+  stateMix:
+    ticket:
+      open: 40
+      pending: 35
+      resolved: 25
+    refund:
+      pending: 30
+      approved: 50
+      rejected: 20
+tasks:
+  - id: assign_open_ticket
+    difficulty: easy
+    kind: permissions
+    intent: Assign the open ticket about a given order number to a named active agent (not the inactive agent with a similar name).
+    actions:
+      - assign_ticket
+    decoyIdea: Assigns a different ticket of the same customer, or assigns to the inactive agent.
+    pressure:
+      distractors: ticket
+  - id: reply_to_customer_ticket
+    difficulty: medium
+    kind: two_actors
+    intent: A customer has replied on a pending ticket about one of several orders; find the ticket and reply as a named agent so it moves to pending again, after the customer's reply reopened it.
+    actions:
+      - agent_reply
+    decoyIdea: Replies on the customer's other ticket with a similar subject, or skips finding the open ticket.
+    pressure:
+      states:
+        - ticket.open
+      distractors: ticket
+  - id: triage_and_resolve
+    difficulty: hard
+    kind: irreversible
+    intent: For a customer's several tickets, find the open unassigned one about a named order (beyond the first list page), assign it to a named agent, send the reply with specified text, then resolve it.
+    actions:
+      - assign_ticket
+      - agent_reply
+      - resolve_ticket
+    decoyIdea: Resolves the wrong ticket for another order or skips assignment/reply, leaving collateral changes.
+    pressure:
+      paging: ticket
+      states:
+        - ticket.open
+        - ticket.pending
+      distractors: ticket
+  - id: refund_large_and_approve
+    difficulty: medium
+    kind: two_actors
+    intent: For the open ticket about a named order, request a $750 refund as a named active agent, then approve it as the active supervisor so the refund ends approved.
+    actions:
+      - request_refund
+      - approve_refund
+    decoyIdea: Requests the refund but never approves it, leaving it pending, or refunds the customer's other order.
+open_questions:
+  - question: Should there be a closed state after resolved?
+    default_answer: No; only open, pending, resolved.
+  - question: Can any agent reply or only the assignee?
+    default_answer: Any active agent may reply; assignment is required only to resolve.
+  - question: Should stale pending tickets auto-resolve?
+    default_answer: Yes, after 3 days without activity.
+  - question: Can a supervisor approve a refund they requested themselves?
+    default_answer: Yes; no separation-of-duties rule.
+  - question: Does the order need to match the ticket's order_number?
+    default_answer: Yes, and the same customer.
+assumptions:
+  - decision: Clock starts 2026-10-09T09:00:00Z with tick 0s; all seeded history is before it.
+    why: Time moves only explicitly, so the auto-resolve job is testable and deterministic.
+  - decision: 'Three ticket states: open, pending (awaiting customer), resolved. No closed state.'
+    why: The request names exactly these states.
+  - decision: Agent reply moves open to pending; customer reply moves pending to open; resolved tickets accept no replies until reopened.
+    why: Standard helpdesk semantics.
+  - decision: Pending tickets with no activity for more than 3 days are auto-resolved by a daily job.
+    why: Common helpdesk automation; gives the pending state a time dimension.
+  - decision: Actions take agent_id in the body instead of auth; no login or roles beyond agent.active.
+    why: The world has no authentication layer.
+  - decision: Handler errors use codes agent_inactive, invalid_state, not_assigned with status 409.
+    why: Distinguishes domain refusals from engine errors.
+  - decision: Resolve requires an assignee.
+    why: A ticket must be owned before being closed out.
+  - decision: Orders are a new entity matched to tickets by order_number and customer; ticket is unchanged.
+    why: Keeps the existing ticket model and tests intact.
+  - decision: Agents get a role field (agent or supervisor, default agent); a supervisor is an agent with role supervisor.
+    why: No auth layer exists, so approval identity is passed as agent_id.
+  - decision: 'The $500 threshold is inclusive: 50000 minor units or less auto-approves; above needs approval.'
+    why: "'Above $500' means strictly greater."
+  - decision: Refund requests are refused if non-rejected refunds would exceed the order total.
+    why: Prevents over-refunding.
+  - decision: Rejecting a pending refund also unblocks resolving; reject_refund is supervisor-only.
+    why: Pending is the only blocking state.
+  - decision: Currency is USD in minor units.
+    why: Request uses dollars.
+outOfScope:
+  - what: Email ingestion, attachments, SLAs, macros, satisfaction ratings
+    why: Not needed for core ticket state workflow.
+  - what: Authentication and permissions per user
+    why: Agent identity is passed explicitly in the action body.
+  - what: Ticket deletion
+    why: Tickets are never removed.
+  - what: Actual payment processing, partial reversals, refund deletion
+    why: Only the approval workflow and ticket-resolution guard are requested.
+changes:
+  - workflows.ticket_lifecycle
+  - agent.fields.role
+  - seed
+  - tests.t_resolve_blocked because a ticket cannot be resolved while one of its refunds is pending

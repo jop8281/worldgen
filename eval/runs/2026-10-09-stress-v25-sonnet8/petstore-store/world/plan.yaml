@@ -1,0 +1,319 @@
+revision: 1
+software: 'Swagger Petstore (OpenAPI 3.0) store API: orders and pet inventory'
+summary: A pet store where customers place orders for pets, orders move placed → approved → delivered, orders reserve pet stock, and inventory reports pets per status. Mirrors the four /store operations of the spec (inventory, place, get, delete order) plus the minimal pet and workflow routes an agent needs.
+clock:
+  start: 2026-10-09T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: pet
+    purpose: A pet listed for sale with a stock count and a sale status (available or sold).
+    keyFields:
+      - name
+      - petId
+      - status
+      - stock
+  - name: order
+    purpose: A purchase order for a quantity of one pet, following placed, approved, delivered.
+    keyFields:
+      - petId
+      - quantity
+      - shipDate
+      - status
+      - complete
+workflows:
+  - name: order_lifecycle
+    entity: order
+    states:
+      - placed
+      - approved
+      - delivered
+    rules:
+      - rule: Placing an order for an available pet reserves its quantity from pet stock; the pet becomes sold when stock reaches 0; the new order is placed with complete false.
+        by:
+          - place_order
+        test: place_reserves_stock
+      - rule: An order for an unknown pet (400 unknown_pet), a sold pet (409 pet_sold), or a quantity above stock (409 insufficient_stock) is refused and changes nothing.
+        by:
+          - place_order
+        test: place_refusals
+      - rule: Orders move only placed → approved → delivered; delivering sets complete true; other moves are refused with 409 invalid_state.
+        by:
+          - approve_order
+          - deliver_order
+        test: order_progression
+      - rule: Deleting a placed or approved order returns its quantity to pet stock and makes a sold pet available again; a delivered order cannot be deleted (409 order_delivered).
+        by:
+          - delete_order
+        test: delete_restores_stock
+      - Order quantity is at least 1 and shipDate is optional.
+    actions:
+      - place_order
+      - approve_order
+      - deliver_order
+      - delete_order
+  - name: pet_inventory
+    entity: pet
+    states:
+      - available
+      - sold
+    rules:
+      - rule: Inventory reports the number of pets per pet status, always with both available and sold keys.
+        by:
+          - get_inventory
+        test: inventory_counts
+      - rule: pet.petId is unique.
+        schema: unique constraint on pet.petId
+    actions:
+      - get_inventory
+jobs: []
+acceptanceTests:
+  - id: place_reserves_stock
+    intent: Placing orders reserves pet stock and marks the pet sold at zero stock.
+    actions:
+      - place_order
+    description: Create a pet with stock 3, order 2, then 1; stock drops to 1 then 0 and the pet becomes sold; a further order is refused.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/pets', { name: 'Acceptance Beagle A', petId: 90001, stock: 3 });
+        ctx.assert(p.status === 201, 'create pet: ' + JSON.stringify(p));
+        const o = ctx.api('POST', '/store/orders', { petId: 90001, quantity: 2, shipDate: '2026-10-20T10:00:00.000Z' });
+        ctx.assert(o.status === 200, 'place: ' + JSON.stringify(o));
+        ctx.assert(o.body.status === 'placed' && o.body.complete === false && o.body.petId === 90001 && o.body.quantity === 2, 'order fields: ' + JSON.stringify(o.body));
+        const g = ctx.api('GET', '/store/orders/' + o.body.id);
+        ctx.assert(g.status === 200 && g.body.id === o.body.id, 'get order: ' + JSON.stringify(g));
+        let pet = ctx.api('GET', '/pets/' + p.body.id).body;
+        ctx.assert(pet.stock === 1 && pet.status === 'available', 'stock 1 available: ' + JSON.stringify(pet));
+        const o2 = ctx.api('POST', '/store/orders', { petId: 90001, quantity: 1 });
+        ctx.assert(o2.status === 200, 'second order: ' + JSON.stringify(o2));
+        pet = ctx.api('GET', '/pets/' + p.body.id).body;
+        ctx.assert(pet.stock === 0 && pet.status === 'sold', 'sold at zero: ' + JSON.stringify(pet));
+        const o3 = ctx.api('POST', '/store/orders', { petId: 90001, quantity: 1 });
+        ctx.assert(o3.status === 409 && o3.body.type === 'pet_sold', 'sold pet: ' + JSON.stringify(o3));
+      }
+  - id: place_refusals
+    intent: Invalid orders are refused and change no stock.
+    actions:
+      - place_order
+    description: Unknown pet, zero quantity, missing petId and quantity above stock are refused; stock is unchanged.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/pets', { name: 'Acceptance Beagle B', petId: 90002, stock: 2 });
+        ctx.assert(p.status === 201, 'create pet: ' + JSON.stringify(p));
+        const unknown = ctx.api('POST', '/store/orders', { petId: 90999, quantity: 1 });
+        ctx.assert(unknown.status === 400 && unknown.body.type === 'unknown_pet', 'unknown pet: ' + JSON.stringify(unknown));
+        const zero = ctx.api('POST', '/store/orders', { petId: 90002, quantity: 0 });
+        ctx.assert(zero.status === 400 && zero.body.type === 'input.invalid', 'zero quantity: ' + JSON.stringify(zero));
+        const missing = ctx.api('POST', '/store/orders', { quantity: 1 });
+        ctx.assert(missing.status === 400 && missing.body.type === 'input.invalid', 'missing petId: ' + JSON.stringify(missing));
+        const big = ctx.api('POST', '/store/orders', { petId: 90002, quantity: 3 });
+        ctx.assert(big.status === 409 && big.body.type === 'insufficient_stock', 'too many: ' + JSON.stringify(big));
+        const pet = ctx.api('GET', '/pets/' + p.body.id).body;
+        ctx.assert(pet.stock === 2 && pet.status === 'available', 'stock unchanged: ' + JSON.stringify(pet));
+      }
+  - id: order_progression
+    intent: Orders advance placed, approved, delivered and refuse other moves.
+    actions:
+      - place_order
+      - approve_order
+      - deliver_order
+    description: Approve then deliver an order (complete becomes true); repeat approve, deliver a placed order and approve a missing order are refused.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/pets', { name: 'Acceptance Beagle C', petId: 90003, stock: 5 });
+        ctx.assert(p.status === 201, 'create pet: ' + JSON.stringify(p));
+        const o = ctx.api('POST', '/store/orders', { petId: 90003, quantity: 1 });
+        ctx.assert(o.status === 200, 'place: ' + JSON.stringify(o));
+        const a = ctx.api('POST', '/store/orders/' + o.body.id + '/approve', {});
+        ctx.assert(a.status === 200 && a.body.status === 'approved' && a.body.complete === false, 'approve: ' + JSON.stringify(a));
+        const again = ctx.api('POST', '/store/orders/' + o.body.id + '/approve', {});
+        ctx.assert(again.status === 409 && again.body.type === 'invalid_state', 'approve twice: ' + JSON.stringify(again));
+        const d = ctx.api('POST', '/store/orders/' + o.body.id + '/deliver', {});
+        ctx.assert(d.status === 200 && d.body.status === 'delivered' && d.body.complete === true, 'deliver: ' + JSON.stringify(d));
+        const o2 = ctx.api('POST', '/store/orders', { petId: 90003, quantity: 1 });
+        const early = ctx.api('POST', '/store/orders/' + o2.body.id + '/deliver', {});
+        ctx.assert(early.status === 409 && early.body.type === 'invalid_state', 'deliver placed: ' + JSON.stringify(early));
+        const missing = ctx.api('POST', '/store/orders/ord_9999/approve', {});
+        ctx.assert(missing.status === 404 && missing.body.type === 'order_not_found', 'missing: ' + JSON.stringify(missing));
+      }
+  - id: delete_restores_stock
+    intent: Deleting an order returns its stock, and delivered orders cannot be deleted.
+    actions:
+      - place_order
+      - approve_order
+      - deliver_order
+      - delete_order
+    description: Order the last unit, delete the order and see the pet available again; a delivered order is protected; a missing order is 404.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/pets', { name: 'Acceptance Beagle D', petId: 90004, stock: 2 });
+        ctx.assert(p.status === 201, 'create pet: ' + JSON.stringify(p));
+        const o = ctx.api('POST', '/store/orders', { petId: 90004, quantity: 2 });
+        ctx.assert(o.status === 200, 'place: ' + JSON.stringify(o));
+        let pet = ctx.api('GET', '/pets/' + p.body.id).body;
+        ctx.assert(pet.status === 'sold' && pet.stock === 0, 'sold after order: ' + JSON.stringify(pet));
+        const del = ctx.api('DELETE', '/store/orders/' + o.body.id);
+        ctx.assert(del.status === 204, 'delete: ' + JSON.stringify(del));
+        pet = ctx.api('GET', '/pets/' + p.body.id).body;
+        ctx.assert(pet.status === 'available' && pet.stock === 2, 'stock restored: ' + JSON.stringify(pet));
+        const gone = ctx.api('GET', '/store/orders/' + o.body.id);
+        ctx.assert(gone.status === 404 && gone.body.type === 'row.not_found', 'order gone: ' + JSON.stringify(gone));
+        const o2 = ctx.api('POST', '/store/orders', { petId: 90004, quantity: 1 });
+        ctx.api('POST', '/store/orders/' + o2.body.id + '/approve', {});
+        ctx.api('POST', '/store/orders/' + o2.body.id + '/deliver', {});
+        const prot = ctx.api('DELETE', '/store/orders/' + o2.body.id);
+        ctx.assert(prot.status === 409 && prot.body.type === 'order_delivered', 'delivered delete: ' + JSON.stringify(prot));
+        pet = ctx.api('GET', '/pets/' + p.body.id).body;
+        ctx.assert(pet.stock === 1, 'stock unchanged by refused delete: ' + JSON.stringify(pet));
+        const none = ctx.api('DELETE', '/store/orders/ord_9999');
+        ctx.assert(none.status === 404 && none.body.type === 'order_not_found', 'missing delete: ' + JSON.stringify(none));
+      }
+  - id: inventory_counts
+    intent: Inventory counts pets per status.
+    actions:
+      - get_inventory
+      - place_order
+    description: Compare inventory before and after adding a pet and selling it out.
+    script: |-
+      (ctx) => {
+        const before = ctx.api('GET', '/store/inventory');
+        ctx.assert(before.status === 200 && typeof before.body.available === 'number' && typeof before.body.sold === 'number', 'inventory shape: ' + JSON.stringify(before));
+        const p = ctx.api('POST', '/pets', { name: 'Acceptance Beagle E', petId: 90005, stock: 1 });
+        ctx.assert(p.status === 201, 'create pet: ' + JSON.stringify(p));
+        const mid = ctx.api('GET', '/store/inventory').body;
+        ctx.assert(mid.available === before.body.available + 1 && mid.sold === before.body.sold, 'available +1: ' + JSON.stringify(mid));
+        const o = ctx.api('POST', '/store/orders', { petId: 90005, quantity: 1 });
+        ctx.assert(o.status === 200, 'place: ' + JSON.stringify(o));
+        const after = ctx.api('GET', '/store/inventory').body;
+        ctx.assert(after.available === before.body.available && after.sold === before.body.sold + 1, 'moved to sold: ' + JSON.stringify(after));
+      }
+routes:
+  - id: get_inventory
+    method: GET
+    path: /store/inventory
+    purpose: Returns the number of pets per pet status as a map of integers (action).
+  - id: place_order
+    method: POST
+    path: /store/orders
+    purpose: Place an order for a pet; reserves stock (action built from the create operation).
+  - id: get_order
+    method: GET
+    path: /store/orders/{id}
+    purpose: Find a purchase order by id (spec orderId).
+  - id: delete_order
+    method: DELETE
+    path: /store/orders/{id}
+    purpose: Delete an order and return its stock (action, answers 204).
+  - id: list_orders
+    method: GET
+    path: /store/orders
+    purpose: List orders with filters so an agent can discover ids (added on purpose).
+  - id: approve_order
+    method: POST
+    path: /store/orders/{id}/approve
+    purpose: Move a placed order to approved (added on purpose).
+  - id: deliver_order
+    method: POST
+    path: /store/orders/{id}/deliver
+    purpose: Move an approved order to delivered (added on purpose).
+  - id: list_pets
+    method: GET
+    path: /pets
+    purpose: List and filter pets.
+  - id: get_pet
+    method: GET
+    path: /pets/{id}
+    purpose: Read one pet.
+  - id: create_pet
+    method: POST
+    path: /pets
+    purpose: Add a pet with its stock.
+  - id: update_pet
+    method: PATCH
+    path: /pets/{id}
+    purpose: Edit a pet.
+seed:
+  rowsPerEntity:
+    pet: 30
+    order: 40
+  mix: 30 pets, about 80% available and 20% sold (stock 0); 40 orders spread over placed, approved and delivered, with shipDates spread around the clock start, several pets with more than one order, and a few same-named near-duplicate pets with different orders.
+  stateMix:
+    order:
+      placed: 35
+      approved: 35
+      delivered: 30
+    pet:
+      available: 80
+      sold: 20
+tasks:
+  - id: approve_biscuit_order
+    difficulty: easy
+    kind: two_actors
+    intent: Approve the one placed order for the pet named Biscuit.
+    actions:
+      - approve_order
+    decoyIdea: Approves a delivered or approved order for another pet, or one of the other orders for a similarly named pet.
+    pressure:
+      distractors: order
+  - id: cancel_luna_placed_order
+    difficulty: medium
+    kind: irreversible
+    intent: "A customer cancelled: delete only the placed order for the pet named Luna with quantity 2, so its stock returns. Luna's other orders, including a delivered one, must stay."
+    actions:
+      - delete_order
+    decoyIdea: Deletes the delivered or approved Luna order, or deletes by the wrong quantity, or PATCHes the pet stock by hand.
+    pressure:
+      states:
+        - order.placed
+        - order.delivered
+      distractors: order
+  - id: fulfil_orders_due_soon
+    difficulty: hard
+    kind: scarce_resource
+    intent: Take every order that is still placed and has a shipDate on or before 2026-10-12 all the way to delivered, approving then delivering each. Change nothing else.
+    actions:
+      - approve_order
+      - deliver_order
+    decoyIdea: Reads only the first page of orders, only approves without delivering, or also moves approved orders and orders shipping later.
+    pressure:
+      paging: order
+      states:
+        - order.placed
+        - order.approved
+open_questions:
+  - question: Should orders be listable and pets managed even though the spec kept only 4 store operations?
+    default_answer: Yes, add minimal list_orders and pet routes so agents can discover rows.
+  - question: Should placing an order reserve pet stock?
+    default_answer: Yes, a pet has a stock count and sells out.
+  - question: Should the integer order id be kept?
+    default_answer: No, use engine string ids.
+assumptions:
+  - decision: Engine row ids are strings (ord_0001, pet_0001); the spec's integer order id is replaced by the implicit id. petId on an order is an integer matching pet.petId, not a ref, to keep the spec's integer type.
+    why: The engine assigns string ids and openapi field types must match; a ref would be a string.
+  - decision: Path param {orderId} is written {id}.
+    why: Get routes and actions address rows by {id}; the URL shape is identical.
+  - decision: Added pet entity, pet routes, list_orders, approve_order and deliver_order beyond the 4 in-scope operations.
+    why: Inventory by pet status and order progression need pets and an agent needs to discover and advance orders.
+  - decision: Pet status is a state field with available and sold (no pending), moving available↔sold with stock.
+    why: Keeps inventory simple and deterministic.
+  - decision: Inventory counts pets (not units) per status and always includes both keys available and sold.
+    why: Petstore inventory is keyed by pet status.
+  - decision: place_order returns 200 with the Order (spec), refuses with 400 unknown_pet, 409 pet_sold or 409 insufficient_stock. Optional status input must be placed, complete must be false.
+    why: Spec declares 200 and 400; conflicts use 409.
+  - decision: Error body uses the proposed template, so the machine code is in body.type and the HTTP status is in body.code. Tests assert body.type.
+    why: Follows the proposed meta.api.error.
+  - decision: delete_order is an action answering 204, 404 order_not_found, and 409 order_delivered for delivered orders. Deleting returns the quantity to the pet and re-lists a sold pet as available.
+    why: Cancelling an order must release reserved stock.
+  - decision: Clock starts 2026-10-09T09:00:00Z with tick 0s; seeded history is before it, shipDates may be after it.
+    why: Explicit deterministic time; shipDate is a planned future time.
+  - decision: No jobs.
+    why: Nothing in the spec happens on a schedule.
+  - decision: Tests use pet petId values 90001 and above, seed uses 1 to 30.
+    why: Avoids collisions with seed rows.
+outOfScope:
+  - what: Pet create/update/delete beyond minimal pet routes, photos, tags, categories, /pet, /user endpoints
+    why: Only 4 /store operations were kept; the rest were dropped.
+  - what: Authentication and API keys
+    why: Not part of the kept operations.
+changes: []
