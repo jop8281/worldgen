@@ -116,6 +116,7 @@ These screenshots come from the real app, with no model call. [prod/screenshots/
 ## More
 
 - [research/readme-reference.md](research/readme-reference.md) holds the longer reference: every world with its task scores, the engine and Docker details, the other CLIs, checks and costs, and Boat recovery.
+- [prod/scorecards.md](prod/scorecards.md) keeps four separate scorecards, for the generator, environment fidelity, the graders and agents, each with its own denominator; `bun run scorecards` regenerates it from committed files.
 - [research/architecture.md](research/architecture.md) gives the reasoning, [research/decisions.md](research/decisions.md) logs every design call, and [AGENTS.md](AGENTS.md) holds the working rules.
 - Work is tracked in the [WorldGen Linear project](https://linear.app/yossi-zozo123/project/worldgen-f83badd4a2c7).
 - WorldGen is MIT licensed: see [LICENSE](LICENSE).

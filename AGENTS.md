@@ -34,7 +34,7 @@ This is the workflow as of 2026-10-08. Linear and GitHub split the work, and one
 | `research/` | The spec, plans, `decisions.md`, `architecture.md`, domain notes. Markdown and JSON only. | Code or spikes. Nothing in `code/` reads it. |
 | `code/` | The one npm package: engine, WorldGen, CLIs, tests. | Worlds, eval inputs, deliverables. |
 | `eval/` | The rehearsal suite (`suite.yaml`), its inputs, and run output, which `bun run eval` writes under eval/runs on its first run. | Code, or worlds meant for submission. |
-| `prod/` | What gets handed in: `design.md`, the generated `world-format.md`, the hand-built world, generated worlds, and scenarios in `prod/scenarios/`. | Drafts and rehearsal runs. Tests check every world here, so a broken world fails `bun run test`. |
+| `prod/` | What gets handed in: `design.md`, the generated `world-format.md` and `scorecards.md`, the hand-built world, generated worlds, and scenarios in `prod/scenarios/`. | Drafts and rehearsal runs. Tests check every world here, so a broken world fails `bun run test`. |
 
 `code/` reads `prod/worlds/*` by path, in tests and as the few-shot examples (`exampleWorld` in `code/worldgen.config.json`, one picked per input, A-390). It never imports from `research/`, `eval/` or `prod/`.
 
@@ -102,6 +102,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `sandboxes/files.ts` | The bundle of code package plus one world, and its host workspace. `collectBundle` `publicOnly` uploads only `<worldDir>/public/world.yaml`, the public form of the world (YOS-159), so no grader, solution or decoy source reaches a sandbox. |
 | `scenario/manifest.ts` | What a scenario is (J140): N existing worlds by alias, gates (per-world tasks) and gateway faults, and `loadScenario()`, which checks every world through `#engine` and reports every cross-check failure at once. |
 | `scenario/gateway.ts` | `serveScenario()`: every world in process, the one gateway the agent gets (`/<alias>/<rest>`, the fault table, the boundary trace) and the operator's admin port (`GET /_scenario/trace`, `POST /_scenario/grade`, all-or-nothing verdict over the gates). Shell code. |
+| `scorecards/cards.ts` | The four scorecards of YOS-262 (A-402), rendered as `prod/scorecards.md`: generator (eval runs scored as analyze-eval scores them, over every suite case per A-341), environment fidelity (recorded `fidelity` events; the 0.80 floor is a gate), grader (verify controls and probe coverage) and agent (difficulty runs and dataset export counts). Also which folders make a run (`runParts`) and which suite scores it (`suiteFor`). Each card has its own denominator and limits, and every number names its source path. Pure. |
 | `studio/analytics.ts` | Agent Playground analytics: exported episodes grouped by world, task and model, with success rate, failure causes and cost per success. Episodes that called no model group under `noop (no model)`. Pure. |
 | `studio/page.ts` | The studio page: one offline operator app. Pure. |
 | `studio/runstore.ts` | The studio's jobs on disk (`.studio-runs.json` in the worlds dir, finished jobs past 200 moved to the append-only `.studio-runs.archive.jsonl`, A-376): each generation run and agent episode with its idempotency key, request fingerprint, phase (intent, running, finished), lease and recovery, written whole through a temp file and a rename (A-329, A-335). An A-329 record still loads. `recoveryOf()` is the one lease rule (A-335): leave, resume or stop an unfinished job, for the studio and for reconcile-jobs alike. Process checks are injected. |
@@ -129,6 +130,7 @@ The engine lives in `engine/`. `index.ts`, `sandbox.ts` and `http.ts` are shell 
 | `cli/redteam.ts` | `bun run redteam`: every task of a worlds directory once on loopback with the red-team solver (A-404), one row per task appended to `results.jsonl` so a stopped run resumes, then `summary.md`. Stops at the first model error. The report is `dataset/redteam.ts`. |
 | `cli/evidence.ts` | `bun run evidence`: argument parsing and printing for the dataset re-check (A-392). The work is in `dataset/evidence.ts`. No logic. |
 | `cli/scenario.ts` | Argument parsing and printing for `bun run scenario`: `check <dir>` and `serve <dir> [--port] [--admin-port]`. The work is in `scenario/manifest.ts` and `scenario/gateway.ts`. No logic. |
+| `cli/scorecards.ts` | `bun run scorecards`: reads the committed eval runs and their lane folders, the suites, fidelity references, prod worlds (through `checkWorld`), difficulty runs and export manifests, and writes `prod/scorecards.md`. Never reads `research/`. The work is in `scorecards/cards.ts`. No logic. |
 | `cli/studio.ts` | Argument parsing and wiring for `bun run studio`: the operator web app, and its users from `--users <file>` or `WORLDGEN_STUDIO_TOKEN`, and the `reconcile-jobs` subcommand. No logic. |
 | `cli/studio-watch.ts` | Argument parsing, the two GETs and the exit status for `bun run studio-watch`: one check of a running Studio, OK lines and exit 0, or one `ALERT <code>: <why>` line per problem and exit 1. The token comes only from `WORLDGEN_STUDIO_TOKEN`, goes only to `GET /api/costs` as a bearer header, and is never printed. The rules are in `studio/watch.ts`. No logic. |
 | `lib/never.ts` | `assertNever` for exhaustive switches. |
@@ -170,6 +172,7 @@ bun run typecheck                                    # whole package, then engin
 bun run test                                         # bun test runs the node:test files
 bun run check                                        # the default gate: typecheck, then every test under Bun (A-134)
 bun run docs                                         # regenerate ../prod/world-format.md
+bun run scorecards                                   # regenerate ../prod/scorecards.md from committed files; no model call
 bun run e2e                                          # acceptance: typecheck, helpdesk checked, verified and over HTTP, CLI help, fresh docs
 
 bun run worldplay check  ../prod/worlds/helpdesk      # issues with path, expected, found, hint

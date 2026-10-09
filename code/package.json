@@ -24,6 +24,7 @@
     "evidence": "bun src/cli/evidence.ts",
     "studio": "bun src/cli/studio.ts",
     "scenario": "bun src/cli/scenario.ts",
+    "scorecards": "bun src/cli/scorecards.ts",
     "studio-watch": "bun src/cli/studio-watch.ts",
     "docs": "bun src/cli/worldplay.ts docs",
     "demo:prepare": "bash ../scripts/demo-rehearsal.sh prepare",
