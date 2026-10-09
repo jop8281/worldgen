@@ -10,7 +10,7 @@ import { after, before, describe, it } from 'node:test';
 import { checkWorld, createRuntime, loadWorld, renderWorldYaml } from '#engine';
 import { main } from '../src/cli/evidence.ts';
 import { checkExportFolder, replayEpisode } from '../src/dataset/evidence.ts';
-import { hashState, sha256Hex, type Episode } from '../src/dataset/schema.ts';
+import { canonicalJson, hashState, outcomeOf, parseEpisode, sha256Hex, type Episode } from '../src/dataset/schema.ts';
 
 const REPO = path.resolve(import.meta.dirname, '../..');
 const ORDERS = path.join(REPO, 'eval/dataset/2026-10-07/gen-orders');
@@ -43,7 +43,42 @@ const firstResultIs404 = editFirstEpisode((ep) => {
   ep.messages.find((m: { type: string }) => m.type === 'tool_result').status = 404;
 });
 
+/**
+ * The committed version 1 gen-orders export rewritten as version 2 (A-389): every row in dataset.jsonl with its outcome,
+ * the last one turned into a done run the engine scored 0, and a manifest 2 with its counts and checksum.
+ */
+const asVersion2 = async (folder: string): Promise<void> => {
+  const v1rows = (await readFile(path.join(folder, 'dataset.jsonl'), 'utf8')).split('\n').filter(Boolean);
+  const rows = v1rows.map((l, i) => {
+    const ep = parseEpisode(JSON.parse(l), `row ${i + 1}`);
+    if (i !== v1rows.length - 1) return ep;
+    const failed = { ...ep, score: 0 };
+    return { ...failed, outcome: outcomeOf(failed, null) };
+  });
+  const text = rows.map((r) => `${canonicalJson(r)}\n`).join('');
+  const m = JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8'));
+  const manifest = {
+    ...m, manifest_version: 2, schema_version: 2,
+    counts: { episodes: 4, by_verdict: { success: 3, partial: 0, failure: 1, infra: 0 }, by_stop_reason: { done: 4 }, by_failure_cause: { 'scored 0': 1 } },
+    files: { dataset: { path: 'dataset.jsonl', records: 4, bytes: Buffer.byteLength(text), sha256: sha256Hex(text) } },
+  };
+  await writeFile(path.join(folder, 'dataset.jsonl'), text);
+  await rm(path.join(folder, 'failures.jsonl'));
+  await writeFile(path.join(folder, 'manifest.json'), JSON.stringify(manifest, null, 2));
+};
+
 describe('checkExportFolder', () => {
+  it('reads a version 2 export: replays its complete successes and counts its other rows, unreplayed (A-389)', async () => {
+    const f = await checkExportFolder(await copyOfOrders('v2', asVersion2));
+    assert.equal(f.error, null);
+    assert.deepEqual([f.changedFiles, f.worldOk, f.failedRuns], [[], true, 1]);
+    assert.deepEqual(f.replays.map((r) => [r.episode, r.agrees]), [
+      ['gen-orders-w2__cancel_stale_pending_with_gift_note__1', true],
+      ['gen-orders-w2__pay_oldest_pending_for_customer__1', true],
+      ['gen-orders-w2__refund_delivered_big_orders_for_customer__1', true],
+    ]);
+  });
+
   it('replays every committed gen-orders episode to its recorded score on the frozen world', async () => {
     const f = await checkExportFolder(ORDERS);
     assert.equal(f.error, null);
