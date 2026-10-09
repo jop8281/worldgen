@@ -1919,8 +1919,11 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   async function runStatus(p: Params, who: User, filter: string | null): Promise<Reply> {
     const run = runOf(p['runId'] ?? '', who, filter);
     if (run === undefined) return fail(404, 'run.unknown', `No run ${p['runId'] ?? ''}`);
-    const events = await readEvents(run);
+    // The phase is read before the events. A run turns finished only after an iterate's publish has renamed
+    // `<out>.partial` to `<out>` (watch), so a status that reads finished reads its events after the rename. The other
+    // order let a read that straddled the rename find neither dir and call a done run failed (J195).
     const running = run.phase !== 'finished';
+    const events = await readEvents(run);
     const tail = events.slice(-EVENT_TAIL);
     // Issue text and error messages can quote seed values or model output, so below admin they show only for a run whose
     // saved world has no sensitive field; the out dir holds a world only once the run is done, so a run with none fails
@@ -2180,6 +2183,9 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const run = isEpisode(job) ? job : undefined;
     const out = run?.outDir ?? path.join(episodesDir, runId);
     if (run === undefined && !await isDir(out)) return unknown;
+    // Before the export is read, as in runStatus: an episode turns finished only after its child, which wrote the export,
+    // has exited, so a status that reads finished never reads an export the child had yet to write (J195).
+    const running = run !== undefined && run.phase !== 'finished';
     const exported = await exportedEpisode(out, runId);
     // Tool results hold the world's answers, so a role below admin sees them masked like the console's (A-356).
     const sensitive: Sensitivity = who.role === 'admin' ? new Map() : await episodeSensitivity(exported, out);
@@ -2187,7 +2193,6 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     // The child's last lines can quote a world answer or task source, so only an admin reads them, whatever the world (A-377).
     const raw = run?.child?.output() ?? '';
     const output = who.role === 'admin' || raw.trim() === '' ? raw : CHILD_TEXT_WITHHELD;
-    const running = run !== undefined && run.phase !== 'finished';
     return {
       status: 200,
       body: {
@@ -2237,11 +2242,13 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     const rows = await Promise.all([...ids].sort().reverse().map(async (runId) => {
       const job = jobs.get(runId);
       const run = isEpisode(job) ? job : undefined;
+      // The phase before the export, as in episodeStatus (J195).
+      const running = run !== undefined && run.phase !== 'finished';
       const e = await exportedEpisode(run?.outDir ?? path.join(episodesDir, runId), runId);
       const ep = isObject(e) ? e : null;
       return {
         runId,
-        running: run !== undefined && run.phase !== 'finished',
+        running,
         task: ep?.['task_id'] ?? run?.episode.task ?? null,
         world: ep?.['world_id'] ?? run?.episode.world ?? null,
         stop: ep?.['stop_reason'] ?? null,
