@@ -7,7 +7,7 @@ Measured, not proven (A-393). `worldplay verify` runs probes against every task'
 - **Unattributed probes.** A probe that scored below 1 without flipping any goal of a goal-scored grader, such as one an early `return 0` caught. Those `return 0` lines are not counted as checks, because finding them needs a parse of the grader.
 - **Error rate.** Every probe run that verify counts must score below 1, or the world fails verification, so "0 full marks" below is a gate, not a measurement of how often an agent fools a grader. What the probes miss is the checks listed last with no flip, the slots with nothing to probe, and exploit classes no probe tries. The two classes review point 1 on #147 found, an edit undone before the end and free text no grader reads, now have probes (A-387, A-388): `undone_write` and `free_text` below.
 
-Measured on the prod worlds of `59a39201` (PR #163: J150 with the worlds J158 regenerated), with this branch's engine, by:
+Measured on the prod worlds of `stabilize/main` at `0fc39737` (#163: J150 with the worlds J158 regenerated), with this branch's engine, by:
 
 ```sh
 cd code && bun scripts/probe-coverage.ts ../prod/worlds
