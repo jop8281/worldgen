@@ -89,8 +89,8 @@ Every world in `prod/worlds/`, checked by the engine's `checkWorld`, which `bun 
 | gen-linear-backlog | 4 | 17 | 0 | 1 | 13/13 (100.0%) | 15/32 (46.9%) | `prod/worlds/gen-linear-backlog/world.yaml` |
 | gen-orders | 4 | 15 | 0 | 2 | 8/9 (88.9%) | 22/32 (68.8%) | `prod/worlds/gen-orders/world.yaml` |
 | gen-orders-customers | 3 | 11 | 0 | 1 | 7/7 (100.0%) | 16/24 (66.7%) | `prod/worlds/gen-orders-customers/world.yaml` |
-| gen-petstore | 3 | 9 | 0 | 2 | 9/10 (90.0%) | 13/24 (54.2%) | `prod/worlds/gen-petstore/world.yaml` |
-| gen-petstore-refunds | 6 | 18 | 0 | 4 | 26/27 (96.3%) | 22/48 (45.8%) | `prod/worlds/gen-petstore-refunds/world.yaml` |
+| gen-petstore | 3 | 9 | 0 | 2 | 10/10 (100.0%) | 13/24 (54.2%) | `prod/worlds/gen-petstore/world.yaml` |
+| gen-petstore-refunds | 6 | 18 | 0 | 4 | 27/27 (100.0%) | 22/48 (45.8%) | `prod/worlds/gen-petstore-refunds/world.yaml` |
 | gen-refunds | 4 | 12 | 0 | 3 | 23/24 (95.8%) | 5/32 (15.6%) | `prod/worlds/gen-refunds/world.yaml` |
 | gen-rental-fleet | 4 | 14 | 0 | 3 | 13/15 (86.7%) | 13/32 (40.6%) | `prod/worlds/gen-rental-fleet/world.yaml` |
 | gen-repair-desk | 3 | 10 | 0 | 1 | 8/8 (100.0%) | 20/24 (83.3%) | `prod/worlds/gen-repair-desk/world.yaml` |
@@ -101,8 +101,8 @@ Every world in `prod/worlds/`, checked by the engine's `checkWorld`, which `bun 
 | gen-todo-projects | 3 | 11 | 0 | 1 | 5/5 (100.0%) | 16/24 (66.7%) | `prod/worlds/gen-todo-projects/world.yaml` |
 | gen-warehouse-inventory | 4 | 12 | 0 | 1 | 11/11 (100.0%) | 14/32 (43.8%) | `prod/worlds/gen-warehouse-inventory/world.yaml` |
 | helpdesk | 3 | 14 | 0 | 2 | 8/8 (100.0%) | 19/24 (79.2%) | `prod/worlds/helpdesk/world.yaml` |
-| retail-tau2 | 8 | 15 | 0 | 6 | 26/38 (68.4%) | 12/64 (18.8%) | `prod/worlds/retail-tau2/world.yaml` |
-| **Total** | 95 | 328 | 0 | 52 | 275/299 (92.0%) | 364/760 (47.9%) | `prod/worlds/` |
+| retail-tau2 | 8 | 15 | 0 | 6 | 27/38 (71.1%) | 12/64 (18.8%) | `prod/worlds/retail-tau2/world.yaml` |
+| **Total** | 95 | 328 | 0 | 52 | 278/299 (93.0%) | 364/760 (47.9%) | `prod/worlds/` |
 
 No task declares an alternative solution, so this card does not yet show that a second correct path also scores 1.
 

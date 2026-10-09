@@ -7,7 +7,7 @@
  * - A task passes only if all of these hold. The solution scores exactly 1 and gets no 5xx.
  *   Doing nothing scores exactly 0. Medium and hard tasks have a decoy. Every decoy gets no
  *   5xx, scores below 1 and is not trivial. Every strict prefix of the solution's successful writes scores
- *   below 1, and so does the solution plus one collateral write (the engine builds both by replaying
+ *   below 1, so does the solution with any one of its writes but the last left out (A-401), and so does the solution plus one collateral write (the engine builds each by replaying
  *   the solution's calls, no model), as does the solution plus a collateral edit it then undoes. Two solution
  *   runs from seed end in the same state hash. Nonsense in each free-text field the solution writes scores below 1 (A-388).
  * - The collateral guards (a task's `allows`, ctx.guardChanges) judge every write a call made, not only the end
@@ -610,6 +610,37 @@ function prefixScores(
     if (g.score === 1) break;
   }
   return { ok: true, scores, runs };
+}
+
+/**
+ * The solution with one successful write left out (A-401): for each write but the last, which a prefix already cuts,
+ * the solution's successful calls replayed from `seed` without that one; a later call that needed it is simply refused.
+ * A replay that ends where the solution ends proves nothing about the grader and is skipped. Stops at the first
+ * omission that scores 1 or cannot be graded.
+ */
+function omissionScores(
+  world: CheckedWorld,
+  seed: State,
+  taskId: string,
+  host: SnippetHost,
+  log: readonly CallRecord[],
+  writes: readonly number[],
+  end: State,
+): { ok: true; full: { write: number; call: string } | null; runs: ProbeRun[] } | { ok: false; issue: CheckIssue } {
+  const runs: ProbeRun[] = [];
+  const solutionContent = contentHash(end);
+  for (const [i, seq] of writes.slice(0, -1).entries()) {
+    const rt = runtime(world, host, seed);
+    for (const c of log) if (succeeded(c) && c.seq !== seq) rt.call(c.req);
+    const state = stateFromDump(world, rt.dump());
+    if (contentHash(state) === solutionContent) continue;
+    const g = grade(world, seed, state, taskId, host, rt.journal(), rt.log());
+    if (!g.ok) return g;
+    runs.push({ probe: `omit_write ${i + 1}`, graded: g });
+    const left = log.find((c) => c.seq === seq);
+    if (g.score === 1) return { ok: true, full: { write: i + 1, call: left === undefined ? '' : `${left.req.method} ${left.req.path}` }, runs };
+  }
+  return { ok: true, full: null, runs };
 }
 
 /** A runtime that starts at `seed` and re-issues `log`'s successful calls, reads too, so engine time matches. */
@@ -1236,6 +1267,15 @@ export function verifyTask(
       }
       if (prefixes.scores.length > 0) bestPrefixScore = Math.max(...prefixes.scores);
       runs.push(...prefixes.runs);
+    }
+    const omissions = omissionScores(world, seed, taskId, host, first.log, writes, first.end);
+    if (!omissions.ok) push(omissions.issue);
+    else {
+      if (omissions.full !== null) {
+        const { write, call } = omissions.full;
+        push(issue('task.omission_full_marks', taskPath, { write, of: writes.length, call }, `the solution without write ${write} of ${writes.length} (${call}) scored 1`));
+      }
+      runs.push(...omissions.runs);
     }
   }
 

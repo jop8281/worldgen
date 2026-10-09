@@ -299,6 +299,7 @@ const ISSUE_EXAMPLES: { readonly [C in IssueCode]: CheckIssue } = {
   'task.decoy_server_error': issue('task.decoy_server_error', ['format'], { task: '<task>', why: '<why>', call: '<method> <path> answered <status>', body: '<body>' }, '<found>'),
   'task.prefix_full_marks': issue('task.prefix_full_marks', ['format'], { writes: 2, of: 3 }, '<found>'),
   'task.mutant_full_marks': issue('task.mutant_full_marks', ['format'], { kind: 'other_row', call: '<call>' }, '<found>'),
+  'task.omission_full_marks': issue('task.omission_full_marks', ['format'], { write: 1, of: 2, call: '<call>' }, '<found>'),
   'task.freetext_unchecked': issue('task.freetext_unchecked', ['format'], { field: '<entity>.<field>', call: '<call>' }, '<found>'),
   'task.nondeterministic': issue('task.nondeterministic', ['format'], { first: '<hash>', second: '<hash>' }, '<found>'),
   'world.too_few_tasks': issue('world.too_few_tasks', ['format'], { have: 2 }, '<found>'),
