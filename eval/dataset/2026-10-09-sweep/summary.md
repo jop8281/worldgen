@@ -7,7 +7,7 @@ How it ran (J175, P-YOS-6 points 2 and 3):
 - Settings: `--max-turns 30`, `--budget-usd 1` per world run, `--max-minutes 60`. The cost ledger was isolated, with `WORLDGEN_MAX_DAILY_LLM_USD=15`. `TMPDIR` was set to an empty directory per run (see J188).
 - Passes:
   - `p1`, `p2`, `p3`: `claude-haiku-5-5` once on every task of all 25 worlds. `p1/gen-bookmarks` was the one-world probe that ran first.
-  - `s1`, `s2`, `s3`: `claude-sonnet-5-5` once on every task of the 4 worlds where Haiku missed a task.
+  - `s1`, `s2`, `s3` (and `t1`–`t3` below): `claude-sonnet-5-5` once on every task of the 4 worlds where Haiku missed a task.
 - `bun run dataset` has no per-task filter, so passes cover whole worlds.
 - Each `<pass>/<world>/` holds the schema-2 export (`dataset.jsonl`), its `manifest.json` and `REPORT.md`. Failures are included.
 - The three Haiku passes are also the J180 teacher export: 285 Haiku episodes with failures, at no new spend.
@@ -16,24 +16,31 @@ Read the Sonnet column with care:
 
 - Sonnet episodes on the hard clinic, rental-fleet and warehouse tasks cost up to $0.82 each. The $1 per-world run budget ran out before those tasks, so they are recorded as infra (`run_budget_limit`, or a `model_error` at the budget).
 - Those tasks are unmeasured for Sonnet, not failed by it.
-- Measuring them needs a larger per-world budget than the $15 cap left. The sweep spent $14.55 of it.
 
-95 tasks in 25 prod worlds. Haiku: 267/284 episodes succeeded. Sonnet: 32/35.
+Follow-up `t1`, `t2`, `t3` (J175b):
+
+- What ran: Sonnet ×3 on clinic-appointments and rental-fleet with `--budget-usd 3` per world run, on a separate ledger capped at $9 from the v2.5 reserve.
+- The hard tasks still don't measure cleanly for Sonnet. One episode of `record_yesterdays_no_shows` cost $1.99 and another $2.98.
+- The ledger admits each call at its bound, so the 6 concurrent runs hit the $9 cap at $7.21 actually spent. Later calls were refused as `model_error` (infra).
+- Graded Sonnet trials now: `record_yesterdays_no_shows` 0/1, `triage_small_claims` 0/1 (turn limit), `book_earliest_cardiology_slot` 4/5. `clear_dr_patel_calendar_for_leave` is still unmeasured.
+- Spend: total model spend across both ledgers is $21.76 (Haiku $4.81, Sonnet $16.95).
+
+95 tasks in 25 prod worlds. Haiku: 267/284 episodes succeeded. Sonnet: 41/47.
 
 | Measured | Tasks |
 |---|---|
 | easy | 89 |
 | flaky-for-haiku | 1 |
-| hard-for-everyone | 1 |
-| hard-for-haiku | 1 |
-| hard-for-haiku (sonnet unmeasured: run budget) | 3 |
+| hard-for-everyone | 3 |
+| hard-for-haiku (sonnet unmeasured: budget) | 1 |
+| hard-for-haiku, flaky-for-sonnet | 1 |
 
 | Verdicts | success | partial | failure | infra |
 |---|---|---|---|---|
 | Haiku | 267 | 11 | 6 | 1 |
-| Sonnet | 32 | 0 | 3 | 13 |
+| Sonnet | 41 | 2 | 4 | 25 |
 
-Model spend: Haiku $4.81 (2567 calls), Sonnet $9.74 (352 calls), total $14.55.
+Model spend: Haiku $4.81 (2567 calls), Sonnet $16.95 (509 calls), total $21.76.
 
 ## Tasks Haiku missed at least once
 
@@ -41,11 +48,11 @@ The input for J179 and J182. k/n counts graded episodes; an infra episode (a run
 
 | World | Task | Labeled | Haiku | Sonnet | Measured | Failure causes |
 |---|---|---|---|---|---|---|
-| gen-clinic-appointments | book_earliest_cardiology_slot | medium | 0/3 | 3/3 | hard-for-haiku | failure: guard broken ×3 |
-| gen-clinic-appointments | clear_dr_patel_calendar_for_leave | hard | 0/3 | 0/0 (+3 infra) | hard-for-haiku (sonnet unmeasured: run budget) | partial: scored 0.8333333333333334 ×1; partial: scored 0.8431372549019608 ×1; partial: scored 0.823529411764706 ×1; infra: run budget ×3 |
-| gen-clinic-appointments | record_yesterdays_no_shows | hard | 0/3 | 0/0 (+3 infra) | hard-for-haiku (sonnet unmeasured: run budget) | partial: scored 0.7666666666666667 ×1; partial: scored 0.7333333333333333 ×1; partial: turn_limit ×1; infra: model_error ×3 |
+| gen-clinic-appointments | book_earliest_cardiology_slot | medium | 0/3 | 4/5 (+1 infra) | hard-for-haiku, flaky-for-sonnet | failure: guard broken ×4; infra: model_error ×1 |
+| gen-clinic-appointments | clear_dr_patel_calendar_for_leave | hard | 0/3 | 0/0 (+6 infra) | hard-for-haiku (sonnet unmeasured: budget) | partial: scored 0.8333333333333334 ×1; partial: scored 0.8431372549019608 ×1; partial: scored 0.823529411764706 ×1; infra: run budget ×4; infra: model_error ×2 |
+| gen-clinic-appointments | record_yesterdays_no_shows | hard | 0/3 | 0/1 (+5 infra) | hard-for-everyone | partial: scored 0.7666666666666667 ×1; partial: scored 0.7333333333333333 ×1; partial: turn_limit ×1; infra: model_error ×5; partial: scored 0.8333333333333334 ×1 |
 | gen-hotel-booking | cancel_arriving_tomorrow_with_fee | medium | 0/3 | 0/3 | hard-for-everyone | failure: scored 0 ×6 |
-| gen-rental-fleet | triage_small_claims | hard | 0/3 | 0/0 (+3 infra) | hard-for-haiku (sonnet unmeasured: run budget) | partial: turn_limit ×2; partial: scored 0.9642857142857143 ×1; infra: model_error ×3 |
+| gen-rental-fleet | triage_small_claims | hard | 0/3 | 0/1 (+5 infra) | hard-for-everyone | partial: turn_limit ×3; partial: scored 0.9642857142857143 ×1; infra: model_error ×5 |
 | gen-shipments | claim_for_late_delivered_shipments | hard | 2/2 (+1 infra) | - | easy | infra: grade_error ×1 |
 | gen-warehouse-inventory | restock_pick_bins | hard | 1/3 | 0/0 (+3 infra) | flaky-for-haiku | partial: scored 0.6923076923076923 ×2; infra: model_error ×2; infra: world_error ×1 |
 
@@ -63,10 +70,10 @@ The input for J179 and J182. k/n counts graded episodes; an infra episode (a run
 | gen-bookmarks | merge_maya_ml_tags | medium | 3/3 | - | easy |
 | gen-bookmarks | share_maya_big_private_collections | hard | 3/3 | - | easy |
 | gen-bookmarks | trash_maya_broken_links | hard | 3/3 | - | easy |
-| gen-clinic-appointments | book_earliest_cardiology_slot | medium | 0/3 | 3/3 | hard-for-haiku |
-| gen-clinic-appointments | cancel_marias_far_appointment | easy | 3/3 | 3/3 | easy |
-| gen-clinic-appointments | clear_dr_patel_calendar_for_leave | hard | 0/3 | 0/0 (+3 infra) | hard-for-haiku (sonnet unmeasured: run budget) |
-| gen-clinic-appointments | record_yesterdays_no_shows | hard | 0/3 | 0/0 (+3 infra) | hard-for-haiku (sonnet unmeasured: run budget) |
+| gen-clinic-appointments | book_earliest_cardiology_slot | medium | 0/3 | 4/5 (+1 infra) | hard-for-haiku, flaky-for-sonnet |
+| gen-clinic-appointments | cancel_marias_far_appointment | easy | 3/3 | 5/5 (+1 infra) | easy |
+| gen-clinic-appointments | clear_dr_patel_calendar_for_leave | hard | 0/3 | 0/0 (+6 infra) | hard-for-haiku (sonnet unmeasured: budget) |
+| gen-clinic-appointments | record_yesterdays_no_shows | hard | 0/3 | 0/1 (+5 infra) | hard-for-everyone |
 | gen-course-enrollments | drop_student_from_course | easy | 3/3 | - | easy |
 | gen-course-enrollments | enroll_into_full_course | medium | 3/3 | - | easy |
 | gen-course-enrollments | grade_completed_department_courses | hard | 3/3 | - | easy |
@@ -109,10 +116,10 @@ The input for J179 and J182. k/n counts graded episodes; an infra episode (a run
 | gen-refunds | merge_ticket_into_refund_metadata | medium | 3/3 | - | easy |
 | gen-refunds | refund_annual_plan_in_full | easy | 3/3 | - | easy |
 | gen-refunds | refund_remaining_balance | medium | 3/3 | - | easy |
-| gen-rental-fleet | cancel_elena_reservation | easy | 3/3 | 3/3 | easy |
-| gen-rental-fleet | return_tomas_reyes_suv | medium | 3/3 | 3/3 | easy |
-| gen-rental-fleet | triage_small_claims | hard | 0/3 | 0/0 (+3 infra) | hard-for-haiku (sonnet unmeasured: run budget) |
-| gen-rental-fleet | waive_priya_late_fee | medium | 3/3 | 3/3 | easy |
+| gen-rental-fleet | cancel_elena_reservation | easy | 3/3 | 4/4 (+2 infra) | easy |
+| gen-rental-fleet | return_tomas_reyes_suv | medium | 3/3 | 6/6 | easy |
+| gen-rental-fleet | triage_small_claims | hard | 0/3 | 0/1 (+5 infra) | hard-for-everyone |
+| gen-rental-fleet | waive_priya_late_fee | medium | 3/3 | 5/5 (+1 infra) | easy |
 | gen-repair-desk | assign_and_start_laptop | medium | 3/3 | - | easy |
 | gen-repair-desk | raise_espresso_priority | easy | 3/3 | - | easy |
 | gen-repair-desk | reassign_and_start_dana_queue | hard | 3/3 | - | easy |
