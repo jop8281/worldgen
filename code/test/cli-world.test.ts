@@ -285,8 +285,8 @@ describe('world verify on the helpdesk world', () => {
     const r = run('verify', HELPDESK);
     assert.equal(r.status, 0, r.stderr);
     const lines = r.stdout.split('\n');
-    assert.equal(lines[2], 'escalate_breached_enterprise_tickets hard solution 1.000 noop 0.000 decoys [0.571, 0.000, 0.000, 0.000, 0.000, 0.000] prefix 0.857 mutants 5/7 probed (not probed: extra_delete, perturb) checks 2/2 flipped');
-    assert.equal(lines[3], 'total: checks 8/8 flipped, mutants 16/21 probed, 3 tasks');
+    assert.equal(lines[2], 'escalate_breached_enterprise_tickets hard solution 1.000 noop 0.000 decoys [0.571, 0.000, 0.000, 0.000, 0.000, 0.000] prefix 0.857 mutants 6/8 probed (not probed: extra_delete, perturb) checks 2/2 flipped');
+    assert.equal(lines[3], 'total: checks 8/8 flipped, mutants 19/24 probed, 3 tasks');
   });
 
   it('--json prints one proof object per task', () => {
@@ -319,11 +319,11 @@ describe('world verify', () => {
     const lines = r.stdout.split('\n');
     assert.equal(lines.length, 5);
     // One write and no decoys, so nothing here depends on how decoys and prefixes are scored.
-    assert.equal(lines[0], 'resolve_password_ticket easy solution 1.000 noop 0.000 decoys [] prefix - mutants 5/7 probed (not probed: extra_action, perturb) checks 1/1 flipped');
-    const rest = String.raw` mutants \d\/7 probed( \(not probed: [a-z_, ]+\))? checks \d+\/\d+ flipped( \(not flipped: [^)]+\))?( unattributed \[[^\]]*\])?$`;
+    assert.equal(lines[0], 'resolve_password_ticket easy solution 1.000 noop 0.000 decoys [] prefix - mutants 6/8 probed (not probed: extra_action, perturb) checks 1/1 flipped');
+    const rest = String.raw` mutants \d\/8 probed( \(not probed: [a-z_, ]+\))? checks \d+\/\d+ flipped( \(not flipped: [^)]+\))?( unattributed \[[^\]]*\])?$`;
     assert.match(lines[1] ?? '', new RegExp(String.raw`^resolve_initech_pending medium solution 1\.000 noop 0\.000 decoys \[(\d\.\d{3}(, \d\.\d{3})*)?\] prefix (-|\d\.\d{3})` + rest));
     assert.match(lines[2] ?? '', new RegExp(String.raw`^escalate_acme hard solution 1\.000 noop 0\.000 decoys \[(\d\.\d{3}(, \d\.\d{3})*)?\] prefix (-|\d\.\d{3})` + rest));
-    assert.equal(lines[3], 'total: checks 3/3 flipped, mutants 15/21 probed, 3 tasks');
+    assert.equal(lines[3], 'total: checks 3/3 flipped, mutants 18/24 probed, 3 tasks');
     assert.equal(lines[4], '');
   });
 
@@ -382,7 +382,8 @@ describe('world grade', () => {
     const done = run('grade', tasksDir, 'resolve_password_ticket', '--state', end);
     assert.equal(done.status, 0, done.stdout + done.stderr);
     assert.equal(done.stdout, '1\n');
-    assert.equal(withoutPagingLint(done.stderr), '');
+    // A dump carries no write trace, so the grade says an undone edit went unjudged (A-387).
+    assert.equal(withoutPagingLint(done.stderr), 'caveat: no journal or call log given, so ctx.changes() and the collateral guards saw only the end state; an edit undone before it was not judged\n');
     const noop = run('grade', tasksDir, 'resolve_password_ticket', `--state=${seed}`);
     assert.equal(noop.status, 0, noop.stdout + noop.stderr);
     assert.equal(noop.stdout, '0\n');
@@ -397,7 +398,7 @@ describe('world grade', () => {
     assert.equal(r.stdout, '0.5\n');
     assert.equal(
       withoutPagingLint(r.stderr),
-      'caveat: no journal given and job(s) escalate_overdue may have fired before 2026-01-05T13:00:01.000Z; their changes counted as calls, so a collateral check may have lowered this score\n',
+      'caveat: no journal given and job(s) escalate_overdue may have fired before 2026-01-05T13:00:01.000Z; their changes counted as calls, so a collateral check may have lowered this score; no journal or call log given, so ctx.changes() and the collateral guards saw only the end state; an edit undone before it was not judged\n',
     );
   });
 

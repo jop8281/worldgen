@@ -19,7 +19,7 @@
  *   verdicts the engine produced.
  */
 import {
-  changesSince, queryOf, runtime, type ApiRequest, type CallRecord, type DumpInput, type HttpMethod, type OriginJournal, type Runtime,
+  changesSince, queryOf, runtime, type ApiRequest, type CallRecord, type DumpInput, type HttpMethod, type JournalRow, type OriginJournal, type Runtime,
 } from './api.ts';
 import type { CheckedWorld } from './check.ts';
 import { fromIso, parseDuration, timeMath, toIso, type Iso } from './clock.ts';
@@ -145,48 +145,29 @@ function withReader<T>(world: World, state: State, fn: (db: ReadDb) => T): T {
 }
 
 /**
- * ctx.changes(): every change since seed, minus ignored entities and, unless asked, job changes. Call changes are the
- * written ones, so a reverted call edit appears as an updated change (A-387); job changes stay net.
+ * The rows the run's calls wrote (A-387): the journal's call entries, or the call log's writes when no journal was
+ * given (a state graded over HTTP has the log, GET /_world/log, and no journal).
  */
-function changesFn(seed: State, end: State, journal: OriginJournal): GraderCtx['changes'] {
+function callWritesOf(journal: OriginJournal, log: readonly CallRecord[]): JournalRow[] {
+  const fromJournal = journal.filter((e) => e.origin === 'call').flatMap((e) => e.rows);
+  if (fromJournal.length > 0) return fromJournal;
+  return log.filter(succeeded).flatMap((c) => c.writes.map((w) => ({ entity: w.entity, id: w.id, kind: w.op, fields: w.fields })));
+}
+
+/**
+ * ctx.changes(): every change since seed, minus ignored entities and, unless asked, job changes. A call change counts
+ * every field a call wrote, so a reverted call edit appears as an updated change (A-387); a job change is the net one.
+ * `onRead` runs on every call, so gradeDump knows the run's changes were judged.
+ */
+function changesFn(seed: State, end: State, journal: OriginJournal, log: readonly CallRecord[], onRead: () => void): GraderCtx['changes'] {
   let all: readonly Change[] | null = null;
   return (opts) => {
-    all ??= [...writtenChanges(seed, end, journal), ...changesSince(seed, end, journal).filter((c) => c.origin === 'job')];
+    onRead();
+    all ??= changesSince(seed, end, journal, callWritesOf(journal, log));
     const ignore = Array.isArray(opts?.ignore) ? opts.ignore.map(String) : [];
     const includeJobs = opts?.includeJobs === true;
     return all.filter((c) => !ignore.includes(c.entity) && (includeJobs || c.origin !== 'job'));
   };
-}
-
-/**
- * What the collateral guards judge (A-387): the call changes since seed, each updated row widened to every field a call
- * wrote on it, plus each row a call wrote that ends as it began (an edit later undone) as an updated change of the
- * fields written. A row a call created is judged by its created change alone, so a row created and then deleted again
- * is not counted. Job changes are not calls, so none of them appear.
- */
-function writtenChanges(seed: State, end: State, journal: OriginJournal): Change[] {
-  const net = changesSince(seed, end, journal).filter((c) => c.origin === 'call');
-  const keyOf = (entity: string, id: string): string => `${entity}\u0000${id}`;
-  const written = new Map<string, { entity: string; id: string; fields: string[]; created: boolean }>();
-  for (const e of journal) {
-    if (e.origin !== 'call') continue;
-    for (const r of e.rows) {
-      const key = keyOf(r.entity, r.id);
-      const w = written.get(key) ?? { entity: r.entity, id: r.id, fields: [], created: false };
-      if (r.kind === 'created') w.created = true;
-      for (const f of r.fields) if (!w.fields.includes(f)) w.fields.push(f);
-      written.set(key, w);
-    }
-  }
-  const out: Change[] = net.map((c) => {
-    const w = written.get(keyOf(c.entity, c.id));
-    return c.kind === 'updated' && w !== undefined && !w.created ? { ...c, fields: [...new Set([...c.fields, ...w.fields])] } : c;
-  });
-  const netRows = new Set(net.map((c) => keyOf(c.entity, c.id)));
-  for (const [key, w] of written) {
-    if (!w.created && !netRows.has(key)) out.push({ entity: w.entity, id: w.id, kind: 'updated', fields: w.fields, origin: 'call' });
-  }
-  return out;
 }
 
 const succeeded = (c: CallRecord): boolean => c.res.status < 400;
@@ -244,7 +225,7 @@ function scorer(): Pick<GraderCtx, 'goal' | 'guard' | 'score'> & { goals: GoalRe
 /** The name of the guard the engine adds for a task's `allows`. */
 export const allowsGuard = (taskId: string): string => `engine: only the changes tasks.${taskId}.allows declares`;
 
-/** A grader run's score, what it recorded, whether it read ctx.trace(), and whether a collateral guard judged the writes. */
+/** A grader run's score, what it recorded, whether it read ctx.trace(), and whether it or a guard read the run's changes. */
 type GradeRun = { ok: true; graded: Extract<Graded, { ok: true }>; readTrace: boolean; judgedWrites: boolean } | { ok: false; issue: CheckIssue };
 
 function gradeRun(world: World, seed: State, end: State, taskId: string, host: SnippetHost, journal: OriginJournal, log: readonly CallRecord[]): GradeRun {
@@ -266,14 +247,10 @@ function gradeRun(world: World, seed: State, end: State, taskId: string, host: S
     return trace;
   };
   const s = scorer();
-  const changes = changesFn(seed, end, journal);
   let judgedWrites = false;
-  let writes: readonly Change[] | null = null;
-  const written = (): readonly Change[] => {
+  const changes = changesFn(seed, end, journal, log, () => {
     judgedWrites = true;
-    writes ??= writtenChanges(seed, end, journal);
-    return writes;
-  };
+  });
   let score: unknown;
   try {
     score = withReader(world, end, (db) =>
@@ -289,7 +266,7 @@ function gradeRun(world: World, seed: State, end: State, taskId: string, host: S
               throw parsed.error;
             }
             const rules = parsed.data.allowed;
-            return s.guard(parsed.data.name, written().every((change) => {
+            return s.guard(parsed.data.name, changes().every((change) => {
               const matching = rules.filter((rule) => rule.entity === change.entity && rule.id === change.id && rule.kind === change.kind);
               return matching.length > 0 && change.fields.every((field) => matching.some((rule) => rule.fields.includes(field)));
             }));
@@ -313,7 +290,7 @@ function gradeRun(world: World, seed: State, end: State, taskId: string, host: S
   const allows = t.task.allows;
   if (allows !== undefined) {
     const rowOf = (state: State, entity: string, id: string): Row | undefined => [...(state.tables[entity]?.values() ?? [])].find((r) => r.id === id);
-    s.guard(allowsGuard(taskId), written().every((change) => {
+    s.guard(allowsGuard(taskId), changes().every((change) => {
       const row = rowOf(change.kind === 'created' ? end : seed, change.entity, change.id);
       return allows.some((a) => a.entity === change.entity && a.kind === change.kind &&
         (change.kind !== 'updated' || change.fields.every((f) => a.fields.includes(f))) &&
@@ -467,8 +444,8 @@ export function gradeDump(
   if (run.readTrace && log === undefined) {
     caveats.push('no call log given, so ctx.trace() was empty; a history guard judged this state as if no call had been made');
   }
-  if (run.judgedWrites && journal === undefined) {
-    caveats.push('no journal given, so the collateral guards saw only the end state; an edit undone before it was not judged');
+  if (run.judgedWrites && journal === undefined && log === undefined) {
+    caveats.push('no journal or call log given, so ctx.changes() and the collateral guards saw only the end state; an edit undone before it was not judged');
   }
   return caveats.length === 0 ? run.graded : { ...run.graded, caveat: caveats.join('; ') };
 }
@@ -954,7 +931,8 @@ function* undoneEdits({ world, seed, end, log }: MutantInput): Generator<readonl
     const path = route.path.replace(PATH_PARAM, id);
     for (const [name, def] of Object.entries(world.entities[entity]?.fields ?? {})) {
       if (skip.has(name) || def.readonly || def.unique || machineOf(def) !== undefined || row[name] === undefined) continue;
-      const value = [...(seed.tables[entity]?.values() ?? [])].map((r) => r[name]).find((v) => v !== undefined && v !== row[name]);
+      const now = JSON.stringify(row[name]);
+      const value = [...(seed.tables[entity]?.values() ?? [])].map((r) => r[name]).find((v) => v !== undefined && JSON.stringify(v) !== now);
       if (value !== undefined) yield [{ method: route.method, path, query: {}, body: { [name]: value } }, { method: route.method, path, query: {}, body: { [name]: row[name] } }];
     }
   }
@@ -976,6 +954,11 @@ function undoneIssues(world: CheckedWorld, seed: State, taskId: string, host: Sn
   for (const [edit, undo] of undoneEdits({ world, seed, end, log })) {
     if (tries++ === MUTANT_TRIES) break;
     if (rt.call(edit).status >= 400) continue;
+    // An edit that changed nothing a grader can see proves nothing once undone.
+    if (contentHash(stateFromDump(world, rt.dump())) === solutionContent) {
+      rt = replaySolution(world, seed, host, log);
+      continue;
+    }
     const back = rt.call(undo).status < 400;
     const state = stateFromDump(world, rt.dump());
     // A pair that did not end where the solution ends is not an undone edit, so the next starts from a fresh replay.

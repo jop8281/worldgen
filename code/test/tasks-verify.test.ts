@@ -58,7 +58,7 @@ const brief = (r: Verified): [string, readonly (string | number)[], string][] =>
 function plain(v: TaskVerdict): Omit<TaskVerdict, 'endStateHash' | 'collateral' | 'checks' | 'unattributedProbes'> {
   const { endStateHash, collateral, checks: _checks, unattributedProbes: _unattributed, ...rest } = v;
   assert.match(endStateHash, /^[0-9a-f]{32}$/);
-  assert.equal(collateral.length, 7);
+  assert.equal(collateral.length, 8);
   return rest;
 }
 
@@ -128,6 +128,7 @@ describe('decoys run from seed and must score below 1 (R2, R3, R10)', () => {
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets/tkt_0002/resolve scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets {"customer":"cus_0001","subject":"Cannot log in","priority":"low"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus DELETE /tickets/tkt_0001 scored 1'],
+      ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus PATCH /customers/cus_0001 {"tier":"pro"} then {"tier":"enterprise"} scored 1'],
     ]);
     assert.equal(issues[0]?.hint, `The decoy "${DECOY_WHY}" scored 1. Its script may not do what its why says (a list read right after a write often returns the row the script just created), or the grader cannot tell it apart. Check the script's calls first, then tighten the grader.`);
   });
@@ -234,6 +235,7 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets/tkt_0002/resolve scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets {"customer":"cus_0001","subject":"Cannot log in","priority":"low"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus DELETE /tickets/tkt_0001 scored 1'],
+      ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus PATCH /customers/cus_0001 {"tier":"pro"} then {"tier":"enterprise"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution with POST /tickets/tkt_0002/resolve instead of /tickets/tkt_0012/resolve scored 1'],
     ]);
     assert.equal(issues[0]?.hint, 'The first 1 of 2 solution writes already score 1. The grader ignores the rest of the work.');
@@ -249,6 +251,7 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
       ['task.mutant_full_marks', ['tasks', 'escalate_acme', 'grader'], 'the solution plus POST /tickets/tkt_0002/resolve scored 1'],
       ['task.mutant_full_marks', ['tasks', 'escalate_acme', 'grader'], 'the solution plus POST /tickets {"customer":"cus_0001","subject":"Cannot log in","priority":"low"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'escalate_acme', 'grader'], 'the solution plus DELETE /tickets/tkt_0002 scored 1'],
+      ['task.mutant_full_marks', ['tasks', 'escalate_acme', 'grader'], 'the solution plus PATCH /customers/cus_0001 {"tier":"pro"} then {"tier":"enterprise"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'escalate_acme', 'grader'], 'the solution with POST /tickets/tkt_0002/resolve instead of /tickets/tkt_0006/resolve scored 1'],
     ]);
   });
@@ -269,6 +272,7 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets/tkt_0002/resolve scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets {"customer":"cus_0001","subject":"Cannot log in","priority":"low"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus DELETE /tickets/tkt_0001 scored 1'],
+      ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus PATCH /customers/cus_0001 {"tier":"pro"} then {"tier":"enterprise"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution with POST /tickets/tkt_0002/resolve instead of /tickets/tkt_0012/resolve scored 1'],
     ]);
   });
@@ -286,6 +290,7 @@ describe('strict solution prefixes (R6, R7, R10)', () => {
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets/tkt_0002/resolve scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus POST /tickets {"customer":"cus_0001","subject":"Cannot log in","priority":"low"} scored 1'],
       ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus DELETE /tickets/tkt_0001 scored 1'],
+      ['task.mutant_full_marks', ['tasks', 'resolve_initech_pending', 'grader'], 'the solution plus PATCH /customers/cus_0001 {"tier":"pro"} then {"tier":"enterprise"} scored 1'],
     ]);
   });
 
@@ -407,6 +412,7 @@ describe('collateral mutants (A-156)', () => {
       { kind: 'extra_action', call: null, score: null },
       { kind: 'extra_create', call: 'POST /tickets {"customer":"cus_0001","subject":"Cannot log in","priority":"low"}', score: 0.5 },
       { kind: 'extra_delete', call: 'DELETE /tickets/tkt_0001', score: 0.5 },
+      { kind: 'undone_write', call: 'PATCH /customers/cus_0001 {"tier":"pro"} then {"tier":"enterprise"}', score: 0.5 },
       { kind: 'retarget', call: 'POST /tickets/tkt_0005/resolve instead of /tickets/tkt_0002/resolve', score: 0 },
       { kind: 'perturb', call: null, score: null },
     ]);

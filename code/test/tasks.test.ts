@@ -167,10 +167,10 @@ describe('verifyTask (R3, R4, R7)', () => {
     if (!r.ok) return;
     const { endStateHash, collateral, ...rest } = r.verdict;
     assert.match(endStateHash, /^[0-9a-f]{32}$/);
-    assert.equal(collateral.length, 7);
+    assert.equal(collateral.length, 8);
     assert.deepEqual(rest, {
       taskId: 'resolve_password_ticket', difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [],
-      checks: [{ check: 'return', flippedBy: ['target_field', 'other_row', 'extra_create', 'extra_delete', 'retarget'] }], unattributedProbes: [],
+      checks: [{ check: 'return', flippedBy: ['target_field', 'other_row', 'extra_create', 'extra_delete', 'undone_write', 'retarget'] }], unattributedProbes: [],
     });
     assert.deepEqual(r.log.map((c) => c.routeId), ['list_tickets', 'resolve_ticket']);
   });
@@ -327,7 +327,7 @@ describe('gradeDump (R8)', () => {
       assert.equal(rt.call({ method: 'POST', path: `/tickets/${id}/resolve`, query: {}, body: undefined }).status, 200);
     }
     const end = JSON.parse(JSON.stringify(rt.dump())) as ReturnType<Runtime['dump']>;
-    assert.deepEqual(gradeDump(w, 'resolve_initech_pending', end, host), { ok: true, score: 1 });
+    assert.deepEqual(gradeDump(w, 'resolve_initech_pending', end, host), { ok: true, score: 1, caveat: 'no journal or call log given, so ctx.changes() and the collateral guards saw only the end state; an edit undone before it was not judged' });
   });
 
   it('R8 the solution end dump hashes like the verdict end state', () => {
@@ -339,7 +339,7 @@ describe('gradeDump (R8)', () => {
     rt.call({ method: 'GET', path: '/tickets', query: {}, body: undefined });
     rt.call({ method: 'POST', path: '/tickets/tkt_0002/resolve', query: {}, body: undefined });
     assert.equal(stateHash(stateFromDump(w, rt.dump())), v.verdict.endStateHash);
-    assert.deepEqual(gradeDump(w, 'resolve_password_ticket', rt.dump(), host), { ok: true, score: 1 });
+    assert.deepEqual(gradeDump(w, 'resolve_password_ticket', rt.dump(), host), { ok: true, score: 1, caveat: 'no journal or call log given, so ctx.changes() and the collateral guards saw only the end state; an edit undone before it was not judged' });
   });
 
   it('R8 with the runtime journal, job changes after the solution do not lower the score (A-28)', () => {
@@ -369,7 +369,7 @@ describe('gradeDump (R8)', () => {
     assert.equal(r.score, 0.5);
     assert.equal(
       r.caveat,
-      'no journal given and job(s) escalate_overdue may have fired before 2026-01-08T09:00:01.000Z; their changes counted as calls, so a collateral check may have lowered this score',
+      'no journal given and job(s) escalate_overdue may have fired before 2026-01-08T09:00:01.000Z; their changes counted as calls, so a collateral check may have lowered this score; no journal or call log given, so ctx.changes() and the collateral guards saw only the end state; an edit undone before it was not judged',
     );
   });
 
