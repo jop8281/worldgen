@@ -1,0 +1,491 @@
+{
+  "counts": {
+    "expected": 29,
+    "observed": 8,
+    "valid": 8,
+    "invalid": 0,
+    "missing": 21,
+    "duplicate": 0,
+    "unexpected": 0
+  },
+  "outcomes": {
+    "success": 7,
+    "expected refusal": 0,
+    "product failure": 1,
+    "infra failure": 0,
+    "not run": 21
+  },
+  "cases": [
+    {
+      "id": "helpdesk-sla",
+      "status": "valid",
+      "outcome": "product failure",
+      "passed": false,
+      "sources": [
+        "helpdesk-sla/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 442208,
+        "costUsd": 2.2046116,
+        "attempts": 9
+      }
+    },
+    {
+      "id": "bakery-vague",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "bakery-vague/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 236792,
+        "costUsd": 0.7629134,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "video-codec-impossible",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "library-holds",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "billing-dunning",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "todo-projects",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "clinic-appointments",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "stripe-refunds",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "petstore-store",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "petstore-store/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 269238,
+        "costUsd": 0.687097,
+        "attempts": 5
+      }
+    },
+    {
+      "id": "orders-csv",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "orders-csv/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 270806,
+        "costUsd": 1.787962,
+        "attempts": 5
+      }
+    },
+    {
+      "id": "linear-backlog-csv",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "helpdesk-add-refunds",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "helpdesk-add-refunds/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 495570,
+        "costUsd": 3.1099053999999997,
+        "attempts": 17
+      }
+    },
+    {
+      "id": "stripe-partial-refunds",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "retail-tau2-known",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "linear-description",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "linear-description/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 392030,
+        "costUsd": 1.4603946,
+        "attempts": 9
+      }
+    },
+    {
+      "id": "insurance-claims",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "bookmarks",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "bookmarks/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 446829,
+        "costUsd": 1.2923352000000001,
+        "attempts": 6
+      }
+    },
+    {
+      "id": "rental-fleet",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "warehouse-inventory",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "hotel-booking",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "repair-desk",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "course-enrollments-csv",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "shipments-csv",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "stripe-customers",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "stripe-charges",
+      "status": "valid",
+      "outcome": "success",
+      "passed": true,
+      "sources": [
+        "stripe-charges/case.json"
+      ],
+      "diagnostics": [],
+      "metrics": {
+        "ms": 490919,
+        "costUsd": 1.5678800000000002,
+        "attempts": 11
+      }
+    },
+    {
+      "id": "petstore-full",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "petstore-add-refunds",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "forecast-impossible",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    },
+    {
+      "id": "live-market-feed-impossible",
+      "status": "missing",
+      "outcome": "not run",
+      "passed": false,
+      "sources": [],
+      "diagnostics": [
+        "Expected case evidence missing"
+      ],
+      "metrics": {
+        "ms": null,
+        "costUsd": null,
+        "attempts": null
+      }
+    }
+  ],
+  "unexpected": [],
+  "passed": 7,
+  "passRate": 0.2413793103448276,
+  "allPassed": false,
+  "completeSuite": false,
+  "metrics": {
+    "ms": {
+      "measured": 8,
+      "expected": 29,
+      "coverage": 0.27586206896551724,
+      "measuredTotal": 3044392,
+      "total": null,
+      "p50": 392030,
+      "p95": 495570
+    },
+    "costUsd": {
+      "measured": 8,
+      "expected": 29,
+      "coverage": 0.27586206896551724,
+      "measuredTotal": 12.873099199999999,
+      "total": null,
+      "p50": 1.4603946,
+      "p95": 3.1099053999999997
+    },
+    "attempts": {
+      "measured": 8,
+      "expected": 29,
+      "coverage": 0.27586206896551724,
+      "measuredTotal": 68,
+      "total": null,
+      "p50": 6,
+      "p95": 17
+    }
+  },
+  "percentileMethod": "nearest-rank: sorted measured case totals at ceil(p × n), one-based; no interpolation; null for no samples",
+  "interpretation": "Descriptive evidence only; no improvement claim. Rates use all expected cases; measured totals and percentiles cover only measured expected cases."
+}

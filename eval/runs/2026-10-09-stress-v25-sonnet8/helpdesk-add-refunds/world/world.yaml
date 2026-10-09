@@ -1,0 +1,1223 @@
+format: 1
+meta:
+  name: world
+  description: A helpdesk where customers open tickets about their orders, agents are assigned and reply, and tickets move open -> pending -> resolved (and back when the customer replies or the ticket is reopened). A daily job auto-resolves pending tickets that have gone quiet.
+  resembles: Zendesk-style helpdesk (tickets, comments, agents, customers)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  customer:
+    description: A shopper who opens support tickets about their orders.
+    idPrefix: cus
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+  agent:
+    description: A support agent. Only active agents may be assigned to tickets or reply on them.
+    idPrefix: agt
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      active:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+      role:
+        type: enum
+        description: Only an active supervisor may approve or reject a refund.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - agent
+          - supervisor
+        default: agent
+  ticket:
+    description: A support request about an order. It starts open and unassigned, and its status moves only through the ticket actions and the auto-resolve job.
+    idPrefix: tkt
+    fields:
+      subject:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      description:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      order_number:
+        type: string
+        description: "The order the ticket is about, such as #W1234567."
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - open
+          - pending
+          - resolved
+        initial: open
+        transitions:
+          open:
+            - pending
+            - resolved
+          pending:
+            - open
+            - resolved
+          resolved:
+            - open
+      assignee_id:
+        type: ref
+        description: The assigned agent, null while unassigned.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: agent
+        onDelete: restrict
+      priority:
+        type: enum
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - low
+          - normal
+          - high
+          - urgent
+        default: normal
+      last_activity_at:
+        type: datetime
+        description: Time of the last comment or status change; the auto-resolve job reads it.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: now
+  comment:
+    description: A reply on a ticket, written either by an agent or by the customer.
+    idPrefix: cmt
+    fields:
+      ticket_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: ticket
+        onDelete: cascade
+      author_kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - agent
+          - customer
+      agent_id:
+        type: ref
+        description: The replying agent. Null for customer comments.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: agent
+        onDelete: restrict
+      body:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  order:
+    description: A customer's purchase, identified by order_number. Tickets link to it by matching order_number and customer.
+    idPrefix: ord
+    fields:
+      order_number:
+        type: string
+        description: "Order identifier such as #W2000100."
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      total:
+        type: money
+        description: Order total in USD minor units.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+  refund:
+    description: A refund of part or all of an order, requested by an agent against a ticket. Above $500 it stays pending until an active supervisor approves or rejects it.
+    idPrefix: rfd
+    fields:
+      ticket_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: ticket
+        onDelete: restrict
+      order_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: order
+        onDelete: restrict
+      amount:
+        type: money
+        description: Refund amount in USD minor units.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 1
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - pending
+          - approved
+          - rejected
+        initial: pending
+        transitions:
+          pending:
+            - approved
+            - rejected
+          approved: []
+          rejected: []
+      requested_by:
+        type: ref
+        description: The agent who requested the refund.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: agent
+        onDelete: restrict
+      approved_by:
+        type: ref
+        description: The supervisor who approved it, null until approved.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: agent
+        onDelete: restrict
+      reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+routes:
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - email
+      - name
+    search:
+      - name
+      - email
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /customers
+    description: List customers, filtered by email or name.
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /customers/{id}
+    description: Read a customer.
+  create_customer:
+    op: create
+    entity: customer
+    method: POST
+    path: /customers
+    description: Create a customer.
+  list_agents:
+    op: list
+    entity: agent
+    filters:
+      - name
+      - email
+      - active
+    search:
+      - name
+      - email
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /agents
+    description: List agents, filtered by name, email or active.
+  get_agent:
+    op: get
+    entity: agent
+    method: GET
+    path: /agents/{id}
+    description: Read an agent.
+  create_agent:
+    op: create
+    entity: agent
+    method: POST
+    path: /agents
+    description: Create an agent.
+  list_tickets:
+    op: list
+    entity: ticket
+    filters:
+      - status
+      - assignee_id
+      - customer_id
+      - order_number
+      - priority
+    search:
+      - subject
+    sort:
+      - created_at
+      - last_activity_at
+    pageSize: 25
+    method: GET
+    path: /tickets
+    description: List tickets, filtered by status, assignee, customer, order number or priority.
+  get_ticket:
+    op: get
+    entity: ticket
+    method: GET
+    path: /tickets/{id}
+    description: Read a ticket.
+  create_ticket:
+    op: create
+    entity: ticket
+    method: POST
+    path: /tickets
+    description: Open a ticket. It starts open and unassigned.
+  list_comments:
+    op: list
+    entity: comment
+    filters:
+      - ticket_id
+      - author_kind
+    search:
+      - body
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /comments
+    description: List comments, filtered by ticket_id and author_kind.
+  list_orders:
+    op: list
+    entity: order
+    filters:
+      - order_number
+      - customer_id
+    search:
+      - order_number
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /orders
+    description: List orders, filtered by order_number and customer_id.
+  get_order:
+    op: get
+    entity: order
+    method: GET
+    path: /orders/{id}
+    description: Read an order.
+  create_order:
+    op: create
+    entity: order
+    method: POST
+    path: /orders
+    description: Create an order (order_number unique, total in USD minor units).
+  list_refunds:
+    op: list
+    entity: refund
+    filters:
+      - ticket_id
+      - order_id
+      - status
+      - requested_by
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /refunds
+    description: List refunds, filtered by ticket_id, order_id, status and requested_by.
+  get_refund:
+    op: get
+    entity: refund
+    method: GET
+    path: /refunds/{id}
+    description: Read a refund.
+actions:
+  assign_ticket:
+    method: POST
+    path: /tickets/{id}/assign
+    description: Assign an unresolved ticket to an active agent.
+    input:
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket not found');
+       const a = ctx.db.get('agent', ctx.body.agent_id);
+       if (a === null) ctx.fail(404, 'not_found', 'agent not found');
+       if (!a.active) ctx.fail(409, 'agent_inactive', 'agent is not active');
+       if (t.status === 'resolved') ctx.fail(409, 'invalid_state', 'ticket is resolved');
+       return { status: 200, body: ctx.db.update('ticket', t.id, { assignee_id: a.id, last_activity_at: ctx.now() }) };
+      }
+  agent_reply:
+    method: POST
+    path: /tickets/{id}/reply
+    description: Active agent replies; open ticket becomes pending.
+    input:
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      body:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket not found');
+       const a = ctx.db.get('agent', ctx.body.agent_id);
+       if (a === null) ctx.fail(404, 'not_found', 'agent not found');
+       if (!a.active) ctx.fail(409, 'agent_inactive', 'agent is not active');
+       if (t.status === 'resolved') ctx.fail(409, 'invalid_state', 'ticket is resolved');
+       ctx.db.create('comment', { ticket_id: t.id, author_kind: 'agent', agent_id: a.id, body: ctx.body.body });
+       const patch = { last_activity_at: ctx.now() };
+       if (t.status === 'open') patch.status = 'pending';
+       return { status: 200, body: ctx.db.update('ticket', t.id, patch) };
+      }
+  customer_reply:
+    method: POST
+    path: /tickets/{id}/customer-reply
+    description: Customer replies; pending ticket becomes open.
+    input:
+      body:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket not found');
+       if (t.status === 'resolved') ctx.fail(409, 'invalid_state', 'ticket is resolved');
+       ctx.db.create('comment', { ticket_id: t.id, author_kind: 'customer', agent_id: null, body: ctx.body.body });
+       const patch = { last_activity_at: ctx.now() };
+       if (t.status === 'pending') patch.status = 'open';
+       return { status: 200, body: ctx.db.update('ticket', t.id, patch) };
+      }
+  resolve_ticket:
+    method: POST
+    path: /tickets/{id}/resolve
+    description: Resolve an assigned, unresolved ticket with no pending refund.
+    input: {}
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket not found');
+       if (t.status === 'resolved') ctx.fail(409, 'invalid_state', 'ticket is already resolved');
+       if (t.assignee_id === null) ctx.fail(409, 'not_assigned', 'ticket has no assignee');
+       if (ctx.db.list('refund', { where: { ticket_id: t.id, status: 'pending' } }).length > 0) ctx.fail(409, 'refund_pending', 'ticket has a pending refund; approve or reject it first');
+       return { status: 200, body: ctx.db.update('ticket', t.id, { status: 'resolved', last_activity_at: ctx.now() }) };
+      }
+  reopen_ticket:
+    method: POST
+    path: /tickets/{id}/reopen
+    description: Reopen a resolved ticket.
+    input: {}
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket not found');
+       if (t.status !== 'resolved') ctx.fail(409, 'invalid_state', 'only resolved tickets can be reopened');
+       return { status: 200, body: ctx.db.update('ticket', t.id, { status: 'open', last_activity_at: ctx.now() }) };
+      }
+  request_refund:
+    method: POST
+    path: /tickets/{id}/refunds
+    description: Request a refund of an order linked to the ticket. Up to $500 is approved at once; above stays pending for a supervisor.
+    input:
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      order_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      amount:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 1
+      reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const t = ctx.db.get('ticket', ctx.params.id);
+       if (t === null) ctx.fail(404, 'not_found', 'ticket not found');
+       const a = ctx.db.get('agent', ctx.body.agent_id);
+       if (a === null) ctx.fail(404, 'not_found', 'agent not found');
+       if (!a.active) ctx.fail(409, 'agent_inactive', 'agent is not active');
+       const o = ctx.db.get('order', ctx.body.order_id);
+       if (o === null) ctx.fail(404, 'not_found', 'order not found');
+       if (o.order_number !== t.order_number || o.customer_id !== t.customer_id) ctx.fail(409, 'order_mismatch', 'order does not match the ticket order number and customer');
+       const amount = ctx.body.amount;
+       if (!(amount > 0)) ctx.fail(400, 'input.invalid', 'amount must be positive');
+       let used = 0;
+       for (const r of ctx.db.list('refund', { where: { order_id: o.id } })) {
+        if (r.status !== 'rejected') used += r.amount;
+       }
+       if (used + amount > o.total) ctx.fail(409, 'amount_exceeds_order', 'refunds would exceed the order total');
+       const reason = ctx.body.reason === undefined ? null : ctx.body.reason;
+       let rf = ctx.db.create('refund', { ticket_id: t.id, order_id: o.id, amount, requested_by: a.id, reason });
+       if (amount <= 50000) rf = ctx.db.update('refund', rf.id, { status: 'approved' });
+       return { status: 201, body: rf };
+      }
+  approve_refund:
+    method: POST
+    path: /refunds/{id}/approve
+    description: An active supervisor approves a pending refund.
+    input:
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const rf = ctx.db.get('refund', ctx.params.id);
+       if (rf === null) ctx.fail(404, 'not_found', 'refund not found');
+       const a = ctx.db.get('agent', ctx.body.agent_id);
+       if (a === null) ctx.fail(404, 'not_found', 'agent not found');
+       if (!a.active || a.role !== 'supervisor') ctx.fail(409, 'not_supervisor', 'only an active supervisor can decide a refund');
+       if (rf.status !== 'pending') ctx.fail(409, 'invalid_state', 'only a pending refund can be decided');
+       return { status: 200, body: ctx.db.update('refund', rf.id, { status: 'approved', approved_by: a.id }) };
+      }
+  reject_refund:
+    method: POST
+    path: /refunds/{id}/reject
+    description: An active supervisor rejects a pending refund.
+    input:
+      agent_id:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+       const rf = ctx.db.get('refund', ctx.params.id);
+       if (rf === null) ctx.fail(404, 'not_found', 'refund not found');
+       const a = ctx.db.get('agent', ctx.body.agent_id);
+       if (a === null) ctx.fail(404, 'not_found', 'agent not found');
+       if (!a.active || a.role !== 'supervisor') ctx.fail(409, 'not_supervisor', 'only an active supervisor can decide a refund');
+       if (rf.status !== 'pending') ctx.fail(409, 'invalid_state', 'only a pending refund can be decided');
+       return { status: 200, body: ctx.db.update('refund', rf.id, { status: 'rejected' }) };
+      }
+jobs:
+  auto_resolve_stale_pending:
+    description: Resolve pending tickets with no activity for more than 3 days.
+    every: 1d
+    run: |-
+      (ctx) => {
+       const now = ctx.now();
+       for (const t of ctx.db.list('ticket', { where: { status: 'pending' } })) {
+        if (ctx.time.minutesBetween(t.last_activity_at, now) > 4320) {
+         ctx.db.update('ticket', t.id, { status: 'resolved', last_activity_at: now });
+        }
+       }
+      }
+fixtures: {}
+seed:
+  customer: |-
+    (ctx) => {
+    const names = ['Maya Brooks','Liam Ortega','Hana Kimura','Ethan Walsh','Zoe Petrov','Noor Rahman','Jack Moreau','Ines Duarte'];
+    return names.map((name) => ({ name, email: name.toLowerCase().split(' ').join('.') + '@shopmail.example.com' }));
+    }
+  agent: |-
+    (ctx) => {
+    return [
+    { name: 'Dana Reyes', email: 'dana.reyes@helpdesk.example.com', active: true },
+    { name: 'Dana Reyes-Cole', email: 'dana.reyescole@helpdesk.example.com', active: false },
+    { name: 'Priya Menon', email: 'priya.menon@helpdesk.example.com', active: true },
+    { name: 'Tom Hendricks', email: 'tom.hendricks@helpdesk.example.com', active: true },
+    { name: 'Sam Okafor', email: 'sam.okafor@helpdesk.example.com', active: true, role: 'supervisor' },
+    ];
+    }
+  ticket: |-
+    (ctx) => {
+    const customers = ctx.rows('customer');
+    const agents = ctx.rows('agent').filter((a) => a.active && a.role !== 'supervisor');
+    const subjects = ['Where is my order', 'Where is my order?', 'Order arrived damaged', 'Wrong item received'];
+    const pattern = ['open', 'pending', 'resolved', 'open', 'pending', 'open', 'pending', 'resolved'];
+    const prios = ['low', 'normal', 'high', 'urgent', 'normal'];
+    const rows = [];
+    for (let i = 0; i < 32; i++) {
+      const status = pattern[i % 8];
+      const assigned = status !== 'open' || i % 3 === 0;
+      const h = 3 + ((i * 7) % 60);
+      rows.push({
+        subject: subjects[Math.floor(i / 8) % 4],
+        description: 'Customer reports an issue with order #W' + (2000100 + i) + '. Please look into it.',
+        customer_id: customers[i % 8].id,
+        order_number: '#W' + (2000100 + i),
+        status,
+        assignee_id: assigned ? agents[i % agents.length].id : null,
+        priority: prios[i % 5],
+        last_activity_at: ctx.time.minus(ctx.now(), h + 'h'),
+      });
+    }
+    return rows;
+    }
+  comment: |-
+    (ctx) => {
+    const tickets = ctx.rows('ticket');
+    const rows = [];
+    for (const t of tickets) {
+      rows.push({ ticket_id: t.id, author_kind: 'customer', agent_id: null, body: t.description });
+    }
+    const replied = tickets.filter((t) => t.status !== 'open' && t.assignee_id !== null).slice(0, 8);
+    for (const t of replied) {
+      rows.push({ ticket_id: t.id, author_kind: 'agent', agent_id: t.assignee_id, body: 'Thanks for reaching out. We are checking on order ' + t.order_number + ' and will update you shortly.' });
+    }
+    return rows;
+    }
+  order: |-
+    (ctx) => {
+    const customers = ctx.rows('customer');
+    const rows = [];
+    for (let i = 0; i < 24; i++) {
+      rows.push({
+        order_number: '#W' + (2000100 + i),
+        customer_id: customers[i % 8].id,
+        total: 30000 + (i % 6) * 35000,
+      });
+    }
+    return rows;
+    }
+  refund: |-
+    (ctx) => {
+    const agents = ctx.rows('agent');
+    const workers = agents.filter((a) => a.active && a.role !== 'supervisor');
+    const sup = agents.find((a) => a.role === 'supervisor');
+    const tickets = ctx.rows('ticket');
+    const orders = ctx.rows('order');
+    const spec = [
+      [0, 20000, 'approved', false, 'Item arrived damaged'],
+      [2, 15000, 'approved', false, 'Partial refund for late delivery'],
+      [3, 60000, 'approved', true, 'Wrong item shipped'],
+      [4, 80000, 'approved', true, 'Defective product'],
+      [13, 30000, 'approved', false, 'Missing accessory'],
+      [5, 70000, 'pending', false, 'Lost parcel'],
+      [14, 60000, 'pending', false, 'Order never arrived'],
+      [16, 90000, 'pending', false, 'Defective product'],
+      [17, 75000, 'rejected', false, 'Customer changed mind'],
+      [19, 55000, 'rejected', false, 'Outside return window'],
+    ];
+    return spec.map(([i, amount, status, bySup, reason], k) => ({
+      ticket_id: tickets[i].id,
+      order_id: orders[i].id,
+      amount,
+      status,
+      requested_by: workers[k % workers.length].id,
+      approved_by: bySup ? sup.id : null,
+      reason,
+    }));
+    }
+tests:
+  t_assign:
+    description: Inactive agent refused with agent_inactive, active agent accepted, resolved ticket refused.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Assign Cust',email:'assign.cust@accept.invalid'});
+      ctx.assert(c.status===201,'customer create '+JSON.stringify(c.body));
+      const a = ctx.api('POST','/agents',{name:'Assign Active',email:'assign.active@accept.invalid',active:true}).body;
+      const i = ctx.api('POST','/agents',{name:'Assign Inactive',email:'assign.inactive@accept.invalid',active:false}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Where is my parcel',description:'Late',customer_id:c.body.id,order_number:'#A1001'});
+      ctx.assert(t.status===201 && t.body.status==='open' && t.body.assignee_id===null,'ticket create '+JSON.stringify(t.body));
+      const bad = ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:i.id});
+      ctx.assert(bad.status===409 && bad.body.error.code==='agent_inactive','inactive agent: '+JSON.stringify(bad.body));
+      const ok = ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:a.id});
+      ctx.assert(ok.status===200 && ok.body.assignee_id===a.id && ok.body.status==='open','assign: '+JSON.stringify(ok.body));
+      ctx.assert(ctx.api('POST','/tickets/'+t.body.id+'/resolve',{}).status===200,'resolve');
+      const late = ctx.api('POST','/tickets/'+t.body.id+'/assign',{agent_id:a.id});
+      ctx.assert(late.status===409 && late.body.error.code==='invalid_state','assign resolved: '+JSON.stringify(late.body));
+      }
+  t_agent_reply:
+    description: Active agent reply creates a comment and sets pending; inactive agent refused; resolved ticket refused.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Reply Cust',email:'reply.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Reply Active',email:'reply.active@accept.invalid',active:true}).body;
+      const i = ctx.api('POST','/agents',{name:'Reply Inactive',email:'reply.inactive@accept.invalid',active:false}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Damaged item',description:'Broken',customer_id:c.id,order_number:'#A2001'}).body;
+      const bad = ctx.api('POST','/tickets/'+t.id+'/reply',{agent_id:i.id,body:'hi'});
+      ctx.assert(bad.status===409 && bad.body.error.code==='agent_inactive','inactive: '+JSON.stringify(bad.body));
+      const r = ctx.api('POST','/tickets/'+t.id+'/reply',{agent_id:a.id,body:'We are sending a replacement.'});
+      ctx.assert(r.status===200 && r.body.status==='pending','reply: '+JSON.stringify(r.body));
+      const cm = ctx.api('GET','/comments?ticket_id='+t.id).body.data;
+      ctx.assert(cm.length===1 && cm[0].author_kind==='agent' && cm[0].agent_id===a.id && cm[0].body==='We are sending a replacement.','comment: '+JSON.stringify(cm));
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      const late = ctx.api('POST','/tickets/'+t.id+'/reply',{agent_id:a.id,body:'again'});
+      ctx.assert(late.status===409 && late.body.error.code==='invalid_state','resolved reply: '+JSON.stringify(late.body));
+      }
+  t_customer_reply:
+    description: After an agent reply the customer replies and the ticket returns to open; a resolved ticket refuses the reply.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Cust Reply',email:'custreply.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'CR Agent',email:'custreply.agent@accept.invalid',active:true}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Wrong size',description:'Too small',customer_id:c.id,order_number:'#A3001'}).body;
+      ctx.assert(ctx.api('POST','/tickets/'+t.id+'/reply',{agent_id:a.id,body:'Which size?'}).body.status==='pending','pending');
+      const r = ctx.api('POST','/tickets/'+t.id+'/customer-reply',{body:'Size M please.'});
+      ctx.assert(r.status===200 && r.body.status==='open','customer reply: '+JSON.stringify(r.body));
+      const cm = ctx.api('GET','/comments?ticket_id='+t.id+'&author_kind=customer').body.data;
+      ctx.assert(cm.length===1 && cm[0].body==='Size M please.','customer comment');
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      const late = ctx.api('POST','/tickets/'+t.id+'/customer-reply',{body:'hello?'});
+      ctx.assert(late.status===409 && late.body.error.code==='invalid_state','resolved: '+JSON.stringify(late.body));
+      }
+  t_resolve:
+    description: Unassigned ticket refused with not_assigned; assigned ticket resolves; second resolve refused.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Resolve Cust',email:'resolve.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Resolve Agent',email:'resolve.agent@accept.invalid',active:true}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Refund status',description:'Where is it',customer_id:c.id,order_number:'#A4001'}).body;
+      const bad = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(bad.status===409 && bad.body.error.code==='not_assigned','unassigned: '+JSON.stringify(bad.body));
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      const ok = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(ok.status===200 && ok.body.status==='resolved','resolve: '+JSON.stringify(ok.body));
+      const again = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(again.status===409 && again.body.error.code==='invalid_state','again: '+JSON.stringify(again.body));
+      }
+  t_reopen:
+    description: Reopen on open ticket refused; reopen on resolved ticket returns it to open.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Reopen Cust',email:'reopen.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Reopen Agent',email:'reopen.agent@accept.invalid',active:true}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Missing item',description:'Box empty',customer_id:c.id,order_number:'#A5001'}).body;
+      const bad = ctx.api('POST','/tickets/'+t.id+'/reopen',{});
+      ctx.assert(bad.status===409 && bad.body.error.code==='invalid_state','open reopen: '+JSON.stringify(bad.body));
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      const ok = ctx.api('POST','/tickets/'+t.id+'/reopen',{});
+      ctx.assert(ok.status===200 && ok.body.status==='open','reopen: '+JSON.stringify(ok.body));
+      }
+  t_auto_resolve:
+    description: A pending ticket stays pending at 2 days and becomes resolved after 4; an open ticket is untouched.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Auto Cust',email:'auto.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Auto Agent',email:'auto.agent@accept.invalid',active:true}).body;
+      const p = ctx.api('POST','/tickets',{subject:'Auto pending',description:'x',customer_id:c.id,order_number:'#A6001'}).body;
+      const o = ctx.api('POST','/tickets',{subject:'Auto open',description:'x',customer_id:c.id,order_number:'#A6002'}).body;
+      ctx.api('POST','/tickets/'+p.id+'/assign',{agent_id:a.id});
+      ctx.assert(ctx.api('POST','/tickets/'+p.id+'/reply',{agent_id:a.id,body:'Any update?'}).body.status==='pending','pending');
+      ctx.advance('2d');
+      ctx.assert(ctx.api('GET','/tickets/'+p.id).body.status==='pending','still pending at 2d');
+      ctx.advance('2d');
+      ctx.assert(ctx.api('GET','/tickets/'+p.id).body.status==='resolved','resolved at 4d');
+      ctx.assert(ctx.api('GET','/tickets/'+o.id).body.status==='open','open untouched');
+      }
+  t_refund_small:
+    description: Small refunds approve at once (including exactly $500); mismatched order, inactive agent and over-total amounts are refused.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Refund Cust',email:'refund.cust@accept.invalid'}).body;
+      const c2 = ctx.api('POST','/customers',{name:'Refund Other',email:'refund.other@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Refund Agent',email:'refund.agent@accept.invalid',active:true}).body;
+      const i = ctx.api('POST','/agents',{name:'Refund Inactive',email:'refund.inactive@accept.invalid',active:false}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Item broken',description:'x',customer_id:c.id,order_number:'#R1001'}).body;
+      const o = ctx.api('POST','/orders',{order_number:'#R1001',customer_id:c.id,total:80000});
+      ctx.assert(o.status===201,'order create '+JSON.stringify(o.body));
+      const other = ctx.api('POST','/orders',{order_number:'#R1002',customer_id:c2.id,total:80000}).body;
+      const r1 = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.body.id,amount:20000,reason:'Damaged'});
+      ctx.assert(r1.status===201 && r1.body.status==='approved' && r1.body.amount===20000 && r1.body.requested_by===a.id,'small: '+JSON.stringify(r1.body));
+      const r2 = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.body.id,amount:50000,reason:'Boundary'});
+      ctx.assert(r2.status===201 && r2.body.status==='approved','boundary 500: '+JSON.stringify(r2.body));
+      const over = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.body.id,amount:20000,reason:'Too much'});
+      ctx.assert(over.status===409 && over.body.error.code==='amount_exceeds_order','over: '+JSON.stringify(over.body));
+      const mm = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:other.id,amount:1000,reason:'Wrong'});
+      ctx.assert(mm.status===409 && mm.body.error.code==='order_mismatch','mismatch: '+JSON.stringify(mm.body));
+      const ia = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:i.id,order_id:o.body.id,amount:1000,reason:'x'});
+      ctx.assert(ia.status===409 && ia.body.error.code==='agent_inactive','inactive: '+JSON.stringify(ia.body));
+      }
+  t_refund_approval:
+    description: A $600 refund is pending; a plain agent cannot approve; a supervisor approves one and rejects another; decided refunds cannot be decided again.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Approve Cust',email:'approve.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Approve Agent',email:'approve.agent@accept.invalid',active:true}).body;
+      const s = ctx.api('POST','/agents',{name:'Approve Sup',email:'approve.sup@accept.invalid',active:true,role:'supervisor'});
+      ctx.assert(s.status===201 && s.body.role==='supervisor','supervisor create '+JSON.stringify(s.body));
+      const t = ctx.api('POST','/tickets',{subject:'Big refund',description:'x',customer_id:c.id,order_number:'#R2001'}).body;
+      const o = ctx.api('POST','/orders',{order_number:'#R2001',customer_id:c.id,total:200000}).body;
+      const r1 = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.id,amount:60000,reason:'Defective'});
+      ctx.assert(r1.status===201 && r1.body.status==='pending' && r1.body.approved_by===null,'pending: '+JSON.stringify(r1.body));
+      const no = ctx.api('POST','/refunds/'+r1.body.id+'/approve',{agent_id:a.id});
+      ctx.assert(no.status===409 && no.body.error.code==='not_supervisor','non supervisor: '+JSON.stringify(no.body));
+      const ok = ctx.api('POST','/refunds/'+r1.body.id+'/approve',{agent_id:s.body.id});
+      ctx.assert(ok.status===200 && ok.body.status==='approved' && ok.body.approved_by===s.body.id,'approve: '+JSON.stringify(ok.body));
+      const again = ctx.api('POST','/refunds/'+r1.body.id+'/approve',{agent_id:s.body.id});
+      ctx.assert(again.status===409 && again.body.error.code==='invalid_state','again: '+JSON.stringify(again.body));
+      const r2 = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.id,amount:60000,reason:'Second'}).body;
+      const rej = ctx.api('POST','/refunds/'+r2.id+'/reject',{agent_id:s.body.id});
+      ctx.assert(rej.status===200 && rej.body.status==='rejected','reject: '+JSON.stringify(rej.body));
+      const nr = ctx.api('POST','/refunds/'+r2.id+'/reject',{agent_id:a.id});
+      ctx.assert(nr.status===409,'agent reject refused');
+      }
+  t_resolve_blocked:
+    description: Resolve is refused with refund_pending while a refund is pending, and succeeds after a supervisor approves it.
+    script: |-
+      (ctx) => {
+      const c = ctx.api('POST','/customers',{name:'Block Cust',email:'block.cust@accept.invalid'}).body;
+      const a = ctx.api('POST','/agents',{name:'Block Agent',email:'block.agent@accept.invalid',active:true}).body;
+      const s = ctx.api('POST','/agents',{name:'Block Sup',email:'block.sup@accept.invalid',active:true,role:'supervisor'}).body;
+      const t = ctx.api('POST','/tickets',{subject:'Refund then resolve',description:'x',customer_id:c.id,order_number:'#R3001'}).body;
+      const o = ctx.api('POST','/orders',{order_number:'#R3001',customer_id:c.id,total:100000}).body;
+      ctx.api('POST','/tickets/'+t.id+'/assign',{agent_id:a.id});
+      const r = ctx.api('POST','/tickets/'+t.id+'/refunds',{agent_id:a.id,order_id:o.id,amount:70000,reason:'Lost parcel'}).body;
+      ctx.assert(r.status==='pending','refund pending '+JSON.stringify(r));
+      const bad = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(bad.status===409 && bad.body.error.code==='refund_pending','blocked: '+JSON.stringify(bad.body));
+      ctx.assert(ctx.api('GET','/tickets/'+t.id).body.status==='open','ticket unchanged');
+      ctx.assert(ctx.api('POST','/refunds/'+r.id+'/approve',{agent_id:s.id}).status===200,'approve');
+      const ok = ctx.api('POST','/tickets/'+t.id+'/resolve',{});
+      ctx.assert(ok.status===200 && ok.body.status==='resolved','resolve after approval: '+JSON.stringify(ok.body));
+      }
+tasks:
+  assign_open_ticket:
+    difficulty: easy
+    instruction: "Maya Brooks has several support tickets that look alike. Assign her open ticket about order #W2000108 to the support agent Dana Reyes. Dana Reyes is the active agent; do not use the similarly named agent Dana Reyes-Cole. Change nothing else."
+    grader: |-
+      (ctx) => {
+      const t = ctx.seed.list('ticket', { where: { order_number: '#W2000108' } })[0];
+      const dana = ctx.seed.list('agent', { where: { name: 'Dana Reyes' } })[0];
+      if (!t || !dana) return 0;
+      ctx.guardChanges('only the target ticket was assigned', [{ entity: 'ticket', id: t.id, kind: 'updated', fields: ['assignee_id', 'last_activity_at'] }]);
+      const end = ctx.db.get('ticket', t.id);
+      ctx.goal(0.7, 'the ticket is assigned to the active Dana Reyes', end.assignee_id === dana.id);
+      ctx.goal(0.3, 'the ticket is assigned and still open', end.assignee_id === dana.id && end.status === 'open');
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const cust = ctx.api('GET', '/customers').body.data.find((c) => c.name === 'Maya Brooks');
+      ctx.assert(cust, 'customer Maya Brooks not found');
+      const dana = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Dana Reyes' && a.active === true);
+      ctx.assert(dana, 'active agent Dana Reyes not found');
+      const open = ctx.api('GET', '/tickets?customer_id=' + cust.id + '&status=open').body.data;
+      const target = open.find((t) => t.order_number === '#W2000108');
+      ctx.assert(target, 'open ticket for #W2000108 not found');
+      const r = ctx.api('POST', '/tickets/' + target.id + '/assign', { agent_id: dana.id });
+      ctx.assert(r.status === 200, 'assign failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: "assigns Dana Reyes to Maya's other open, unassigned ticket (order #W2000116) instead of the one about #W2000108"
+        script: |-
+          (ctx) => {
+          const dana = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Dana Reyes' && a.active === true);
+          const cust = ctx.api('GET', '/customers').body.data.find((c) => c.name === 'Maya Brooks');
+          const open = ctx.api('GET', '/tickets?customer_id=' + cust.id + '&status=open').body.data;
+          const wrong = open.find((t) => t.order_number === '#W2000116');
+          ctx.assert(wrong, 'wrong ticket not found');
+          ctx.api('POST', '/tickets/' + wrong.id + '/assign', { agent_id: dana.id });
+          }
+    alternatives:
+      - why: finds the ticket directly by its order number filter instead of through the customer
+        script: |-
+          (ctx) => {
+          const dana = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Dana Reyes' && a.active === true);
+          ctx.assert(dana, 'agent not found');
+          const found = ctx.api('GET', '/tickets?order_number=%23W2000108').body.data;
+          ctx.assert(found.length === 1, 'expected one ticket');
+          const r = ctx.api('POST', '/tickets/' + found[0].id + '/assign', { agent_id: dana.id });
+          ctx.assert(r.status === 200, 'assign failed');
+          }
+    allows:
+      - entity: ticket
+        kind: updated
+        fields:
+          - assignee_id
+          - last_activity_at
+        where:
+          order_number: "#W2000108"
+  reply_to_customer_ticket:
+    difficulty: medium
+    instruction: 'Ethan Walsh has several tickets with near-identical subjects. His open ticket about order #W2000111 is waiting on us after his latest message. Reply to it as the agent Tom Hendricks with exactly this text: "We traced your parcel and it ships tomorrow." so the ticket moves to pending. Do not touch his other tickets.'
+    grader: |-
+      (ctx) => {
+      const TEXT = 'We traced your parcel and it ships tomorrow.';
+      const t = ctx.seed.list('ticket', { where: { order_number: '#W2000111' } })[0];
+      const tom = ctx.seed.list('agent', { where: { name: 'Tom Hendricks' } })[0];
+      if (!t || !tom) return 0;
+      const created = ctx.changes().filter((c) => c.entity === 'comment' && c.kind === 'created');
+      const allowed = [{ entity: 'ticket', id: t.id, kind: 'updated', fields: ['status', 'last_activity_at'] }].concat(created.map((c) => ({ entity: 'comment', id: c.id, kind: 'created', fields: c.fields })));
+      ctx.guardChanges('only the target ticket and its reply comment changed', allowed);
+      ctx.guard('at most one new comment and it is on the target ticket', created.length <= 1 && created.every((c) => ctx.db.get('comment', c.id).ticket_id === t.id));
+      const end = ctx.db.get('ticket', t.id);
+      const before = ctx.seed.list('comment', { where: { ticket_id: t.id } }).map((c) => c.id);
+      const fresh = ctx.db.list('comment', { where: { ticket_id: t.id, author_kind: 'agent' } }).filter((c) => before.indexOf(c.id) < 0);
+      const mine = fresh.find((c) => c.body === TEXT);
+      ctx.goal(0.3, 'an agent comment with the requested text exists on the ticket', mine !== undefined);
+      ctx.goal(0.3, 'the comment is written by Tom Hendricks', mine !== undefined && mine.agent_id === tom.id);
+      ctx.goal(0.4, 'the ticket is pending after exactly one reply', end.status === 'pending' && fresh.length === 1);
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const cust = ctx.api('GET', '/customers').body.data.find((c) => c.name === 'Ethan Walsh');
+      ctx.assert(cust, 'customer Ethan Walsh not found');
+      const tom = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Tom Hendricks' && a.active === true);
+      ctx.assert(tom, 'agent Tom Hendricks not found');
+      const open = ctx.api('GET', '/tickets?customer_id=' + cust.id + '&status=open').body.data;
+      const target = open.find((t) => t.order_number === '#W2000111');
+      ctx.assert(target, 'open ticket for #W2000111 not found');
+      const r = ctx.api('POST', '/tickets/' + target.id + '/reply', { agent_id: tom.id, body: 'We traced your parcel and it ships tomorrow.' });
+      ctx.assert(r.status === 200 && r.body.status === 'pending', 'reply failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: replies on the right ticket with the right text but as Priya Menon instead of Tom Hendricks
+        script: |-
+          (ctx) => {
+          const priya = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Priya Menon' && a.active === true);
+          const cust = ctx.api('GET', '/customers').body.data.find((c) => c.name === 'Ethan Walsh');
+          const open = ctx.api('GET', '/tickets?customer_id=' + cust.id + '&status=open').body.data;
+          const target = open.find((t) => t.order_number === '#W2000111');
+          ctx.api('POST', '/tickets/' + target.id + '/reply', { agent_id: priya.id, body: 'We traced your parcel and it ships tomorrow.' });
+          }
+      - why: "replies as Tom Hendricks on Ethan's other ticket with the near-identical subject (order #W2000103)"
+        script: |-
+          (ctx) => {
+          const tom = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Tom Hendricks' && a.active === true);
+          const cust = ctx.api('GET', '/customers').body.data.find((c) => c.name === 'Ethan Walsh');
+          const open = ctx.api('GET', '/tickets?customer_id=' + cust.id + '&status=open').body.data;
+          const wrong = open.find((t) => t.order_number === '#W2000103');
+          ctx.api('POST', '/tickets/' + wrong.id + '/reply', { agent_id: tom.id, body: 'We traced your parcel and it ships tomorrow.' });
+          }
+    alternatives: []
+    allows:
+      - entity: ticket
+        kind: updated
+        fields:
+          - status
+          - last_activity_at
+        where:
+          order_number: "#W2000111"
+      - entity: comment
+        kind: created
+        fields: []
+        where:
+          ticket_id: tkt_0012
+          author_kind: agent
+  triage_and_resolve:
+    difficulty: hard
+    instruction: 'Noor Rahman has several open tickets about different orders. Find the open, unassigned ticket about order #W2000129. Assign it to the agent Priya Menon, then reply to it as Priya with exactly this text: "Your replacement has shipped. Tracking number TRK-4471." and finally resolve it. Do these in that order and change no other ticket.'
+    grader: |-
+      (ctx) => {
+      const TEXT = 'Your replacement has shipped. Tracking number TRK-4471.';
+      const t = ctx.seed.list('ticket', { where: { order_number: '#W2000129' } })[0];
+      const priya = ctx.seed.list('agent', { where: { name: 'Priya Menon' } })[0];
+      if (!t || !priya) return 0;
+      const created = ctx.changes().filter((c) => c.entity === 'comment' && c.kind === 'created');
+      const allowed = [{ entity: 'ticket', id: t.id, kind: 'updated', fields: ['assignee_id', 'status', 'last_activity_at'] }].concat(created.map((c) => ({ entity: 'comment', id: c.id, kind: 'created', fields: c.fields })));
+      ctx.guardChanges('only the target ticket and its reply comment changed', allowed);
+      ctx.guard('at most one new comment and it is on the target ticket', created.length <= 1 && created.every((c) => ctx.db.get('comment', c.id).ticket_id === t.id));
+      const end = ctx.db.get('ticket', t.id);
+      const before = ctx.seed.list('comment', { where: { ticket_id: t.id } }).map((c) => c.id);
+      const fresh = ctx.db.list('comment', { where: { ticket_id: t.id, author_kind: 'agent' } }).filter((c) => before.indexOf(c.id) < 0);
+      const mine = fresh.find((c) => c.body === TEXT);
+      ctx.goal(0.3, 'the ticket is assigned to Priya Menon', end.assignee_id === priya.id);
+      ctx.goal(0.35, 'Priya replied with the requested text', mine !== undefined && mine.agent_id === priya.id && mine.author_kind === 'agent');
+      ctx.goal(0.35, 'the ticket is resolved', end.status === 'resolved');
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const TEXT = 'Your replacement has shipped. Tracking number TRK-4471.';
+      const cust = ctx.api('GET', '/customers').body.data.find((c) => c.name === 'Noor Rahman');
+      ctx.assert(cust, 'customer Noor Rahman not found');
+      const priya = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Priya Menon' && a.active === true);
+      ctx.assert(priya, 'agent Priya Menon not found');
+      const queue = ctx.api('GET', '/tickets?assignee_id=' + priya.id).body.data;
+      ctx.assert(queue.length >= 0, 'queue read');
+      let page = ctx.api('GET', '/tickets?limit=25');
+      let target = null;
+      while (true) {
+        const found = page.body.data.find((t) => t.customer_id === cust.id && t.order_number === '#W2000129' && t.status === 'open' && t.assignee_id === null);
+        if (found) { target = found; break; }
+        const next = page.body.next_cursor;
+        if (!next) break;
+        page = ctx.api('GET', '/tickets?limit=25&cursor=' + encodeURIComponent(next));
+      }
+      ctx.assert(target, 'open unassigned ticket for #W2000129 not found');
+      const a = ctx.api('POST', '/tickets/' + target.id + '/assign', { agent_id: priya.id });
+      ctx.assert(a.status === 200, 'assign failed: ' + JSON.stringify(a.body));
+      const r = ctx.api('POST', '/tickets/' + target.id + '/reply', { agent_id: priya.id, body: TEXT });
+      ctx.assert(r.status === 200, 'reply failed: ' + JSON.stringify(r.body));
+      const s = ctx.api('POST', '/tickets/' + target.id + '/resolve', {});
+      ctx.assert(s.status === 200 && s.body.status === 'resolved', 'resolve failed: ' + JSON.stringify(s.body));
+      }
+    decoys:
+      - why: assigns Priya and sends the reply but never resolves the ticket
+        script: |-
+          (ctx) => {
+          const priya = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Priya Menon' && a.active === true);
+          const t = ctx.api('GET', '/tickets?order_number=%23W2000129').body.data[0];
+          ctx.assert(t, 'ticket not found');
+          ctx.api('POST', '/tickets/' + t.id + '/assign', { agent_id: priya.id });
+          ctx.api('POST', '/tickets/' + t.id + '/reply', { agent_id: priya.id, body: 'Your replacement has shipped. Tracking number TRK-4471.' });
+          }
+      - why: does the whole assign, reply and resolve flow on the right ticket but as Dana Reyes instead of Priya Menon
+        script: |-
+          (ctx) => {
+          const dana = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Dana Reyes' && a.active === true);
+          const t = ctx.api('GET', '/tickets?order_number=%23W2000129').body.data[0];
+          ctx.assert(t, 'ticket not found');
+          ctx.api('POST', '/tickets/' + t.id + '/assign', { agent_id: dana.id });
+          ctx.api('POST', '/tickets/' + t.id + '/reply', { agent_id: dana.id, body: 'Your replacement has shipped. Tracking number TRK-4471.' });
+          ctx.api('POST', '/tickets/' + t.id + '/resolve', {});
+          }
+    alternatives: []
+    allows:
+      - entity: ticket
+        kind: updated
+        fields:
+          - assignee_id
+          - status
+          - last_activity_at
+        where:
+          order_number: "#W2000129"
+      - entity: comment
+        kind: created
+        fields: []
+        where:
+          ticket_id: tkt_0030
+          author_kind: agent
+  refund_large_and_approve:
+    difficulty: medium
+    instruction: 'Noor Rahman has an open ticket about order #W2000121 and has been promised a $750.00 refund on that order. Request the refund on that ticket as the support agent Priya Menon, with the reason "Item arrived damaged". Because it is above $500 it will need sign-off, so then approve it as the active supervisor. Do not change any other ticket, order or refund.'
+    grader: |-
+      (ctx) => {
+      const REASON = 'Item arrived damaged';
+      const t = ctx.seed.list('ticket', { where: { order_number: '#W2000121' } })[0];
+      const o = ctx.seed.list('order', { where: { order_number: '#W2000121' } })[0];
+      const priya = ctx.seed.list('agent', { where: { name: 'Priya Menon' } })[0];
+      const sam = ctx.seed.list('agent', { where: { name: 'Sam Okafor' } })[0];
+      if (!t || !o || !priya || !sam) return 0;
+      const old = new Set(ctx.seed.list('refund', { where: { ticket_id: t.id } }).map((r) => r.id));
+      const fresh = ctx.db.list('refund', { where: { ticket_id: t.id } }).filter((r) => !old.has(r.id));
+      const fields = ['ticket_id', 'order_id', 'amount', 'requested_by', 'reason', 'status', 'approved_by'];
+      const allowed = [];
+      for (const r of fresh) {
+        allowed.push({ entity: 'refund', id: r.id, kind: 'created', fields });
+        allowed.push({ entity: 'refund', id: r.id, kind: 'updated', fields });
+      }
+      ctx.guardChanges('only the new refund on the target ticket changed', allowed);
+      ctx.guard('at most one refund was created anywhere', ctx.changes().filter((c) => c.entity === 'refund' && c.kind === 'created').length <= 1);
+      const r = fresh.length === 1 ? fresh[0] : null;
+      const requested = r !== null && r.order_id === o.id && r.amount === 75000 && r.requested_by === priya.id && r.reason === REASON;
+      ctx.goal(0.4, 'a $750 refund with the requested reason was requested by Priya Menon on the target order', requested);
+      ctx.goal(0.6, 'that refund was approved by the supervisor', requested && r.status === 'approved' && r.approved_by === sam.id);
+      return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+      const cust = ctx.api('GET', '/customers').body.data.find((c) => c.name === 'Noor Rahman');
+      ctx.assert(cust, 'customer Noor Rahman not found');
+      const agents = ctx.api('GET', '/agents').body.data;
+      const priya = agents.find((a) => a.name === 'Priya Menon' && a.active === true);
+      ctx.assert(priya, 'agent Priya Menon not found');
+      const sup = agents.find((a) => a.role === 'supervisor' && a.active === true);
+      ctx.assert(sup, 'active supervisor not found');
+      const ticket = ctx.api('GET', '/tickets?customer_id=' + cust.id + '&status=open').body.data.find((t) => t.order_number === '#W2000121');
+      ctx.assert(ticket, 'open ticket for #W2000121 not found');
+      const order = ctx.api('GET', '/orders?customer_id=' + cust.id).body.data.find((o) => o.order_number === '#W2000121');
+      ctx.assert(order, 'order #W2000121 not found');
+      const r = ctx.api('POST', '/tickets/' + ticket.id + '/refunds', { agent_id: priya.id, order_id: order.id, amount: 75000, reason: 'Item arrived damaged' });
+      ctx.assert(r.status === 201 && r.body.status === 'pending', 'refund request failed: ' + JSON.stringify(r.body));
+      const a = ctx.api('POST', '/refunds/' + r.body.id + '/approve', { agent_id: sup.id });
+      ctx.assert(a.status === 200 && a.body.status === 'approved', 'approve failed: ' + JSON.stringify(a.body));
+      }
+    decoys:
+      - why: requests the $750 refund correctly but never has the supervisor approve it, leaving it pending
+        script: |-
+          (ctx) => {
+          const priya = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Priya Menon' && a.active === true);
+          const t = ctx.api('GET', '/tickets?order_number=%23W2000121').body.data[0];
+          const o = ctx.api('GET', '/orders?order_number=%23W2000121').body.data[0];
+          ctx.assert(t && o, 'ticket or order not found');
+          const r = ctx.api('POST', '/tickets/' + t.id + '/refunds', { agent_id: priya.id, order_id: o.id, amount: 75000, reason: 'Item arrived damaged' });
+          ctx.assert(r.status === 201, 'request failed: ' + JSON.stringify(r.body));
+          }
+      - why: "refunds and approves on Noor's other open ticket (order #W2000105) instead of the one about #W2000121"
+        script: |-
+          (ctx) => {
+          const agents = ctx.api('GET', '/agents').body.data;
+          const priya = agents.find((a) => a.name === 'Priya Menon' && a.active === true);
+          const sup = agents.find((a) => a.role === 'supervisor' && a.active === true);
+          const t = ctx.api('GET', '/tickets?order_number=%23W2000105').body.data[0];
+          const o = ctx.api('GET', '/orders?order_number=%23W2000105').body.data[0];
+          ctx.assert(t && o, 'wrong ticket or order not found');
+          const r = ctx.api('POST', '/tickets/' + t.id + '/refunds', { agent_id: priya.id, order_id: o.id, amount: 75000, reason: 'Item arrived damaged' });
+          ctx.assert(r.status === 201, 'request failed: ' + JSON.stringify(r.body));
+          ctx.api('POST', '/refunds/' + r.body.id + '/approve', { agent_id: sup.id });
+          }
+      - why: requests only $500 on the right order, which auto-approves without any supervisor, instead of the $750 refund asked for
+        script: |-
+          (ctx) => {
+          const priya = ctx.api('GET', '/agents').body.data.find((a) => a.name === 'Priya Menon' && a.active === true);
+          const t = ctx.api('GET', '/tickets?order_number=%23W2000121').body.data[0];
+          const o = ctx.api('GET', '/orders?order_number=%23W2000121').body.data[0];
+          ctx.assert(t && o, 'ticket or order not found');
+          ctx.api('POST', '/tickets/' + t.id + '/refunds', { agent_id: priya.id, order_id: o.id, amount: 50000, reason: 'Item arrived damaged' });
+          }
+    alternatives:
+      - why: finds the ticket and order directly by order number filters instead of through the customer
+        script: |-
+          (ctx) => {
+          const agents = ctx.api('GET', '/agents').body.data;
+          const priya = agents.find((a) => a.name === 'Priya Menon' && a.active === true);
+          const sup = agents.find((a) => a.role === 'supervisor' && a.active === true);
+          const t = ctx.api('GET', '/tickets?order_number=%23W2000121&status=open').body.data[0];
+          const o = ctx.api('GET', '/orders?order_number=%23W2000121').body.data[0];
+          ctx.assert(priya && sup && t && o, 'lookup failed');
+          const r = ctx.api('POST', '/tickets/' + t.id + '/refunds', { agent_id: priya.id, order_id: o.id, amount: 75000, reason: 'Item arrived damaged' });
+          ctx.assert(r.status === 201, 'request failed: ' + JSON.stringify(r.body));
+          const a = ctx.api('POST', '/refunds/' + r.body.id + '/approve', { agent_id: sup.id });
+          ctx.assert(a.status === 200, 'approve failed: ' + JSON.stringify(a.body));
+          }
+    allows:
+      - entity: refund
+        kind: created
+        fields: []
+        where:
+          ticket_id: tkt_0022
+      - entity: refund
+        kind: updated
+        fields:
+          - status
+          - approved_by
+        where:
+          ticket_id: tkt_0022

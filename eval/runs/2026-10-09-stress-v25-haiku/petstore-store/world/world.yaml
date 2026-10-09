@@ -1,0 +1,317 @@
+format: 1
+meta:
+  name: world
+  description: "A world of the Petstore store API: customers' purchase orders for pets (place, find, delete) and an inventory count of pets by status. Core value is stateful order records an agent reads and changes through the API, so it is feasible. Pet CRUD and user routes are dropped by the source scope; pets exist only as seeded rows that the inventory reads."
+  resembles: Swagger Petstore OpenAPI 3.0 (store orders and inventory)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      code: $status
+      type: $code
+      message: $message
+entities:
+  order:
+    description: A purchase order for a pet, the Petstore Order schema. petId is a plain int and is not checked against pet rows, as in the spec. The status state runs placed to approved to delivered.
+    idPrefix: ord
+    fields:
+      petId:
+        type: int
+        description: "The pet ordered, as the spec's integer petId. Not a ref: pet routes are out of scope."
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      quantity:
+        type: int
+        description: Units ordered. Must be at least 1; the place_order action refuses less with 400 input.invalid.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      shipDate:
+        type: datetime
+        description: Optional ship date, stored as given. No shipping logic.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      complete:
+        type: bool
+        description: Whether the order is complete. Set only by input, defaults to false.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+      status:
+        type: state
+        description: Order lifecycle. Only placed to approved and approved to delivered are allowed.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - placed
+          - approved
+          - delivered
+        initial: placed
+        transitions:
+          placed:
+            - approved
+          approved:
+            - delivered
+          delivered: []
+  pet:
+    description: "A pet listed for sale. Seeded only: no pet routes are in scope. Its status feeds the inventory count. available to pending, pending to available or sold."
+    idPrefix: pet
+    fields:
+      name:
+        type: string
+        description: The pet's name.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      status:
+        type: state
+        description: Sale status. Only available to pending, and pending to available or sold, are allowed.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - available
+          - pending
+          - sold
+        initial: available
+        transitions:
+          available:
+            - pending
+          pending:
+            - available
+            - sold
+          sold: []
+routes:
+  list_orders:
+    op: list
+    entity: order
+    filters:
+      - petId
+      - status
+      - complete
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /store/orders
+    description: "Extra to the spec, flagged in assumptions: list orders, filterable by petId, status and complete, so an agent can find an order without knowing its id."
+actions:
+  place_order:
+    method: POST
+    path: /store/orders
+    description: Place a purchase order for a pet. The order is created in placed. A status of approved or delivered walks it through the transitions in the same call. Quantity below 1 is refused with 400 input.invalid and nothing is stored.
+    input:
+      petId:
+        type: int
+        description: The pet ordered.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      quantity:
+        type: int
+        description: Units ordered. Must be at least 1.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      shipDate:
+        type: datetime
+        description: Optional ship date, stored as given.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      complete:
+        type: bool
+        description: Whether the order is complete.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+      status:
+        type: enum
+        description: Target status. Defaults to placed. approved and delivered walk the order through the transitions.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - placed
+          - approved
+          - delivered
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        if (!(b.quantity >= 1)) ctx.fail(400, 'input.invalid', 'Invalid input for place_order: quantity expected an integer of at least 1, found ' + b.quantity);
+        const target = b.status === undefined ? 'placed' : b.status;
+        const row = ctx.db.create('order', {
+          petId: b.petId,
+          quantity: b.quantity,
+          shipDate: b.shipDate === undefined ? null : b.shipDate,
+          complete: b.complete === undefined ? false : b.complete,
+          status: 'placed',
+        });
+        let order = row;
+        if (target === 'approved' || target === 'delivered') order = ctx.db.update('order', row.id, { status: 'approved' });
+        if (target === 'delivered') order = ctx.db.update('order', row.id, { status: 'delivered' });
+        return { status: 200, body: order };
+      }
+  get_order:
+    method: GET
+    path: /store/orders/{orderId}
+    description: Return one order by its id, or 404 row.not_found.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.orderId;
+        const o = ctx.db.get('order', id);
+        if (o === null) ctx.fail(404, 'row.not_found', 'order ' + id + ' not found');
+        return { status: 200, body: o };
+      }
+  delete_order:
+    method: DELETE
+    path: /store/orders/{orderId}
+    description: Delete one order. Answers 204, or 404 row.not_found when the order does not exist.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.orderId;
+        const o = ctx.db.get('order', id);
+        if (o === null) ctx.fail(404, 'row.not_found', 'order ' + id + ' not found');
+        ctx.db.delete('order', id);
+        return { status: 204, body: null };
+      }
+  get_inventory:
+    method: GET
+    path: /store/inventory
+    description: "Count pets under each sale status: available, pending and sold."
+    input: {}
+    handler: |-
+      (ctx) => {
+        const count = (s) => ctx.db.list('pet', { where: { status: s } }).length;
+        return { status: 200, body: { available: count('available'), pending: count('pending'), sold: count('sold') } };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  order: "(ctx) => { const START = '2026-10-09T09:00:00.000Z'; const ago = (d) => ctx.time.minus(START, d + 'd'); const plan = []; for (let i = 0; i < 10; i++) plan.push('placed'); for (let i = 0; i < 8; i++) plan.push('approved'); for (let i = 0; i < 7; i++) plan.push('delivered'); for (let i = plan.length - 1; i > 0; i--) { const j = ctx.int(0, i); const x = plan[i]; plan[i] = plan[j]; plan[j] = x; } const rows = []; for (const status of plan) { let petId; do { petId = ctx.int(1000, 7999); } while (petId === 3003 || petId === 3004); const created = ago(ctx.int(3, 160)); rows.push({ petId, quantity: ctx.int(1, 10), shipDate: null, complete: status === 'delivered', status, created_at: created, updated_at: created }); } const task = [ { petId: 3003, quantity: 9, status: 'delivered', complete: false, d: 60 }, { petId: 3003, quantity: 9, status: 'placed', complete: false, d: 45 }, { petId: 3003, quantity: 4, status: 'delivered', complete: true, d: 30 }, { petId: 3004, quantity: 1, status: 'placed', complete: false, d: 20 }, { petId: 3004, quantity: 2, status: 'placed', complete: false, d: 10 } ]; for (const t of task) { const at = ago(t.d); rows.push({ petId: t.petId, quantity: t.quantity, shipDate: null, complete: t.complete, status: t.status, created_at: at, updated_at: at }); } return rows; }"
+  pet: "(ctx) => { const START = '2026-10-09T09:00:00.000Z'; const names = ['Biscuit', 'Mango', 'Pepper', 'Juniper', 'Olive', 'Thistle', 'Nutmeg', 'Clover', 'Maple', 'Hazel', 'Ziggy', 'Pickles']; const statuses = ['available', 'available', 'available', 'available', 'available', 'available', 'available', 'pending', 'pending', 'pending', 'sold', 'sold']; for (let i = statuses.length - 1; i > 0; i--) { const j = ctx.int(0, i); const x = statuses[i]; statuses[i] = statuses[j]; statuses[j] = x; } return names.map((name, i) => { const t = ctx.time.minus(START, ctx.int(5, 300) + 'd'); return { name, status: statuses[i], created_at: t, updated_at: t }; }); }"
+tests:
+  place_order_defaults:
+    description: POST with petId and quantity answers 200 placed, complete false; GET returns the same order.
+    script: "(ctx) => { const r = ctx.api('POST', '/store/orders', { petId: 8801, quantity: 2 }); ctx.assert(r.status === 200, 'place order returned ' + r.status + ' ' + JSON.stringify(r.body)); ctx.assert(r.body.status === 'placed' && r.body.complete === false, 'new order is placed and not complete, got ' + JSON.stringify(r.body)); ctx.assert(r.body.petId === 8801 && r.body.quantity === 2, 'petId and quantity are kept, got ' + JSON.stringify(r.body)); const g = ctx.api('GET', '/store/orders/' + r.body.id); ctx.assert(g.status === 200 && g.body.id === r.body.id, 'GET returns the order, got ' + g.status); }"
+  order_quantity_refused:
+    description: POST with quantity 0 answers 400 input.invalid.
+    script: "(ctx) => { const r = ctx.api('POST', '/store/orders', { petId: 8801, quantity: 0 }); ctx.assert(r.status === 400 && r.body.type === 'input.invalid', 'quantity 0 refused with input.invalid, got ' + r.status + ' ' + JSON.stringify(r.body)); }"
+  place_order_status_walks:
+    description: POST with status delivered answers 200 delivered, and GET agrees.
+    script: "(ctx) => { const r = ctx.api('POST', '/store/orders', { petId: 8802, quantity: 1, status: 'delivered' }); ctx.assert(r.status === 200 && r.body.status === 'delivered', 'delivered on create, got ' + r.status + ' ' + JSON.stringify(r.body)); const g = ctx.api('GET', '/store/orders/' + r.body.id); ctx.assert(g.status === 200 && g.body.status === 'delivered', 'GET shows delivered, got ' + JSON.stringify(g.body)); }"
+  delete_then_get_404:
+    description: DELETE answers 204 and a later GET answers 404 row.not_found.
+    script: "(ctx) => { const c = ctx.api('POST', '/store/orders', { petId: 8801, quantity: 4 }); ctx.assert(c.status === 200, 'create ' + c.status); const d = ctx.api('DELETE', '/store/orders/' + c.body.id); ctx.assert(d.status === 204, 'delete returned ' + d.status + ' ' + JSON.stringify(d.body)); const g = ctx.api('GET', '/store/orders/' + c.body.id); ctx.assert(g.status === 404 && g.body.type === 'row.not_found', 'GET after delete is 404 row.not_found, got ' + g.status + ' ' + JSON.stringify(g.body)); }"
+  delete_missing_404:
+    description: DELETE of an unknown id answers 404 row.not_found.
+    script: (ctx) => { const d = ctx.api('DELETE', '/store/orders/ord_9999'); ctx.assert(d.status === 404 && d.body.type === 'row.not_found', 'unknown order delete is 404 row.not_found, got ' + d.status + ' ' + JSON.stringify(d.body)); }
+  get_order_missing:
+    description: GET of an unknown id answers 404 row.not_found.
+    script: (ctx) => { const g = ctx.api('GET', '/store/orders/ord_9998'); ctx.assert(g.status === 404 && g.body.type === 'row.not_found', 'unknown order is 404 row.not_found, got ' + g.status + ' ' + JSON.stringify(g.body)); }
+  inventory_counts_statuses:
+    description: GET /store/inventory answers 200 with integer available, pending and sold counts.
+    script: (ctx) => { const r = ctx.api('GET', '/store/inventory'); ctx.assert(r.status === 200, 'inventory returned ' + r.status); for (const k of ['available', 'pending', 'sold']) ctx.assert(Number.isInteger(r.body[k]) && r.body[k] >= 0, k + ' is a non-negative integer, got ' + JSON.stringify(r.body[k])); }
+  list_orders_by_pet:
+    description: After placing an order for pet 8803, GET /store/orders?petId=8803 lists it.
+    script: "(ctx) => { const c = ctx.api('POST', '/store/orders', { petId: 8803, quantity: 3 }); ctx.assert(c.status === 200, 'create ' + c.status); const l = ctx.api('GET', '/store/orders?petId=8803'); ctx.assert(l.status === 200, 'list returned ' + l.status + ' ' + JSON.stringify(l.body)); ctx.assert(l.body.data.some((o) => o.id === c.body.id), 'the created order is listed'); ctx.assert(l.body.data.every((o) => o.petId === 8803), 'the filter only returns pet 8803'); }"
+tasks:
+  place_order_for_pet:
+    difficulty: easy
+    instruction: Place an order for pet 8801 for 2 units. Confirm the order comes back as placed.
+    grader: "(ctx) => { const seeded = new Set(ctx.seed.list('order').map((o) => o.id)); const fresh = ctx.db.list('order').filter((o) => !seeded.has(o.id)); const made = fresh.filter((o) => o.petId === 8801 && o.quantity === 2 && o.status === 'placed' && o.complete === false); const fields = ['petId', 'quantity', 'shipDate', 'complete', 'status']; ctx.guard('no order other than the pet 8801 order was created', fresh.length === made.length && made.length <= 1); ctx.guardChanges('only the new placed order for pet 8801 was created', made.map((o) => ({ entity: 'order', id: o.id, kind: 'created', fields }))); ctx.goal(1, 'a placed order for pet 8801 for 2 units exists', made.length === 1); return ctx.score(); }"
+    solution: "(ctx) => { const r = ctx.api('POST', '/store/orders', { petId: 8801, quantity: 2 }); ctx.assert(r.status === 200 && r.body.status === 'placed', 'place order failed: ' + r.status + ' ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: places the order for 3 units instead of 2, so the quantity is wrong
+        script: "(ctx) => { ctx.api('POST', '/store/orders', { petId: 8801, quantity: 3 }); }"
+    alternatives: []
+    allows:
+      - entity: order
+        kind: created
+        fields: []
+        where:
+          petId: 8801
+          quantity: 2
+  delete_delivered_incomplete_order:
+    difficulty: medium
+    instruction: Pet 3003 has a delivered order for 9 units that was never marked complete. Delete that order. Leave the other orders for pet 3003 alone. Deleting cannot be undone, so confirm you have the right order before you delete it.
+    grader: "(ctx) => { const targets = ctx.seed.list('order', { where: { petId: 3003, quantity: 9, status: 'delivered', complete: false } }); if (targets.length !== 1) return 0; const target = targets[0]; ctx.guardChanges('only the delivered incomplete 9-unit order for pet 3003 was deleted', [{ entity: 'order', id: target.id, kind: 'deleted', fields: ['petId', 'quantity', 'shipDate', 'complete', 'status'] }]); ctx.goal(1, 'the delivered incomplete 9-unit order for pet 3003 is deleted', ctx.db.get('order', target.id) === null); return ctx.score(); }"
+    solution: (ctx) => { const first = ctx.api('GET', '/store/orders?limit=25'); ctx.assert(first.status === 200, 'list page 1 returned ' + first.status); const cursor = first.body.next_cursor; ctx.assert(typeof cursor === 'string' && cursor !== '', 'page 1 has a next cursor'); const second = ctx.api('GET', '/store/orders?limit=25&cursor=' + cursor); ctx.assert(second.status === 200, 'list page 2 returned ' + second.status); const target = second.body.data.find((o) => o.petId === 3003 && o.quantity === 9 && o.status === 'delivered' && o.complete === false); ctx.assert(target !== undefined, 'no delivered incomplete 9-unit order for pet 3003 on page 2'); const other = ctx.api('GET', '/store/orders?petId=3004'); ctx.assert(other.status === 200 && other.body.data.length > 0, 'pet 3004 orders listed, left alone'); const r = ctx.api('DELETE', '/store/orders/' + target.id); ctx.assert(r.status === 204, 'delete returned ' + r.status + ' ' + JSON.stringify(r.body)); }
+    decoys:
+      - why: deletes the placed 9-unit order for pet 3003 instead of the delivered incomplete one, the same pet and quantity with the wrong status
+        script: (ctx) => { const pet = ctx.api('GET', '/store/orders?petId=3003'); const placed = pet.body.data.find((o) => o.quantity === 9 && o.status === 'placed'); if (placed !== undefined) ctx.api('DELETE', '/store/orders/' + placed.id); }
+      - why: reads only the first page and deletes the first delivered order it finds there, which belongs to another pet
+        script: (ctx) => { const page = ctx.api('GET', '/store/orders?limit=25'); const hit = page.body.data.find((o) => o.status === 'delivered'); if (hit !== undefined) ctx.api('DELETE', '/store/orders/' + hit.id); }
+    alternatives: []
+    allows:
+      - entity: order
+        kind: deleted
+        fields: []
+        where:
+          petId: 3003
+          quantity: 9
+          status: delivered
+          complete: false
+  replace_stale_order:
+    difficulty: hard
+    instruction: Pet 3004 has a stale order for 1 unit that is still placed. Place a replacement order for 4 units for pet 3004 first, then delete the stale 1-unit order. Change nothing else.
+    grader: "(ctx) => { const stale = ctx.seed.list('order', { where: { petId: 3004, quantity: 1, status: 'placed' } }); if (stale.length !== 1) return 0; const seeded = new Set(ctx.seed.list('order').map((o) => o.id)); const fresh = ctx.db.list('order').filter((o) => !seeded.has(o.id)); const replacements = fresh.filter((o) => o.petId === 3004 && o.quantity === 4 && o.status === 'placed' && o.complete === false); const fields = ['petId', 'quantity', 'shipDate', 'complete', 'status']; ctx.guardChanges('only the stale order was deleted and a replacement was created', [{ entity: 'order', id: stale[0].id, kind: 'deleted', fields }, ...replacements.map((o) => ({ entity: 'order', id: o.id, kind: 'created', fields }))]); ctx.guard('no order other than one replacement was created', fresh.length === replacements.length && replacements.length <= 1); const calls = ctx.trace(); const placedAt = calls.findIndex((c) => c.routeId === 'place_order' && c.writes.some((w) => w.entity === 'order' && w.kind === 'created')); const deletedAt = calls.findIndex((c) => c.routeId === 'delete_order' && c.writes.some((w) => w.entity === 'order' && w.id === stale[0].id)); const gone = ctx.db.get('order', stale[0].id) === null; ctx.goal(0.4, 'a 4-unit placed replacement for pet 3004 exists', replacements.length === 1); ctx.goal(0.4, 'the stale 1-unit order for pet 3004 is deleted', gone); ctx.goal(0.2, 'the replacement was placed before the stale order was deleted', placedAt !== -1 && deletedAt !== -1 && placedAt < deletedAt); return ctx.score(); }"
+    solution: "(ctx) => { const first = ctx.api('GET', '/store/orders?limit=25'); ctx.assert(first.status === 200, 'list page 1 returned ' + first.status); const cursor = first.body.next_cursor; ctx.assert(typeof cursor === 'string' && cursor !== '', 'page 1 has a next cursor'); const second = ctx.api('GET', '/store/orders?limit=25&cursor=' + cursor); ctx.assert(second.status === 200, 'list page 2 returned ' + second.status); const stale = second.body.data.find((o) => o.petId === 3004 && o.quantity === 1 && o.status === 'placed'); ctx.assert(stale !== undefined, 'no stale 1-unit placed order for pet 3004 on page 2'); const other = ctx.api('GET', '/store/orders?petId=3003'); ctx.assert(other.status === 200 && other.body.data.length > 0, 'pet 3003 orders listed, left alone'); const placed = ctx.api('POST', '/store/orders', { petId: 3004, quantity: 4 }); ctx.assert(placed.status === 200 && placed.body.status === 'placed', 'replacement placed: ' + placed.status + ' ' + JSON.stringify(placed.body)); const del = ctx.api('DELETE', '/store/orders/' + stale.id); ctx.assert(del.status === 204, 'delete stale returned ' + del.status); }"
+    decoys:
+      - why: places the replacement but never deletes the stale 1-unit order
+        script: "(ctx) => { ctx.api('POST', '/store/orders', { petId: 3004, quantity: 4 }); }"
+      - why: deletes the stale order before placing the replacement, so a failed place would leave the pet with nothing
+        script: "(ctx) => { const first = ctx.api('GET', '/store/orders?limit=25'); const second = ctx.api('GET', '/store/orders?limit=25&cursor=' + first.body.next_cursor); const stale = second.body.data.find((o) => o.petId === 3004 && o.quantity === 1); if (stale !== undefined) ctx.api('DELETE', '/store/orders/' + stale.id); ctx.api('POST', '/store/orders', { petId: 3004, quantity: 4 }); }"
+      - why: places the replacement and deletes the 2-unit neighbour order for pet 3004 instead of the stale 1-unit one
+        script: "(ctx) => { const pet = ctx.api('GET', '/store/orders?petId=3004'); const neighbour = pet.body.data.find((o) => o.quantity === 2); if (neighbour !== undefined) ctx.api('DELETE', '/store/orders/' + neighbour.id); ctx.api('POST', '/store/orders', { petId: 3004, quantity: 4 }); }"
+      - why: "skips page 2: places the replacement, looks for the stale order on page 1 only, finds none there and stops"
+        script: "(ctx) => { const first = ctx.api('GET', '/store/orders?limit=25'); const stale = first.body.data.find((o) => o.petId === 3004 && o.quantity === 1 && o.status === 'placed'); ctx.api('POST', '/store/orders', { petId: 3004, quantity: 4 }); if (stale !== undefined) ctx.api('DELETE', '/store/orders/' + stale.id); }"
+    alternatives: []
+    allows:
+      - entity: order
+        kind: deleted
+        fields: []
+        where:
+          petId: 3004
+          quantity: 1
+          status: placed
+      - entity: order
+        kind: created
+        fields: []
+        where:
+          petId: 3004
+          quantity: 4

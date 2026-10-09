@@ -1,0 +1,79 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T164638Z_7117791a",
+  "mode": "create",
+  "input": {
+    "kind": "openapi",
+    "digest": "cf4cbdd468f046e27ddd53cc99efb8c9a35c884dafc2c5dfd2c7ec85c864afe1",
+    "source": {
+      "kind": "openapi",
+      "path": "eval/inputs/petstore.openapi.yaml",
+      "only": [
+        "/store"
+      ]
+    }
+  },
+  "worldId": "wid_883ce0020b33fa46b3b096c8897ba6e798c0b9f06b094eb2f2b4eafddccb6677",
+  "model": "claude-haiku-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 129739,
+      "costUsd": 0.022585550000000003
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 25184,
+      "costUsd": 0.006521550000000001
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 15556,
+      "costUsd": 0.004031170000000001
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 22884,
+      "costUsd": 0.00708866
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 29666,
+      "costUsd": 0.0064202700000000005
+    },
+    {
+      "step": "seed",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 9767,
+      "costUsd": 0.0042534700000000005
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 134311,
+      "costUsd": 0.01982497
+    },
+    {
+      "step": "tasks",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 104197,
+      "costUsd": 0.01615867
+    }
+  ],
+  "ms": 471640,
+  "costUsd": 0.08688431
+}

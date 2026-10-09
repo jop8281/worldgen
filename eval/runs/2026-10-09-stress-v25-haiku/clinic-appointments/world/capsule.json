@@ -1,0 +1,61 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T163644Z_3d9c0190",
+  "mode": "create",
+  "input": {
+    "kind": "description",
+    "digest": "10673f6d527985f13a09e11db30cd1ff1d14cb57c5c9b982f71ab72f2090b020",
+    "source": {
+      "kind": "description"
+    }
+  },
+  "worldId": "wid_28c50397e9a436d048e4d96d6416bdf71ec911154502e3032b169fd253e464d1",
+  "model": "claude-haiku-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 193373,
+      "costUsd": 0.04357909
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 103023,
+      "costUsd": 0.00902805
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 27708,
+      "costUsd": 0.0194134
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 29465,
+      "costUsd": 0.007988470000000001
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 86131,
+      "costUsd": 0.01538747
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 153720,
+      "costUsd": 0.02585337
+    }
+  ],
+  "ms": 593735,
+  "costUsd": 0.12124984999999999
+}

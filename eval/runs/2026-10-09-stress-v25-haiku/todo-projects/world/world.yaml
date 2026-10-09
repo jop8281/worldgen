@@ -1,0 +1,596 @@
+format: 1
+meta:
+  name: world
+  description: "A to-do app where members work tasks grouped into projects. Tasks have an assignee and an optional due date and move through todo, in_progress and done. A project can be archived only when every one of its tasks is done. Feasible: the core value is stateful records that an agent reads and changes through an API with actions on them."
+  resembles: Asana-style projects and tasks API
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  member:
+    description: A person who can be assigned tasks. Inactive members cannot take new assignments.
+    idPrefix: mem
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      active:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  project:
+    description: A named group of tasks. Its status is a state field that only archive_project moves to archived. Archived is final.
+    idPrefix: prj
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      status:
+        type: state
+        description: active until archive_project moves it to archived. No transition leaves archived.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - active
+          - archived
+        initial: active
+        transitions:
+          active:
+            - archived
+          archived: []
+  task:
+    description: A unit of work inside one project, with an optional assignee and due date. Its status moves only through start_task and complete_task. assignee_id is set only by assign_task.
+    idPrefix: tsk
+    fields:
+      project_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: project
+        onDelete: restrict
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      notes:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: Starts todo. todo can move to in_progress or done, in_progress to done, and done is final.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - todo
+          - in_progress
+          - done
+        initial: todo
+        transitions:
+          todo:
+            - in_progress
+            - done
+          in_progress:
+            - done
+          done: []
+      assignee_id:
+        type: ref
+        description: Set only by assign_task. Must be an active member.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: member
+        onDelete: nullify
+      due_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      completed_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_projects:
+    op: list
+    entity: project
+    filters:
+      - status
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /projects
+    description: Page through projects, filtered by status, searched by name.
+  get_project:
+    op: get
+    entity: project
+    method: GET
+    path: /projects/{id}
+    description: Read one project.
+  create_project:
+    op: create
+    entity: project
+    method: POST
+    path: /projects
+    description: Create an active project.
+  update_project:
+    op: update
+    entity: project
+    method: PATCH
+    path: /projects/{id}
+    description: Rename a project. Status is not writable here.
+  list_project_tasks:
+    op: list
+    entity: task
+    filters:
+      - status
+      - assignee_id
+    search: []
+    sort:
+      - due_at
+    pageSize: 25
+    method: GET
+    path: /projects/{project_id}/tasks
+    description: Page through one project's tasks, filtered by status and assignee, sorted by due date.
+  list_tasks:
+    op: list
+    entity: task
+    filters:
+      - project_id
+      - status
+      - assignee_id
+    search:
+      - title
+    sort:
+      - due_at
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /tasks
+    description: Page through all tasks, filtered by project, status and assignee, searched by title.
+  get_task:
+    op: get
+    entity: task
+    method: GET
+    path: /tasks/{id}
+    description: Read one task.
+  create_task:
+    op: create
+    entity: task
+    method: POST
+    path: /tasks
+    description: Create a task in a project. It starts todo and unassigned.
+  update_task:
+    op: update
+    entity: task
+    method: PATCH
+    path: /tasks/{id}
+    description: Edit the title, notes or due date of a task.
+  list_members:
+    op: list
+    entity: member
+    filters:
+      - active
+    search:
+      - name
+      - email
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /members
+    description: Page through members, filtered by active, searched by name and email.
+  get_member:
+    op: get
+    entity: member
+    method: GET
+    path: /members/{id}
+    description: Read one member.
+  create_member:
+    op: create
+    entity: member
+    method: POST
+    path: /members
+    description: Create an active member.
+  update_member:
+    op: update
+    entity: member
+    method: PATCH
+    path: /members/{id}
+    description: Change a member's name or active flag.
+actions:
+  archive_project:
+    method: POST
+    path: /projects/{id}/archive
+    description: Archive an active project. Refused with tasks_open while any task is not done. Archived is final.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const p = ctx.db.get('project', id);
+        if (p === null) ctx.fail(404, 'not_found', 'project ' + id + ' not found');
+        if (p.status === 'archived') ctx.fail(409, 'already_archived', 'project ' + id + ' is already archived');
+        const open = ctx.db.list('task', { where: { project_id: id } }).filter((t) => t.status !== 'done');
+        if (open.length > 0) ctx.fail(409, 'tasks_open', 'project ' + id + ' has ' + open.length + ' task(s) not done: ' + open.map((t) => t.id).join(', ') + '. Complete them before archiving.');
+        return { status: 200, body: ctx.db.update('project', id, { status: 'archived' }) };
+      }
+  start_task:
+    method: POST
+    path: /tasks/{id}/start
+    description: Start a todo task, moving it to in_progress. Any other status is refused with invalid_state.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('task', id);
+        if (t === null) ctx.fail(404, 'not_found', 'task ' + id + ' not found');
+        if (t.status !== 'todo') ctx.fail(409, 'invalid_state', 'task ' + id + ' is ' + t.status + '. Only todo tasks can be started.');
+        return { status: 200, body: ctx.db.update('task', id, { status: 'in_progress' }) };
+      }
+  assign_task:
+    method: POST
+    path: /tasks/{id}/assign
+    description: Assign a task to an active member. Refused with member_inactive for an inactive member and invalid_state for a done task.
+    input:
+      assignee_id:
+        type: ref
+        description: The member who will work the task. Must be active.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('task', id);
+        if (t === null) ctx.fail(404, 'not_found', 'task ' + id + ' not found');
+        if (t.status === 'done') ctx.fail(409, 'invalid_state', 'task ' + id + ' is done. Done tasks cannot be reassigned.');
+        const m = ctx.db.get('member', ctx.body.assignee_id);
+        if (m === null) ctx.fail(422, 'unknown_member', 'member ' + ctx.body.assignee_id + ' not found. List members with GET /members.');
+        if (m.active !== true) ctx.fail(409, 'member_inactive', 'member ' + m.id + ' (' + m.name + ') is inactive. Pick an active member.');
+        return { status: 200, body: ctx.db.update('task', id, { assignee_id: m.id }) };
+      }
+  complete_task:
+    method: POST
+    path: /tasks/{id}/complete
+    description: Mark a task done and set completed_at. A task that is already done is refused with already_done.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('task', id);
+        if (t === null) ctx.fail(404, 'not_found', 'task ' + id + ' not found');
+        if (t.status === 'done') ctx.fail(409, 'already_done', 'task ' + id + ' is already done.');
+        return { status: 200, body: ctx.db.update('task', id, { status: 'done', completed_at: ctx.now() }) };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  member: "(ctx) => { const ms = [['Ana Ruiz','ana.ruiz@northfield.example',true],['Ana Roiz','ana.roiz@brightpath.example',false],['Ben Okafor','ben.okafor@northfield.example',true],['Chloe Martin','chloe.martin@northfield.example',true],['Dev Patel','dev.patel@northfield.example',false],['Elena Ruiz','elena.ruiz@northfield.example',true]]; return ms.map((m, i) => { const c = ctx.time.plus('2025-06-02T09:00:00.000Z', (i * 41) + 'd'); return { name: m[0], email: m[1], active: m[2], created_at: c, updated_at: c }; }); }"
+  project: "(ctx) => { const START = '2026-10-09T09:00:00.000Z'; const ps = [['Website relaunch','active','2026-01-12T09:00:00.000Z',null],['Operations','active','2026-02-02T09:00:00.000Z',null],['Mobile app v3','active','2026-03-16T09:00:00.000Z',null],['Q4 marketing','active','2026-04-06T09:00:00.000Z',null],['Office move','archived','2025-09-08T09:00:00.000Z','20d'],['Q3 budget review','archived','2025-09-22T09:00:00.000Z','39d']]; return ps.map((p) => { const updated = p[3] === null ? p[2] : ctx.time.minus(START, p[3]); return { name: p[0], status: p[1], created_at: p[2], updated_at: updated }; }); }"
+  task: "(ctx) => { const START = '2026-10-09T09:00:00.000Z'; const at = (d) => (d < 0 ? ctx.time.minus(START, (-d) + 'd') : ctx.time.plus(START, d + 'd')); const projects = ctx.rows('project'); const members = ctx.rows('member'); const spec = [[0,'Renew SSL certificate','todo',-1,3,20,null],[0,'Update pricing page copy','in_progress',3,5,14,null],[0,'Fix broken links in footer','in_progress',0,-2,12,null],[0,'Review homepage hero design','done',2,-6,20,8],[0,'Migrate blog to new CMS','todo',5,12,9,null],[0,'Set up 301 redirects for old URLs','done',0,-10,30,11],[1,'Draft Q4 onboarding checklist','todo',-1,7,10,null],[1,'Confirm vendor contracts for Q4','in_progress',2,2,15,null],[1,'Reconcile expense reports','done',3,-3,25,4],[1,'Update emergency contact sheet','todo',5,-1,18,null],[2,'Renew SSL certificate','todo',2,20,16,null],[2,'Fix crash on Android 14 login','in_progress',2,1,7,null],[2,'Write release notes for 3.2','todo',-1,9,5,null],[2,'Submit iOS build for review','done',0,-5,22,5],[2,'Triage store reviews backlog','in_progress',5,4,11,null],[2,'Add offline mode to sync queue','todo',3,30,6,null],[3,'Plan October webinar series','todo',-1,14,8,null],[3,'Draft press release for partnership','in_progress',3,3,13,null],[3,'Approve Q4 ad creative','done',5,-2,19,2],[3,'Book trade show booth','todo',0,25,4,null],[3,'Compile customer quotes for case study','in_progress',2,-4,17,null],[1,'Schedule staff training on new tools','todo',-1,10,3,null],[2,'Confirm push notification opt-in copy','todo',2,8,2,null],[1,'Prepare Q4 board summary deck','in_progress',3,4,6,null],[2,'Migrate build pipeline to new runner','in_progress',0,-3,21,null],[1,'Send invoices for September retainer','done',2,-9,40,9],[4,'Pack and label storage boxes','done',3,-30,60,21],[4,'Confirm new lease keys handover','done',5,-25,55,22],[5,'Consolidate department forecasts','done',0,-60,90,45],[5,'Sign off Q3 variance report','done',3,-50,80,40]]; return spec.map(([p, title, status, a, due, created, completed]) => { const createdAt = at(-created); return { project_id: projects[p].id, title, notes: null, status, assignee_id: a < 0 ? null : members[a].id, due_at: at(due), completed_at: completed === null ? null : at(-completed), created_at: createdAt, updated_at: completed === null ? createdAt : at(-completed) }; }); }"
+tests:
+  archive_refuses_open_tasks:
+    description: Create a project and an open task. Archiving is refused with tasks_open. After completing the task, archiving succeeds, and a second archive is refused with already_archived.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/projects', { name: 'Plan check archive gate' });
+        ctx.assert(p.status === 201, 'create project returned ' + p.status);
+        const t = ctx.api('POST', '/tasks', { project_id: p.body.id, title: 'Plan check open task' });
+        ctx.assert(t.status === 201, 'create task returned ' + t.status);
+        const early = ctx.api('POST', '/projects/' + p.body.id + '/archive');
+        ctx.assert(early.status === 409 && early.body.error.code === 'tasks_open', 'archive with an open task: ' + early.status + ' ' + JSON.stringify(early.body));
+        const done = ctx.api('POST', '/tasks/' + t.body.id + '/complete');
+        ctx.assert(done.status === 200, 'complete returned ' + done.status);
+        const ok = ctx.api('POST', '/projects/' + p.body.id + '/archive');
+        ctx.assert(ok.status === 200 && ok.body.status === 'archived', 'archive after completion: ' + ok.status + ' ' + JSON.stringify(ok.body));
+        const again = ctx.api('POST', '/projects/' + p.body.id + '/archive');
+        ctx.assert(again.status === 409 && again.body.error.code === 'already_archived', 'second archive: ' + again.status + ' ' + JSON.stringify(again.body));
+      }
+  assign_requires_active_member:
+    description: Create two members, deactivate one, then assign a task to each. The inactive one is refused with member_inactive and the active one succeeds.
+    script: |-
+      (ctx) => {
+        const m = ctx.api('POST', '/members', { name: 'Plan Check Active', email: 'plan.check.active@probe.example' });
+        ctx.assert(m.status === 201, 'create active member returned ' + m.status);
+        const gone = ctx.api('POST', '/members', { name: 'Plan Check Inactive', email: 'plan.check.inactive@probe.example' });
+        ctx.assert(gone.status === 201, 'create second member returned ' + gone.status);
+        const off = ctx.api('PATCH', '/members/' + gone.body.id, { active: false });
+        ctx.assert(off.status === 200 && off.body.active === false, 'deactivate returned ' + off.status);
+        const p = ctx.api('POST', '/projects', { name: 'Plan check assignment' });
+        const t = ctx.api('POST', '/tasks', { project_id: p.body.id, title: 'Plan check assign task' });
+        ctx.assert(t.status === 201, 'create task returned ' + t.status);
+        const bad = ctx.api('POST', '/tasks/' + t.body.id + '/assign', { assignee_id: gone.body.id });
+        ctx.assert(bad.status === 409 && bad.body.error.code === 'member_inactive', 'inactive member: ' + bad.status + ' ' + JSON.stringify(bad.body));
+        const good = ctx.api('POST', '/tasks/' + t.body.id + '/assign', { assignee_id: m.body.id });
+        ctx.assert(good.status === 200 && good.body.assignee_id === m.body.id, 'active member: ' + good.status + ' ' + JSON.stringify(good.body));
+      }
+  complete_sets_completed_at:
+    description: Create a task and complete it. The result is done with a completed_at string. A second completion is refused with already_done, and a read shows done.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/projects', { name: 'Plan check completion' });
+        const t = ctx.api('POST', '/tasks', { project_id: p.body.id, title: 'Plan check complete task' });
+        ctx.assert(t.status === 201, 'create task returned ' + t.status);
+        const r = ctx.api('POST', '/tasks/' + t.body.id + '/complete');
+        ctx.assert(r.status === 200 && r.body.status === 'done', 'complete: ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(typeof r.body.completed_at === 'string', 'completed_at set, got ' + JSON.stringify(r.body.completed_at));
+        const again = ctx.api('POST', '/tasks/' + t.body.id + '/complete');
+        ctx.assert(again.status === 409 && again.body.error.code === 'already_done', 'second complete: ' + again.status + ' ' + JSON.stringify(again.body));
+        const read = ctx.api('GET', '/tasks/' + t.body.id);
+        ctx.assert(read.status === 200 && read.body.status === 'done', 'read after complete: ' + read.status + ' ' + JSON.stringify(read.body));
+      }
+  project_tasks_filter_by_assignee:
+    description: Create a project with two tasks, assign one to a member, and list the project's tasks. Unfiltered returns both, and filtering by the assignee returns only the assigned task.
+    script: |-
+      (ctx) => {
+        const m = ctx.api('POST', '/members', { name: 'Plan Check Filter', email: 'plan.check.filter@probe.example' });
+        ctx.assert(m.status === 201, 'create member returned ' + m.status);
+        const p = ctx.api('POST', '/projects', { name: 'Plan check filter' });
+        const t1 = ctx.api('POST', '/tasks', { project_id: p.body.id, title: 'Plan check first' });
+        const t2 = ctx.api('POST', '/tasks', { project_id: p.body.id, title: 'Plan check second' });
+        ctx.assert(t1.status === 201 && t2.status === 201, 'create tasks');
+        const a = ctx.api('POST', '/tasks/' + t1.body.id + '/assign', { assignee_id: m.body.id });
+        ctx.assert(a.status === 200, 'assign returned ' + a.status);
+        const all = ctx.api('GET', '/projects/' + p.body.id + '/tasks');
+        ctx.assert(all.status === 200 && all.body.data.length === 2, 'unfiltered list: ' + all.status + ' ' + JSON.stringify(all.body));
+        const mine = ctx.api('GET', '/projects/' + p.body.id + '/tasks?assignee_id=' + m.body.id);
+        ctx.assert(mine.status === 200 && mine.body.data.length === 1 && mine.body.data[0].id === t1.body.id, 'filtered list: ' + JSON.stringify(mine.body));
+      }
+  start_moves_task_to_in_progress:
+    description: Create a task, start it, and check in_progress. A second start is refused with invalid_state.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/projects', { name: 'Plan check start' });
+        const t = ctx.api('POST', '/tasks', { project_id: p.body.id, title: 'Plan check start task' });
+        ctx.assert(t.status === 201 && t.body.status === 'todo', 'new task is todo: ' + JSON.stringify(t.body));
+        const r = ctx.api('POST', '/tasks/' + t.body.id + '/start');
+        ctx.assert(r.status === 200 && r.body.status === 'in_progress', 'start: ' + r.status + ' ' + JSON.stringify(r.body));
+        const again = ctx.api('POST', '/tasks/' + t.body.id + '/start');
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second start: ' + again.status + ' ' + JSON.stringify(again.body));
+      }
+tasks:
+  complete_named_task:
+    difficulty: easy
+    instruction: Mark done the open task 'Renew SSL certificate' in project 'Website relaunch'.
+    grader: |-
+      (ctx) => {
+        const proj = ctx.seed.list('project', { where: { name: 'Website relaunch' } })[0];
+        if (!proj) return 0;
+        const target = ctx.seed.list('task', { where: { project_id: proj.id, title: 'Renew SSL certificate' } })[0];
+        if (!target) return 0;
+        ctx.guardChanges('only the open Renew SSL certificate task in Website relaunch changed', [
+          { entity: 'task', id: target.id, kind: 'updated', fields: ['status', 'completed_at'] },
+        ]);
+        const end = ctx.db.get('task', target.id);
+        ctx.goal(1, 'Renew SSL certificate in Website relaunch is done', end.status === 'done' && typeof end.completed_at === 'string');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const project = ctx.api('GET', '/projects?status=active').body.data.find((p) => p.name === 'Website relaunch');
+        ctx.assert(project, 'project Website relaunch not found');
+        const todo = ctx.api('GET', '/projects/' + project.id + '/tasks?status=todo').body.data;
+        const target = todo.find((t) => t.title === 'Renew SSL certificate');
+        ctx.assert(target, 'no open Renew SSL certificate task in Website relaunch');
+        const r = ctx.api('POST', '/tasks/' + target.id + '/complete');
+        ctx.assert(r.status === 200 && r.body.status === 'done', 'complete failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: completes the same-titled task in Mobile app v3, the near-duplicate the seed plants, and leaves the Website relaunch task open
+        script: |-
+          (ctx) => {
+            const mobile = ctx.api('GET', '/projects?status=active').body.data.find((p) => p.name === 'Mobile app v3');
+            ctx.assert(mobile, 'project Mobile app v3 not found');
+            const dup = ctx.api('GET', '/projects/' + mobile.id + '/tasks?status=todo').body.data.find((t) => t.title === 'Renew SSL certificate');
+            ctx.assert(dup, 'duplicate task not found');
+            ctx.api('POST', '/tasks/' + dup.id + '/complete');
+          }
+    alternatives: []
+    allows:
+      - entity: task
+        kind: updated
+        fields:
+          - status
+          - completed_at
+        where:
+          project_id: prj_0001
+          title: Renew SSL certificate
+  assign_active_member_in_project:
+    difficulty: medium
+    instruction: Assign the todo task 'Draft Q4 onboarding checklist' in project 'Operations' to the active member Ana Ruiz, not the inactive duplicate with a similar name.
+    grader: |-
+      (ctx) => {
+        const ops = ctx.seed.list('project', { where: { name: 'Operations' } })[0];
+        if (!ops) return 0;
+        const target = ctx.seed.list('task', { where: { project_id: ops.id, title: 'Draft Q4 onboarding checklist' } })[0];
+        if (!target) return 0;
+        const ana = ctx.seed.list('member', { where: { name: 'Ana Ruiz' } })[0];
+        if (!ana) return 0;
+        ctx.guardChanges('only the assignee of the draft onboarding task changed', [
+          { entity: 'task', id: target.id, kind: 'updated', fields: ['assignee_id'] },
+        ]);
+        const end = ctx.db.get('task', target.id);
+        const member = end.assignee_id === null ? null : ctx.db.get('member', end.assignee_id);
+        ctx.goal(0.5, 'the task is assigned to an active member', member !== null && member.active === true);
+        ctx.goal(0.5, 'the active member Ana Ruiz is assigned', end.assignee_id === ana.id);
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const ops = ctx.api('GET', '/projects?status=active').body.data.find((p) => p.name === 'Operations');
+        ctx.assert(ops, 'project Operations not found');
+        const todo = ctx.api('GET', '/projects/' + ops.id + '/tasks?status=todo').body.data;
+        const task = todo.find((t) => t.title === 'Draft Q4 onboarding checklist');
+        ctx.assert(task, 'no todo task Draft Q4 onboarding checklist in Operations');
+        const inactive = ctx.api('GET', '/members?active=false').body.data;
+        ctx.assert(inactive.some((m) => m.name === 'Ana Roiz'), 'inactive duplicate Ana Roiz not listed');
+        const ana = ctx.api('GET', '/members?active=true').body.data.find((m) => m.name === 'Ana Ruiz');
+        ctx.assert(ana, 'active member Ana Ruiz not found');
+        const r = ctx.api('POST', '/tasks/' + task.id + '/assign', { assignee_id: ana.id });
+        ctx.assert(r.status === 200 && r.body.assignee_id === ana.id, 'assign failed: ' + JSON.stringify(r.body));
+      }
+    decoys:
+      - why: tries the inactive duplicate Ana Roiz, which is refused with member_inactive, then assigns the last active member on the list, Elena Ruiz, instead of Ana Ruiz
+        script: |-
+          (ctx) => {
+            const ops = ctx.api('GET', '/projects?status=active').body.data.find((p) => p.name === 'Operations');
+            const task = ctx.api('GET', '/projects/' + ops.id + '/tasks?status=todo').body.data.find((t) => t.title === 'Draft Q4 onboarding checklist');
+            const roiz = ctx.api('GET', '/members?active=false').body.data.find((m) => m.name === 'Ana Roiz');
+            ctx.api('POST', '/tasks/' + task.id + '/assign', { assignee_id: roiz.id });
+            const last = ctx.api('GET', '/members?active=true').body.data.pop();
+            ctx.api('POST', '/tasks/' + task.id + '/assign', { assignee_id: last.id });
+          }
+    alternatives: []
+    allows:
+      - entity: task
+        kind: updated
+        fields:
+          - assignee_id
+        where:
+          project_id: prj_0002
+          title: Draft Q4 onboarding checklist
+  close_out_project:
+    difficulty: hard
+    instruction: "Close out project 'Website relaunch': complete every task in it that is not done, then archive the project. Change nothing in other projects."
+    grader: |-
+      (ctx) => {
+        const proj = ctx.seed.list('project', { where: { name: 'Website relaunch' } })[0];
+        if (!proj) return 0;
+        const open = ctx.seed.list('task', { where: { project_id: proj.id } }).filter((t) => t.status !== 'done');
+        if (open.length === 0) return 0;
+        ctx.guardChanges('only the open tasks of Website relaunch and the project status changed', [
+          ...open.map((t) => ({ entity: 'task', id: t.id, kind: 'updated', fields: ['status', 'completed_at'] })),
+          { entity: 'project', id: proj.id, kind: 'updated', fields: ['status'] },
+        ]);
+        const allDone = open.every((t) => {
+          const e = ctx.db.get('task', t.id);
+          return e !== null && e.status === 'done' && typeof e.completed_at === 'string';
+        });
+        const end = ctx.db.get('project', proj.id);
+        ctx.goal(0.5, 'every open task of Website relaunch is done', allDone);
+        ctx.goal(0.5, 'Website relaunch is archived', end.status === 'archived');
+        return ctx.score();
+      }
+    solution: |-
+      (ctx) => {
+        const pages = (path) => {
+          const rows = [];
+          let cursor = null;
+          do {
+            const sep = path.includes('?') ? '&' : '?';
+            const r = ctx.api('GET', path + (cursor === null ? '' : sep + 'cursor=' + cursor));
+            ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body));
+            rows.push(...r.body.data);
+            cursor = r.body.next_cursor;
+          } while (cursor !== null);
+          return rows;
+        };
+        const project = pages('/projects?status=active').find((p) => p.name === 'Website relaunch');
+        ctx.assert(project, 'project Website relaunch not found');
+        const open = pages('/projects/' + project.id + '/tasks').filter((t) => t.status !== 'done');
+        ctx.assert(open.length > 0, 'no open tasks left in Website relaunch');
+        for (const t of open) {
+          const r = ctx.api('POST', '/tasks/' + t.id + '/complete');
+          ctx.assert(r.status === 200, 'complete ' + t.id + ' failed: ' + JSON.stringify(r.body));
+        }
+        const a = ctx.api('POST', '/projects/' + project.id + '/archive');
+        ctx.assert(a.status === 200 && a.body.status === 'archived', 'archive failed: ' + JSON.stringify(a.body));
+      }
+    decoys:
+      - why: completes the open tasks of Website relaunch but never archives the project
+        script: |-
+          (ctx) => {
+            const proj = ctx.api('GET', '/projects?status=active').body.data.find((p) => p.name === 'Website relaunch');
+            const rows = ctx.api('GET', '/projects/' + proj.id + '/tasks').body.data;
+            for (const t of rows) if (t.status !== 'done') ctx.api('POST', '/tasks/' + t.id + '/complete');
+          }
+      - why: completes only the in_progress tasks, then tries to archive, which is refused while the todo tasks stay open
+        script: |-
+          (ctx) => {
+            const proj = ctx.api('GET', '/projects?status=active').body.data.find((p) => p.name === 'Website relaunch');
+            const rows = ctx.api('GET', '/projects/' + proj.id + '/tasks?status=in_progress').body.data;
+            for (const t of rows) ctx.api('POST', '/tasks/' + t.id + '/complete');
+            ctx.api('POST', '/projects/' + proj.id + '/archive');
+          }
+      - why: closes out Website relaunch but also completes the open tasks of Operations, which it was not asked to touch
+        script: |-
+          (ctx) => {
+            const projects = ctx.api('GET', '/projects?status=active').body.data;
+            const site = projects.find((p) => p.name === 'Website relaunch');
+            const ops = projects.find((p) => p.name === 'Operations');
+            for (const proj of [site, ops]) {
+              const rows = ctx.api('GET', '/projects/' + proj.id + '/tasks').body.data;
+              for (const t of rows) if (t.status !== 'done') ctx.api('POST', '/tasks/' + t.id + '/complete');
+            }
+            ctx.api('POST', '/projects/' + site.id + '/archive');
+          }
+    alternatives: []
+    allows:
+      - entity: task
+        kind: updated
+        fields:
+          - status
+          - completed_at
+        where:
+          project_id: prj_0001
+      - entity: project
+        kind: updated
+        fields:
+          - status
+        where:
+          name: Website relaunch

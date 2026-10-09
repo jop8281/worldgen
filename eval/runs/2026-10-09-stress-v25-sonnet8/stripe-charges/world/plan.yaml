@@ -1,0 +1,334 @@
+revision: 2
+software: Stripe API (charges, refunds, customers), version 2024-06-20
+summary: A Stripe-style payments world. Agents list and retrieve charges with Stripe's paging, create charges (captured at once or held pending), capture held charges and refund captured ones. Customers group charges. Refunds are stored as their own rows and returned by the refund action.
+clock:
+  start: 2026-10-09T09:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: customer
+    purpose: A Stripe customer that charges can reference.
+    keyFields:
+      - name
+      - email
+      - description
+  - name: charge
+    purpose: A payment attempt. Holds amount, currency, capture state, refunded totals and status. Field names follow the spec (amount_captured, amount_refunded, receipt_email, failure_code, metadata, created).
+    keyFields:
+      - amount
+      - currency
+      - customer
+      - description
+      - captured
+      - paid
+      - refunded
+      - status
+      - amount_captured
+      - amount_refunded
+      - created
+  - name: refund
+    purpose: A refund against a charge, created by the refund action.
+    keyFields:
+      - charge
+      - amount
+      - currency
+      - reason
+      - status
+workflows:
+  - name: charge_lifecycle
+    entity: charge
+    states:
+      - pending
+      - succeeded
+      - failed
+    rules:
+      - rule: A charge needs an integer amount of at least 1, a 3-letter lowercase currency, and an existing customer if one is given. Otherwise the create is refused.
+        by:
+          - create_charge
+        test: create_charge_validation
+      - rule: 'A charge created without capture=false is captured at once: status succeeded, paid and captured true, amount_captured equal to amount, amount_refunded 0, refunded false.'
+        by:
+          - create_charge
+        test: create_charge_captured
+      - rule: 'A charge created with capture=false is held: status pending, captured false, paid false, amount_captured 0.'
+        by:
+          - create_charge
+        test: create_charge_uncaptured
+      - rule: Only a pending charge can be captured. Capturing moves it to succeeded with amount_captured equal to amount. Capturing again is refused with 409 charge_already_captured.
+        by:
+          - capture_charge
+        test: capture_charge_flow
+      - rule: A refund can only be made on a succeeded charge, and its amount cannot exceed amount_captured minus amount_refunded. The refund adds to amount_refunded and refunded becomes true when the whole captured amount is refunded.
+        by:
+          - refund_charge
+        test: refund_partial_then_full
+      - rule: An over-refund or a refund on a pending charge changes nothing and is refused (400 amount_too_large, 409 charge_not_refundable).
+        by:
+          - refund_charge
+        test: refund_refusals
+      - rule: Charges list newest first with has_more, starting_after and ending_before paging, and the customer filter returns only that customer's charges.
+        by:
+          - create_charge
+        test: list_charges_paging
+      - rule: The charge's customer must exist.
+        schema: customer is a ref field, so the data model refuses an unknown customer.
+    actions:
+      - create_charge
+      - capture_charge
+      - refund_charge
+      - create_customer
+jobs: []
+acceptanceTests:
+  - id: create_charge_captured
+    intent: A default charge is captured at once
+    actions:
+      - create_charge
+    description: Create a charge without capture. It is succeeded, paid, captured, fully captured and not refunded, and GET returns the same.
+    script: |-
+      (ctx) => {
+        const r = ctx.api('POST', '/v1/charges', { amount: 2000, currency: 'usd', description: 'acceptance coffee beans' });
+        ctx.assert(r.status === 200, 'create returned ' + r.status + ' ' + JSON.stringify(r.body));
+        const c = r.body;
+        ctx.assert(c.object === 'charge' && String(c.id).startsWith('ch_'), 'charge object with ch_ id, got ' + JSON.stringify(c));
+        ctx.assert(c.status === 'succeeded' && c.paid === true && c.captured === true, 'captured at once, got ' + c.status);
+        ctx.assert(c.amount === 2000 && c.amount_captured === 2000 && c.amount_refunded === 0 && c.refunded === false, 'amounts wrong ' + JSON.stringify(c));
+        ctx.assert(c.currency === 'usd' && c.description === 'acceptance coffee beans', 'currency and description kept');
+        const g = ctx.api('GET', '/v1/charges/' + c.id);
+        ctx.assert(g.status === 200 && g.body.id === c.id && g.body.status === 'succeeded', 'get returned ' + g.status);
+      }
+  - id: create_charge_uncaptured
+    intent: capture=false holds the charge as pending
+    actions:
+      - create_charge
+    description: Create a charge with capture false. It is pending, not captured, not paid and has amount_captured 0.
+    script: |-
+      (ctx) => {
+        const r = ctx.api('POST', '/v1/charges', { amount: 4500, currency: 'eur', capture: false, receipt_email: 'hold@example.com' });
+        ctx.assert(r.status === 200, 'create returned ' + r.status + ' ' + JSON.stringify(r.body));
+        const c = r.body;
+        ctx.assert(c.status === 'pending' && c.captured === false && c.paid === false, 'held, got ' + JSON.stringify(c));
+        ctx.assert(c.amount === 4500 && c.amount_captured === 0 && c.amount_refunded === 0 && c.refunded === false, 'amounts wrong ' + JSON.stringify(c));
+        ctx.assert(c.receipt_email === 'hold@example.com', 'receipt_email kept');
+      }
+  - id: create_charge_validation
+    intent: Bad input is refused and writes nothing
+    actions:
+      - create_charge
+    description: Missing amount, missing currency, zero amount and an unknown customer are refused.
+    script: |-
+      (ctx) => {
+        const noAmount = ctx.api('POST', '/v1/charges', { currency: 'usd' });
+        ctx.assert(noAmount.status === 400 && noAmount.body.error.code === 'input.invalid', 'missing amount: ' + JSON.stringify(noAmount));
+        const noCurrency = ctx.api('POST', '/v1/charges', { amount: 500 });
+        ctx.assert(noCurrency.status === 400 && noCurrency.body.error.code === 'input.invalid', 'missing currency: ' + JSON.stringify(noCurrency));
+        const zero = ctx.api('POST', '/v1/charges', { amount: 0, currency: 'usd' });
+        ctx.assert(zero.status === 400 && zero.body.error.code === 'amount_invalid', 'zero amount: ' + JSON.stringify(zero));
+        const unknown = ctx.api('POST', '/v1/charges', { amount: 500, currency: 'usd', customer: 'cus_9999' });
+        ctx.assert(unknown.status === 400 && unknown.body.error.code === 'resource_missing', 'unknown customer: ' + JSON.stringify(unknown));
+      }
+  - id: capture_charge_flow
+    intent: A pending charge is captured once
+    actions:
+      - create_charge
+      - capture_charge
+    description: Capture a held charge. It becomes succeeded and fully captured. A second capture is refused with 409 charge_already_captured.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/v1/charges', { amount: 7000, currency: 'usd', capture: false }).body;
+        ctx.assert(c.status === 'pending', 'created pending');
+        const r = ctx.api('POST', '/v1/charges/' + c.id + '/capture', {});
+        ctx.assert(r.status === 200, 'capture returned ' + r.status + ' ' + JSON.stringify(r.body));
+        ctx.assert(r.body.status === 'succeeded' && r.body.captured === true && r.body.paid === true && r.body.amount_captured === 7000, 'captured, got ' + JSON.stringify(r.body));
+        const again = ctx.api('POST', '/v1/charges/' + c.id + '/capture', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'charge_already_captured', 'second capture: ' + JSON.stringify(again));
+        const missing = ctx.api('POST', '/v1/charges/ch_9999/capture', {});
+        ctx.assert(missing.status === 404 && missing.body.error.code === 'row.not_found', 'missing: ' + JSON.stringify(missing));
+      }
+  - id: refund_partial_then_full
+    intent: Refunds accumulate until the charge is refunded
+    actions:
+      - create_charge
+      - refund_charge
+    description: Refund 1000 of 3000, then the remainder by default. refunded turns true only after the second refund.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/v1/charges', { amount: 3000, currency: 'usd' }).body;
+        const r1 = ctx.api('POST', '/v1/charges/' + c.id + '/refund', { amount: 1000, reason: 'requested_by_customer' });
+        ctx.assert(r1.status === 200, 'refund returned ' + r1.status + ' ' + JSON.stringify(r1.body));
+        ctx.assert(r1.body.object === 'refund' && r1.body.amount === 1000 && r1.body.charge === c.id && r1.body.status === 'succeeded' && r1.body.reason === 'requested_by_customer', 'refund object, got ' + JSON.stringify(r1.body));
+        const mid = ctx.api('GET', '/v1/charges/' + c.id).body;
+        ctx.assert(mid.amount_refunded === 1000 && mid.refunded === false && mid.status === 'succeeded', 'partly refunded, got ' + JSON.stringify(mid));
+        const r2 = ctx.api('POST', '/v1/charges/' + c.id + '/refund', {});
+        ctx.assert(r2.status === 200 && r2.body.amount === 2000, 'remainder refunded, got ' + JSON.stringify(r2.body));
+        ctx.assert(r2.body.id !== r1.body.id, 'second refund is a new refund');
+        const end = ctx.api('GET', '/v1/charges/' + c.id).body;
+        ctx.assert(end.amount_refunded === 3000 && end.refunded === true, 'fully refunded, got ' + JSON.stringify(end));
+      }
+  - id: refund_refusals
+    intent: Over-refunds and refunds of held charges change nothing
+    actions:
+      - create_charge
+      - refund_charge
+    description: Refunding more than is left is 400 amount_too_large. Refunding a pending charge is 409 charge_not_refundable. The charges stay unchanged.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/v1/charges', { amount: 1500, currency: 'usd' }).body;
+        const over = ctx.api('POST', '/v1/charges/' + c.id + '/refund', { amount: 1501 });
+        ctx.assert(over.status === 400 && over.body.error.code === 'amount_too_large', 'over-refund: ' + JSON.stringify(over));
+        ctx.assert(ctx.api('GET', '/v1/charges/' + c.id).body.amount_refunded === 0, 'nothing refunded');
+        const held = ctx.api('POST', '/v1/charges', { amount: 900, currency: 'usd', capture: false }).body;
+        const r = ctx.api('POST', '/v1/charges/' + held.id + '/refund', {});
+        ctx.assert(r.status === 409 && r.body.error.code === 'charge_not_refundable', 'pending refund: ' + JSON.stringify(r));
+        ctx.assert(ctx.api('GET', '/v1/charges/' + held.id).body.status === 'pending', 'still pending');
+      }
+  - id: list_charges_paging
+    intent: Stripe list paging and the customer filter work
+    actions:
+      - create_customer
+      - create_charge
+    description: Create a customer and three charges. The customer filter with limit 2 returns the newest two with has_more true, and starting_after returns the oldest one with has_more false.
+    script: |-
+      (ctx) => {
+        const cu = ctx.api('POST', '/v1/customers', { name: 'Paging Test Co', email: 'paging@example.com' });
+        ctx.assert(cu.status === 201, 'customer create returned ' + cu.status + ' ' + JSON.stringify(cu.body));
+        const id = cu.body.id;
+        const ids = [];
+        for (const amount of [100, 200, 300]) {
+          const r = ctx.api('POST', '/v1/charges', { amount, currency: 'usd', customer: id });
+          ctx.assert(r.status === 200 && r.body.customer === id, 'charge create: ' + JSON.stringify(r.body));
+          ids.push(r.body.id);
+        }
+        const p1 = ctx.api('GET', '/v1/charges?customer=' + id + '&limit=2');
+        ctx.assert(p1.status === 200 && p1.body.data.length === 2 && p1.body.has_more === true, 'page 1: ' + JSON.stringify(p1.body));
+        ctx.assert(p1.body.data[0].id === ids[2] && p1.body.data[1].id === ids[1], 'newest first');
+        const p2 = ctx.api('GET', '/v1/charges?customer=' + id + '&limit=2&starting_after=' + p1.body.data[1].id);
+        ctx.assert(p2.status === 200 && p2.body.data.length === 1 && p2.body.has_more === false && p2.body.data[0].id === ids[0], 'page 2: ' + JSON.stringify(p2.body));
+        const missing = ctx.api('GET', '/v1/charges/ch_9999');
+        ctx.assert(missing.status === 404 && missing.body.error.code === 'row.not_found', 'missing charge: ' + JSON.stringify(missing));
+      }
+routes:
+  - id: list_charges
+    method: GET
+    path: /v1/charges
+    purpose: List charges, newest first, with limit, starting_after, ending_before and a customer filter (Stripe list paging).
+  - id: create_charge
+    method: POST
+    path: /v1/charges
+    purpose: Create a charge. Built as the create_charge action.
+  - id: get_charge
+    method: GET
+    path: /v1/charges/{id}
+    purpose: Retrieve a charge (the spec names the param {charge}).
+  - id: capture_charge
+    method: POST
+    path: /v1/charges/{id}/capture
+    purpose: 'Extra action: capture a pending charge.'
+  - id: refund_charge
+    method: POST
+    path: /v1/charges/{id}/refund
+    purpose: 'Extra action: refund all or part of a captured charge.'
+  - id: list_customers
+    method: GET
+    path: /v1/customers
+    purpose: List customers, so an agent can find a customer id by name.
+  - id: get_customer
+    method: GET
+    path: /v1/customers/{id}
+    purpose: Retrieve a customer.
+  - id: create_customer
+    method: POST
+    path: /v1/customers
+    purpose: Create a customer (needed so tests and agents can make customers).
+seed:
+  rowsPerEntity:
+    customer: 8
+    charge: 60
+    refund: 10
+  mix: Charges spread over 8 customers, with one customer (Acme Corp) holding more than 25 charges so its list needs a second page. Mostly succeeded, some pending (uncaptured), a few failed. Some succeeded charges are partly or fully refunded. Near-duplicate charges share an amount and customer but differ in description.
+  stateMix:
+    charge:
+      pending: 20
+      succeeded: 65
+      failed: 15
+tasks:
+  - id: capture_northwind_hold
+    difficulty: easy
+    kind: two_actors
+    intent: Customer Northwind Traders has exactly one held (pending) charge. Capture it and change nothing else.
+    actions:
+      - capture_charge
+    decoyIdea: Captures a pending charge belonging to another customer, or captures every pending charge.
+    pressure:
+      states:
+        - charge.pending
+      distractors: charge
+  - id: refund_duplicate_charge
+    difficulty: medium
+    kind: irreversible
+    intent: "Acme Corp was billed twice for 'Order #4471 annual plan'. Two succeeded charges have the same amount, and one has the description 'Order #4471 annual plan (duplicate)'. Refund that duplicate in full and leave the original alone."
+    actions:
+      - refund_charge
+    decoyIdea: Refunds the original charge with the same amount, or refunds a pending or already refunded look-alike.
+    pressure:
+      paging: charge
+      states:
+        - charge.succeeded
+      distractors: charge
+  - id: settle_acme_holds_and_refund_dupes
+    difficulty: hard
+    kind: irreversible
+    intent: For Acme Corp, capture every held (pending) charge, then fully refund every charge whose description starts with 'DUP' that is succeeded (including those just captured). Skip failed charges. Acme's charges span more than one page.
+    actions:
+      - capture_charge
+      - refund_charge
+    decoyIdea: Reads only the first page, refunds before capturing so held DUP charges are missed, or refunds failed or non-DUP charges.
+    pressure:
+      paging: charge
+      states:
+        - charge.pending
+        - charge.succeeded
+        - charge.failed
+      distractors: charge
+open_questions:
+  - question: Should the capture and refund endpoints be added beyond the three kept operations?
+    default_answer: Yes, as declared extra operations, so tasks can change state.
+  - question: Should a refund create a separate Refund object returned to the caller?
+    default_answer: Yes. refund_charge returns the Refund object and stores it as a refund row.
+  - question: Is an uncaptured charge paid?
+    default_answer: No. Uncaptured means status pending, paid false.
+assumptions:
+  - decision: Only charges are in scope as the spec's kept operations. Customers and refunds are supporting entities.
+    why: The three kept operations all return Charge, which refers to a customer and a refund list.
+  - decision: 'Extra operations are added on purpose: POST /v1/charges/{id}/capture, POST /v1/charges/{id}/refund, GET/POST /v1/customers and GET /v1/customers/{id}.'
+    why: With only list, create and get there is no workflow beyond creation. Tasks and acceptance tests need capture and refund, and customers to group charges. Stripe offers all of these.
+  - decision: Route paths use {id} for the row id where the spec says {charge}.
+    why: The engine requires {id} on a get route. The spec path matches segment by segment.
+  - decision: meta.api uses list mode stripe (data, has_more, starting_after, ending_before, limit) and the error body {error:{type:invalid_request_error, code, message}}.
+    why: This is what the spec proposes.
+  - decision: Request bodies are JSON, not form-encoded.
+    why: The engine's API takes JSON bodies.
+  - decision: The created field is a unix_time in seconds, named as the spec names it. Charge ids use the prefix ch (ch_0001).
+    why: This keeps the spec's field names and Stripe-style output.
+  - decision: capture=false creates a charge with status pending, captured false, paid false, amount_captured 0. Otherwise status is succeeded, captured true, paid true, amount_captured equal to amount.
+    why: The spec's status enum is succeeded|pending|failed, so a held authorization maps to pending.
+  - decision: Failed charges exist in the seed only (failure_code and failure_message set). They cannot be captured or refunded. The API cannot create a failed charge.
+    why: No card network is simulated.
+  - decision: Refund amount defaults to the remaining captured amount. A refund cannot exceed amount_captured minus amount_refunded. Once amount_refunded equals amount_captured, refunded is true. The charge stays succeeded.
+    why: This is Stripe's behaviour and the spec's status enum has no refunded status.
+  - decision: The embedded refunds list on a charge is optional in the spec and is not an acceptance requirement. Refunds are stored as rows and returned by refund_charge; the charge's amount_refunded and refunded fields reflect them.
+    why: The spec does not require refunds on Charge, and the previous acceptance test could not rely on an embedded list.
+  - decision: 'Action errors: 400 amount_invalid, 400 resource_missing (unknown customer), 400 amount_too_large, 409 charge_already_captured, 409 charge_not_capturable, 409 charge_not_refundable. Engine codes (input.invalid, row.not_found) apply to missing inputs and unknown ids.'
+    why: Stripe-like errors on the shared error body.
+  - decision: Clock starts 2026-10-09T09:00:00Z with tick 0s. All seeded history lies before the start. There are no jobs.
+    why: Time stays explicit and tasks stay deterministic. Expiry of uncaptured charges is out of scope.
+  - decision: Metadata is a string-to-string map stored as JSON text and returned as an object. It is optional on create.
+    why: The spec requires metadata on Charge but not on create.
+outOfScope:
+  - what: Payment intents, payment methods, cards, disputes, balance transactions, payouts, webhooks, idempotency keys, expand[] parameters
+    why: Dropped from the subset. The 10 other operations are not in scope.
+  - what: Real card processing, 3-D Secure and auto-expiry of uncaptured charges
+    why: This is a computation or integration concern, not stateful records.
+  - what: Basic auth enforcement and livemode behaviour
+    why: The world is a single test-mode account. livemode is always false.
+changes: []

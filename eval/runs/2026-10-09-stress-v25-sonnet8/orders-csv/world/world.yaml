@@ -1,0 +1,1216 @@
+format: 1
+meta:
+  name: world
+  description: An order desk where customers' orders move from pending through paid, shipped and delivered, or end cancelled or refunded. Agents read orders and customers and run the fulfilment actions. The orders and customers CSV tables are kept exactly.
+  resembles: Shopify-style order desk (orders and customers admin API)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-04-08T09:00:00Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  customer:
+    description: A buyer of the shop, imported from the customers CSV. Emails are unique.
+    idPrefix: cus
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 200
+        format: email
+      country:
+        type: string
+        description: ISO 3166 alpha-2 country code.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 2
+      plan:
+        type: string
+        description: Subscription plan, such as free, pro or team.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 20
+  order:
+    description: A customer order. It starts pending and moves through paid, shipped and delivered, or ends cancelled or refunded. Transitions run through the workflow actions.
+    idPrefix: ord
+    fields:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      status:
+        type: state
+        description: Fulfilment status. Changed only by the pay, ship, deliver, cancel and refund actions.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - pending
+          - paid
+          - shipped
+          - delivered
+          - cancelled
+          - refunded
+        initial: pending
+        transitions:
+          pending:
+            - paid
+            - cancelled
+          paid:
+            - shipped
+            - cancelled
+            - refunded
+          shipped:
+            - delivered
+          delivered:
+            - refunded
+          cancelled: []
+          refunded: []
+      total_cents:
+        type: money
+        description: Order total in cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      currency:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 3
+        default: USD
+      item_count:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      placed_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      shipped_at:
+        type: datetime
+        description: Set by the ship action.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      note:
+        type: enum
+        description: Optional delivery note.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - Deliver after 5pm
+          - Back door, ring twice
+          - Call "before" delivery
+          - Gift wrap, no receipt
+routes:
+  list_orders:
+    op: list
+    entity: order
+    filters:
+      - status
+      - customer_id
+      - currency
+      - note
+      - item_count
+    search: []
+    sort:
+      - placed_at
+      - total_cents
+    pageSize: 25
+    method: GET
+    path: /orders
+    description: List orders, filter by status, customer_id, currency, note and item_count, sort by placed_at and total_cents.
+  get_order:
+    op: get
+    entity: order
+    method: GET
+    path: /orders/{id}
+    description: Read one order.
+  create_order:
+    op: create
+    entity: order
+    method: POST
+    path: /orders
+    description: Create a pending order.
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - plan
+      - country
+    search:
+      - name
+      - email
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /customers
+    description: List customers, filter by plan and country, search by name and email.
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /customers/{id}
+    description: Read one customer.
+  create_customer:
+    op: create
+    entity: customer
+    method: POST
+    path: /customers
+    description: Create a customer.
+actions:
+  pay_order:
+    method: POST
+    path: /orders/{id}/pay
+    description: Mark a pending order paid.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const o = ctx.db.get('order', ctx.params.id);
+        if (o === null) ctx.fail(404, 'not_found', 'order ' + ctx.params.id + ' not found');
+        if (o.status !== 'pending') ctx.fail(409, 'invalid_state', 'order ' + o.id + ' is ' + o.status + '. Only pending orders can be paid.');
+        return { status: 200, body: ctx.db.update('order', o.id, { status: 'paid' }) };
+      }
+  ship_order:
+    method: POST
+    path: /orders/{id}/ship
+    description: Ship a paid order and set shipped_at.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const o = ctx.db.get('order', ctx.params.id);
+        if (o === null) ctx.fail(404, 'not_found', 'order ' + ctx.params.id + ' not found');
+        if (o.status !== 'paid') ctx.fail(409, 'invalid_state', 'order ' + o.id + ' is ' + o.status + '. Only paid orders can be shipped.');
+        return { status: 200, body: ctx.db.update('order', o.id, { status: 'shipped', shipped_at: ctx.now() }) };
+      }
+  deliver_order:
+    method: POST
+    path: /orders/{id}/deliver
+    description: Mark a shipped order delivered.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const o = ctx.db.get('order', ctx.params.id);
+        if (o === null) ctx.fail(404, 'not_found', 'order ' + ctx.params.id + ' not found');
+        if (o.status !== 'shipped') ctx.fail(409, 'invalid_state', 'order ' + o.id + ' is ' + o.status + '. Only shipped orders can be delivered.');
+        return { status: 200, body: ctx.db.update('order', o.id, { status: 'delivered' }) };
+      }
+  cancel_order:
+    method: POST
+    path: /orders/{id}/cancel
+    description: Cancel a pending or paid order.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const o = ctx.db.get('order', ctx.params.id);
+        if (o === null) ctx.fail(404, 'not_found', 'order ' + ctx.params.id + ' not found');
+        if (o.status !== 'pending' && o.status !== 'paid') ctx.fail(409, 'invalid_state', 'order ' + o.id + ' is ' + o.status + '. Only pending and paid orders can be cancelled.');
+        return { status: 200, body: ctx.db.update('order', o.id, { status: 'cancelled' }) };
+      }
+  refund_order:
+    method: POST
+    path: /orders/{id}/refund
+    description: Refund a paid or delivered order. Refund is final.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const o = ctx.db.get('order', ctx.params.id);
+        if (o === null) ctx.fail(404, 'not_found', 'order ' + ctx.params.id + ' not found');
+        if (o.status !== 'paid' && o.status !== 'delivered') ctx.fail(409, 'invalid_state', 'order ' + o.id + ' is ' + o.status + '. Only paid and delivered orders can be refunded.');
+        return { status: 200, body: ctx.db.update('order', o.id, { status: 'refunded' }) };
+      }
+jobs: {}
+fixtures:
+  orders:
+    - id: ord_0001
+      customer_id: cus_0010
+      status: pending
+      total_cents: 1799
+      currency: USD
+      item_count: 3
+      placed_at: 2026-01-19T10:00:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0002
+      customer_id: cus_0014
+      status: paid
+      total_cents: 5149
+      currency: USD
+      item_count: 5
+      placed_at: 2026-01-20T11:07:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0003
+      customer_id: cus_0004
+      status: shipped
+      total_cents: 22299
+      currency: USD
+      item_count: 5
+      placed_at: 2026-01-21T12:14:00.000Z
+      shipped_at: 2026-01-22T14:00:00.000Z
+      note: null
+    - id: ord_0004
+      customer_id: cus_0013
+      status: delivered
+      total_cents: 27349
+      currency: USD
+      item_count: 4
+      placed_at: 2026-01-22T13:21:00.000Z
+      shipped_at: 2026-01-23T14:00:00.000Z
+      note: null
+    - id: ord_0005
+      customer_id: cus_0016
+      status: cancelled
+      total_cents: 26799
+      currency: USD
+      item_count: 1
+      placed_at: 2026-01-23T14:28:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0006
+      customer_id: cus_0005
+      status: refunded
+      total_cents: 3099
+      currency: USD
+      item_count: 5
+      placed_at: 2026-01-24T15:35:00.000Z
+      shipped_at: 2026-01-25T14:00:00.000Z
+      note: null
+    - id: ord_0007
+      customer_id: cus_0014
+      status: refunded
+      total_cents: 24500
+      currency: USD
+      item_count: 4
+      placed_at: 2026-01-25T16:42:00.000Z
+      shipped_at: 2026-01-26T14:00:00.000Z
+      note: Deliver after 5pm
+    - id: ord_0008
+      customer_id: cus_0004
+      status: paid
+      total_cents: 32599
+      currency: USD
+      item_count: 4
+      placed_at: 2026-01-26T17:49:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0009
+      customer_id: cus_0018
+      status: refunded
+      total_cents: 13399
+      currency: USD
+      item_count: 4
+      placed_at: 2026-01-27T18:56:00.000Z
+      shipped_at: 2026-01-28T14:00:00.000Z
+      note: null
+    - id: ord_0010
+      customer_id: cus_0018
+      status: refunded
+      total_cents: 33699
+      currency: USD
+      item_count: 4
+      placed_at: 2026-01-28T10:03:00.000Z
+      shipped_at: 2026-02-01T14:00:00.000Z
+      note: null
+    - id: ord_0011
+      customer_id: cus_0010
+      status: delivered
+      total_cents: 14200
+      currency: USD
+      item_count: 1
+      placed_at: 2026-02-01T11:10:00.000Z
+      shipped_at: 2026-02-02T14:00:00.000Z
+      note: null
+    - id: ord_0012
+      customer_id: cus_0015
+      status: paid
+      total_cents: 27249
+      currency: USD
+      item_count: 3
+      placed_at: 2026-02-02T12:17:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0013
+      customer_id: cus_0016
+      status: paid
+      total_cents: 24399
+      currency: USD
+      item_count: 4
+      placed_at: 2026-02-03T13:24:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0014
+      customer_id: cus_0002
+      status: delivered
+      total_cents: 15349
+      currency: USD
+      item_count: 4
+      placed_at: 2026-02-04T14:31:00.000Z
+      shipped_at: 2026-02-05T14:00:00.000Z
+      note: null
+    - id: ord_0015
+      customer_id: cus_0017
+      status: pending
+      total_cents: 13749
+      currency: USD
+      item_count: 2
+      placed_at: 2026-02-05T15:38:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0016
+      customer_id: cus_0016
+      status: delivered
+      total_cents: 3799
+      currency: USD
+      item_count: 3
+      placed_at: 2026-02-06T16:45:00.000Z
+      shipped_at: 2026-02-07T14:00:00.000Z
+      note: null
+    - id: ord_0017
+      customer_id: cus_0007
+      status: delivered
+      total_cents: 38749
+      currency: USD
+      item_count: 2
+      placed_at: 2026-02-07T17:52:00.000Z
+      shipped_at: 2026-02-08T14:00:00.000Z
+      note: null
+    - id: ord_0018
+      customer_id: cus_0003
+      status: delivered
+      total_cents: 549
+      currency: USD
+      item_count: 5
+      placed_at: 2026-02-08T18:59:00.000Z
+      shipped_at: 2026-02-09T14:00:00.000Z
+      note: null
+    - id: ord_0019
+      customer_id: cus_0003
+      status: cancelled
+      total_cents: 31700
+      currency: USD
+      item_count: 2
+      placed_at: 2026-02-09T10:06:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0020
+      customer_id: cus_0018
+      status: pending
+      total_cents: 14299
+      currency: USD
+      item_count: 3
+      placed_at: 2026-02-10T11:13:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0021
+      customer_id: cus_0016
+      status: paid
+      total_cents: 35899
+      currency: USD
+      item_count: 2
+      placed_at: 2026-02-11T12:20:00.000Z
+      shipped_at: null
+      note: Back door, ring twice
+    - id: ord_0022
+      customer_id: cus_0005
+      status: cancelled
+      total_cents: 31199
+      currency: USD
+      item_count: 5
+      placed_at: 2026-02-12T13:27:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0023
+      customer_id: cus_0006
+      status: shipped
+      total_cents: 7499
+      currency: USD
+      item_count: 3
+      placed_at: 2026-02-13T14:34:00.000Z
+      shipped_at: 2026-02-14T14:00:00.000Z
+      note: Back door, ring twice
+    - id: ord_0024
+      customer_id: cus_0005
+      status: cancelled
+      total_cents: 27100
+      currency: USD
+      item_count: 4
+      placed_at: 2026-02-14T15:41:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0025
+      customer_id: cus_0013
+      status: pending
+      total_cents: 4200
+      currency: USD
+      item_count: 3
+      placed_at: 2026-02-15T16:48:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0026
+      customer_id: cus_0001
+      status: refunded
+      total_cents: 1899
+      currency: USD
+      item_count: 4
+      placed_at: 2026-02-16T17:55:00.000Z
+      shipped_at: 2026-02-17T14:00:00.000Z
+      note: null
+    - id: ord_0027
+      customer_id: cus_0015
+      status: shipped
+      total_cents: 17100
+      currency: USD
+      item_count: 4
+      placed_at: 2026-02-17T18:02:00.000Z
+      shipped_at: 2026-02-18T14:00:00.000Z
+      note: null
+    - id: ord_0028
+      customer_id: cus_0006
+      status: delivered
+      total_cents: 8399
+      currency: USD
+      item_count: 5
+      placed_at: 2026-02-18T10:09:00.000Z
+      shipped_at: 2026-02-19T14:00:00.000Z
+      note: null
+    - id: ord_0029
+      customer_id: cus_0011
+      status: paid
+      total_cents: 23999
+      currency: USD
+      item_count: 2
+      placed_at: 2026-02-19T11:16:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0030
+      customer_id: cus_0018
+      status: refunded
+      total_cents: 20900
+      currency: USD
+      item_count: 2
+      placed_at: 2026-02-20T12:23:00.000Z
+      shipped_at: 2026-02-21T14:00:00.000Z
+      note: null
+    - id: ord_0031
+      customer_id: cus_0002
+      status: refunded
+      total_cents: 33699
+      currency: USD
+      item_count: 1
+      placed_at: 2026-02-21T13:30:00.000Z
+      shipped_at: 2026-02-22T14:00:00.000Z
+      note: null
+    - id: ord_0032
+      customer_id: cus_0007
+      status: delivered
+      total_cents: 25299
+      currency: USD
+      item_count: 1
+      placed_at: 2026-02-22T14:37:00.000Z
+      shipped_at: 2026-02-23T14:00:00.000Z
+      note: null
+    - id: ord_0033
+      customer_id: cus_0007
+      status: paid
+      total_cents: 26900
+      currency: USD
+      item_count: 2
+      placed_at: 2026-02-23T15:44:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0034
+      customer_id: cus_0013
+      status: refunded
+      total_cents: 14449
+      currency: USD
+      item_count: 5
+      placed_at: 2026-02-24T16:51:00.000Z
+      shipped_at: 2026-02-25T14:00:00.000Z
+      note: null
+    - id: ord_0035
+      customer_id: cus_0013
+      status: delivered
+      total_cents: 16100
+      currency: USD
+      item_count: 3
+      placed_at: 2026-02-25T17:58:00.000Z
+      shipped_at: 2026-02-26T14:00:00.000Z
+      note: null
+    - id: ord_0036
+      customer_id: cus_0016
+      status: paid
+      total_cents: 21749
+      currency: USD
+      item_count: 4
+      placed_at: 2026-02-26T18:05:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0037
+      customer_id: cus_0016
+      status: paid
+      total_cents: 23200
+      currency: USD
+      item_count: 5
+      placed_at: 2026-02-27T10:12:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0038
+      customer_id: cus_0004
+      status: cancelled
+      total_cents: 11400
+      currency: USD
+      item_count: 1
+      placed_at: 2026-02-28T11:19:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0039
+      customer_id: cus_0011
+      status: pending
+      total_cents: 21399
+      currency: USD
+      item_count: 2
+      placed_at: 2026-03-01T12:26:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0040
+      customer_id: cus_0006
+      status: pending
+      total_cents: 18599
+      currency: USD
+      item_count: 5
+      placed_at: 2026-03-02T13:33:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0041
+      customer_id: cus_0009
+      status: cancelled
+      total_cents: 28999
+      currency: USD
+      item_count: 2
+      placed_at: 2026-03-03T14:40:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0042
+      customer_id: cus_0009
+      status: cancelled
+      total_cents: 34899
+      currency: USD
+      item_count: 2
+      placed_at: 2026-03-04T15:47:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0043
+      customer_id: cus_0004
+      status: pending
+      total_cents: 22800
+      currency: USD
+      item_count: 1
+      placed_at: 2026-03-05T16:54:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0044
+      customer_id: cus_0006
+      status: refunded
+      total_cents: 33599
+      currency: USD
+      item_count: 1
+      placed_at: 2026-03-06T17:01:00.000Z
+      shipped_at: 2026-03-07T14:00:00.000Z
+      note: Call "before" delivery
+    - id: ord_0045
+      customer_id: cus_0003
+      status: cancelled
+      total_cents: 15449
+      currency: USD
+      item_count: 2
+      placed_at: 2026-03-07T18:08:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0046
+      customer_id: cus_0001
+      status: shipped
+      total_cents: 21549
+      currency: USD
+      item_count: 4
+      placed_at: 2026-03-08T10:15:00.000Z
+      shipped_at: 2026-03-09T14:00:00.000Z
+      note: null
+    - id: ord_0047
+      customer_id: cus_0001
+      status: pending
+      total_cents: 16300
+      currency: USD
+      item_count: 1
+      placed_at: 2026-03-09T11:22:00.000Z
+      shipped_at: null
+      note: Gift wrap, no receipt
+    - id: ord_0048
+      customer_id: cus_0012
+      status: refunded
+      total_cents: 16649
+      currency: USD
+      item_count: 5
+      placed_at: 2026-03-10T12:29:00.000Z
+      shipped_at: 2026-03-11T14:00:00.000Z
+      note: null
+    - id: ord_0049
+      customer_id: cus_0002
+      status: refunded
+      total_cents: 21149
+      currency: USD
+      item_count: 5
+      placed_at: 2026-03-11T13:36:00.000Z
+      shipped_at: 2026-03-12T14:00:00.000Z
+      note: null
+    - id: ord_0050
+      customer_id: cus_0014
+      status: paid
+      total_cents: 35100
+      currency: USD
+      item_count: 3
+      placed_at: 2026-03-12T14:43:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0051
+      customer_id: cus_0009
+      status: cancelled
+      total_cents: 20449
+      currency: USD
+      item_count: 3
+      placed_at: 2026-03-13T15:50:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0052
+      customer_id: cus_0014
+      status: pending
+      total_cents: 1749
+      currency: USD
+      item_count: 3
+      placed_at: 2026-03-14T16:57:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0053
+      customer_id: cus_0004
+      status: shipped
+      total_cents: 15749
+      currency: USD
+      item_count: 3
+      placed_at: 2026-03-15T17:04:00.000Z
+      shipped_at: 2026-03-16T14:00:00.000Z
+      note: null
+    - id: ord_0054
+      customer_id: cus_0018
+      status: cancelled
+      total_cents: 18000
+      currency: USD
+      item_count: 5
+      placed_at: 2026-03-16T18:11:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0055
+      customer_id: cus_0004
+      status: pending
+      total_cents: 8899
+      currency: USD
+      item_count: 1
+      placed_at: 2026-03-17T10:18:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0056
+      customer_id: cus_0012
+      status: pending
+      total_cents: 31099
+      currency: USD
+      item_count: 3
+      placed_at: 2026-03-18T11:25:00.000Z
+      shipped_at: null
+      note: Deliver after 5pm
+    - id: ord_0057
+      customer_id: cus_0005
+      status: pending
+      total_cents: 18749
+      currency: USD
+      item_count: 4
+      placed_at: 2026-03-19T12:32:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0058
+      customer_id: cus_0014
+      status: delivered
+      total_cents: 34400
+      currency: USD
+      item_count: 2
+      placed_at: 2026-03-20T13:39:00.000Z
+      shipped_at: 2026-03-21T14:00:00.000Z
+      note: null
+    - id: ord_0059
+      customer_id: cus_0018
+      status: paid
+      total_cents: 35599
+      currency: USD
+      item_count: 4
+      placed_at: 2026-03-21T14:46:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0060
+      customer_id: cus_0008
+      status: shipped
+      total_cents: 1600
+      currency: USD
+      item_count: 3
+      placed_at: 2026-03-22T15:53:00.000Z
+      shipped_at: 2026-03-23T14:00:00.000Z
+      note: null
+    - id: ord_0061
+      customer_id: cus_0009
+      status: cancelled
+      total_cents: 16600
+      currency: USD
+      item_count: 5
+      placed_at: 2026-03-23T16:00:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0062
+      customer_id: cus_0018
+      status: pending
+      total_cents: 2499
+      currency: USD
+      item_count: 5
+      placed_at: 2026-03-24T17:07:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0063
+      customer_id: cus_0017
+      status: shipped
+      total_cents: 39199
+      currency: USD
+      item_count: 3
+      placed_at: 2026-03-25T18:14:00.000Z
+      shipped_at: 2026-03-26T14:00:00.000Z
+      note: null
+    - id: ord_0064
+      customer_id: cus_0001
+      status: pending
+      total_cents: 32600
+      currency: USD
+      item_count: 4
+      placed_at: 2026-03-26T10:21:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0065
+      customer_id: cus_0017
+      status: pending
+      total_cents: 8299
+      currency: USD
+      item_count: 4
+      placed_at: 2026-03-27T11:28:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0066
+      customer_id: cus_0008
+      status: refunded
+      total_cents: 29249
+      currency: USD
+      item_count: 3
+      placed_at: 2026-03-28T12:35:00.000Z
+      shipped_at: 2026-04-01T14:00:00.000Z
+      note: null
+    - id: ord_0067
+      customer_id: cus_0015
+      status: paid
+      total_cents: 33149
+      currency: USD
+      item_count: 5
+      placed_at: 2026-04-01T13:42:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0068
+      customer_id: cus_0010
+      status: delivered
+      total_cents: 10100
+      currency: USD
+      item_count: 4
+      placed_at: 2026-04-02T14:49:00.000Z
+      shipped_at: 2026-04-03T14:00:00.000Z
+      note: null
+    - id: ord_0069
+      customer_id: cus_0001
+      status: paid
+      total_cents: 18699
+      currency: USD
+      item_count: 4
+      placed_at: 2026-04-03T15:56:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0070
+      customer_id: cus_0003
+      status: pending
+      total_cents: 15849
+      currency: USD
+      item_count: 5
+      placed_at: 2026-04-04T16:03:00.000Z
+      shipped_at: null
+      note: null
+    - id: ord_0071
+      customer_id: cus_0004
+      status: refunded
+      total_cents: 1499
+      currency: USD
+      item_count: 2
+      placed_at: 2026-04-05T17:10:00.000Z
+      shipped_at: 2026-04-06T14:00:00.000Z
+      note: null
+    - id: ord_0072
+      customer_id: cus_0002
+      status: refunded
+      total_cents: 20649
+      currency: USD
+      item_count: 5
+      placed_at: 2026-04-06T18:17:00.000Z
+      shipped_at: 2026-04-07T14:00:00.000Z
+      note: null
+  customers:
+    - id: cus_0001
+      name: Ada Lovelace
+      email: ada.lovelace@example.com
+      country: GB
+      plan: pro
+      created_at: 2026-01-01T09:00:00.000Z
+    - id: cus_0002
+      name: Grace Hopper
+      email: grace.hopper@example.com
+      country: GB
+      plan: free
+      created_at: 2026-01-02T10:00:00.000Z
+    - id: cus_0003
+      name: Alan Turing
+      email: alan.turing@example.com
+      country: IE
+      plan: team
+      created_at: 2026-01-03T11:00:00.000Z
+    - id: cus_0004
+      name: Edsger Dijkstra
+      email: edsger.dijkstra@example.com
+      country: SE
+      plan: team
+      created_at: 2026-01-04T12:00:00.000Z
+    - id: cus_0005
+      name: Barbara Liskov
+      email: barbara.liskov@example.com
+      country: SE
+      plan: free
+      created_at: 2026-01-05T13:00:00.000Z
+    - id: cus_0006
+      name: Donald Knuth
+      email: donald.knuth@example.com
+      country: US
+      plan: team
+      created_at: 2026-01-06T14:00:00.000Z
+    - id: cus_0007
+      name: Frances Allen
+      email: frances.allen@example.com
+      country: GB
+      plan: free
+      created_at: 2026-01-07T15:00:00.000Z
+    - id: cus_0008
+      name: Ken Thompson
+      email: ken.thompson@example.com
+      country: NL
+      plan: free
+      created_at: 2026-01-08T16:00:00.000Z
+    - id: cus_0009
+      name: Margaret Hamilton
+      email: margaret.hamilton@example.com
+      country: SE
+      plan: free
+      created_at: 2026-01-09T09:00:00.000Z
+    - id: cus_0010
+      name: Dennis Ritchie
+      email: dennis.ritchie@example.com
+      country: SE
+      plan: team
+      created_at: 2026-01-10T10:00:00.000Z
+    - id: cus_0011
+      name: Radia Perlman
+      email: radia.perlman@example.com
+      country: CA
+      plan: free
+      created_at: 2026-01-11T11:00:00.000Z
+    - id: cus_0012
+      name: John McCarthy
+      email: john.mccarthy@example.com
+      country: IE
+      plan: pro
+      created_at: 2026-01-12T12:00:00.000Z
+    - id: cus_0013
+      name: Katherine Johnson
+      email: katherine.johnson@example.com
+      country: CA
+      plan: pro
+      created_at: 2026-01-13T13:00:00.000Z
+    - id: cus_0014
+      name: Niklaus Wirth
+      email: niklaus.wirth@example.com
+      country: IE
+      plan: team
+      created_at: 2026-01-14T14:00:00.000Z
+    - id: cus_0015
+      name: Shafi Goldwasser
+      email: shafi.goldwasser@example.com
+      country: GB
+      plan: team
+      created_at: 2026-01-15T15:00:00.000Z
+    - id: cus_0016
+      name: Leslie Lamport
+      email: leslie.lamport@example.com
+      country: CA
+      plan: free
+      created_at: 2026-01-16T16:00:00.000Z
+    - id: cus_0017
+      name: Hedy Lamarr
+      email: hedy.lamarr@example.com
+      country: NL
+      plan: pro
+      created_at: 2026-01-17T09:00:00.000Z
+    - id: cus_0018
+      name: Tim Berners-Lee
+      email: tim.bernerslee@example.com
+      country: SE
+      plan: free
+      created_at: 2026-01-18T10:00:00.000Z
+seed:
+  customer: "(ctx) => ctx.fixtures.customers.map((r) => { const { id, ...rest } = r; return { ...rest, updated_at: r.created_at }; })"
+  order: "(ctx) => ctx.fixtures.orders.map((r) => { const { id, ...rest } = r; return { ...rest, created_at: r.placed_at, updated_at: r.shipped_at ? r.shipped_at : r.placed_at }; })"
+tests:
+  pay_order_flow:
+    description: Create a customer and an order, pay it, then pay again.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Pay Tester', email: 'pay.tester@payflow.test', country: 'GB', plan: 'pro' });
+        ctx.assert(c.status === 201, 'create customer ' + JSON.stringify(c.body));
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 1500, currency: 'USD', item_count: 1, placed_at: '2026-04-01T10:00:00Z' });
+        ctx.assert(o.status === 201 && o.body.status === 'pending', 'create order ' + JSON.stringify(o.body));
+        const p = ctx.api('POST', '/orders/' + o.body.id + '/pay', {});
+        ctx.assert(p.status === 200 && p.body.status === 'paid', 'pay ' + JSON.stringify(p.body));
+        const again = ctx.api('POST', '/orders/' + o.body.id + '/pay', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second pay ' + JSON.stringify(again.body));
+      }
+  ship_order_flow:
+    description: Ship a pending order (refused), pay it, ship it.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Ship Tester', email: 'ship.tester@shipflow.test', country: 'DE', plan: 'free' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 2500, currency: 'USD', item_count: 2, placed_at: '2026-04-01T11:00:00Z' });
+        ctx.assert(o.status === 201, 'create order ' + JSON.stringify(o.body));
+        const early = ctx.api('POST', '/orders/' + o.body.id + '/ship', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'ship pending ' + JSON.stringify(early.body));
+        ctx.assert(ctx.api('POST', '/orders/' + o.body.id + '/pay', {}).status === 200, 'pay');
+        const s = ctx.api('POST', '/orders/' + o.body.id + '/ship', {});
+        ctx.assert(s.status === 200 && s.body.status === 'shipped' && s.body.shipped_at !== null, 'ship ' + JSON.stringify(s.body));
+      }
+  deliver_order_flow:
+    description: Deliver a paid order (refused), ship it, deliver it, deliver again.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Deliver Tester', email: 'deliver.tester@deliverflow.test', country: 'FR', plan: 'pro' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 900, currency: 'USD', item_count: 1, placed_at: '2026-04-02T10:00:00Z' });
+        const id = o.body.id;
+        ctx.api('POST', '/orders/' + id + '/pay', {});
+        const early = ctx.api('POST', '/orders/' + id + '/deliver', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'deliver paid ' + JSON.stringify(early.body));
+        ctx.api('POST', '/orders/' + id + '/ship', {});
+        const d = ctx.api('POST', '/orders/' + id + '/deliver', {});
+        ctx.assert(d.status === 200 && d.body.status === 'delivered', 'deliver ' + JSON.stringify(d.body));
+        const again = ctx.api('POST', '/orders/' + id + '/deliver', {});
+        ctx.assert(again.status === 409, 'deliver twice ' + again.status);
+      }
+  cancel_order_flow:
+    description: Cancel a pending order, a paid order, and fail on a shipped order.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Cancel Tester', email: 'cancel.tester@cancelflow.test', country: 'ES', plan: 'free' });
+        const mk = (n) => ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 700 + n, currency: 'USD', item_count: 1, placed_at: '2026-04-03T10:00:00Z' }).body.id;
+        const a = mk(1), b = mk(2), s = mk(3);
+        const ca = ctx.api('POST', '/orders/' + a + '/cancel', {});
+        ctx.assert(ca.status === 200 && ca.body.status === 'cancelled', 'cancel pending ' + JSON.stringify(ca.body));
+        ctx.api('POST', '/orders/' + b + '/pay', {});
+        const cb = ctx.api('POST', '/orders/' + b + '/cancel', {});
+        ctx.assert(cb.status === 200 && cb.body.status === 'cancelled', 'cancel paid ' + JSON.stringify(cb.body));
+        ctx.api('POST', '/orders/' + s + '/pay', {});
+        ctx.api('POST', '/orders/' + s + '/ship', {});
+        const cs = ctx.api('POST', '/orders/' + s + '/cancel', {});
+        ctx.assert(cs.status === 409 && cs.body.error.code === 'invalid_state', 'cancel shipped ' + JSON.stringify(cs.body));
+      }
+  refund_order_flow:
+    description: Refuse refunding a pending order, refund a paid order, refuse a second refund.
+    script: |-
+      (ctx) => {
+        const c = ctx.api('POST', '/customers', { name: 'Refund Tester', email: 'refund.tester@refundflow.test', country: 'IT', plan: 'pro' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, total_cents: 4200, currency: 'USD', item_count: 3, placed_at: '2026-04-04T10:00:00Z' });
+        const id = o.body.id;
+        const early = ctx.api('POST', '/orders/' + id + '/refund', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'refund pending ' + JSON.stringify(early.body));
+        ctx.api('POST', '/orders/' + id + '/pay', {});
+        const r = ctx.api('POST', '/orders/' + id + '/refund', {});
+        ctx.assert(r.status === 200 && r.body.status === 'refunded', 'refund ' + JSON.stringify(r.body));
+        const again = ctx.api('POST', '/orders/' + id + '/refund', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'refund twice ' + JSON.stringify(again.body));
+      }
+tasks:
+  cancel_latest_pending:
+    difficulty: easy
+    instruction: Cancel the pending order that was placed most recently. Change nothing else.
+    grader: "(ctx) => { let target = null; for (const o of ctx.seed.list('order', { where: { status: 'pending' } })) { if (target === null || ctx.time.minutesBetween(target.placed_at, o.placed_at) > 0) target = o; } if (target === null) return 0; ctx.guardChanges('only the latest pending order changed, and only its status', [{ entity: 'order', id: target.id, kind: 'updated', fields: ['status'] }]); return ctx.db.get('order', target.id).status === 'cancelled' ? 1 : 0; }"
+    solution: (ctx) => { const r = ctx.api('GET', '/orders?status=pending&sort=-placed_at&limit=1'); ctx.assert(r.status === 200 && r.body.data.length === 1, 'no pending order ' + JSON.stringify(r.body)); const c = ctx.api('POST', '/orders/' + r.body.data[0].id + '/cancel', {}); ctx.assert(c.status === 200, 'cancel failed ' + JSON.stringify(c.body)); }
+    decoys:
+      - why: Cancels the earliest-placed pending order instead of the most recent one
+        script: (ctx) => { const r = ctx.api('GET', '/orders?status=pending&sort=placed_at&limit=1'); ctx.api('POST', '/orders/' + r.body.data[0].id + '/cancel', {}); }
+      - why: Cancels the two most recently placed pending orders, one more than asked
+        script: (ctx) => { const r = ctx.api('GET', '/orders?status=pending&sort=-placed_at&limit=2'); for (const o of r.body.data) ctx.api('POST', '/orders/' + o.id + '/cancel', {}); }
+    alternatives:
+      - why: Reads every pending order and picks the latest placed_at itself instead of sorting on the server
+        script: (ctx) => { const r = ctx.api('GET', '/orders?status=pending&limit=25'); ctx.assert(r.status === 200, 'list failed ' + JSON.stringify(r.body)); let latest = null; for (const o of r.body.data) { if (latest === null || o.placed_at > latest.placed_at) latest = o; } ctx.assert(latest !== null, 'no pending order'); const c = ctx.api('POST', '/orders/' + latest.id + '/cancel', {}); ctx.assert(c.status === 200, 'cancel failed ' + JSON.stringify(c.body)); }
+    allows:
+      - entity: order
+        kind: updated
+        fields:
+          - status
+        where:
+          status: pending
+          customer_id: cus_0003
+  refund_top_delivered:
+    difficulty: medium
+    instruction: Refund the two delivered orders with the highest total_cents among the orders placed on or after 15 February 2026. Only an order that is delivered may be refunded, and every other order must stay as it is.
+    grader: "(ctx) => { const since = '2026-02-15T00:00:00.000Z'; const cands = ctx.seed.list('order', { where: { status: 'delivered' } }).filter((o) => ctx.time.minutesBetween(since, o.placed_at) >= 0).sort((a, b) => b.total_cents - a.total_cents); if (cands.length < 2) return 0; const targets = cands.slice(0, 2); ctx.guardChanges('only the two top delivered orders changed, and only their status', targets.map((t) => ({ entity: 'order', id: t.id, kind: 'updated', fields: ['status'] }))); for (const t of targets) { ctx.goal(0.5, 'order ' + t.id + ' refunded', ctx.db.get('order', t.id).status === 'refunded'); } return ctx.score(); }"
+    solution: "(ctx) => { const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'list failed ' + JSON.stringify(r.body)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); const cands = orders.filter((o) => o.status === 'delivered' && o.placed_at >= '2026-02-15T00:00:00.000Z').sort((a, b) => b.total_cents - a.total_cents); ctx.assert(cands.length >= 2, 'expected delivered orders since 15 Feb'); const peek = ctx.api('GET', '/orders?status=delivered&limit=5'); ctx.assert(peek.status === 200 && peek.body.data.every((o) => o.status === 'delivered'), 'delivered list failed'); for (const o of cands.slice(0, 2)) { const r = ctx.api('POST', '/orders/' + o.id + '/refund', {}); ctx.assert(r.status === 200, 'refund ' + o.id + ' failed ' + JSON.stringify(r.body)); } }"
+    decoys:
+      - why: Refunds only the single highest-total delivered order and forgets the second one
+        script: "(ctx) => { const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); const cands = orders.filter((o) => o.status === 'delivered' && o.placed_at >= '2026-02-15T00:00:00.000Z').sort((a, b) => b.total_cents - a.total_cents); ctx.api('POST', '/orders/' + cands[0].id + '/refund', {}); }"
+      - why: Ignores the 15 February cutoff and refunds the two highest-total delivered orders of all time
+        script: "(ctx) => { const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?status=delivered&limit=5' + (cursor === null ? '' : '&cursor=' + cursor)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); const cands = orders.sort((a, b) => b.total_cents - a.total_cents); for (const o of cands.slice(0, 2)) ctx.api('POST', '/orders/' + o.id + '/refund', {}); }"
+      - why: "Does not check the order is delivered: refunds the two highest-total paid or delivered orders since 15 February, which hits paid orders"
+        script: "(ctx) => { const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); const cands = orders.filter((o) => (o.status === 'delivered' || o.status === 'paid') && o.placed_at >= '2026-02-15T00:00:00.000Z').sort((a, b) => b.total_cents - a.total_cents); for (const o of cands.slice(0, 2)) ctx.api('POST', '/orders/' + o.id + '/refund', {}); }"
+      - why: Stops after the second page of orders, so it never sees the highest-total delivered order on page 3 and refunds a lower one instead
+        script: "(ctx) => { const orders = []; let cursor = null; for (let i = 0; i < 2; i++) { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); orders.push(...r.body.data); cursor = r.body.next_cursor; if (cursor === null) break; } const cands = orders.filter((o) => o.status === 'delivered' && o.placed_at >= '2026-02-15T00:00:00.000Z').sort((a, b) => b.total_cents - a.total_cents); for (const o of cands.slice(0, 2)) ctx.api('POST', '/orders/' + o.id + '/refund', {}); }"
+    alternatives:
+      - why: Pages through the delivered-only list with a small page size instead of the whole order list
+        script: "(ctx) => { const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?status=delivered&limit=5' + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'list failed ' + JSON.stringify(r.body)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); const cands = orders.filter((o) => o.placed_at >= '2026-02-15T00:00:00.000Z').sort((a, b) => b.total_cents - a.total_cents); ctx.assert(cands.length >= 2, 'expected delivered orders since 15 Feb'); for (const o of cands.slice(0, 2)) { const r = ctx.api('POST', '/orders/' + o.id + '/refund', {}); ctx.assert(r.status === 200, 'refund ' + o.id + ' failed ' + JSON.stringify(r.body)); } }"
+    allows:
+      - entity: order
+        kind: updated
+        fields:
+          - status
+        where:
+          status: delivered
+          total_cents: 34400
+      - entity: order
+        kind: updated
+        fields:
+          - status
+        where:
+          status: delivered
+          total_cents: 25299
+  pay_and_ship_pro_pending:
+    difficulty: hard
+    instruction: Register a new customer named Rosalind Franklin with the email rosalind.franklin@example.com, country GB and plan pro. Then pay and ship every order that is still pending and was placed by a customer on the pro plan. Change nothing else.
+    grader: "(ctx) => { const plan = {}; for (const c of ctx.seed.list('customer')) plan[c.id] = c.plan; const targets = ctx.seed.list('order', { where: { status: 'pending' } }).filter((o) => plan[o.customer_id] === 'pro'); if (targets.length === 0) return 0; const fresh = ctx.db.list('customer').filter((c) => ctx.seed.get('customer', c.id) === null && c.name === 'Rosalind Franklin' && c.email === 'rosalind.franklin@example.com' && c.country === 'GB' && c.plan === 'pro'); ctx.guardChanges('only the new customer and the pro pending orders changed', [...targets.map((t) => ({ entity: 'order', id: t.id, kind: 'updated', fields: ['status', 'shipped_at'] })), ...fresh.map((c) => ({ entity: 'customer', id: c.id, kind: 'created', fields: ['name', 'email', 'country', 'plan'] }))]); let done = 0; for (const t of targets) { const end = ctx.db.get('order', t.id); if (end.status === 'shipped' && end.shipped_at !== null) done += 1; } const registered = fresh.length === 1 ? 15 : 0; return (registered + 85 * done / targets.length) / 100; }"
+    solution: "(ctx) => { const c = ctx.api('POST', '/customers', { name: 'Rosalind Franklin', email: 'rosalind.franklin@example.com', country: 'GB', plan: 'pro' }); ctx.assert(c.status === 201, 'create customer failed ' + JSON.stringify(c.body)); const proRes = ctx.api('GET', '/customers?plan=pro'); ctx.assert(proRes.status === 200, 'customer list failed ' + JSON.stringify(proRes.body)); const pro = new Set(proRes.body.data.map((x) => x.id)); const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'order list failed ' + JSON.stringify(r.body)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); const targets = orders.filter((o) => o.status === 'pending' && pro.has(o.customer_id)); ctx.assert(targets.length > 0, 'no pending pro orders found'); for (const o of targets) { const p = ctx.api('POST', '/orders/' + o.id + '/pay', {}); ctx.assert(p.status === 200, 'pay ' + o.id + ' failed ' + JSON.stringify(p.body)); const s = ctx.api('POST', '/orders/' + o.id + '/ship', {}); ctx.assert(s.status === 200, 'ship ' + o.id + ' failed ' + JSON.stringify(s.body)); } }"
+    decoys:
+      - why: Registers the customer and pays every pro pending order but never ships them
+        script: "(ctx) => { ctx.api('POST', '/customers', { name: 'Rosalind Franklin', email: 'rosalind.franklin@example.com', country: 'GB', plan: 'pro' }); const pro = new Set(ctx.api('GET', '/customers?plan=pro').body.data.map((x) => x.id)); const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); for (const o of orders.filter((x) => x.status === 'pending' && pro.has(x.customer_id))) { ctx.api('POST', '/orders/' + o.id + '/pay', {}); } }"
+      - why: Reads only the first page of orders, so it pays and ships just the pro pending orders on that page and misses the rest
+        script: "(ctx) => { ctx.api('POST', '/customers', { name: 'Rosalind Franklin', email: 'rosalind.franklin@example.com', country: 'GB', plan: 'pro' }); const pro = new Set(ctx.api('GET', '/customers?plan=pro').body.data.map((x) => x.id)); const page = ctx.api('GET', '/orders?limit=25').body.data; for (const o of page.filter((x) => x.status === 'pending' && pro.has(x.customer_id))) { ctx.api('POST', '/orders/' + o.id + '/pay', {}); ctx.api('POST', '/orders/' + o.id + '/ship', {}); } }"
+      - why: Ignores the customer plan and pays and ships every pending order, including those of free and team customers
+        script: "(ctx) => { ctx.api('POST', '/customers', { name: 'Rosalind Franklin', email: 'rosalind.franklin@example.com', country: 'GB', plan: 'pro' }); const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); for (const o of orders.filter((x) => x.status === 'pending')) { ctx.api('POST', '/orders/' + o.id + '/pay', {}); ctx.api('POST', '/orders/' + o.id + '/ship', {}); } }"
+      - why: Pays and ships every pro pending order correctly but skips registering the new customer
+        script: "(ctx) => { const pro = new Set(ctx.api('GET', '/customers?plan=pro').body.data.map((x) => x.id)); const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); for (const o of orders.filter((x) => x.status === 'pending' && pro.has(x.customer_id))) { ctx.api('POST', '/orders/' + o.id + '/pay', {}); ctx.api('POST', '/orders/' + o.id + '/ship', {}); } }"
+    alternatives:
+      - why: Pays every target order first and ships them all in a second pass, and registers the customer last
+        script: "(ctx) => { const proRes = ctx.api('GET', '/customers?plan=pro'); ctx.assert(proRes.status === 200, 'customer list failed'); const pro = new Set(proRes.body.data.map((x) => x.id)); const orders = []; let cursor = null; do { const r = ctx.api('GET', '/orders?limit=25' + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'order list failed'); orders.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); const targets = orders.filter((o) => o.status === 'pending' && pro.has(o.customer_id)); ctx.assert(targets.length > 0, 'no pending pro orders found'); for (const o of targets) { ctx.assert(ctx.api('POST', '/orders/' + o.id + '/pay', {}).status === 200, 'pay ' + o.id + ' failed'); } for (const o of targets) { ctx.assert(ctx.api('POST', '/orders/' + o.id + '/ship', {}).status === 200, 'ship ' + o.id + ' failed'); } const c = ctx.api('POST', '/customers', { name: 'Rosalind Franklin', email: 'rosalind.franklin@example.com', country: 'GB', plan: 'pro' }); ctx.assert(c.status === 201, 'create customer failed ' + JSON.stringify(c.body)); }"
+    allows:
+      - entity: customer
+        kind: created
+        fields: []
+        where:
+          email: rosalind.franklin@example.com
+          plan: pro
+      - entity: order
+        kind: updated
+        fields:
+          - status
+          - shipped_at
+        where:
+          status: pending
+          customer_id: cus_0001
+      - entity: order
+        kind: updated
+        fields:
+          - status
+          - shipped_at
+        where:
+          status: pending
+          customer_id: cus_0012
+      - entity: order
+        kind: updated
+        fields:
+          - status
+          - shipped_at
+        where:
+          status: pending
+          customer_id: cus_0013
+      - entity: order
+        kind: updated
+        fields:
+          - status
+          - shipped_at
+        where:
+          status: pending
+          customer_id: cus_0017

@@ -1,0 +1,110 @@
+{
+  "capsule": 1,
+  "runId": "run_20261009T163554Z_e826f820",
+  "mode": "create",
+  "input": {
+    "kind": "description",
+    "digest": "57e32539c954aebe73089d71925e1b2177ef93829c1a3a1225e9bb5bc8a976d0",
+    "source": {
+      "kind": "description"
+    }
+  },
+  "worldId": "wid_e3d9d54fe71f7383a8ac51b5c2f5041843a50a3df739410a8341de57b3b1d708",
+  "model": "claude-haiku-5-5",
+  "transport": "claude-cli",
+  "attempts": [
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 82888,
+      "costUsd": 0.010541530000000002
+    },
+    {
+      "step": "plan",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 28253,
+      "costUsd": 0.006450829999999999
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "invalid_output",
+      "ms": 10922,
+      "costUsd": 0.0036149499999999996
+    },
+    {
+      "step": "model",
+      "n": 2,
+      "outcome": "accepted",
+      "ms": 19209,
+      "costUsd": 0.00490255
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 17513,
+      "costUsd": 0.005172090000000001
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 67682,
+      "costUsd": 0.01006764
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "rejected",
+      "ms": 104247,
+      "costUsd": 0.01688724
+    },
+    {
+      "step": "tasks",
+      "n": 2,
+      "outcome": "rejected",
+      "ms": 32333,
+      "costUsd": 0.00877954
+    },
+    {
+      "step": "plan",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 26161,
+      "costUsd": 0.007412829999999999
+    },
+    {
+      "step": "model",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 20801,
+      "costUsd": 0.007815260000000001
+    },
+    {
+      "step": "workflow",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 7863,
+      "costUsd": 0.00426509
+    },
+    {
+      "step": "seed",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 17059,
+      "costUsd": 0.00543014
+    },
+    {
+      "step": "tasks",
+      "n": 1,
+      "outcome": "accepted",
+      "ms": 47257,
+      "costUsd": 0.01083214
+    }
+  ],
+  "ms": 482863,
+  "costUsd": 0.10217183
+}

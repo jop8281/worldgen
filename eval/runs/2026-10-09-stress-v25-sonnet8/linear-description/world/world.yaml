@@ -1,0 +1,1063 @@
+format: 1
+meta:
+  name: world
+  description: An issue tracker where teams own issues that members work through backlog, todo, in progress, in review, done or canceled. Actions enforce who may be assigned, a per-team work-in-progress limit, completion and cancellation rules, and comment rules.
+  resembles: Linear-style issue tracker (teams, members, projects, issues with a workflow status, comments)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-09T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  team:
+    description: A group that owns issues. Has a unique short key and a per-assignee work-in-progress limit.
+    idPrefix: team
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      key:
+        type: string
+        description: Unique short uppercase key, such as ENG.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 10
+        pattern: ^[A-Z][A-Z0-9]{1,9}$
+      wip_limit:
+        type: int
+        description: Most in_progress issues one assignee may hold at once.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+        max: 50
+        default: 3
+  member:
+    description: A person on a team. Role is admin, member or guest. Guests cannot be assigned issues.
+    idPrefix: mem
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 200
+        format: email
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: restrict
+      role:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - admin
+          - member
+          - guest
+        default: member
+      active:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  project:
+    description: A body of work within a team that groups issues.
+    idPrefix: prj
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 160
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: restrict
+      status:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - planned
+          - active
+          - completed
+          - canceled
+        default: active
+  issue:
+    description: A unit of work moving through the status lifecycle. Assignment, start, completion and cancellation go through actions.
+    idPrefix: iss
+    fields:
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: restrict
+      project_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: project
+        onDelete: nullify
+      assignee_id:
+        type: ref
+        description: Set by the assign_issue action.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: member
+        onDelete: nullify
+      priority:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - urgent
+          - high
+          - medium
+          - low
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - backlog
+          - todo
+          - in_progress
+          - in_review
+          - done
+          - canceled
+        initial: backlog
+        transitions:
+          backlog:
+            - todo
+            - in_progress
+            - canceled
+          todo:
+            - backlog
+            - in_progress
+            - canceled
+          in_progress:
+            - todo
+            - in_review
+            - done
+            - canceled
+          in_review:
+            - in_progress
+            - done
+            - canceled
+          done: []
+          canceled: []
+      estimate:
+        type: int
+        description: Story points.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        min: 0
+        max: 100
+      started_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      completed_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      canceled_reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      due_date:
+        type: string
+        description: Target date as YYYY-MM-DD.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 10
+        pattern: ^\d{4}-\d{2}-\d{2}$
+      cycle_id:
+        type: ref
+        description: The cycle (sprint) the issue is planned into.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: cycle
+        onDelete: nullify
+  comment:
+    description: A message on an issue written by a member of the issue's team. Created by the add_comment action.
+    idPrefix: cmt
+    fields:
+      issue_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: issue
+        onDelete: cascade
+      author_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+      body:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  workflow_state:
+    description: A named column of a team's issue workflow, such as Todo or In Review. The type groups it into backlog, unstarted, started, completed or canceled. Reference data; issue status stays on the issue.
+    idPrefix: wfs
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      type:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - backlog
+          - unstarted
+          - started
+          - completed
+          - canceled
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: cascade
+      color:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 20
+      position:
+        type: int
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        min: 0
+  issue_label:
+    description: A label that can tag issues, either for one team or workspace-wide when team_id is null.
+    idPrefix: lbl
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+      color:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 20
+      team_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: cascade
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  cycle:
+    description: A time-boxed iteration (sprint) of a team that issues can be planned into.
+    idPrefix: cyc
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      number:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: cascade
+      starts_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      ends_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+routes:
+  list_issues:
+    op: list
+    entity: issue
+    filters:
+      - status
+      - priority
+      - team_id
+      - project_id
+      - assignee_id
+    search:
+      - title
+    sort:
+      - created_at
+      - priority
+    pageSize: 25
+    method: GET
+    path: /issues
+  get_issue:
+    op: get
+    entity: issue
+    method: GET
+    path: /issues/{id}
+  create_issue:
+    op: create
+    entity: issue
+    method: POST
+    path: /issues
+  update_issue:
+    op: update
+    entity: issue
+    method: PATCH
+    path: /issues/{id}
+  list_comments:
+    op: list
+    entity: comment
+    filters:
+      - author_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /issues/{issue_id}/comments
+  list_teams:
+    op: list
+    entity: team
+    filters: []
+    search:
+      - name
+      - key
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /teams
+  get_team:
+    op: get
+    entity: team
+    method: GET
+    path: /teams/{id}
+  create_team:
+    op: create
+    entity: team
+    method: POST
+    path: /teams
+  list_members:
+    op: list
+    entity: member
+    filters:
+      - team_id
+      - role
+      - active
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /members
+  get_member:
+    op: get
+    entity: member
+    method: GET
+    path: /members/{id}
+  create_member:
+    op: create
+    entity: member
+    method: POST
+    path: /members
+  list_projects:
+    op: list
+    entity: project
+    filters:
+      - team_id
+      - status
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /projects
+  create_project:
+    op: create
+    entity: project
+    method: POST
+    path: /projects
+  list_users:
+    op: list
+    entity: member
+    filters:
+      - team_id
+      - role
+      - active
+    search:
+      - name
+      - email
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /users
+    description: Users of the workspace (same rows as members).
+  list_labels:
+    op: list
+    entity: issue_label
+    filters:
+      - team_id
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /labels
+  create_label:
+    op: create
+    entity: issue_label
+    method: POST
+    path: /labels
+  list_workflow_states:
+    op: list
+    entity: workflow_state
+    filters:
+      - team_id
+      - type
+    search:
+      - name
+    sort:
+      - name
+      - position
+    pageSize: 25
+    method: GET
+    path: /workflow_states
+  create_workflow_state:
+    op: create
+    entity: workflow_state
+    method: POST
+    path: /workflow_states
+  list_cycles:
+    op: list
+    entity: cycle
+    filters:
+      - team_id
+    search:
+      - name
+    sort:
+      - starts_at
+      - number
+    pageSize: 25
+    method: GET
+    path: /cycles
+  get_cycle:
+    op: get
+    entity: cycle
+    method: GET
+    path: /cycles/{id}
+  create_cycle:
+    op: create
+    entity: cycle
+    method: POST
+    path: /cycles
+  create_issue_comment:
+    op: create
+    entity: comment
+    method: POST
+    path: /issues/{issue_id}/comments
+    description: Plain comment create scoped to the issue.
+actions:
+  assign_issue:
+    method: POST
+    path: /issues/{id}/assign
+    description: Assign an issue to an active, non-guest member of the issue's team. Done and canceled issues cannot be assigned.
+    input:
+      assignee_id:
+        type: ref
+        description: The member who will own the issue.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        if (issue.status === 'done' || issue.status === 'canceled') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is ' + issue.status + ' and cannot be assigned.');
+        const m = ctx.db.get('member', ctx.body.assignee_id);
+        if (m === null) ctx.fail(422, 'unknown_member', 'member ' + ctx.body.assignee_id + ' not found.');
+        if (m.team_id !== issue.team_id) ctx.fail(409, 'wrong_team', 'member ' + m.id + ' is not on the team of issue ' + issue.id + '.');
+        if (m.active !== true) ctx.fail(409, 'member_inactive', 'member ' + m.id + ' is inactive.');
+        if (m.role === 'guest') ctx.fail(409, 'guest_not_assignable', 'member ' + m.id + ' is a guest and cannot be assigned issues.');
+        const updated = ctx.db.update('issue', issue.id, { assignee_id: m.id });
+        return { status: 200, body: updated };
+      }
+  start_issue:
+    method: POST
+    path: /issues/{id}/start
+    description: Start an assigned backlog or todo issue. Moves it to in_progress and sets started_at. Refused with wip_limit_reached when the assignee already holds the team's wip_limit in_progress issues.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        if (issue.status !== 'backlog' && issue.status !== 'todo') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is ' + issue.status + '. Only backlog and todo issues can be started.');
+        if (issue.assignee_id === null) ctx.fail(409, 'not_assigned', 'issue ' + issue.id + ' has no assignee. Assign it first.');
+        const team = ctx.db.get('team', issue.team_id);
+        const active = ctx.db.list('issue', { where: { assignee_id: issue.assignee_id, status: 'in_progress' } });
+        if (active.length >= team.wip_limit) ctx.fail(409, 'wip_limit_reached', 'assignee ' + issue.assignee_id + ' already has ' + active.length + ' in_progress issues (limit ' + team.wip_limit + ').');
+        const updated = ctx.db.update('issue', issue.id, { status: 'in_progress', started_at: ctx.now() });
+        return { status: 200, body: updated };
+      }
+  complete_issue:
+    method: POST
+    path: /issues/{id}/complete
+    description: Complete an in_progress or in_review issue. Moves it to done and sets completed_at.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        if (issue.status !== 'in_progress' && issue.status !== 'in_review') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is ' + issue.status + '. Only in_progress and in_review issues can be completed.');
+        const updated = ctx.db.update('issue', issue.id, { status: 'done', completed_at: ctx.now() });
+        return { status: 200, body: updated };
+      }
+  cancel_issue:
+    method: POST
+    path: /issues/{id}/cancel
+    description: Cancel an issue with a non-blank reason. Done issues cannot be canceled and canceled is final.
+    input:
+      reason:
+        type: text
+        description: Why the issue is canceled.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        const reason = String(ctx.body.reason).trim();
+        if (reason === '') ctx.fail(400, 'input.invalid', 'Invalid input for cancel_issue: reason expected a non-blank text, found ""');
+        if (issue.status === 'done' || issue.status === 'canceled') ctx.fail(409, 'invalid_state', 'issue ' + issue.id + ' is ' + issue.status + ' and cannot be canceled.');
+        const updated = ctx.db.update('issue', issue.id, { status: 'canceled', canceled_reason: reason });
+        return { status: 200, body: updated };
+      }
+  add_comment:
+    method: POST
+    path: /issues/{id}/comment
+    description: Add a comment to an issue. The author must be a member of the issue's team. Canceled issues accept no comments.
+    input:
+      author_id:
+        type: ref
+        description: The member writing the comment.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: member
+        onDelete: restrict
+      body:
+        type: text
+        description: The comment text.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const issue = ctx.db.get('issue', ctx.params.id);
+        if (issue === null) ctx.fail(404, 'not_found', 'issue ' + ctx.params.id + ' not found');
+        if (issue.status === 'canceled') ctx.fail(409, 'issue_canceled', 'issue ' + issue.id + ' is canceled and accepts no comments.');
+        const author = ctx.db.get('member', ctx.body.author_id);
+        if (author === null) ctx.fail(422, 'unknown_member', 'member ' + ctx.body.author_id + ' not found.');
+        if (author.team_id !== issue.team_id) ctx.fail(409, 'author_not_in_team', 'member ' + author.id + ' is not on the team of issue ' + issue.id + '.');
+        const text = String(ctx.body.body).trim();
+        if (text === '') ctx.fail(400, 'input.invalid', 'Invalid input for add_comment: body expected a non-blank text, found ""');
+        const c = ctx.db.create('comment', { issue_id: issue.id, author_id: author.id, body: ctx.body.body });
+        return { status: 201, body: c };
+      }
+jobs: {}
+fixtures: {}
+seed:
+  team: |-
+    (ctx) => [
+      { name: 'Platform', key: 'PLAT', wip_limit: 3 },
+      { name: 'Mobile', key: 'MOB', wip_limit: 3 },
+      { name: 'Web', key: 'WEB', wip_limit: 3 },
+    ].map((t, i) => { const at = ctx.time.plus('2026-05-04T09:00:00.000Z', i + 'd'); return { ...t, created_at: at, updated_at: at }; })
+  member: |-
+    (ctx) => {
+      const teams = ctx.rows('team');
+      const tid = (n) => teams.find((t) => t.name === n).id;
+      const rows = [
+        ['Dana Whitfield', 'dana.whitfield@platformco.example', 'Platform', 'admin'],
+        ['Ravi Menon', 'ravi.menon@platformco.example', 'Platform', 'member'],
+        ['Priya Nair', 'priya.nair@platformco.example', 'Platform', 'guest'],
+        ['Elena Park', 'elena.park@mobileco.example', 'Mobile', 'member'],
+        ['Tomas Berg', 'tomas.berg@mobileco.example', 'Mobile', 'admin'],
+        ['Jonah Kerr', 'jonah.kerr@mobileco.example', 'Mobile', 'guest'],
+        ['Mei Tanaka', 'mei.tanaka@webco.example', 'Web', 'member'],
+        ['Dana Whitfield', 'dana.whitfield@webco.example', 'Web', 'member'],
+        ['Lucy Hart', 'lucy.hart@webco.example', 'Web', 'guest'],
+      ];
+      return rows.map(([name, email, team, role], i) => {
+        const at = ctx.time.plus('2026-06-01T09:00:00.000Z', i * 3 + 'd');
+        return { name, email, team_id: tid(team), role, active: true, created_at: at, updated_at: at };
+      });
+    }
+  project: |-
+    (ctx) => {
+      const teams = ctx.rows('team');
+      const tid = (n) => teams.find((t) => t.name === n).id;
+      return [
+        ['Reliability Q4', 'Platform', 'active'],
+        ['API v2', 'Platform', 'planned'],
+        ['Mobile 5.0', 'Mobile', 'active'],
+        ['Checkout Revamp', 'Web', 'active'],
+      ].map(([name, team, status], i) => {
+        const at = ctx.time.plus('2026-07-01T09:00:00.000Z', i * 2 + 'd');
+        return { name, team_id: tid(team), status, created_at: at, updated_at: at };
+      });
+    }
+  issue: |-
+    (ctx) => {
+      const teams = ctx.rows('team');
+      const members = ctx.rows('member');
+      const projects = ctx.rows('project');
+      const tid = (n) => teams.find((t) => t.name === n).id;
+      const mem = (name, team) => members.find((m) => m.name === name && m.team_id === tid(team)).id;
+      const prj = (n) => (n === null ? null : projects.find((p) => p.name === n).id);
+      // [title, team, status, priority, assignee, project]
+      const anchors = [
+        ['Rate limiter returns 500 on burst traffic', 'Platform', 'in_review', 'high', 'Ravi Menon', 'Reliability Q4'],
+        ['Webhook retry backoff is not exponential', 'Platform', 'todo', 'medium', 'Ravi Menon', 'Reliability Q4'],
+        ['Migrate job queue to new broker', 'Platform', 'in_progress', 'high', 'Ravi Menon', 'Reliability Q4'],
+        ['Fix flaky deploy pipeline', 'Platform', 'in_progress', 'medium', 'Ravi Menon', null],
+        ['Add tracing to the API gateway', 'Platform', 'in_progress', 'medium', 'Ravi Menon', 'API v2'],
+        ['Database failover alert not firing', 'Platform', 'backlog', 'urgent', null, 'Reliability Q4'],
+        ['Push notifications delayed by minutes', 'Mobile', 'backlog', 'urgent', null, 'Mobile 5.0'],
+        ['Upgrade Postgres minor version', 'Platform', 'backlog', 'high', null, null],
+        ['Checkout page returns 500 for guests', 'Web', 'todo', 'urgent', null, 'Checkout Revamp'],
+        ['TLS certificate renewal automation', 'Platform', 'in_progress', 'urgent', 'Dana Whitfield', 'Reliability Q4'],
+        ['Dark mode support', 'Mobile', 'backlog', 'medium', null, 'Mobile 5.0'],
+        ['Dark mode support', 'Web', 'backlog', 'medium', null, null],
+        ['Dark mode support for settings screen', 'Mobile', 'todo', 'low', null, 'Mobile 5.0'],
+        ['Dark mode support (tablet layout)', 'Mobile', 'done', 'low', 'Elena Park', 'Mobile 5.0'],
+        ['Dark mode support', 'Web', 'in_progress', 'medium', 'Mei Tanaka', 'Checkout Revamp'],
+        ['Rate limiter config for push gateway', 'Mobile', 'in_review', 'medium', 'Elena Park', 'Mobile 5.0'],
+        ['Audit log export pagination', 'Platform', 'in_review', 'low', 'Ravi Menon', 'API v2'],
+        ['Webhook retries for Slack integration', 'Web', 'todo', 'medium', 'Mei Tanaka', null],
+      ];
+      const fillerStatus = [];
+      for (const [s, n] of [['backlog', 3], ['todo', 3], ['in_progress', 3], ['in_review', 3], ['done', 7], ['canceled', 3]]) for (let i = 0; i < n; i++) fillerStatus.push(s);
+      const titles = [
+        'Search results missing recent records', 'Slow page loads in EU region', 'Crash when opening shared folder',
+        'Export CSV times out', 'Update onboarding copy', 'Profile photo upload fails', 'Timezone wrong in audit log',
+        'Add keyboard shortcuts to editor', 'Reduce bundle size of landing page', 'Fix typo in billing emails',
+        'Notification settings not saved', 'Improve empty state on dashboard', 'Android back button closes app',
+        'Add SSO login option', 'Calendar sync duplicates events', 'Pagination broken on reports page',
+        'Image carousel flickers on Safari', 'Cache invalidation after deploy', 'Support bulk edit of labels',
+        'Offline mode loses draft', 'Session expires too early', 'Password reset link opens blank page',
+      ];
+      const teamNames = ['Platform', 'Mobile', 'Web'];
+      const eligible = (team) => members.filter((m) => m.team_id === tid(team) && m.role !== 'guest' && m.active && m.name !== 'Ravi Menon').map((m) => m.id);
+      const prios = ['high', 'medium', 'low', 'medium'];
+      const fillerProjects = { Platform: 'API v2', Mobile: 'Mobile 5.0', Web: 'Checkout Revamp' };
+      const all = anchors.map(([title, team, status, priority, who, project]) => ({ title, team, status, priority, assignee: who === null ? null : mem(who, team), project }));
+      fillerStatus.forEach((status, k) => {
+        const team = teamNames[k % 3];
+        const el = eligible(team);
+        let assignee = el[k % el.length];
+        if (status === 'backlog' || (status === 'todo' && k % 2 === 0)) assignee = null;
+        all.push({ title: titles[k], team, status, priority: prios[k % 4], assignee, project: k % 3 === 0 ? null : fillerProjects[team] });
+      });
+      return all.map((o, i) => {
+        const created = ctx.time.plus('2026-08-01T09:00:00.000Z', i * 20 + 'h');
+        const started = ['in_progress', 'in_review', 'done'].includes(o.status);
+        return {
+          title: o.title,
+          description: i % 3 === 0 ? null : 'Reported by the team and triaged in the weekly review.',
+          team_id: tid(o.team),
+          project_id: prj(o.project),
+          assignee_id: o.assignee,
+          priority: o.priority,
+          status: o.status,
+          estimate: ctx.pick([1, 2, 3, 5, 8, null]),
+          started_at: started ? ctx.time.plus(created, '1d') : null,
+          completed_at: o.status === 'done' ? ctx.time.plus(created, '3d') : null,
+          canceled_reason: o.status === 'canceled' ? 'No longer needed after the roadmap review' : null,
+          created_at: created,
+          updated_at: o.status === 'done' ? ctx.time.plus(created, '3d') : started ? ctx.time.plus(created, '1d') : created,
+        };
+      });
+    }
+  comment: |-
+    (ctx) => {
+      const members = ctx.rows('member');
+      const issues = ctx.rows('issue');
+      const bodies = [
+        'Looking into this now.', 'Reproduced on staging, logs attached.', 'Can we get an estimate before planning?',
+        'This is blocked on the design review.', 'Fix is up for review.', 'Verified on the latest build.',
+        'Moving this up, customers are asking about it.', 'Could not reproduce, need more details.',
+      ];
+      const out = [];
+      for (let i = 0; i < 30; i++) {
+        const issue = issues[(i * 4 + 1) % issues.length];
+        const team = members.filter((m) => m.team_id === issue.team_id);
+        const author = team[i % team.length];
+        const at = ctx.time.plus(issue.created_at, (2 + (i % 5)) + 'h');
+        out.push({ issue_id: issue.id, author_id: author.id, body: bodies[i % bodies.length], created_at: at, updated_at: at });
+      }
+      return out;
+    }
+tests:
+  assign_member_checks:
+    description: Creates two teams and members of each kind, then tries to assign an issue to each.
+    script: |-
+      (ctx) => {
+        const t1 = ctx.api('POST', '/teams', { name: 'Zeta One', key: 'ZAA', wip_limit: 3 }).body;
+        const t2 = ctx.api('POST', '/teams', { name: 'Zeta Two', key: 'ZAB', wip_limit: 3 }).body;
+        const mk = (n, team, extra) => ctx.api('POST', '/members', Object.assign({ name: n, email: n.toLowerCase().replace(' ', '.') + '@test.example', team_id: team.id, role: 'member' }, extra || {})).body;
+        const ok = mk('Alex Okay', t1);
+        const other = mk('Olga Other', t2);
+        const gone = mk('Ian Inactive', t1, { active: false });
+        const guest = mk('Gus Guest', t1, { role: 'guest' });
+        const issue = ctx.api('POST', '/issues', { title: 'Assign check', team_id: t1.id, priority: 'medium' }).body;
+        ctx.assert(issue.status === 'backlog', 'new issue is backlog, got ' + issue.status);
+        const a = ctx.api('POST', '/issues/' + issue.id + '/assign', { assignee_id: other.id });
+        ctx.assert(a.status === 409 && a.body.error.code === 'wrong_team', 'other team: ' + JSON.stringify(a));
+        const b = ctx.api('POST', '/issues/' + issue.id + '/assign', { assignee_id: gone.id });
+        ctx.assert(b.status === 409 && b.body.error.code === 'member_inactive', 'inactive: ' + JSON.stringify(b));
+        const c = ctx.api('POST', '/issues/' + issue.id + '/assign', { assignee_id: guest.id });
+        ctx.assert(c.status === 409 && c.body.error.code === 'guest_not_assignable', 'guest: ' + JSON.stringify(c));
+        const d = ctx.api('POST', '/issues/' + issue.id + '/assign', { assignee_id: ok.id });
+        ctx.assert(d.status === 200 && d.body.assignee_id === ok.id, 'assign ok: ' + JSON.stringify(d));
+      }
+  assign_closed_issue:
+    description: Cancels an issue and then tries to assign it.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Zeta Three', key: 'ZAC', wip_limit: 3 }).body;
+        const m = ctx.api('POST', '/members', { name: 'Cleo Closed', email: 'cleo.closed@test.example', team_id: t.id, role: 'member' }).body;
+        const i = ctx.api('POST', '/issues', { title: 'Closed assign', team_id: t.id, priority: 'low' }).body;
+        const x = ctx.api('POST', '/issues/' + i.id + '/cancel', { reason: 'Not needed' });
+        ctx.assert(x.status === 200 && x.body.status === 'canceled', 'cancel: ' + JSON.stringify(x));
+        const a = ctx.api('POST', '/issues/' + i.id + '/assign', { assignee_id: m.id });
+        ctx.assert(a.status === 409 && a.body.error.code === 'invalid_state', 'assign canceled: ' + JSON.stringify(a));
+        const after = ctx.api('GET', '/issues/' + i.id).body;
+        ctx.assert(after.assignee_id === null, 'assignee unchanged');
+      }
+  start_needs_assignee:
+    description: Tries to start an unassigned issue, then assigns and starts it.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Zeta Four', key: 'ZAD', wip_limit: 3 }).body;
+        const m = ctx.api('POST', '/members', { name: 'Sam Starter', email: 'sam.starter@test.example', team_id: t.id, role: 'member' }).body;
+        const i = ctx.api('POST', '/issues', { title: 'Start check', team_id: t.id, priority: 'high' }).body;
+        const no = ctx.api('POST', '/issues/' + i.id + '/start', {});
+        ctx.assert(no.status === 409 && no.body.error.code === 'not_assigned', 'unassigned start: ' + JSON.stringify(no));
+        ctx.assert(ctx.api('POST', '/issues/' + i.id + '/assign', { assignee_id: m.id }).status === 200, 'assign');
+        const at = ctx.now();
+        const r = ctx.api('POST', '/issues/' + i.id + '/start', {});
+        ctx.assert(r.status === 200 && r.body.status === 'in_progress' && r.body.started_at === at, 'start: ' + JSON.stringify(r));
+        const again = ctx.api('POST', '/issues/' + i.id + '/start', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second start: ' + JSON.stringify(again));
+      }
+  wip_limit_enforced:
+    description: "Team with wip_limit 1: second start is refused until the first is completed."
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Zeta Five', key: 'ZAE', wip_limit: 1 }).body;
+        const m = ctx.api('POST', '/members', { name: 'Wendy Limit', email: 'wendy.limit@test.example', team_id: t.id, role: 'member' }).body;
+        const a = ctx.api('POST', '/issues', { title: 'WIP A', team_id: t.id, priority: 'medium' }).body;
+        const b = ctx.api('POST', '/issues', { title: 'WIP B', team_id: t.id, priority: 'medium' }).body;
+        for (const x of [a, b]) ctx.assert(ctx.api('POST', '/issues/' + x.id + '/assign', { assignee_id: m.id }).status === 200, 'assign ' + x.id);
+        ctx.assert(ctx.api('POST', '/issues/' + a.id + '/start', {}).status === 200, 'start A');
+        const blocked = ctx.api('POST', '/issues/' + b.id + '/start', {});
+        ctx.assert(blocked.status === 409 && blocked.body.error.code === 'wip_limit_reached', 'blocked: ' + JSON.stringify(blocked));
+        ctx.assert(ctx.api('GET', '/issues/' + b.id).body.status === 'backlog', 'B unchanged');
+        ctx.assert(ctx.api('POST', '/issues/' + a.id + '/complete', {}).status === 200, 'complete A');
+        const ok = ctx.api('POST', '/issues/' + b.id + '/start', {});
+        ctx.assert(ok.status === 200 && ok.body.status === 'in_progress', 'B starts after A is done: ' + JSON.stringify(ok));
+      }
+  complete_sets_completed_at:
+    description: Completes a started issue; refuses a backlog issue and a second completion.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Zeta Six', key: 'ZAF', wip_limit: 3 }).body;
+        const m = ctx.api('POST', '/members', { name: 'Dora Done', email: 'dora.done@test.example', team_id: t.id, role: 'admin' }).body;
+        const i = ctx.api('POST', '/issues', { title: 'Complete check', team_id: t.id, priority: 'urgent' }).body;
+        const early = ctx.api('POST', '/issues/' + i.id + '/complete', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'backlog complete: ' + JSON.stringify(early));
+        ctx.api('POST', '/issues/' + i.id + '/assign', { assignee_id: m.id });
+        ctx.api('POST', '/issues/' + i.id + '/start', {});
+        const at = ctx.now();
+        const r = ctx.api('POST', '/issues/' + i.id + '/complete', {});
+        ctx.assert(r.status === 200 && r.body.status === 'done' && r.body.completed_at === at, 'complete: ' + JSON.stringify(r));
+        const again = ctx.api('POST', '/issues/' + i.id + '/complete', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'again: ' + JSON.stringify(again));
+      }
+  cancel_requires_reason:
+    description: Missing and blank reason are refused; a valid cancel stores the reason; done issues cannot be canceled.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Zeta Seven', key: 'ZAG', wip_limit: 3 }).body;
+        const m = ctx.api('POST', '/members', { name: 'Carl Cancel', email: 'carl.cancel@test.example', team_id: t.id, role: 'member' }).body;
+        const i = ctx.api('POST', '/issues', { title: 'Cancel check', team_id: t.id, priority: 'low' }).body;
+        const miss = ctx.api('POST', '/issues/' + i.id + '/cancel', {});
+        ctx.assert(miss.status === 400 && miss.body.error.code === 'input.invalid', 'missing reason: ' + JSON.stringify(miss));
+        const blank = ctx.api('POST', '/issues/' + i.id + '/cancel', { reason: '   ' });
+        ctx.assert(blank.status === 400 && blank.body.error.code === 'input.invalid', 'blank reason: ' + JSON.stringify(blank));
+        const r = ctx.api('POST', '/issues/' + i.id + '/cancel', { reason: 'Duplicate of another issue' });
+        ctx.assert(r.status === 200 && r.body.status === 'canceled' && r.body.canceled_reason === 'Duplicate of another issue', 'cancel: ' + JSON.stringify(r));
+        const j = ctx.api('POST', '/issues', { title: 'Cancel done', team_id: t.id, priority: 'low' }).body;
+        ctx.api('POST', '/issues/' + j.id + '/assign', { assignee_id: m.id });
+        ctx.api('POST', '/issues/' + j.id + '/start', {});
+        ctx.api('POST', '/issues/' + j.id + '/complete', {});
+        const late = ctx.api('POST', '/issues/' + j.id + '/cancel', { reason: 'Too late' });
+        ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'cancel done: ' + JSON.stringify(late));
+      }
+  comment_author_team:
+    description: Posts comments from an own-team and an other-team member and lists them.
+    script: |-
+      (ctx) => {
+        const t1 = ctx.api('POST', '/teams', { name: 'Zeta Eight', key: 'ZAH', wip_limit: 3 }).body;
+        const t2 = ctx.api('POST', '/teams', { name: 'Zeta Nine', key: 'ZAI', wip_limit: 3 }).body;
+        const own = ctx.api('POST', '/members', { name: 'Owen Own', email: 'owen.own@test.example', team_id: t1.id, role: 'member' }).body;
+        const out = ctx.api('POST', '/members', { name: 'Otto Outside', email: 'otto.outside@test.example', team_id: t2.id, role: 'member' }).body;
+        const i = ctx.api('POST', '/issues', { title: 'Comment check', team_id: t1.id, priority: 'medium' }).body;
+        const bad = ctx.api('POST', '/issues/' + i.id + '/comment', { author_id: out.id, body: 'Drive-by' });
+        ctx.assert(bad.status === 409 && bad.body.error.code === 'author_not_in_team', 'other team: ' + JSON.stringify(bad));
+        const good = ctx.api('POST', '/issues/' + i.id + '/comment', { author_id: own.id, body: 'Looking into it' });
+        ctx.assert(good.status === 201 && good.body.issue_id === i.id && good.body.author_id === own.id, 'comment: ' + JSON.stringify(good));
+        const list = ctx.api('GET', '/issues/' + i.id + '/comments').body.data;
+        ctx.assert(list.length === 1 && list[0].body === 'Looking into it', 'one comment listed');
+      }
+  comment_closed_issue:
+    description: Cancels an issue then tries to comment.
+    script: |-
+      (ctx) => {
+        const t = ctx.api('POST', '/teams', { name: 'Zeta Ten', key: 'ZAJ', wip_limit: 3 }).body;
+        const m = ctx.api('POST', '/members', { name: 'Cory Comment', email: 'cory.comment@test.example', team_id: t.id, role: 'member' }).body;
+        const i = ctx.api('POST', '/issues', { title: 'Closed comment', team_id: t.id, priority: 'low' }).body;
+        ctx.assert(ctx.api('POST', '/issues/' + i.id + '/cancel', { reason: 'Obsolete' }).status === 200, 'cancel');
+        const r = ctx.api('POST', '/issues/' + i.id + '/comment', { author_id: m.id, body: 'Anyone here?' });
+        ctx.assert(r.status === 409 && r.body.error.code === 'issue_canceled', 'comment on canceled: ' + JSON.stringify(r));
+        ctx.assert(ctx.api('GET', '/issues/' + i.id + '/comments').body.data.length === 0, 'no comment stored');
+      }
+tasks:
+  assign_urgent_platform_issue:
+    difficulty: easy
+    instruction: Assign the unassigned urgent issue of the Platform team to the active member Dana Whitfield, who is on that team. Change nothing else.
+    grader: "(ctx) => { const plat = ctx.seed.list('team', { where: { name: 'Platform' } })[0]; if (!plat) return 0; const dana = ctx.seed.list('member', { where: { name: 'Dana Whitfield', team_id: plat.id } })[0]; if (!dana) return 0; const targets = ctx.seed.list('issue', { where: { team_id: plat.id, priority: 'urgent' } }).filter((i) => i.assignee_id === null); if (targets.length !== 1) return 0; const t = targets[0]; ctx.guardChanges('only the assignee of the target issue changed', [{ entity: 'issue', id: t.id, kind: 'updated', fields: ['assignee_id'] }]); ctx.goal(1, 'target issue assigned to Dana Whitfield of Platform', ctx.db.get('issue', t.id).assignee_id === dana.id); return ctx.score(); }"
+    solution: "(ctx) => { const platform = ctx.api('GET', '/teams?q=Platform').body.data.find((t) => t.name === 'Platform'); ctx.assert(platform, 'team Platform not found'); const dana = ctx.api('GET', '/members?team_id=' + platform.id + '&q=Dana').body.data.find((m) => m.name === 'Dana Whitfield'); ctx.assert(dana, 'member Dana Whitfield not found on Platform'); const urgent = ctx.api('GET', '/issues?team_id=' + platform.id + '&priority=urgent').body.data; const open = urgent.filter((i) => i.assignee_id === null); ctx.assert(open.length === 1, 'expected one unassigned urgent Platform issue, found ' + open.length); const r = ctx.api('POST', '/issues/' + open[0].id + '/assign', { assignee_id: dana.id }); ctx.assert(r.status === 200, 'assign failed: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: assigns the unassigned urgent issue of the Web team to the Web team's Dana Whitfield instead of the Platform one
+        script: "(ctx) => { const web = ctx.api('GET', '/teams?q=Web').body.data.find((t) => t.name === 'Web'); const dana = ctx.api('GET', '/members?team_id=' + web.id + '&q=Dana').body.data.find((m) => m.name === 'Dana Whitfield'); const issue = ctx.api('GET', '/issues?team_id=' + web.id + '&priority=urgent').body.data.find((i) => i.assignee_id === null); ctx.assert(issue && dana, 'Web issue or member not found'); ctx.api('POST', '/issues/' + issue.id + '/assign', { assignee_id: dana.id }); }"
+    alternatives:
+      - why: finds the issue through a status filter across all teams and picks the member from a name search, filtering by team in code
+        script: "(ctx) => { const platform = ctx.api('GET', '/teams?q=PLAT').body.data.find((t) => t.key === 'PLAT'); ctx.assert(platform, 'team Platform not found'); const dana = ctx.api('GET', '/members?q=Dana').body.data.find((m) => m.name === 'Dana Whitfield' && m.team_id === platform.id); ctx.assert(dana, 'Dana Whitfield of Platform not found'); const backlog = ctx.api('GET', '/issues?priority=urgent&status=backlog').body.data; const open = backlog.filter((i) => i.team_id === platform.id && i.assignee_id === null); ctx.assert(open.length === 1, 'expected one candidate, found ' + open.length); const r = ctx.api('POST', '/issues/' + open[0].id + '/assign', { assignee_id: dana.id }); ctx.assert(r.status === 200, 'assign failed: ' + JSON.stringify(r.body)); }"
+    allows:
+      - entity: issue
+        kind: updated
+        fields:
+          - assignee_id
+        where:
+          team_id: team_0001
+          priority: urgent
+          assignee_id: null
+  cancel_duplicate_dark_mode:
+    difficulty: medium
+    instruction: "In the Mobile team, cancel the backlog issue titled exactly 'Dark mode support' as a duplicate: the cancellation reason must say it is a duplicate. Similar issues in other teams or statuses must stay untouched."
+    grader: "(ctx) => { const mobile = ctx.seed.list('team', { where: { name: 'Mobile' } })[0]; if (!mobile) return 0; const targets = ctx.seed.list('issue', { where: { team_id: mobile.id, status: 'backlog' } }).filter((i) => i.title === 'Dark mode support'); if (targets.length !== 1) return 0; const t = targets[0]; ctx.guardChanges('only the status and reason of the target issue changed', [{ entity: 'issue', id: t.id, kind: 'updated', fields: ['status', 'canceled_reason'] }]); const end = ctx.db.get('issue', t.id); const canceled = end.status === 'canceled'; ctx.goal(0.6, 'target issue is canceled', canceled); ctx.goal(0.4, 'cancellation reason says duplicate', canceled && typeof end.canceled_reason === 'string' && /duplicat/i.test(end.canceled_reason)); return ctx.score(); }"
+    solution: "(ctx) => { const mobile = ctx.api('GET', '/teams?q=Mobile').body.data.find((t) => t.name === 'Mobile'); ctx.assert(mobile, 'team Mobile not found'); const backlog = ctx.api('GET', '/issues?team_id=' + mobile.id + '&status=backlog').body.data; const hits = backlog.filter((i) => i.title === 'Dark mode support'); ctx.assert(hits.length === 1, 'expected one Mobile backlog issue titled Dark mode support, found ' + hits.length); const r = ctx.api('POST', '/issues/' + hits[0].id + '/cancel', { reason: 'Duplicate of the Dark mode support issue in the Web team' }); ctx.assert(r.status === 200, 'cancel failed: ' + JSON.stringify(r.body)); }"
+    decoys:
+      - why: cancels the identically titled backlog issue of the Web team instead of the Mobile one
+        script: "(ctx) => { const web = ctx.api('GET', '/teams?q=Web').body.data.find((t) => t.name === 'Web'); const hit = ctx.api('GET', '/issues?team_id=' + web.id + '&status=backlog').body.data.find((i) => i.title === 'Dark mode support'); ctx.assert(hit, 'Web issue not found'); ctx.api('POST', '/issues/' + hit.id + '/cancel', { reason: 'Duplicate of the Mobile issue' }); }"
+      - why: cancels the right Mobile issue but gives a reason that does not say it is a duplicate
+        script: "(ctx) => { const mobile = ctx.api('GET', '/teams?q=Mobile').body.data.find((t) => t.name === 'Mobile'); const hit = ctx.api('GET', '/issues?team_id=' + mobile.id + '&status=backlog').body.data.find((i) => i.title === 'Dark mode support'); ctx.assert(hit, 'Mobile issue not found'); ctx.api('POST', '/issues/' + hit.id + '/cancel', { reason: 'No longer needed' }); }"
+    alternatives:
+      - why: finds the issue with a title search plus team and status filters instead of filtering the backlog list in code
+        script: "(ctx) => { const mobile = ctx.api('GET', '/teams?q=MOB').body.data.find((t) => t.key === 'MOB'); ctx.assert(mobile, 'team Mobile not found'); const hits = ctx.api('GET', '/issues?q=Dark+mode+support&team_id=' + mobile.id + '&status=backlog').body.data.filter((i) => i.title === 'Dark mode support'); ctx.assert(hits.length === 1, 'expected one match, found ' + hits.length); const r = ctx.api('POST', '/issues/' + hits[0].id + '/cancel', { reason: 'Duplicate issue, already tracked by the Web team' }); ctx.assert(r.status === 200, 'cancel failed: ' + JSON.stringify(r.body)); }"
+    allows:
+      - entity: issue
+        kind: updated
+        fields:
+          - status
+          - canceled_reason
+        where:
+          title: Dark mode support
+          team_id: team_0002
+          status: backlog
+  free_wip_and_start_next:
+    difficulty: hard
+    instruction: Ravi Menon on the Platform team is at his team's work-in-progress limit. Mark his in-review rate limiter issue as done, and free a slot by completing his in-progress issue about the job queue migration. Then start his to-do issue about webhook retries so he ends within the limit. Do not touch any other issue.
+    grader: "(ctx) => { const ravi = ctx.seed.list('member', { where: { name: 'Ravi Menon' } })[0]; if (!ravi) return 0; const mine = ctx.seed.list('issue', { where: { assignee_id: ravi.id } }); const review = mine.find((i) => i.status === 'in_review' && /rate limiter/i.test(i.title)); const prog = mine.find((i) => i.status === 'in_progress' && /job queue/i.test(i.title)); const todo = mine.find((i) => i.status === 'todo' && /webhook retr/i.test(i.title)); if (!review || !prog || !todo) return 0; ctx.guardChanges('only the three named issues changed, in their status fields', [{ entity: 'issue', id: review.id, kind: 'updated', fields: ['status', 'completed_at'] }, { entity: 'issue', id: prog.id, kind: 'updated', fields: ['status', 'completed_at'] }, { entity: 'issue', id: todo.id, kind: 'updated', fields: ['status', 'started_at'] }]); const r = ctx.db.get('issue', review.id); const p = ctx.db.get('issue', prog.id); const t = ctx.db.get('issue', todo.id); const team = ctx.db.get('team', ravi.team_id); const inProgress = ctx.db.list('issue', { where: { assignee_id: ravi.id, status: 'in_progress' } }).length; ctx.goal(0.25, 'rate limiter issue is done', r.status === 'done' && r.completed_at !== null); ctx.goal(0.25, 'job queue issue is done', p.status === 'done' && p.completed_at !== null); ctx.goal(0.3, 'webhook retries issue is started', t.status === 'in_progress' && t.started_at !== null); ctx.goal(0.2, 'Ravi ends within the WIP limit after starting the next issue', t.status === 'in_progress' && inProgress <= team.wip_limit); return ctx.score(); }"
+    solution: "(ctx) => { const ravi = ctx.api('GET', '/members?q=Ravi').body.data.find((m) => m.name === 'Ravi Menon'); ctx.assert(ravi, 'member Ravi Menon not found'); const peek = ctx.api('GET', '/issues?assignee_id=' + ravi.id + '&status=in_progress&sort=-created_at&limit=2').body; ctx.assert(peek.data.length === 2 && peek.next_cursor !== null, 'Ravi does not look to be at the WIP limit'); const all = []; let cursor = null; do { const r = ctx.api('GET', '/issues?limit=25&sort=-created_at' + (cursor === null ? '' : '&cursor=' + encodeURIComponent(cursor))); ctx.assert(r.status === 200, 'list failed: ' + JSON.stringify(r.body)); all.push(...r.body.data); cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor; } while (cursor !== null); const mine = all.filter((i) => i.assignee_id === ravi.id); const review = mine.filter((i) => i.status === 'in_review' && /rate limiter/i.test(i.title)); const prog = mine.filter((i) => i.status === 'in_progress' && /job queue/i.test(i.title)); const todo = mine.filter((i) => i.status === 'todo' && /webhook retr/i.test(i.title)); ctx.assert(review.length === 1 && prog.length === 1 && todo.length === 1, 'expected one match each, found ' + review.length + '/' + prog.length + '/' + todo.length); const a = ctx.api('POST', '/issues/' + review[0].id + '/complete', {}); ctx.assert(a.status === 200, 'complete review failed: ' + JSON.stringify(a.body)); const b = ctx.api('POST', '/issues/' + prog[0].id + '/complete', {}); ctx.assert(b.status === 200, 'complete in-progress failed: ' + JSON.stringify(b.body)); const c = ctx.api('POST', '/issues/' + todo[0].id + '/start', {}); ctx.assert(c.status === 200, 'start failed: ' + JSON.stringify(c.body)); }"
+    decoys:
+      - why: completes only the in-review rate limiter issue and believes that frees a slot, so starting the webhook issue is refused by the WIP limit
+        script: (ctx) => { const ravi = ctx.api('GET', '/members?q=Ravi').body.data.find((m) => m.name === 'Ravi Menon'); const mine = ctx.api('GET', '/issues?assignee_id=' + ravi.id).body.data; const review = mine.find((i) => i.status === 'in_review' && /rate limiter/i.test(i.title)); const todo = mine.find((i) => i.status === 'todo' && /webhook retr/i.test(i.title)); ctx.assert(review && todo, 'issues not found'); ctx.api('POST', '/issues/' + review.id + '/complete', {}); ctx.api('POST', '/issues/' + todo.id + '/start', {}); }
+      - why: completes the job queue issue and starts the webhook issue but leaves the in-review rate limiter issue open
+        script: (ctx) => { const ravi = ctx.api('GET', '/members?q=Ravi').body.data.find((m) => m.name === 'Ravi Menon'); const mine = ctx.api('GET', '/issues?assignee_id=' + ravi.id).body.data; const prog = mine.find((i) => i.status === 'in_progress' && /job queue/i.test(i.title)); const todo = mine.find((i) => i.status === 'todo' && /webhook retr/i.test(i.title)); ctx.assert(prog && todo, 'issues not found'); ctx.api('POST', '/issues/' + prog.id + '/complete', {}); ctx.api('POST', '/issues/' + todo.id + '/start', {}); }
+      - why: frees the slot by completing a different in-progress issue of Ravi (the deploy pipeline one) instead of the job queue migration
+        script: (ctx) => { const ravi = ctx.api('GET', '/members?q=Ravi').body.data.find((m) => m.name === 'Ravi Menon'); const mine = ctx.api('GET', '/issues?assignee_id=' + ravi.id).body.data; const review = mine.find((i) => i.status === 'in_review' && /rate limiter/i.test(i.title)); const other = mine.find((i) => i.status === 'in_progress' && /deploy pipeline/i.test(i.title)); const todo = mine.find((i) => i.status === 'todo' && /webhook retr/i.test(i.title)); ctx.assert(review && other && todo, 'issues not found'); ctx.api('POST', '/issues/' + review.id + '/complete', {}); ctx.api('POST', '/issues/' + other.id + '/complete', {}); ctx.api('POST', '/issues/' + todo.id + '/start', {}); }
+    alternatives:
+      - why: starts the work in a different order, completing the in-progress job queue issue first and the in-review issue afterwards, and finds Ravi's issues with a filter instead of paging
+        script: "(ctx) => { const ravi = ctx.api('GET', '/members?q=Menon').body.data.find((m) => m.name === 'Ravi Menon'); ctx.assert(ravi, 'member Ravi Menon not found'); const mine = []; let cursor = null; do { const r = ctx.api('GET', '/issues?assignee_id=' + ravi.id + '&limit=25' + (cursor === null ? '' : '&cursor=' + encodeURIComponent(cursor))); mine.push(...r.body.data); cursor = r.body.next_cursor === undefined ? null : r.body.next_cursor; } while (cursor !== null); const review = mine.find((i) => i.status === 'in_review' && /rate limiter/i.test(i.title)); const prog = mine.find((i) => i.status === 'in_progress' && /job queue/i.test(i.title)); const todo = mine.find((i) => i.status === 'todo' && /webhook retr/i.test(i.title)); ctx.assert(review && prog && todo, 'issues not found'); ctx.assert(ctx.api('POST', '/issues/' + prog.id + '/complete', {}).status === 200, 'complete job queue failed'); ctx.assert(ctx.api('POST', '/issues/' + review.id + '/complete', {}).status === 200, 'complete review failed'); ctx.assert(ctx.api('POST', '/issues/' + todo.id + '/start', {}).status === 200, 'start failed'); }"
+    allows:
+      - entity: issue
+        kind: updated
+        fields:
+          - status
+          - completed_at
+        where:
+          assignee_id: mem_0002
+          status: in_review
+          title: Rate limiter returns 500 on burst traffic
+      - entity: issue
+        kind: updated
+        fields:
+          - status
+          - completed_at
+        where:
+          assignee_id: mem_0002
+          status: in_progress
+          title: Migrate job queue to new broker
+      - entity: issue
+        kind: updated
+        fields:
+          - status
+          - started_at
+        where:
+          assignee_id: mem_0002
+          status: todo
+          title: Webhook retry backoff is not exponential

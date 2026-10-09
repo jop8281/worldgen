@@ -1,0 +1,338 @@
+revision: 1
+software: Bakery order and pickup system (Square for Restaurants / Toast-style bakery ordering)
+summary: A bakery sells products with limited daily stock. Customers place pickup orders that reserve stock; staff move orders through production, ready and pickup. Cancelling a placed order restores stock, and ready orders not collected within 24 hours expire.
+clock:
+  start: 2026-10-09T08:00:00.000Z
+  tick: 0s
+verdict:
+  kind: proceed
+entities:
+  - name: product
+    purpose: A bakery item for sale (bread, pastry, cake) with price and stock on hand.
+    keyFields:
+      - name
+      - sku
+      - category
+      - price
+      - stock
+  - name: customer
+    purpose: A person who orders for pickup.
+    keyFields:
+      - name
+      - email
+      - phone
+  - name: bakery_order
+    purpose: A pickup order of one quantity of one product by a customer; moves through a fulfillment state machine.
+    keyFields:
+      - customer_id
+      - product_id
+      - quantity
+      - total
+      - pickup_date
+      - status
+      - ready_at
+workflows:
+  - name: order_fulfillment
+    entity: bakery_order
+    states:
+      - placed
+      - in_production
+      - ready
+      - picked_up
+      - cancelled
+      - expired
+    rules:
+      - rule: Placing an order requires enough stock; it reserves the quantity (decrements stock) and computes total = price x quantity. Insufficient stock is refused with 409 insufficient_stock.
+        by:
+          - place_order
+        test: t_place_stock
+      - rule: Only a placed order can be cancelled; cancelling restores the reserved stock. Other states are refused with 409 invalid_state.
+        by:
+          - cancel_order
+        test: t_cancel
+      - rule: Orders move placed -> in_production -> ready -> picked_up in order only; out-of-sequence steps are refused with 409 invalid_state and marking ready stamps ready_at.
+        by:
+          - start_production
+          - mark_ready
+          - pick_up
+        test: t_flow
+      - rule: A ready order not picked up within 24 hours becomes expired (stock is not restored because the goods are perishable).
+        by:
+          - expire_ready_orders
+        test: t_expire
+      - rule: Restocking adds a positive quantity to a product's stock; stock changes only through restock and orders.
+        by:
+          - restock_product
+        test: t_restock
+      - rule: Product sku is unique.
+        schema: sku is a unique string field on product.
+    actions:
+      - place_order
+      - start_production
+      - mark_ready
+      - pick_up
+      - cancel_order
+      - restock_product
+jobs:
+  - name: expire_ready_orders
+    every: 1h
+    rule: Every hour, each ready order whose ready_at is 24 hours or more in the past becomes expired.
+acceptanceTests:
+  - id: t_place_stock
+    intent: place_order reserves stock, computes total, refuses insufficient stock
+    actions:
+      - place_order
+      - restock_product
+    description: Create a product, restock 5, order 2 (stock 3, total computed), order 4 refused with insufficient_stock, stock unchanged.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/products', { name: 'Test Baguette A', sku: 'TST-PLACE-1', category: 'bread', price: 350 });
+        ctx.assert(p.status === 201, 'create product: ' + JSON.stringify(p.body));
+        const rs = ctx.api('POST', '/products/' + p.body.id + '/restock', { quantity: 5 });
+        ctx.assert(rs.status === 200 && rs.body.stock === 5, 'restock: ' + JSON.stringify(rs.body));
+        const c = ctx.api('POST', '/customers', { name: 'Place Tester', email: 'place.tester@example.com' });
+        ctx.assert(c.status === 201, 'create customer: ' + JSON.stringify(c.body));
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 2, pickup_date: '2026-10-12' });
+        ctx.assert(o.status === 201 && o.body.status === 'placed' && o.body.total === 700, 'place: ' + JSON.stringify(o.body));
+        ctx.assert(ctx.api('GET', '/products/' + p.body.id).body.stock === 3, 'stock reserved');
+        const big = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 4, pickup_date: '2026-10-12' });
+        ctx.assert(big.status === 409 && big.body.error.code === 'insufficient_stock', 'insufficient: ' + JSON.stringify(big));
+        ctx.assert(ctx.api('GET', '/products/' + p.body.id).body.stock === 3, 'stock unchanged after refusal');
+      }
+  - id: t_cancel
+    intent: cancel_order only from placed and restores stock
+    actions:
+      - cancel_order
+      - place_order
+      - restock_product
+      - start_production
+    description: Cancel a placed order restores stock; second cancel and cancel of an in-production order are refused.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/products', { name: 'Test Croissant B', sku: 'TST-CANCEL-1', category: 'pastry', price: 300 });
+        ctx.api('POST', '/products/' + p.body.id + '/restock', { quantity: 5 });
+        const c = ctx.api('POST', '/customers', { name: 'Cancel Tester', email: 'cancel.tester@example.com' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 2, pickup_date: '2026-10-12' });
+        ctx.assert(o.status === 201, 'place: ' + JSON.stringify(o.body));
+        ctx.assert(ctx.api('GET', '/products/' + p.body.id).body.stock === 3, 'reserved');
+        const x = ctx.api('POST', '/orders/' + o.body.id + '/cancel', {});
+        ctx.assert(x.status === 200 && x.body.status === 'cancelled', 'cancel: ' + JSON.stringify(x.body));
+        ctx.assert(ctx.api('GET', '/products/' + p.body.id).body.stock === 5, 'stock restored');
+        const again = ctx.api('POST', '/orders/' + o.body.id + '/cancel', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second cancel: ' + JSON.stringify(again));
+        const o2 = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 1, pickup_date: '2026-10-12' });
+        ctx.assert(ctx.api('POST', '/orders/' + o2.body.id + '/start_production', {}).status === 200, 'start');
+        const late = ctx.api('POST', '/orders/' + o2.body.id + '/cancel', {});
+        ctx.assert(late.status === 409 && late.body.error.code === 'invalid_state', 'cancel in production: ' + JSON.stringify(late));
+        ctx.assert(ctx.api('GET', '/products/' + p.body.id).body.stock === 4, 'stock not restored by refused cancel');
+      }
+  - id: t_flow
+    intent: orders follow placed -> in_production -> ready -> picked_up only
+    actions:
+      - place_order
+      - restock_product
+      - start_production
+      - mark_ready
+      - pick_up
+    description: Out-of-sequence steps are refused; the full flow stamps ready_at.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/products', { name: 'Test Sourdough C', sku: 'TST-FLOW-1', category: 'bread', price: 600 });
+        ctx.api('POST', '/products/' + p.body.id + '/restock', { quantity: 3 });
+        const c = ctx.api('POST', '/customers', { name: 'Flow Tester', email: 'flow.tester@example.com' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 1, pickup_date: '2026-10-12' });
+        const id = o.body.id;
+        const early = ctx.api('POST', '/orders/' + id + '/mark_ready', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'ready from placed: ' + JSON.stringify(early));
+        const early2 = ctx.api('POST', '/orders/' + id + '/pick_up', {});
+        ctx.assert(early2.status === 409 && early2.body.error.code === 'invalid_state', 'pickup from placed: ' + JSON.stringify(early2));
+        const s = ctx.api('POST', '/orders/' + id + '/start_production', {});
+        ctx.assert(s.status === 200 && s.body.status === 'in_production', 'start: ' + JSON.stringify(s.body));
+        const r = ctx.api('POST', '/orders/' + id + '/mark_ready', {});
+        ctx.assert(r.status === 200 && r.body.status === 'ready' && r.body.ready_at !== null, 'ready: ' + JSON.stringify(r.body));
+        const pk = ctx.api('POST', '/orders/' + id + '/pick_up', {});
+        ctx.assert(pk.status === 200 && pk.body.status === 'picked_up', 'pickup: ' + JSON.stringify(pk.body));
+        const again = ctx.api('POST', '/orders/' + id + '/pick_up', {});
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'second pickup: ' + JSON.stringify(again));
+      }
+  - id: t_expire
+    intent: uncollected ready orders expire after 24 hours
+    actions:
+      - place_order
+      - restock_product
+      - start_production
+      - mark_ready
+    description: A ready order stays ready at 23h and is expired after 25h.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/products', { name: 'Test Eclair D', sku: 'TST-EXP-1', category: 'pastry', price: 450 });
+        ctx.api('POST', '/products/' + p.body.id + '/restock', { quantity: 3 });
+        const c = ctx.api('POST', '/customers', { name: 'Expire Tester', email: 'expire.tester@example.com' });
+        const o = ctx.api('POST', '/orders', { customer_id: c.body.id, product_id: p.body.id, quantity: 1, pickup_date: '2026-10-12' });
+        ctx.api('POST', '/orders/' + o.body.id + '/start_production', {});
+        const r = ctx.api('POST', '/orders/' + o.body.id + '/mark_ready', {});
+        ctx.assert(r.status === 200, 'ready: ' + JSON.stringify(r.body));
+        ctx.advance('23h');
+        ctx.assert(ctx.api('GET', '/orders/' + o.body.id).body.status === 'ready', 'still ready at 23h');
+        const run = ctx.advance('2h');
+        ctx.assert(run.jobsFailed.length === 0, 'no job failed');
+        ctx.assert(ctx.api('GET', '/orders/' + o.body.id).body.status === 'expired', 'expired after 25h');
+        ctx.assert(ctx.api('GET', '/products/' + p.body.id).body.stock === 2, 'stock not restored on expiry');
+      }
+  - id: t_restock
+    intent: restock_product adds positive quantity to stock
+    actions:
+      - restock_product
+    description: Restock accumulates; zero quantity is refused.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/products', { name: 'Test Rye E', sku: 'TST-RESTOCK-1', category: 'bread', price: 500 });
+        ctx.assert(p.status === 201 && p.body.stock === 0, 'new product has no stock: ' + JSON.stringify(p.body));
+        const a = ctx.api('POST', '/products/' + p.body.id + '/restock', { quantity: 10 });
+        ctx.assert(a.status === 200 && a.body.stock === 10, 'restock 10: ' + JSON.stringify(a.body));
+        const b = ctx.api('POST', '/products/' + p.body.id + '/restock', { quantity: 5 });
+        ctx.assert(b.status === 200 && b.body.stock === 15, 'restock 5: ' + JSON.stringify(b.body));
+        const z = ctx.api('POST', '/products/' + p.body.id + '/restock', { quantity: 0 });
+        ctx.assert(z.status === 400 && z.body.error.code === 'input.invalid', 'zero refused: ' + JSON.stringify(z));
+        const dup = ctx.api('POST', '/products', { name: 'Test Rye Dup', sku: 'TST-RESTOCK-1', category: 'bread', price: 500 });
+        ctx.assert(dup.status === 409 && dup.body.error.code === 'field.unique', 'sku unique: ' + JSON.stringify(dup));
+      }
+routes:
+  - id: list_products
+    method: GET
+    path: /products
+    purpose: List products, filter by category, sort by price or name.
+  - id: get_product
+    method: GET
+    path: /products/{id}
+    purpose: Fetch one product.
+  - id: create_product
+    method: POST
+    path: /products
+    purpose: Add a product (stock starts at 0).
+  - id: update_product
+    method: PATCH
+    path: /products/{id}
+    purpose: Edit name, category or price.
+  - id: list_customers
+    method: GET
+    path: /customers
+    purpose: List customers, search by name and email.
+  - id: get_customer
+    method: GET
+    path: /customers/{id}
+    purpose: Fetch one customer.
+  - id: create_customer
+    method: POST
+    path: /customers
+    purpose: Register a customer.
+  - id: list_orders
+    method: GET
+    path: /orders
+    purpose: List orders, filter by status, customer_id, product_id, pickup_date; sort by pickup_date.
+  - id: get_order
+    method: GET
+    path: /orders/{id}
+    purpose: Fetch one order.
+  - id: place_order
+    method: POST
+    path: /orders
+    purpose: Built as workflow action place_order.
+  - id: start_production
+    method: POST
+    path: /orders/{id}/start_production
+    purpose: Built as workflow action.
+  - id: mark_ready
+    method: POST
+    path: /orders/{id}/mark_ready
+    purpose: Built as workflow action.
+  - id: pick_up
+    method: POST
+    path: /orders/{id}/pick_up
+    purpose: Built as workflow action.
+  - id: cancel_order
+    method: POST
+    path: /orders/{id}/cancel
+    purpose: Built as workflow action.
+  - id: restock_product
+    method: POST
+    path: /products/{id}/restock
+    purpose: Built as workflow action.
+seed:
+  rowsPerEntity:
+    product: 12
+    customer: 10
+    bakery_order: 32
+  mix: Orders spread across all six states with several customers holding multiple orders in different states; a few products low on stock; placed orders include several due on the same pickup_date; some seeded orders reference the same products.
+  stateMix:
+    bakery_order:
+      placed: 30
+      in_production: 18
+      ready: 18
+      picked_up: 22
+      cancelled: 8
+      expired: 4
+tasks:
+  - id: restock_low_bread
+    difficulty: easy
+    kind: scarce_resource
+    intent: Restock the product named 'Country Sourdough' (currently low on stock) by 24 units and change nothing else.
+    actions:
+      - restock_product
+    decoyIdea: Restocks the similarly named 'Seeded Sourdough' product instead.
+  - id: cancel_customer_placed_order
+    difficulty: medium
+    kind: irreversible
+    intent: Customer Maria Lopez has several orders. Cancel only her order that is still in placed state for the 'Cinnamon Roll' product, leaving her other orders (in production, ready) untouched.
+    actions:
+      - cancel_order
+    decoyIdea: Cancels a different order of hers, such as the in-production one (refused) or her placed order for another product, or cancels all her orders.
+    pressure:
+      states:
+        - bakery_order.placed
+        - bakery_order.in_production
+        - bakery_order.ready
+      distractors: bakery_order
+  - id: prepare_saturday_orders
+    difficulty: hard
+    kind: scarce_resource
+    intent: Every placed order with pickup_date 2026-10-10 must be taken through production and marked ready, so they can be picked up tomorrow morning. Do not touch orders for other dates or in other states.
+    actions:
+      - start_production
+      - mark_ready
+    decoyIdea: Only processes the first page of orders, or marks ready orders of the wrong pickup date, or skips start_production.
+    pressure:
+      paging: bakery_order
+      states:
+        - bakery_order.placed
+      distractors: bakery_order
+open_questions:
+  - question: Is this for in-store pickup orders or also delivery?
+    default_answer: Pickup only.
+  - question: Should orders contain multiple products?
+    default_answer: No, one product and quantity per order.
+  - question: Is inventory per day or running stock?
+    default_answer: Running stock decremented at order placement.
+  - question: How long may ready orders wait?
+    default_answer: 24 hours, then they expire.
+assumptions:
+  - decision: One order holds one product and quantity.
+    why: Action inputs are scalar, so multi-line orders would need a line-item entity; kept simple.
+  - decision: Currency is USD in cents.
+    why: No currency specified.
+  - decision: Clock starts 2026-10-09T08:00:00Z with tick 0s; seeded history is before it, pickup dates are future.
+    why: Deterministic time; explicit advances only.
+  - decision: Stock is reserved at order placement and restored only on cancel; expired orders do not restore stock.
+    why: Perishable goods; simple inventory model.
+  - decision: No payments, delivery or ingredient inventory.
+    why: Request just says an app for a bakery; ordering and pickup is the core stateful flow.
+  - decision: Stock and status are readonly and change only through actions.
+    why: Rules cannot be bypassed via PATCH.
+outOfScope:
+  - what: Payments and refunds
+    why: Not specified; keeps the world focused on fulfillment.
+  - what: Delivery, recipes, ingredient inventory, staff scheduling
+    why: Beyond a minimal bakery order desk.
+  - what: Multi-item orders
+    why: Would require line items; simplified.
+changes: []
