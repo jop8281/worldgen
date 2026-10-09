@@ -54,9 +54,9 @@ function issuesOf(r: Verified): readonly CheckIssue[] {
 /** [code, path, found] per issue: what a model reads first. */
 const brief = (r: Verified): [string, readonly (string | number)[], string][] => issuesOf(r).map((i) => [i.code, i.path, i.found]);
 
-/** The verdict without its hash, checked for shape only, and without its mutant probes, which their own test pins. */
-function plain(v: TaskVerdict): Omit<TaskVerdict, 'endStateHash' | 'collateral'> {
-  const { endStateHash, collateral, ...rest } = v;
+/** The verdict without its hash, checked for shape only, and without its mutant probes and check coverage, which their own tests pin. */
+function plain(v: TaskVerdict): Omit<TaskVerdict, 'endStateHash' | 'collateral' | 'checks' | 'unattributedProbes'> {
+  const { endStateHash, collateral, checks: _checks, unattributedProbes: _unattributed, ...rest } = v;
   assert.match(endStateHash, /^[0-9a-f]{32}$/);
   assert.equal(collateral.length, 7);
   return rest;
@@ -573,5 +573,59 @@ describe('minimalWorld under the full rules (R9)', () => {
         decoys: [{ why: 'raises priority to urgent but forgets to resolve the pending Acme ticket', score: 0.5 }], bestPrefixScore: 0.5, solutionCalls: 5, solutionWrites: 3, solutionReadsBeforeWrite: 2, solutionPagedEntities: [], solutionRowsChanged: 2, solutionLaterPageEntities: [], solutionDistractorEntities: ['ticket'],
       },
     ]);
+  });
+});
+
+describe('grader check coverage: which checks a probe flipped (A-393)', () => {
+  const targets = `const c = ctx.seed.list('customer', { where: { name: 'Initech' } })[0];
+  const targets = ctx.seed.list('ticket', { where: { customer: c.id, status: 'pending' } });
+  const onlyTargets = ctx.changes().every((x) => targets.some((t) => t.id === x.id) && x.fields.every((f) => f === 'status'));`;
+  const MUTANTS_THAT_COMMIT = ['target_field', 'other_row', 'extra_create', 'extra_delete', 'retarget'];
+
+  it('a grader that records no goal or guard has one check, its return value, flipped by every probe that scored below 1', () => {
+    assert.deepEqual(verdictOf(verify(minimalWorld(), MEDIUM)).checks, [{ check: 'return', flippedBy: ['prefix 1', 'decoy 0', ...MUTANTS_THAT_COMMIT] }]);
+  });
+
+  it('each goal and guard is a check, a repeated name by occurrence, and one no probe flipped has none', () => {
+    const grader = `(ctx) => {
+  ${targets}
+  ctx.guard('only the status of Initech pending tickets changed', onlyTargets);
+  ctx.guard('Initech still exists', ctx.db.get('customer', c.id) !== null);
+  for (const t of targets) ctx.goal(1 / targets.length, 'pending ticket resolved', ctx.db.get('ticket', t.id).status === 'resolved');
+  return ctx.score();
+}`;
+    const v = verdictOf(verify(only(MEDIUM, { grader }), MEDIUM));
+    assert.deepEqual(v.checks, [
+      // The solution resolves tkt_0008 first, so its prefix still has it, and retarget swaps only the last write.
+      { check: 'goal pending ticket resolved', flippedBy: [] },
+      { check: 'goal pending ticket resolved #2', flippedBy: ['prefix 1', 'retarget'] },
+      { check: 'guard only the status of Initech pending tickets changed', flippedBy: ['decoy 0', ...MUTANTS_THAT_COMMIT] },
+      { check: 'guard Initech still exists', flippedBy: [] },
+    ]);
+    assert.deepEqual(v.unattributedProbes, []);
+  });
+
+  it('a guard-only grader keeps its return value as a check, flipped by the probes no guard explains', () => {
+    const grader = `(ctx) => {
+  ${targets}
+  ctx.guard('only the status of Initech pending tickets changed', onlyTargets);
+  return targets.filter((t) => ctx.db.get('ticket', t.id).status === 'resolved').length / targets.length;
+}`;
+    assert.deepEqual(verdictOf(verify(only(MEDIUM, { grader }), MEDIUM)).checks, [
+      { check: 'guard only the status of Initech pending tickets changed', flippedBy: ['decoy 0', ...MUTANTS_THAT_COMMIT] },
+      { check: 'return', flippedBy: ['prefix 1'] },
+    ]);
+  });
+
+  it('a probe an early return 0 caught before any goal is unattributed, not credited to a goal', () => {
+    const grader = `(ctx) => {
+  ${targets}
+  if (!onlyTargets) return 0;
+  for (const t of targets) ctx.goal(1 / targets.length, t.id + ' resolved', ctx.db.get('ticket', t.id).status === 'resolved');
+  return ctx.score();
+}`;
+    const v = verdictOf(verify(only(MEDIUM, { grader }), MEDIUM));
+    assert.deepEqual(v.checks, [{ check: 'goal tkt_0008 resolved', flippedBy: [] }, { check: 'goal tkt_0012 resolved', flippedBy: ['prefix 1'] }]);
+    assert.deepEqual(v.unattributedProbes, ['decoy 0', ...MUTANTS_THAT_COMMIT]);
   });
 });

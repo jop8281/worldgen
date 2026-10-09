@@ -793,7 +793,7 @@ Status reflects this document. Rows the merged design closes are marked "covered
 | R68 | Reads and writes | Write route floor. Each task needs a write | covered (this doc) |
 | R69 | Faithful, not convenient | meta.api envelopes, cursor style, real id formats | partial: no shortcut-endpoint check |
 | R70 | No silent guessing | Assumptions lint. Engine defaults listed in report | covered (this doc) |
-| R71 | Graders discriminate | Prefixes, decoys, mutants | covered |
+| R71 | Graders discriminate | Prefixes, decoys, mutants | partial: the probes flip 272 of 298 grader checks on the prod worlds, and 364 of 665 mutant slots find nothing to probe (A-393) |
 | R72 | Accept any valid solution | Alternative run in verify | partial: only page-size and order variants |
 | R73 | Penalise collateral | Engine-owned gate on origin-tagged changes | covered |
 | R74 | Repo, one command each | CLI for both | partial: fresh-clone setup and README not designed |

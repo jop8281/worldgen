@@ -34,7 +34,7 @@ export type { CheckIssue, IssueCode, IssuePath, IssueOwner, NonEmpty, SourceLine
 export { CHECK_LAYERS, routeKey } from './check.ts';
 export type { CheckReport, CheckedWorld, CheckLayer, WorldStats } from './check.ts';
 export { proofOf, traceOf } from './tasks.ts';
-export type { TaskVerdict, TaskProof, GradedDump, GoalResult, GuardResult, MutantProbe } from './tasks.ts';
+export type { TaskVerdict, TaskProof, GradedDump, GoalResult, GuardResult, MutantProbe, CheckProbe } from './tasks.ts';
 export { publicWorldOf, taskPrivacy, privacySplit } from './split.ts';
 export type { TaskPrivacy } from './split.ts';
 export { VERIFIER_PROTOCOL, VERIFIER_LIMITS, VERIFIER_STOPS, verifierRequestSchema } from './verify.ts';

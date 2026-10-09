@@ -31,6 +31,12 @@ import { seedState, stateHash, transact, type IdempotencyEntry, type Row, type R
 declare const verdictBrand: unique symbol;
 /** One engine mutant kind on one task. `call` and `score` are null when the kind found nothing to probe: unprobed, not passed. */
 export type MutantProbe = { readonly kind: MutantKind; readonly call: string | null; readonly score: number | null };
+/**
+ * One check of a task's grader (A-393): a goal or guard its run on the solution recorded, or `return`, the score
+ * itself, when it records none. `flippedBy` names each probe whose run turned it from met or held to unmet or
+ * failed; an empty list means no probe did, so the check is unprobed, not proven.
+ */
+export type CheckProbe = { readonly check: string; readonly flippedBy: readonly string[] };
 
 export type TaskVerdict = {
   readonly taskId: string;
@@ -55,6 +61,10 @@ export type TaskVerdict = {
   readonly solutionDistractorEntities: readonly string[];
   /** Every engine mutant kind, in order: the call it graded and its score, or nulls when no candidate committed a visible change, so the kind was not probed. */
   readonly collateral: readonly MutantProbe[];
+  /** Each grader check and the probes that flipped it: decoys, prefixes and engine mutants. Doing nothing is not a probe. */
+  readonly checks: readonly CheckProbe[];
+  /** Probes that scored below 1 without flipping a recorded check: the grader's own code outside its goals and guards lowered the score. */
+  readonly unattributedProbes: readonly string[];
   readonly endStateHash: string;
   readonly [verdictBrand]: true;
 };
@@ -556,10 +566,11 @@ function prefixScores(
   host: SnippetHost,
   log: readonly CallRecord[],
   writes: readonly number[],
-): { ok: true; scores: number[] } | { ok: false; issue: CheckIssue } {
+): { ok: true; scores: number[]; runs: ProbeRun[] } | { ok: false; issue: CheckIssue } {
   const scores: number[] = [];
+  const runs: ProbeRun[] = [];
   const strict = writes.slice(0, -1);
-  if (strict.length === 0) return { ok: true, scores };
+  if (strict.length === 0) return { ok: true, scores, runs };
   const rt = runtime(world, host, seed);
   for (const c of log) {
     if (scores.length === strict.length) break;
@@ -569,9 +580,10 @@ function prefixScores(
     const g = grade(world, seed, stateFromDump(world, rt.dump()), taskId, host, rt.journal(), rt.log());
     if (!g.ok) return g;
     scores.push(g.score);
+    runs.push({ probe: `prefix ${scores.length}`, graded: g });
     if (g.score === 1) break;
   }
-  return { ok: true, scores };
+  return { ok: true, scores, runs };
 }
 
 /** A runtime that starts at `seed` and re-issues `log`'s successful calls, reads too, so engine time matches. */
@@ -758,6 +770,7 @@ const SWAPS: Readonly<Record<SwapKind, (input: MutantInput) => Iterable<Swap>>> 
 function swapIssues(world: CheckedWorld, seed: State, taskId: string, host: SnippetHost, log: readonly CallRecord[], end: State): Probed {
   const out: CheckIssue[] = [];
   const probes: MutantProbe[] = [];
+  const runs: ProbeRun[] = [];
   const skip = new Set([contentHash(end), contentHash(seed)]);
   for (const kind of SWAP_KINDS) {
     let probe: MutantProbe = { kind, call: null, score: null };
@@ -775,13 +788,14 @@ function swapIssues(world: CheckedWorld, seed: State, taskId: string, host: Snip
       if (skip.has(contentHash(state))) continue;
       const g = grade(world, seed, state, taskId, host, rt.journal(), rt.log());
       probe = { kind, call: swap.label, score: g.ok ? g.score : null };
+      if (g.ok) runs.push({ probe: kind, graded: g });
       if (!g.ok) out.push(g.issue);
       else if (g.score === 1) out.push(issue('task.mutant_full_marks', ['tasks', taskId, 'grader'], { kind, call: swap.label }, `the solution with ${swap.label} scored 1`));
       break;
     }
     probes.push(probe);
   }
-  return { issues: out, probes };
+  return { issues: out, probes, runs };
 }
 
 /**
@@ -795,12 +809,52 @@ function withinAllows(g: Graded, taskId: string): boolean {
   return g.ok && (g.guards ?? []).some((guard) => guard.name === allowsGuard(taskId) && guard.held);
 }
 
-/** A mutant pass's issues, and one probe per kind it ran. */
-type Probed = { readonly issues: CheckIssue[]; readonly probes: MutantProbe[] };
+/** A mutant pass's issues, one probe per kind it ran, and the graded run of each kind that found something to probe. */
+type Probed = { readonly issues: CheckIssue[]; readonly probes: MutantProbe[]; readonly runs: ProbeRun[] };
+
+/** One probe's graded run, named as `worldplay verify` prints it: `prefix 2`, `decoy 0` or a mutant kind. */
+type ProbeRun = { readonly probe: string; readonly graded: Extract<Graded, { ok: true }> };
+
+/** The goals and guards one grading recorded, keyed by kind and name, a repeated name by occurrence (`#2`), with whether each held. */
+function recordedChecks(g: Extract<Graded, { ok: true }>): Map<string, boolean> {
+  const out = new Map<string, boolean>();
+  const add = (name: string, held: boolean): void => {
+    let key = name;
+    for (let n = 2; out.has(key); n++) key = `${name} #${n}`;
+    out.set(key, held);
+  };
+  for (const goal of g.goals ?? []) add(`goal ${goal.name}`, goal.met);
+  for (const guard of g.guards ?? []) add(`guard ${guard.name}`, guard.held);
+  return out;
+}
+
+/**
+ * Which of the solution's grader checks each probe flipped (A-393). A grader that records no goal returns its own
+ * number, so that number is a check too, `return`, flipped by a probe that scored below 1 without flipping a guard.
+ * When goals make the score, a probe that scored below 1 and flipped none of them, such as one an early `return 0`
+ * caught, is unattributed.
+ */
+function checkCoverage(solution: Extract<Graded, { ok: true }>, runs: readonly ProbeRun[]): { checks: CheckProbe[]; unattributed: string[] } {
+  const base = recordedChecks(solution);
+  const byReturn = (solution.goals ?? []).length === 0;
+  const flipped = new Map<string, string[]>([...base.keys(), ...(byReturn ? ['return'] : [])].map((k) => [k, []]));
+  const unattributed: string[] = [];
+  for (const run of runs) {
+    const seen = recordedChecks(run.graded);
+    const hits = [...base].filter(([check, held]) => held && seen.get(check) === false).map(([check]) => check);
+    if (hits.length === 0 && run.graded.score < 1) {
+      if (byReturn) hits.push('return');
+      else unattributed.push(run.probe);
+    }
+    for (const check of hits) flipped.get(check)?.push(run.probe);
+  }
+  return { checks: [...flipped].map(([check, flippedBy]) => ({ check, flippedBy })), unattributed };
+}
 
 function collateralIssues(world: CheckedWorld, seed: State, taskId: string, host: SnippetHost, log: readonly CallRecord[], end: State): Probed {
   const out: CheckIssue[] = [];
   const probes: MutantProbe[] = [];
+  const runs: ProbeRun[] = [];
   const solutionContent = contentHash(end);
   for (const kind of COLLATERAL_KINDS) {
     let probe: MutantProbe = { kind, call: null, score: null };
@@ -818,13 +872,14 @@ function collateralIssues(world: CheckedWorld, seed: State, taskId: string, host
       const g = grade(world, seed, state, taskId, host, rt.journal(), rt.log());
       const call = req.body === undefined ? `${req.method} ${req.path}` : `${req.method} ${req.path} ${show(req.body)}`;
       probe = { kind, call, score: g.ok ? g.score : null };
+      if (g.ok) runs.push({ probe: kind, graded: g });
       if (!g.ok) out.push(g.issue);
       else if (g.score === 1 && !withinAllows(g, taskId)) out.push(issue('task.mutant_full_marks', ['tasks', taskId, 'grader'], { kind, call }, `the solution plus ${call} scored 1`));
       break;
     }
     probes.push(probe);
   }
-  return { issues: out, probes };
+  return { issues: out, probes, runs };
 }
 
 /**
@@ -859,7 +914,7 @@ const TRIVIAL_FOUND: Readonly<Record<'same_as_noop' | 'same_as_solution', string
  * scores below 1 (checked only when the solution scores 1 and noop 0). Each run is graded with
  * its own trace: the solution's, each prefix replay's, each decoy's, and an empty one for noop. On
  * success `log` is the first solution run's calls and `exercised` the actions whose handlers that
- * run actually ran.
+ * run actually ran, and the verdict names which grader checks each probe flipped (A-393).
  */
 /**
  * Entities whose list route a successful call in `log` asked for a later page: the world's cursor, starting_after
@@ -989,6 +1044,7 @@ export function verifyTask(
   const firstWrite = writes[0] ?? Infinity;
   const readsBeforeWrite = first.log.filter((c) => c.seq < firstWrite && c.req.method === 'GET' && succeeded(c)).length;
   let bestPrefixScore: number | null = null;
+  const runs: ProbeRun[] = [];
   if (solution.ok && solution.score === 1) {
     const prefixes = prefixScores(world, seed, taskId, host, first.log, writes);
     if (!prefixes.ok) push(prefixes.issue);
@@ -999,6 +1055,7 @@ export function verifyTask(
         push(issue('task.prefix_full_marks', taskPath, { writes: k, of: writes.length }, `the first ${k} of ${writes.length} writes scored 1`));
       }
       if (prefixes.scores.length > 0) bestPrefixScore = Math.max(...prefixes.scores);
+      runs.push(...prefixes.runs);
     }
   }
 
@@ -1026,6 +1083,7 @@ export function verifyTask(
       }
       const g = r.graded;
       decoys.push({ why: d.why, score: g.score });
+      runs.push({ probe: `decoy ${i}`, graded: g });
       // A trivial decoy proves nothing about the grader, so its triviality is the issue even at full marks.
       if (writeSeqs(run.log).length === 0) {
         const n = run.log.length;
@@ -1045,11 +1103,14 @@ export function verifyTask(
     for (const pass of [collateralIssues(world, seed, taskId, host, first.log, first.end), swapIssues(world, seed, taskId, host, first.log, first.end)]) {
       for (const i of pass.issues) push(i);
       probes.push(...pass.probes);
+      runs.push(...pass.runs);
     }
   }
 
   const [head, ...rest] = issues;
   if (head) return { ok: false, issues: [head, ...rest] };
+  // No issue means the solution graded, at exactly 1.
+  const coverage = solution.ok ? checkCoverage(solution, runs) : { checks: [], unattributed: [] };
   const verdict = {
     taskId,
     difficulty: task.difficulty,
@@ -1063,6 +1124,8 @@ export function verifyTask(
     solutionPagedEntities: pagedEntities(world, first.log),
     ...traceCoverage(world, first.log),
     collateral: probes,
+    checks: coverage.checks,
+    unattributedProbes: coverage.unattributed,
     endStateHash: hash,
   } as unknown as TaskVerdict;
   return { ok: true, verdict, log: first.log, exercised: [...ran] };
