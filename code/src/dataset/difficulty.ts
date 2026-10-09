@@ -104,8 +104,10 @@ export async function runDifficulty(o: DifficultyRunOptions): Promise<Difficulty
           spent += o.episodeBudgetUsd;
           return done({ kind: 'failed', message: `episode ${runId} (${t.world} ${t.task}, ${model}) could not run to the end, so it is charged its whole $${o.episodeBudgetUsd} budget: ${messageOf(e)}` });
         }
-        if (outcome.stopReason === 'budget_limit' && outcome.refusal === null) {
-          // The caps are shared by every session, so one can run out mid-episode and cut a call short. In doubt, the caps did it: no trial.
+        // The caps are shared by every session, so another can run them low mid-episode and cut a call short of the
+        // episode's own budget. When the caps no longer fit an episode, such a stop is theirs: a refusal, no trial.
+        const cutShort = outcome.budgetTooSmall || (outcome.stopReason === 'budget_limit' && usd(outcome.costUsd) < o.episodeBudgetUsd);
+        if (cutShort && outcome.refusal === null) {
           const after = o.capLeftUsd?.() ?? null;
           if (after !== null && after < o.episodeBudgetUsd) outcome = { ...outcome, refusal: `the spend caps ran low during the episode and leave $${after} for model calls, less than one episode's $${o.episodeBudgetUsd} budget` };
         }

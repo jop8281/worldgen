@@ -191,6 +191,19 @@ describe('runDifficulty and difficultyMatrix', () => {
     assert.deepEqual([cell?.episodes, cell?.trials, cell?.refused], [1, 0, 1]);
   });
 
+  it('keeps a budget_limit that spent the whole episode budget as a trial, and reads a first call the caps cut as a refusal', async () => {
+    const left = [2, 0.3, 0.3];
+    const spent = scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: outcome(0, 0.5, 'budget_limit') });
+    const options = { ...base, tasks: [EASY], episodes: 1 };
+    const r = await runDifficulty({ ...options, run: spent.run, capLeftUsd: () => left.shift() ?? null });
+    assert.deepEqual([r.rows[0]?.refusal, r.rows[0] === undefined ? null : isTrial(r.rows[0])], [null, true]);
+    assert.deepEqual(r.stop, { kind: 'cost_refused', message: "the spend caps leave $0.3 for model calls, less than one episode's $0.5 budget" });
+    const caps = [2, 0.1];
+    const cut = scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: { ...outcome(0, 0, 'model_error'), budgetTooSmall: true } });
+    const c = await runDifficulty({ ...options, run: cut.run, capLeftUsd: () => caps.shift() ?? null });
+    assert.deepEqual(c.stop, { kind: 'cost_refused', message: "the spend caps ran low during the episode and leave $0.1 for model calls, less than one episode's $0.5 budget" });
+  });
+
   it('stops as failed when a model cannot make one call within the episode budget', async () => {
     const { run, jobs } = scriptedRunner({ [`${EASY.task} ${SONNET} 1`]: { ...outcome(0, 0, 'model_error'), budgetTooSmall: true } });
     const r = await runDifficulty({ ...base, tasks: [EASY], episodes: 2, run });
