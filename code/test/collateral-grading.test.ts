@@ -224,7 +224,9 @@ describe('an edit undone before the end still counts as collateral (A-387)', () 
     const held = { wid: worldIdOf(world), worldVersion: 'a'.repeat(64), engine: 'test-engine' };
     const trace = traceOf(rt.log());
     const request = { protocol: 1, submission: 'sub-undone', task: TASK, ...held, trace, chain: chainOf(trace), state: rt.dump() };
-    assert.deepEqual(verifySubmission(world, held, JSON.stringify(request), new Set()).verdict, { task: TASK, wid: held.wid, score: 0, stop: 'graded' });
+    assert.deepEqual(verifySubmission(world, held, JSON.stringify(request), new Set()).verdict, {
+      task: TASK, wid: held.wid, score: 0, stop: 'graded', goals: { met: 0, total: 0 }, guards: { held: 0, total: 1 },
+    });
   });
 
   it('without a journal or a call log the guards see only the end state, and the score says so', () => {
