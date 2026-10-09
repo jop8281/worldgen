@@ -2148,7 +2148,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     });
   }
 
-  /** The episode a run exported and reopened, from its dataset.jsonl or failures.jsonl. The private evidence stays on disk. */
+  /** The episode a run exported and reopened, from its dataset.jsonl, or a version 1 export's failures.jsonl (A-389). The private evidence stays on disk. */
   async function exportedEpisode(out: string, runId: string): Promise<unknown> {
     for (const name of ['dataset.jsonl', 'failures.jsonl']) {
       const text = await readFile(path.join(out, name), 'utf8').catch(() => '');
@@ -2206,13 +2206,17 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
   async function allEpisodes(who: User, filter: string | null): Promise<{ episodes: Episode[]; unreadable: string[] }> {
     const episodesOut: Episode[] = [];
     const unreadable: string[] = [];
+    // A version 1 failures.jsonl left beside a version 2 dataset.jsonl repeats its rows, so each episode counts once (A-389).
+    const seen = new Set<string>();
     for (const runId of await episodeDirs(who, filter)) {
       for (const name of ['dataset.jsonl', 'failures.jsonl']) {
         const text = await readFile(path.join(episodesDir, runId, name), 'utf8').catch(() => '');
         for (const [i, line] of text.split('\n').entries()) {
           if (line.trim() === '') continue;
           try {
-            episodesOut.push(parseEpisode(JSON.parse(line), `${runId}/${name}:${i + 1}`));
+            const ep = parseEpisode(JSON.parse(line), `${runId}/${name}:${i + 1}`);
+            if (!seen.has(ep.episode_id)) episodesOut.push(ep);
+            seen.add(ep.episode_id);
           } catch {
             unreadable.push(`${runId}/${name}:${i + 1}`);
           }

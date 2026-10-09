@@ -10,7 +10,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { checkWorld, createRuntime, loadWorld, openApiOf, renderWorldYaml, traceOf, verifySubmission, worldIdOf, type CheckedWorld, type StateDump } from '#engine';
 import { checkRequest, routesOf } from './episode.ts';
-import { hashState, parseEpisode, parseManifest, sha256Hex, type Episode, type Manifest } from './schema.ts';
+import { hashState, isCompleteSuccess, parseEpisode, parseManifest, sha256Hex, type Episode, type Manifest, type ManifestV1 } from './schema.ts';
 import { verifierRequestOf } from './verifier.ts';
 
 /** One episode replayed: what was recorded, what the verifier answers now, and each binding check. */
@@ -87,16 +87,16 @@ export type FolderCheck = {
   /** True when the manifest names that version, so the episodes ran on this very world. */
   readonly worldOk: boolean;
   readonly replays: readonly EpisodeReplay[];
-  /** Episodes in failures.jsonl: failed runs with no score to check, counted but not replayed. */
+  /** Episodes that are not complete successes, counted but not replayed: failures.jsonl in a version 1 export, the other rows of dataset.jsonl in a version 2 one (A-389). */
   readonly failedRuns: number;
 };
 
 const linesOf = (text: string): string[] => text.split('\n').filter((l) => l.trim() !== '');
 
-/** Checks `<folder>/manifest.json`, `dataset.jsonl` and `failures.jsonl` against the frozen world in `worldDir`. */
+/** Checks `<folder>/manifest.json`, `dataset.jsonl` (and a version 1 export's `failures.jsonl`) against the frozen world in `worldDir`. */
 export async function checkExportFolder(folder: string, worldDir = path.join(folder, 'world')): Promise<FolderCheck> {
   const none = { changedFiles: [], worldVersion: null, worldOk: false, replays: [], failedRuns: 0 };
-  let manifest: Manifest;
+  let manifest: Manifest | ManifestV1;
   try {
     manifest = parseManifest(JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8')), 'manifest.json');
   } catch (e) {
@@ -106,19 +106,29 @@ export async function checkExportFolder(folder: string, worldDir = path.join(fol
   if (manifest.worlds.length !== 1) return { folder, error: `manifest.json names ${manifest.worlds.length} worlds; a folder holds exactly one frozen world`, ...none };
   const changedFiles: string[] = [];
   const texts: Record<string, string> = {};
-  for (const entry of [manifest.files.dataset, manifest.files.failures]) {
+  for (const entry of manifest.manifest_version === 1 ? [manifest.files.dataset, manifest.files.failures] : [manifest.files.dataset]) {
     const bytes = await readFile(path.join(folder, entry.path)).catch(() => null);
     if (bytes === null || sha256Hex(bytes) !== entry.sha256) changedFiles.push(entry.path);
     texts[entry.path] = bytes === null ? '' : bytes.toString('utf8');
   }
-  const failedRuns = linesOf(texts[manifest.files.failures.path] ?? '').length;
+  // The complete successes are replayed, as before A-389; a version 2 dataset.jsonl also holds the other rows, which are counted.
+  const rows = linesOf(texts[manifest.files.dataset.path] ?? '');
+  const success = (line: string): boolean => {
+    try {
+      return isCompleteSuccess(parseEpisode(JSON.parse(line), manifest.files.dataset.path));
+    } catch {
+      return true; // replayed, so the row is reported as episode.invalid
+    }
+  };
+  const replayed = rows.map((line, i) => ({ line, i })).filter(({ line }) => manifest.manifest_version === 1 || success(line));
+  const failedRuns = manifest.manifest_version === 1 ? linesOf(texts[manifest.files.failures.path] ?? '').length : rows.length - replayed.length;
   const loaded = await loadWorld(worldDir);
   const report = loaded.ok ? checkWorld(loaded.value) : null;
   if (report === null || !report.ok) return { folder, error: null, changedFiles, worldVersion: null, worldOk: false, replays: [], failedRuns };
   const worldVersion = sha256Hex(renderWorldYaml(report.world));
   const worldOk = manifest.worlds[0]!.world_version === worldVersion;
   if (!worldOk) return { folder, error: null, changedFiles, worldVersion, worldOk, replays: [], failedRuns };
-  const replays = linesOf(texts[manifest.files.dataset.path] ?? '').map((line, i): EpisodeReplay => {
+  const replays = replayed.map(({ line, i }): EpisodeReplay => {
     const where = `${manifest.files.dataset.path}:${i + 1}`;
     let ep: Episode;
     try {

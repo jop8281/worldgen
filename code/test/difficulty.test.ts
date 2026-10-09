@@ -295,7 +295,8 @@ describe('localRunner over helpdesk with a fake Model', () => {
     const m = difficultyMatrix(options, r);
     assert.deepEqual(m.tasks.map((t) => [t.passes, t.trials, t.measured, t.agrees]), [[1, 2, 'medium', false]]);
     assert.deepEqual(m.cells.map((c) => [c.model, c.measured, c.interval]), [[SONNET, 'easy', [0.207, 1]], [OPUS, 'hard', [0, 0.793]]]);
-    assert.deepEqual([existsSync(path.join(out, 'episodes/loc.1/dataset.jsonl')), existsSync(path.join(out, 'episodes/loc.2/failures.jsonl'))], [true, true]);
+    // Each run's export holds its episode in dataset.jsonl, failed or not, and no failures.jsonl (A-389).
+    assert.deepEqual(['loc.1/dataset.jsonl', 'loc.2/dataset.jsonl', 'loc.2/failures.jsonl'].map((f) => existsSync(path.join(out, 'episodes', f))), [true, true, false]);
   });
 
   it('reads a later call its allowance stopped as budget_limit, a trial, and a first one as a budget too small', async () => {

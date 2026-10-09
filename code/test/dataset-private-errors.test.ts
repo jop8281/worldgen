@@ -35,7 +35,7 @@ describe('private controller errors in dataset exports', () => {
         task: { id: 'visible_task', difficulty: 'easy', instruction: 'Complete the visible task using the public API.' },
         index: 1, openapi: { openapi: '3.1.0', info: { title: 'toy', version: '1', description: '' }, paths: {}, tags: [], components: { schemas: {} }, 'x-error-codes': {} },
         seedHash: hashState(state), port,
-        grade: boundary === 'grade' ? fail : async () => ({ ok: true as const, score: 0 }),
+        grade: boundary === 'grade' ? fail : async () => ({ ok: true as const, score: 0, goals: { met: 0, total: 1 }, guards: { held: 0, total: 0 } }),
         nextTurn: async () => ({ decision: { action: 'finish', final_reply: 'Unable to complete this task.' }, commentary: '',
           usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, costUsd: 0.000012, ms: 1 }),
         maxTurns: 2, budgetLeftUsd: 0.1, deadline: Date.now() + 30_000, now: Date.now, redact,
@@ -55,8 +55,10 @@ describe('private controller errors in dataset exports', () => {
         await writeArtifacts(out, result.episode.episode_id, result.artifacts, redact);
         await appendEpisode(out, result.episode, redact);
         const exported = await exportDataset({ out, redact });
-        assert.deepEqual(exported.manifest.counts, { episodes: 1, accepted: 0, failed: 1, by_stop_reason: { [result.episode.stop_reason]: 1 } });
-        for (const name of ['dataset.jsonl', 'failures.jsonl', 'manifest.json', 'logs/privacy-test.episodes.jsonl']) {
+        assert.deepEqual(exported.manifest.counts, {
+          episodes: 1, by_verdict: { success: 0, partial: 0, failure: 0, infra: 1 }, by_stop_reason: { [result.episode.stop_reason]: 1 }, by_failure_cause: { [result.episode.stop_reason]: 1 },
+        });
+        for (const name of ['dataset.jsonl', 'manifest.json', 'logs/privacy-test.episodes.jsonl']) {
           const text = await readFile(path.join(out, name), 'utf8');
           assert.equal(text.includes(hidden), false, `${name} leaked private evaluation details`);
           assert.equal(text.includes(secret), false, `${name} leaked the controller key`);

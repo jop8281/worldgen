@@ -83,12 +83,16 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       ['escalate_breached_enterprise_tickets', 'hard', 1, 'done'],
     ]);
     assert.deepEqual(result.sandbox, { id: 'fake-sandbox-1', teardown: 'confirmed' });
-    assert.equal(result.manifest?.counts.accepted, 3);
+    assert.deepEqual(result.manifest?.counts.by_verdict, { success: 3, partial: 0, failure: 0, infra: 0 });
 
-    // The export on disk is exactly what was accepted.
+    // The export on disk holds every episode with its outcome, and no failures.jsonl (A-389).
     const rows = lines(path.join(out, 'dataset.jsonl')).map((l) => episodeSchema.parse(JSON.parse(l)));
-    assert.deepEqual(rows.map((r) => r.task_id), ['assign_newest_acme_ticket', 'escalate_breached_enterprise_tickets', 'escalate_breached_printer_ticket']);
-    assert.equal(readFileSync(path.join(out, 'failures.jsonl'), 'utf8'), '');
+    assert.deepEqual(rows.map((r) => [r.task_id, r.outcome.verdict, r.outcome.reward, r.outcome.goals, r.outcome.guards]), [
+      ['assign_newest_acme_ticket', 'success', 1, { met: 0, total: 0 }, { held: 1, total: 1 }],
+      ['escalate_breached_enterprise_tickets', 'success', 1, { met: 0, total: 0 }, { held: 1, total: 1 }],
+      ['escalate_breached_printer_ticket', 'success', 1, { met: 2, total: 2 }, { held: 2, total: 2 }],
+    ]);
+    assert.equal(existsSync(path.join(out, 'failures.jsonl')), false);
     const replies = Object.fromEntries(rows.map((r) => [r.task_id, r.final_reply]));
     assert.equal(replies['assign_newest_acme_ticket'], 'Assigned ticket tkt_0004 to Priya Raman (agt_0001).');
     assert.equal(rows.every((r) => r.initial_state_hash === rows[0]?.initial_state_hash && r.final_state_hash !== r.initial_state_hash), true);
@@ -131,7 +135,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
       backend: { serveLog: `worldplay up with ${BOAT}\n` },
     });
     assert.equal(result.status, 'accepted');
-    const publicText = ['dataset.jsonl', 'failures.jsonl', 'manifest.json'].map((n) => readFileSync(path.join(out, n), 'utf8')).join('\n');
+    const publicText = ['dataset.jsonl', 'manifest.json'].map((n) => readFileSync(path.join(out, n), 'utf8')).join('\n');
     for (const t of Object.values(w.tasks)) {
       assert.ok(t.grader !== undefined && t.solution !== undefined, 'the golden helpdesk is the private form');
       assert.equal(publicText.includes(t.grader), false);
@@ -252,23 +256,37 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.equal(existsSync(path.join(out, 'private', 'worlds', version, 'public', 'world.yaml')), true);
   });
 
-  it('exports the failures and no accepted rows when no solver succeeded', RUN_BUDGET, async () => {
+  it('exports every failed row with its outcome when no solver succeeded (A-389)', RUN_BUDGET, async () => {
     const { result, out } = await run({ solver: lazySolver });
     assert.equal(result.status, 'incomplete');
     assert.deepEqual([result.accepted, result.failed], [0, 3]);
-    assert.equal(readFileSync(path.join(out, 'dataset.jsonl'), 'utf8'), '');
-    assert.equal(lines(path.join(out, 'failures.jsonl')).length, 3);
-    assert.deepEqual(result.manifest?.counts, { episodes: 3, accepted: 0, failed: 3, by_stop_reason: { done: 3 } });
+    assert.deepEqual(lines(path.join(out, 'dataset.jsonl')).map((l) => JSON.parse(l).outcome), [
+      { reward: 0, verdict: 'failure', failure_cause: 'scored 0', goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } },
+      { reward: 0, verdict: 'failure', failure_cause: 'scored 0', goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } },
+      { reward: 0, verdict: 'failure', failure_cause: '0 of 2 goals met', goals: { met: 0, total: 2 }, guards: { held: 2, total: 2 } },
+    ]);
+    assert.deepEqual(result.manifest?.counts, {
+      episodes: 3, by_verdict: { success: 0, partial: 0, failure: 3, infra: 0 }, by_stop_reason: { done: 3 }, by_failure_cause: { '0 of 2 goals met': 1, 'scored 0': 2 },
+    });
     assert.deepEqual(result.episodes.map((e) => e.score), [0, 0, 0]);
     assert.deepEqual(result.problems, []);
   });
 
-  it('reports an incomplete run when only some tasks are solved, and keeps each row where it belongs', RUN_BUDGET, async () => {
+  it('reports an incomplete run when only some tasks are solved, and labels each row', RUN_BUDGET, async () => {
     const { result, out } = await run({ solver: easyOnly });
     assert.equal(result.status, 'incomplete');
     assert.deepEqual([result.accepted, result.failed], [1, 2]);
-    assert.equal(lines(path.join(out, 'dataset.jsonl')).length, 1);
-    assert.equal(lines(path.join(out, 'failures.jsonl')).length, 2);
+    assert.deepEqual(lines(path.join(out, 'dataset.jsonl')).map((l) => [JSON.parse(l).task_id, JSON.parse(l).outcome.verdict]), [
+      ['assign_newest_acme_ticket', 'success'], ['escalate_breached_enterprise_tickets', 'failure'], ['escalate_breached_printer_ticket', 'failure'],
+    ]);
+  });
+
+  it('keeps the successes-only view when the run asks for it, and records that in the manifest', RUN_BUDGET, async () => {
+    const { result, out } = await run({ solver: easyOnly, opts: { successesOnly: true } });
+    assert.deepEqual([result.accepted, result.failed], [1, 2]);
+    assert.deepEqual(lines(path.join(out, 'dataset.jsonl')).map((l) => JSON.parse(l).task_id), ['assign_newest_acme_ticket']);
+    assert.deepEqual(result.manifest?.selection, { run_ids: [], task_ids: [], episode_ids: [], successes_only: true });
+    assert.deepEqual(result.manifest?.counts.by_verdict, { success: 1, partial: 0, failure: 0, infra: 0 });
   });
 
   it('shares the model budget across episodes: once it is spent no later episode starts', RUN_BUDGET, async () => {
@@ -351,7 +369,7 @@ describe('a full run against the golden helpdesk through a fake Boat sandbox', (
     assert.deepEqual(result.problems, ['interrupted before every task had an episode']);
     assert.equal(result.sandbox.teardown, 'confirmed');
     assert.equal(backend.stopped(), true);
-    assert.equal(lines(path.join(out, 'failures.jsonl')).length, 1);
+    assert.deepEqual(lines(path.join(out, 'dataset.jsonl')).map((l) => [JSON.parse(l).outcome.verdict, JSON.parse(l).outcome.failure_cause]), [['infra', 'interrupted']]);
   });
 });
 
@@ -533,7 +551,9 @@ describe('an episode that a fake model cannot spend', () => {
     assert.deepEqual(result.episodes.map((e) => [e.stop_reason, e.usage.model_calls, e.usage.cost_usd, e.score]), [
       ['model_error', 0, 0, 0], ['model_error', 0, 0, 0], ['model_error', 0, 0, 0],
     ]);
-    assert.equal(readFileSync(path.join(out, 'dataset.jsonl'), 'utf8'), '');
+    assert.deepEqual(lines(path.join(out, 'dataset.jsonl')).map((l) => [JSON.parse(l).outcome.verdict, JSON.parse(l).outcome.failure_cause]), [
+      ['infra', 'model_error'], ['infra', 'model_error'], ['infra', 'model_error'],
+    ]);
     assert.equal(turn({}).costUsd > 0, true);
   });
 });
