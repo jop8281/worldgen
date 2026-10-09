@@ -18,7 +18,8 @@ worlds/generated/**/transcripts/
 .uploads/
 # Agent Playground episodes (YOS-190): the studio and `bun run episode` write one directory per run here.
 eval/episodes/
-# Difficulty runs (A-391): `bun run difficulty --out eval/difficulty/<id>` writes the matrix and every episode here.
-eval/difficulty/
+# Difficulty runs (A-391): `bun run difficulty --out eval/difficulty/<id>` writes the matrix there, which is evidence,
+# and every episode's export under episodes/, which stays local.
+eval/difficulty/*/episodes/
 # A run that did not finish leaves <world>.partial under the worlds dir (A-293, A-359); it is evidence, never a world.
 prod/worlds/**/*.partial/
