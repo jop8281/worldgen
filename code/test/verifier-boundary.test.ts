@@ -225,11 +225,11 @@ describe('the verifier protocol against the private world', () => {
 
   it('a trace recorded over the public port grades 1 against the private world, and doing nothing grades 0', async () => {
     const { verdict, ledger } = verify(requestOf());
-    assert.deepEqual(verdict, { task: EASY, wid: prep.wid, score: 1, stop: 'graded' });
+    assert.deepEqual(verdict, { task: EASY, wid: prep.wid, score: 1, stop: 'graded', goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } });
     assert.equal(ledger, 'sub-1');
     const seed = createRuntime(prep.world).dump();
     const noop = verify(requestOf({ trace: [], chain: chainOf([]), state: seed }));
-    assert.deepEqual(noop.verdict, { task: EASY, wid: prep.wid, score: 0, stop: 'graded' });
+    assert.deepEqual(noop.verdict, { task: EASY, wid: prep.wid, score: 0, stop: 'graded', goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } });
     assert.equal(noop.ledger, 'sub-1');
   });
 
@@ -301,6 +301,20 @@ describe('the verifier protocol against the private world', () => {
       for (const fragment of forbidden) assert.equal(JSON.stringify(verdict).includes(fragment), false, JSON.stringify(verdict));
     }
   });
+
+  it('widens a graded verdict by two integer pairs only: goal and guard counts, never a name or any string (A-389)', () => {
+    const fields = (v: unknown): Record<string, unknown> => (typeof v === 'object' && v !== null ? { ...v } : {});
+    const graded = verdicts.map(fields).filter((v) => v['stop'] === 'graded');
+    assert.equal(graded.length >= 2, true, 'the earlier tests recorded no graded verdict');
+    for (const v of graded) {
+      assert.deepEqual(Object.keys(v).sort(), ['goals', 'guards', 'score', 'stop', 'task', 'wid'], JSON.stringify(v));
+      for (const [pair, keys] of [[fields(v['goals']), ['met', 'total']], [fields(v['guards']), ['held', 'total']]] as const) {
+        assert.deepEqual(Object.keys(pair).sort(), [...keys], JSON.stringify(v));
+        for (const n of Object.values(pair)) assert.equal(typeof n === 'number' && Number.isSafeInteger(n) && n >= 0, true, JSON.stringify(v));
+      }
+    }
+    for (const v of verdicts.map(fields).filter((x) => x['stop'] !== 'graded')) assert.deepEqual(Object.keys(v).sort(), ['score', 'stop', 'task', 'wid'], JSON.stringify(v));
+  });
 });
 
 // ---- The verifier child process -------------------------------------------------------------------
@@ -320,7 +334,7 @@ describe('the verifier child process', () => {
   it('one child grades a recorded trace, records the submission, and keeps the evidence private', async () => {
     const out = tmp('verify-child');
     const grade = childGrader({ codeDir: CODE_DIR, out, runner: nodeRunner })(heldOf(prep));
-    assert.deepEqual(await grade(submission('child-1', recorded.trace, recorded.state)), { ok: true, score: 1 });
+    assert.deepEqual(await grade(submission('child-1', recorded.trace, recorded.state)), { ok: true, score: 1, goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } });
     const requestFile = path.join(out, 'private', 'verifier', 'requests', 'child-1.json');
     assert.equal(existsSync(requestFile), true);
     assert.equal(statSync(requestFile).mode & 0o777, 0o600);
@@ -332,7 +346,7 @@ describe('the verifier child process', () => {
   it('a submission graded once cannot be graded again through the run ledger', async () => {
     const out = tmp('verify-child-replay');
     const grade = childGrader({ codeDir: CODE_DIR, out, runner: nodeRunner })(heldOf(prep));
-    assert.deepEqual(await grade(submission('child-2', recorded.trace, recorded.state)), { ok: true, score: 1 });
+    assert.deepEqual(await grade(submission('child-2', recorded.trace, recorded.state)), { ok: true, score: 1, goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } });
     assert.deepEqual(await grade(submission('child-2', recorded.trace, recorded.state)), {
       ok: false, reason: 'the verifier rejected the submission: trace.replayed',
     });
@@ -378,25 +392,44 @@ describe('the verifier child process', () => {
     const envs: (Readonly<Record<string, string | undefined>> | undefined)[] = [];
     const runner: Runner = async (_argv, opts) => {
       envs.push(opts?.env);
-      return { code: 0, stdout: `${JSON.stringify({ task: EASY, wid: prep.wid, score: 1, stop: 'graded' })}\n`, stderr: '' };
+      return { code: 0, stdout: `${JSON.stringify({ task: EASY, wid: prep.wid, score: 1, stop: 'graded', goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } })}\n`, stderr: '' };
     };
     const env = { PATH: process.env.PATH ?? '', HOME: '/home/op', LLM_KEY: 'sk-live-1', BOAT_API_KEY: 'boat-3', WORLDGEN_GUARD_SCALE: '4' };
     const grade = childGrader({ codeDir: CODE_DIR, out: tmp('verify-child-injected-env'), runner, env })(heldOf(prep));
-    assert.deepEqual(await grade(submission('child-env', recorded.trace, recorded.state)), { ok: true, score: 1 });
+    assert.deepEqual(await grade(submission('child-env', recorded.trace, recorded.state)), { ok: true, score: 1, goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } });
     assert.deepEqual(envs, [{ TZ: 'UTC', PATH: process.env.PATH ?? '', WORLDGEN_GUARD_SCALE: '4' }]);
+  });
+
+  it('reads a child verdict only when its counts are two integer pairs: a name, a string, a fraction or an overcount is no verdict (A-389)', async () => {
+    const answer = (goals: unknown, guards: unknown = { held: 1, total: 1 }): Runner => async () =>
+      ({ code: 0, stdout: `${JSON.stringify({ task: EASY, wid: prep.wid, score: 1, stop: 'graded', goals, guards })}\n`, stderr: '' });
+    const grades = async (runner: Runner, id: string) => childGrader({ codeDir: CODE_DIR, out: tmp(`verify-child-${id}`), runner, env: { PATH: '/usr/bin' } })(heldOf(prep))(submission(id, recorded.trace, recorded.state));
+    const notAVerdict = { ok: false, reason: 'the verifier process answered with something other than a verdict' };
+    assert.deepEqual(await grades(answer({ met: 2, total: 3 }, { held: 0, total: 1 }), 'counts-ok'), { ok: true, score: 1, goals: { met: 2, total: 3 }, guards: { held: 0, total: 1 } });
+    for (const [id, goals, guards] of [
+      ['named', { met: 1, total: 1, names: ['refund issued'] }, undefined],
+      ['string', { met: '1', total: 1 }, undefined],
+      ['fraction', { met: 0.5, total: 1 }, undefined],
+      ['over', { met: 2, total: 1 }, undefined],
+      ['negative', { met: -1, total: 1 }, undefined],
+      ['missing', undefined, undefined],
+      ['guard-name', { met: 1, total: 1 }, { held: 1, total: 1, broken: 'only declared changes' }],
+    ] as const) {
+      assert.deepEqual(await grades(answer(goals, guards), `counts-${id}`), notAVerdict, id);
+    }
   });
 
   it('the spawn carries no controller credential and passes the private world by path', async () => {
     const calls: { argv: readonly string[]; env: Readonly<Record<string, string | undefined>> | undefined }[] = [];
     const runner: Runner = async (argv, opts) => {
       calls.push({ argv, env: opts?.env });
-      return { code: 0, stdout: `${JSON.stringify({ task: EASY, wid: prep.wid, score: 1, stop: 'graded' })}\n`, stderr: '' };
+      return { code: 0, stdout: `${JSON.stringify({ task: EASY, wid: prep.wid, score: 1, stop: 'graded', goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } })}\n`, stderr: '' };
     };
     const out = tmp('verify-child-env');
     // The env source is pinned, so the expectation does not depend on the runner's own environment (CI sets WORLDGEN_GUARD_SCALE).
     const env = { PATH: '/usr/bin:/bin', HOME: '/home/op', LLM_KEY: 'sk-live-1', BOAT_API_KEY: 'boat-3' };
     const grade = childGrader({ codeDir: CODE_DIR, out, runner, env })(heldOf(prep));
-    assert.deepEqual(await grade(submission('child-6', recorded.trace, recorded.state)), { ok: true, score: 1 });
+    assert.deepEqual(await grade(submission('child-6', recorded.trace, recorded.state)), { ok: true, score: 1, goals: { met: 0, total: 0 }, guards: { held: 1, total: 1 } });
     assert.deepEqual(calls, [{
       argv: [tsx, 'src/cli/verifier.ts', prep.frozenDir, path.join(out, 'private', 'verifier', 'requests', 'child-6.json'), COMMIT, path.join(out, 'private', 'verifier', 'submissions.jsonl')],
       env: { TZ: 'UTC', PATH: '/usr/bin:/bin' },

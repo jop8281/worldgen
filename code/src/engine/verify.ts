@@ -30,7 +30,7 @@ import { runtime, type DumpInput, type Runtime } from './api.ts';
 import type { CheckedWorld } from './check.ts';
 import type { SnippetHost } from './ctx.ts';
 import { canonicalJson, type Wid } from './provenance.ts';
-import { gradeDump, stateFromDump } from './tasks.ts';
+import { gradeDump, stateFromDump, type Graded } from './tasks.ts';
 import { stateHash } from './store.ts';
 
 /** The protocol version of a verifier request. */
@@ -68,10 +68,24 @@ export const VERIFIER_STOPS = [
 ] as const;
 export type RejectStop = Exclude<(typeof VERIFIER_STOPS)[number], 'graded'>;
 
+/**
+ * How many of the grader's goals were met and its guards held: two integer pairs, never the goals' or guards' names,
+ * which are grader source. Totals are 0 when the grader recorded none (A-389, amending YOS-159's bounded verdict).
+ */
+export type GradeCounts = {
+  readonly goals: { readonly met: number; readonly total: number };
+  readonly guards: { readonly held: number; readonly total: number };
+};
+
 /** The bounded verdict: the only thing the verifier ever answers with. */
 export type VerifierVerdict =
-  | { readonly task: string; readonly wid: Wid; readonly score: number; readonly stop: 'graded' }
+  | ({ readonly task: string; readonly wid: Wid; readonly score: number; readonly stop: 'graded' } & GradeCounts)
   | { readonly task: string; readonly wid: Wid; readonly score: null; readonly stop: RejectStop };
+
+const countsOf = (graded: Extract<Graded, { ok: true }>): GradeCounts => ({
+  goals: { met: (graded.goals ?? []).filter((g) => g.met).length, total: (graded.goals ?? []).length },
+  guards: { held: (graded.guards ?? []).filter((g) => g.held).length, total: (graded.guards ?? []).length },
+});
 
 /** One verified submission: the verdict, and the submission id the caller must record in the session ledger. */
 export type VerifiedSubmission = {
@@ -194,5 +208,5 @@ export function verifySubmission(
 
   const graded = gradeDump(world, req.task, dump, host, rt.journal(), rt.log());
   if (!graded.ok) return reject('grade.failed', req.task, req.submission);
-  return { verdict: { task: req.task, wid: held.wid, score: graded.score, stop: 'graded' }, ledger: req.submission };
+  return { verdict: { task: req.task, wid: held.wid, score: graded.score, stop: 'graded', ...countsOf(graded) }, ledger: req.submission };
 }

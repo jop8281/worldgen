@@ -101,7 +101,7 @@ export function engineGrader(held: HeldWorld): EpisodeGrader {
       seen,
     );
     if (ledger !== null) seen.add(ledger);
-    return verdict.stop === 'graded' ? { ok: true, score: verdict.score } : { ok: false, reason: reasonOf(verdict.stop) };
+    return verdict.stop === 'graded' ? { ok: true, score: verdict.score, goals: verdict.goals, guards: verdict.guards } : { ok: false, reason: reasonOf(verdict.stop) };
   };
 }
 
@@ -112,8 +112,8 @@ const CHILD_TIMEOUT_MS = 300_000;
 
 /**
  * The child's answer on stdout as a grade result, or null when it is not a verdict. Only the
- * bounded fields are read: a stop code and a score, so nothing a broken child could print
- * becomes an episode's reason.
+ * bounded fields are read: a stop code, a score and two integer pairs of goal and guard counts,
+ * so nothing a broken child could print becomes an episode's reason or label.
  */
 function verdictOf(text: string): GradeResult | null {
   let v: unknown;
@@ -122,13 +122,24 @@ function verdictOf(text: string): GradeResult | null {
   } catch {
     return null;
   }
-  const o = v as { task?: unknown; stop?: unknown; score?: unknown } | null;
+  const o = v as { task?: unknown; stop?: unknown; score?: unknown; goals?: unknown; guards?: unknown } | null;
   if (o === null || typeof o !== 'object' || typeof o.task !== 'string' || typeof o.stop !== 'string') return null;
   if (o.stop === 'graded') {
-    return typeof o.score === 'number' && Number.isFinite(o.score) && o.score >= 0 && o.score <= 1 ? { ok: true, score: o.score } : null;
+    const goals = countPair(o.goals, 'met');
+    const guards = countPair(o.guards, 'held');
+    const ok = typeof o.score === 'number' && Number.isFinite(o.score) && o.score >= 0 && o.score <= 1 && goals !== null && guards !== null;
+    return ok ? { ok: true, score: o.score as number, goals: { met: goals.n, total: goals.total }, guards: { held: guards.n, total: guards.total } } : null;
   }
   const stop = REJECT_STOPS.find((s) => s === o.stop);
   return stop === undefined ? null : { ok: false, reason: reasonOf(stop) };
+}
+
+/** `{ <key>: n, total }` with two non-negative integers and n at most total, and nothing else; null otherwise. */
+function countPair(v: unknown, key: 'met' | 'held'): { n: number; total: number } | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join(',') !== [key, 'total'].sort().join(',')) return null;
+  const n = (v as Record<string, unknown>)[key];
+  const total = (v as Record<string, unknown>)['total'];
+  return Number.isSafeInteger(n) && Number.isSafeInteger(total) && (n as number) >= 0 && (n as number) <= (total as number) ? { n: n as number, total: total as number } : null;
 }
 
 export type ChildGraderOptions = {

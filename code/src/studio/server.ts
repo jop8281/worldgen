@@ -2148,7 +2148,7 @@ export async function studioServer(opts: StudioOptions): Promise<StudioServer> {
     });
   }
 
-  /** The episode a run exported and reopened, from its dataset.jsonl or failures.jsonl. The private evidence stays on disk. */
+  /** The episode a run exported and reopened, from its dataset.jsonl, or a version 1 export's failures.jsonl (A-389). The private evidence stays on disk. */
   async function exportedEpisode(out: string, runId: string): Promise<unknown> {
     for (const name of ['dataset.jsonl', 'failures.jsonl']) {
       const text = await readFile(path.join(out, name), 'utf8').catch(() => '');
