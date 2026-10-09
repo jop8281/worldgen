@@ -26,7 +26,8 @@ commands:
                                        the admin port also serves the operator console at /;
                                        --admin-host defaults to 127.0.0.1 even when --host is public;
                                        env WORLDPLAY_HOST and WORLDPLAY_ADMIN_HOST set the defaults
-  verify <dir> [--json]                check, then print each task's verdict: solution, noop, decoys, prefix;
+  verify <dir> [--json]                check, then print each task's verdict: solution, noop, decoys, prefix,
+                                       mutants probed and grader checks flipped, then the world's total;
                                        --json prints one proof object per task instead
   openapi <dir> --spec <file> [--only <prefix,...>] [--json] [--profile]
           [--exact] [--require <feature,...>] [--report <new-file>]
@@ -195,13 +196,27 @@ async function serveCommand(args: readonly string[]): Promise<number> {
 
 const score = (n: number): string => n.toFixed(3);
 
-/** `<id> <difficulty> solution 1.000 noop 0.000 decoys [0.500, 0.000] prefix 0.667`, with `-` for no prefix. */
+/**
+ * `<id> <difficulty> solution 1.000 noop 0.000 decoys [0.500, 0.000] prefix 0.667 mutants 5/7 probed checks 2/3 flipped`,
+ * with `-` for no prefix, the unprobed mutant kinds and unflipped grader checks named, and any unattributed probes (A-393).
+ */
 function verdictLine(v: TaskVerdict): string {
   const decoys = v.decoys.map((d) => score(d.score)).join(', ');
   const prefix = v.bestPrefixScore === null ? '-' : score(v.bestPrefixScore);
   const unprobed = v.collateral.filter((m) => m.call === null).map((m) => m.kind);
   const mutants = `mutants ${v.collateral.length - unprobed.length}/${v.collateral.length} probed${unprobed.length === 0 ? '' : ` (not probed: ${unprobed.join(', ')})`}`;
-  return `${v.taskId} ${v.difficulty} solution ${score(v.solution)} noop ${score(v.noop)} decoys [${decoys}] prefix ${prefix} ${mutants}`;
+  const unflipped = v.checks.filter((c) => c.flippedBy.length === 0).map((c) => c.check);
+  const checks = `checks ${v.checks.length - unflipped.length}/${v.checks.length} flipped${unflipped.length === 0 ? '' : ` (not flipped: ${unflipped.join(', ')})`}`;
+  const unattributed = v.unattributedProbes.length === 0 ? '' : ` unattributed [${v.unattributedProbes.join(', ')}]`;
+  return `${v.taskId} ${v.difficulty} solution ${score(v.solution)} noop ${score(v.noop)} decoys [${decoys}] prefix ${prefix} ${mutants} ${checks}${unattributed}`;
+}
+
+/** `total: checks 7/9 flipped, mutants 15/21 probed, 3 tasks`, over the verified tasks of one world (A-393). */
+function totalLine(verdicts: readonly TaskVerdict[]): string {
+  const sum = (f: (v: TaskVerdict) => number): number => verdicts.reduce((n, v) => n + f(v), 0);
+  const flipped = sum((v) => v.checks.filter((c) => c.flippedBy.length > 0).length);
+  const probed = sum((v) => v.collateral.filter((m) => m.call !== null).length);
+  return `total: checks ${flipped}/${sum((v) => v.checks.length)} flipped, mutants ${probed}/${sum((v) => v.collateral.length)} probed, ${verdicts.length} tasks`;
 }
 
 async function verify(args: readonly string[]): Promise<number> {
@@ -218,12 +233,17 @@ async function verify(args: readonly string[]): Promise<number> {
     return 0;
   }
   let failed = false;
+  const verified: TaskVerdict[] = [];
   const lines = ids.map((id) => {
     const v = Object.hasOwn(report.verdicts, id) ? report.verdicts[id] : undefined;
-    if (v !== undefined) return p.values.json ? JSON.stringify(proofOf(v)) : verdictLine(v);
+    if (v !== undefined) {
+      verified.push(v);
+      return p.values.json ? JSON.stringify(proofOf(v)) : verdictLine(v);
+    }
     failed = true;
     return `${id} not verified`;
   });
+  if (!p.values.json) lines.push(totalLine(verified));
   process.stdout.write(`${lines.join('\n')}\n`);
   return failed ? 1 : 0;
 }

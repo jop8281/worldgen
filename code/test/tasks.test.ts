@@ -170,6 +170,7 @@ describe('verifyTask (R3, R4, R7)', () => {
     assert.equal(collateral.length, 8);
     assert.deepEqual(rest, {
       taskId: 'resolve_password_ticket', difficulty: 'easy', solution: 1, noop: 0, decoys: [], bestPrefixScore: null, solutionCalls: 2, solutionWrites: 1, solutionReadsBeforeWrite: 1, solutionPagedEntities: [], solutionRowsChanged: 1, solutionLaterPageEntities: [], solutionDistractorEntities: [],
+      checks: [{ check: 'return', flippedBy: ['target_field', 'other_row', 'extra_create', 'extra_delete', 'undone_write', 'retarget'] }], unattributedProbes: [],
     });
     assert.deepEqual(r.log.map((c) => c.routeId), ['list_tickets', 'resolve_ticket']);
   });
