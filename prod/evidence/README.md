@@ -20,6 +20,18 @@ Each public claim in [README.md](../../README.md), with the files behind it and 
 - `bun run evidence` replays each episode on this checkout's engine. The episodes declare the engine commit of an earlier repository, so agreement shows that today's engine reproduces the recorded run. For each episode it checks the seed state hash, the status and body of every call, the end-state hash and the score, which it gets by grading the replay through the verifier.
 - Each export folder keeps the world its episodes ran on, in `world/world.yaml`. `bun scripts/freeze-export-world.ts ../prod/worlds/gen-orders ../eval/dataset/2026-10-07/gen-orders` writes one, and refuses unless its hash is the version the manifest names. Five came from `prod/worlds`. helpdesk came from the root commit (`git show 733538fd:prod/worlds/helpdesk/world.yaml`), because A-356 changed helpdesk after the export.
 
+## v2.0 claims
+
+| Claim | Evidence | Command, from `code/` | You should see |
+|---|---|---|---|
+| EXPLOITS_LINE | pending | pending | pending |
+| How hard each task is, measured per model. PILOT_LINE | PILOT_LINE | `bun run difficulty --help` shows the flags. A re-run calls a model, so it is a new measurement with its own cost, not a free re-check | PILOT_LINE |
+| FAILURES_LINE | pending | pending | pending |
+| Generated worlds vary: the few-shot example rotates by input among three worlds, and a new plan needs a hard task naming two or more distinct workflow actions, and a task with a kind | `exampleWorld` in [code/worldgen.config.json](../../code/worldgen.config.json), `pickExample` in `code/src/worldgen/run.ts`, `taskVarietyIssues` in `code/src/worldgen/plan.ts` | `bun test --timeout 120000 test/worldgen.test.ts test/plan.test.ts test/config.test.ts` | every test passes: the rotation table, the variety rule's table and the three listed example worlds |
+| COVERAGE_LINE | pending | pending | pending |
+
+Training benefit is not claimed: [research/training-experiment.md](../../research/training-experiment.md) designs the experiment that would test it, and nothing is run (A-394).
+
 ## Check on GitHub
 
 - v1.1.1's code, `71f84d45`, passed CI twice. `gh run view 37860510831 --repo jop8281/worldgen --json headSha,conclusion` prints `{"conclusion":"success","headSha":"71f84d45efdc7144e17b858df535ba66c120d83b"}`, and so does run 37860513520. The [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1) links both.

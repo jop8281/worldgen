@@ -45,15 +45,27 @@ A WorldGen run writes into `prod/worlds/gen-<slug>/` unless `--out` names a dire
 
 ## Release
 
-The release is **v1.1.1**. Its code is `71f84d45` ([#149](https://github.com/jop8281/worldgen/pull/149)), and the tag adds no code over it. Its verdict runs are [37860510831](https://github.com/jop8281/worldgen/actions/runs/37860510831) and [37860513520](https://github.com/jop8281/worldgen/actions/runs/37860513520), also linked from the [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1). Both passed the test suite and the end-to-end check. CI runs on Bun only: typecheck, every test and the end-to-end check, with no model call.
+The release is **v2.0.0**, tagged at `TAG_SHA`. It answers each of the seven points a reviewer raised on [#147](https://github.com/jop8281/worldgen/pull/147), one row per point, on top of **v1.1.1**, the work-trial hand-in below. Point 4, training benefit, is a designed experiment that has not been run.
+
+| v2.0 adds, by review point | Decision | PR |
+|---|---|---|
+| 1. EXPLOITS_LINE | A-387, A-388, A-395 | pending |
+| 2. Task difficulty is measured, not only labeled: `bun run difficulty` runs N graded episodes of each task of the worlds it is given, with each model, on loopback, under the spend caps. It gives each task, pooled and per model, a pass rate with a Wilson 95% interval and a measured tier, or unmeasured when no episode counts as a trial. PILOT_LINE | A-391 | [#158](https://github.com/jop8281/worldgen/pull/158) |
+| 3. FAILURES_LINE | A-389 | pending |
+| 4. Training benefit is not shown. One experiment is designed, in [research/training-experiment.md](research/training-experiment.md): fine-tune a 7 to 8B open model on episodes from these worlds and score it on τ²-bench airline and telecom, against a bar fixed before the run: +5 points pass^1 on τ² airline, with a 95% bootstrap interval that excludes 0. Nothing is run | A-394 | [#157](https://github.com/jop8281/worldgen/pull/157) |
+| 5. Generated worlds vary. The few-shot example rotates by input among helpdesk, retail-tau2 and gen-hotel-booking, and a new plan needs a hard task whose planned actions name two or more distinct workflow actions, and a task with a kind: permissions, a scarce resource, two actors or an irreversible step. No judge checks yet that the built solution calls the planned actions | A-390 | [#159](https://github.com/jop8281/worldgen/pull/159) |
+| 6. An outsider can verify the claims: an MIT [LICENSE](LICENSE); [prod/evidence/README.md](prod/evidence/README.md), with a re-check command for each claim a clone can check and the Linear receipt for the two it cannot; `bun run evidence`, which replays all 38 exported dataset episodes to their recorded scores; and a public form of each of the 25 worlds in `prod/worlds`, with no grader, solution or decoy | A-392 | [#160](https://github.com/jop8281/worldgen/pull/160) |
+| 7. COVERAGE_LINE | A-393 | pending |
+
+Two known limits remain. OpenAPI fidelity is a normalized comparison of paths, request shapes and error codes within the chosen scope, not exact equivalence with the source API. The snippet heap bound is not enforced in CI, because Bun ignores it (A-87, A-379). Every change lands through a [pull request](https://github.com/jop8281/worldgen/pulls?q=is%3Apr+is%3Amerged) to `stabilize/main`, and `main` moves only by a promotion pull request. [research/readme-reference.md](research/readme-reference.md#status) lists what an earlier repository built. Its PR numbers refer to that repository.
+
+### v1.1.1, the work-trial hand-in
+
+**v1.1.1** is the work-trial hand-in. The first hand-in tag, `v1.0-handin` (`4b3d2be4`), still marks the original commit. v1.1.1's code is `71f84d45` ([#149](https://github.com/jop8281/worldgen/pull/149)), and the tag adds no code over it. Its verdict runs are [37860510831](https://github.com/jop8281/worldgen/actions/runs/37860510831) and [37860513520](https://github.com/jop8281/worldgen/actions/runs/37860513520), also linked from the [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1). Both passed the test suite and the end-to-end check. CI runs on Bun only: typecheck, every test and the end-to-end check, with no model call.
 
 | v1.1.1 carries fixes for the four tracked limits of v1.1.0 | PRs |
 |---|---|
 | A planned job is never a workflow action (YOS-257). A backtrack gives its target and every later step a fresh attempt budget, and plan coverage ignores path-param names (YOS-258). The Boat VM, OpenShell and sbx run only the pinned Bun (YOS-259). An `expect: stopped` eval case is a refusal only on `input_rejected` (YOS-260). The docs give Bun commands, not npm. | [#145](https://github.com/jop8281/worldgen/pull/145), [#144](https://github.com/jop8281/worldgen/pull/144), [#143](https://github.com/jop8281/worldgen/pull/143), [#148](https://github.com/jop8281/worldgen/pull/148), [#141](https://github.com/jop8281/worldgen/pull/141), [#142](https://github.com/jop8281/worldgen/pull/142), [#146](https://github.com/jop8281/worldgen/pull/146) |
-
-Two known limits remain. OpenAPI fidelity is a normalized comparison of paths, request shapes and error codes within the chosen scope, not exact equivalence with the source API. The snippet heap bound is not enforced in CI, because Bun ignores it (A-87, A-379). Every change lands through a [pull request](https://github.com/jop8281/worldgen/pulls?q=is%3Apr+is%3Amerged) to `stabilize/main`, and `main` moves only by a promotion pull request. [research/readme-reference.md](research/readme-reference.md#status) lists what an earlier repository built. Its PR numbers refer to that repository.
-
-Training benefit has not been shown yet: no model has been trained on these worlds and scored on an outside benchmark. See [research/training-experiment.md](research/training-experiment.md) for the experiment that would test it.
 
 ## Results
 
