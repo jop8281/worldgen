@@ -7,6 +7,8 @@ Two tools for building **worlds**. A world is a stateful, deterministic replica 
 
 The task is in [research/spec.md](research/spec.md). [prod/README.md](prod/README.md) maps every spec item to the file that implements it and the command that shows it. The design doc is [prod/design.md](prod/design.md), and [prod/system.md](prod/system.md) shows how the parts fit together, with diagrams.
 
+[prod/evidence/README.md](prod/evidence/README.md) gives the command that re-checks each number below from a clone, with no model call. It also names the few numbers that rest on a Linear receipt or a GitHub CI run instead.
+
 ## Run it
 
 You need Bun 1.4.2 (`curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2`). WorldGen also needs the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code), logged in. Commands run from `code/`.
@@ -37,19 +39,36 @@ A WorldGen run writes into `prod/worlds/gen-<slug>/` unless `--out` names a dire
 
 - **One artifact.** A world is one checked `world.yaml` with its data model, API, workflow logic, seed data and tasks. [prod/world-format.md](prod/world-format.md) documents every section.
 - **The engine is strict.** It checks a world in seven layers, from schema to lints, with errors a model can fix. It refuses any write that breaks the data model, and a failed call changes nothing. Time is engine time, never the wall clock.
-- **Graders must discriminate.** A task counts only when its reference solution scores 1, doing nothing scores 0, and every decoy scores below 1.
+- **Graders are probed, and the coverage is measured.** A task counts only when its reference solution scores 1, doing nothing scores 0, and every decoy, strict prefix and engine mutant scores below 1. That is evidence, not proof. On the prod worlds these probes flip 275 of the 299 grader checks, and 364 of the 760 engine mutant slots find something to probe. [research/evidence/probe-coverage.md](research/evidence/probe-coverage.md) lists the checks no probe reaches.
 - **WorldGen builds in stages.** It plans first, then builds the data model and API, the workflow, the seed and the tasks, and checks after each stage. The engine's issues drive a bounded repair. A run that cannot pass stops and says why. It never hands over a broken world.
 - **Iteration is a diff.** `--world` reruns only the stages a change request reaches. A gate blocks any destructive change the plan did not name.
 
 ## Release
 
-The release is **v1.1.1**. Its code is `71f84d45` ([#149](https://github.com/jop8281/worldgen/pull/149)), and the tag adds no code over it. Its verdict runs are [37860510831](https://github.com/jop8281/worldgen/actions/runs/37860510831) and [37860513520](https://github.com/jop8281/worldgen/actions/runs/37860513520), also linked from the [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1). Both passed the test suite and the end-to-end check. CI runs on Bun only: typecheck, every test and the end-to-end check, with no model call.
+The release is **v2.0.0**; its CI runs are on the [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v2.0.0). It answers each of the seven points a reviewer raised on [#147](https://github.com/jop8281/worldgen/pull/147), one row per point, on top of **v1.1.1**, the work-trial hand-in below. Point 4, training benefit, is a designed experiment that has not been run.
+
+| v2.0 adds, by review point | Decision | PR |
+|---|---|---|
+| 1. Grader exploits are closed. Grading counts a call's edit to an existing row even when a later call puts the old value back. The proof step swaps each free-text string a solution sends for same-length nonsense, and fails a grader that still scores 1. 15 tasks in 9 worlds were fixed to read their text: helpdesk's one through the engine's edit path, and 14 in 8 generated worlds by one WorldGen iterate run each, $2.73 in total. An iterate may now start from a world that fails only at the tasks layer. All 25 prod worlds pass check and verify | A-387, A-388, A-395 | [#163](https://github.com/jop8281/worldgen/pull/163) |
+| 2. Task difficulty is measured, not only labeled: `bun run difficulty` runs N graded episodes of each task of the worlds it is given, with each model, on loopback, under the spend caps. It gives each task, pooled and per model, a pass rate with a Wilson 95% interval and a measured tier, or unmeasured when no episode counts as a trial. No difficulty measurement has been run yet; the pilot waits for budget approval | A-391 | [#158](https://github.com/jop8281/worldgen/pull/158) |
+| 3. Failures are exported. The dataset export writes every episode with a reward, a verdict (success, partial, failure or infra), a public failure cause, and goal and guard counts, with no grader text. A cut from a run-wide budget or deadline counts as infra, and `--successes-only` keeps the old view. The committed 2026-10-07 export predates this and holds 38 successes | A-389, A-396 | [#161](https://github.com/jop8281/worldgen/pull/161), [#162](https://github.com/jop8281/worldgen/pull/162) |
+| 4. Training benefit is not shown. One experiment is designed, in [research/training-experiment.md](research/training-experiment.md): fine-tune a 7 to 8B open model on episodes from these worlds and score it on τ²-bench airline and telecom, against a bar fixed before the run: +5 points pass^1 on τ² airline, with a 95% bootstrap interval that excludes 0. Nothing is run | A-394 | [#157](https://github.com/jop8281/worldgen/pull/157) |
+| 5. Generated worlds vary. The few-shot example rotates by input among helpdesk, retail-tau2 and gen-hotel-booking, and a new plan needs a hard task whose planned actions name two or more distinct workflow actions, and a task with a kind: permissions, a scarce resource, two actors or an irreversible step. No judge checks yet that the built solution calls the planned actions | A-390 | [#159](https://github.com/jop8281/worldgen/pull/159) |
+| 6. An outsider can verify the claims: an MIT [LICENSE](LICENSE); [prod/evidence/README.md](prod/evidence/README.md), with a re-check command for each claim a clone can check and the Linear receipt for the two it cannot; `bun run evidence`, which replays all 38 exported dataset episodes to their recorded scores; and a public form of each of the 25 worlds in `prod/worlds`, with no grader, solution or decoy | A-392 | [#160](https://github.com/jop8281/worldgen/pull/160) |
+| 7. Probe coverage is measured. 275 of 299 grader checks (92.0%) are flipped by some probe, and [research/evidence/probe-coverage.md](research/evidence/probe-coverage.md) names the 24 that are not. The undone-write probe flips 70 and the free-text probe 25. 364 of 760 mutant slots are probed | A-393 | [#164](https://github.com/jop8281/worldgen/pull/164) |
+| Also: scenarios, v1.2 slice 1. N existing worlds behind one gateway, with a trace, faults and an all-or-nothing grade | A-386 | [#147](https://github.com/jop8281/worldgen/pull/147) |
+
+Two known limits remain. OpenAPI fidelity is a normalized comparison of paths, request shapes and error codes within the chosen scope, not exact equivalence with the source API. The snippet heap bound is not enforced in CI, because Bun ignores it (A-87, A-379). Every change lands through a [pull request](https://github.com/jop8281/worldgen/pulls?q=is%3Apr+is%3Amerged) to `stabilize/main`, and `main` moves only by a promotion pull request. [research/readme-reference.md](research/readme-reference.md#status) lists what an earlier repository built. Its PR numbers refer to that repository.
+
+v2.0's generation changes, A-390's example rotation and task kinds and A-395's iterate admission, have not been measured by a paid suite run yet, so v1.1.1 stays the tag for the work-trial live run.
+
+### v1.1.1, the work-trial hand-in
+
+**v1.1.1** is the work-trial hand-in. The first hand-in tag, `v1.0-handin` (`4b3d2be4`), still marks the original commit. v1.1.1's code is `71f84d45` ([#149](https://github.com/jop8281/worldgen/pull/149)), and the tag adds no code over it. Its verdict runs are [37860510831](https://github.com/jop8281/worldgen/actions/runs/37860510831) and [37860513520](https://github.com/jop8281/worldgen/actions/runs/37860513520), also linked from the [GitHub Release page](https://github.com/jop8281/worldgen/releases/tag/v1.1.1). Both passed the test suite and the end-to-end check. CI runs on Bun only: typecheck, every test and the end-to-end check, with no model call.
 
 | v1.1.1 carries fixes for the four tracked limits of v1.1.0 | PRs |
 |---|---|
 | A planned job is never a workflow action (YOS-257). A backtrack gives its target and every later step a fresh attempt budget, and plan coverage ignores path-param names (YOS-258). The Boat VM, OpenShell and sbx run only the pinned Bun (YOS-259). An `expect: stopped` eval case is a refusal only on `input_rejected` (YOS-260). The docs give Bun commands, not npm. | [#145](https://github.com/jop8281/worldgen/pull/145), [#144](https://github.com/jop8281/worldgen/pull/144), [#143](https://github.com/jop8281/worldgen/pull/143), [#148](https://github.com/jop8281/worldgen/pull/148), [#141](https://github.com/jop8281/worldgen/pull/141), [#142](https://github.com/jop8281/worldgen/pull/142), [#146](https://github.com/jop8281/worldgen/pull/146) |
-
-Two known limits remain. OpenAPI fidelity is a normalized comparison of paths, request shapes and error codes within the chosen scope, not exact equivalence with the source API. The snippet heap bound is not enforced in CI, because Bun ignores it (A-87, A-379). Every change lands through a [pull request](https://github.com/jop8281/worldgen/pulls?q=is%3Apr+is%3Amerged) to `stabilize/main`, and `main` moves only by a promotion pull request. [research/readme-reference.md](research/readme-reference.md#status) lists what an earlier repository built. Its PR numbers refer to that repository.
 
 ## Results
 
@@ -82,6 +101,8 @@ On main `e034036c`, `bun run live` ran three stand-in prompts: a description, an
 
 `prod/worlds/` holds 25 worlds and 95 tasks. Two were built by hand: [helpdesk](prod/worlds/helpdesk/) and [retail-tau2](prod/worlds/retail-tau2/), the second mapped from τ²-bench retail. WorldGen generated the other 23, `prod/worlds/gen-*`: 11 from a description, 4 from an OpenAPI spec, 6 from CSVs and 2 from iterate runs. Each one carries its `plan.yaml` and `REPORT.md`. `bun run test` checks and verifies every world.
 
+These worlds are a development set, and they include the answers: each `world.yaml` holds its graders, reference solutions and decoys. Each folder also keeps `public/world.yaml`, the public form a sandboxed agent gets, with none of them. A clean test set is generated fresh by WorldGen from prompts nobody has seen, as the live run does.
+
 ## Studio screenshots
 
 These screenshots come from the real app, with no model call. [prod/screenshots/README.md](prod/screenshots/README.md) gives the command, viewport, runtime and digest of each one, and keeps the 27 frames of the browser E2E.
@@ -97,3 +118,4 @@ These screenshots come from the real app, with no model call. [prod/screenshots/
 - [research/readme-reference.md](research/readme-reference.md) holds the longer reference: every world with its task scores, the engine and Docker details, the other CLIs, checks and costs, and Boat recovery.
 - [research/architecture.md](research/architecture.md) gives the reasoning, [research/decisions.md](research/decisions.md) logs every design call, and [AGENTS.md](AGENTS.md) holds the working rules.
 - Work is tracked in the [WorldGen Linear project](https://linear.app/yossi-zozo123/project/worldgen-f83badd4a2c7).
+- WorldGen is MIT licensed: see [LICENSE](LICENSE).

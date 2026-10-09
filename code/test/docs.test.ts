@@ -265,7 +265,7 @@ describe('documented worldplay subcommands, worldgen flags and runner', () => {
 });
 
 /** The docs an evaluator follows (YOS-201). Every command in them, fenced or inline, is checked. */
-const EVALUATOR_DOCS = ['README.md', 'prod/README.md', 'prod/prompts/README.md', 'research/live-run-runbook.md', 'research/studio-demo-runbook.md'];
+const EVALUATOR_DOCS = ['README.md', 'prod/README.md', 'prod/evidence/README.md', 'prod/prompts/README.md', 'research/live-run-runbook.md', 'research/studio-demo-runbook.md'];
 
 /**
  * One documented command: a package.json script (`bun run x`, `npm run x`), a repo script (`scripts/x.sh`, from the repo
@@ -348,7 +348,7 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
 
   it('finds the documented commands in each file, fenced and inline', () => {
     const heads = (file: string): string[] => [...new Set(commands.filter((c) => c.file === file).map((c) => c.head))].sort();
-    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'scripts/demo-all.sh']);
+    assert.deepEqual(heads('README.md'), ['bun run check', 'bun run difficulty', 'bun run evidence', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay', 'scripts/demo-all.sh']);
     assert.deepEqual(heads('prod/README.md'), ['../scripts/live.sh', 'bun run docs', 'bun run live', 'bun run studio', 'bun run test', 'bun run worldgen', 'bun run worldplay']);
     assert.deepEqual(heads('prod/prompts/README.md'), ['bun run live', 'bun run worldgen']);
     assert.deepEqual(heads('research/live-run-runbook.md'), [
@@ -356,6 +356,11 @@ describe('every command the evaluator docs give is checked (YOS-201)', () => {
       'scripts/boat-ci.sh', 'scripts/live.sh', 'scripts/solve-demo.sh',
     ]);
     assert.deepEqual(heads('research/studio-demo-runbook.md'), ['bun run studio', 'bun scripts/studio-rehearse.ts', 'scripts/studio-deploy.sh']);
+    assert.deepEqual(heads('prod/evidence/README.md'), [
+      '../scripts/demo-all.sh', 'bun run dataset', 'bun run difficulty', 'bun run evidence', 'bun run live', 'bun run scenario',
+      'bun run worldplay', 'bun scripts/analyze-eval.ts', 'bun scripts/freeze-export-world.ts', 'bun scripts/probe-coverage.ts',
+      'bun scripts/render-public-worlds.ts',
+    ]);
   });
 
   it('names a package.json script for every `bun run` and `npm run`, and each CLI answers --help with 0', () => {

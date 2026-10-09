@@ -238,9 +238,10 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(r.out.includes('dataset run cli-run: accepted'), true);
     assert.equal(r.out.some((l) => l.startsWith('  accepted 3 of 3 task(s), failed or missing 0, model spend $')), true);
     assert.equal(r.out.includes('  sandbox fake-sandbox-1: teardown confirmed'), true);
+    assert.equal(r.out.includes(`  export: ${path.join(outDir, 'dataset.jsonl')} (3: 3 success, 0 partial, 0 failure, 0 infra), manifest.json`), true, r.out.join('\n'));
     assert.equal(r.out.some((l) => l.includes('does not independently certify that the final reply is factually correct')), true);
     assert.equal(r.err.length, 0);
-    assert.deepEqual(readdirSync(outDir).sort(), ['REPORT.md', 'dataset.jsonl', 'failures.jsonl', 'logs', 'manifest.json', 'private']);
+    assert.deepEqual(readdirSync(outDir).sort(), ['REPORT.md', 'dataset.jsonl', 'logs', 'manifest.json', 'private']);
     assert.equal(backend.events.at(-1), 'down');
   });
 
@@ -251,6 +252,18 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     assert.equal(r.err.includes('dataset run cli-run: incomplete'), true);
     assert.equal(r.err.some((l) => l.startsWith('  accepted 1 of 3 task(s), failed or missing 2')), true);
     assert.equal(r.out.some((l) => l.startsWith('dataset run')), false);
+  });
+
+  it('exports every episode with its verdict, or the successes alone with --successes-only (A-389)', RUN_BUDGET, async () => {
+    const verdicts = (dir: string): unknown[] => readFileSync(path.join(dir, 'dataset.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { outcome: { verdict: unknown } }).outcome.verdict);
+    for (const [flag, want] of [[[], ['success', 'failure', 'failure']], [['--successes-only'], ['success']]] as const) {
+      const outDir = tmp('cli-verdicts');
+      const port = await freePortPair();
+      const r = await run([...required(outDir), ...flag], { backend: fakeBackend(await helpdesk(), { port }), nextTurn: easyOnly, port });
+      assert.equal(r.code, 3, r.err.join('\n'));
+      assert.deepEqual(verdicts(outDir), want);
+      assert.deepEqual((JSON.parse(readFileSync(path.join(outDir, 'manifest.json'), 'utf8')) as { selection: unknown }).selection, flag.length === 0 ? null : { run_ids: [], task_ids: [], episode_ids: [], successes_only: true });
+    }
   });
 
   it('records a --model override on the manifest and every episode, and the default model without one (A-283)', RUN_BUDGET, async () => {
@@ -333,13 +346,13 @@ describe('the dataset CLI in process, over a fake Boat sandbox and a scripted so
     for (const needle of ['_world', 'decoy', '127.0.0.1', KEYS.BOAT_API_KEY]) assert.equal(everything.includes(needle), false, needle);
 
     const rows = readFileSync(path.join(outDir, 'dataset.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-    assert.equal(rows.length, 1);
+    assert.deepEqual(rows.map((r) => r.outcome.verdict), ['success', 'failure', 'failure']);
     assert.equal(rows[0].final_reply, EASY_REPLY);
     assert.equal(rows[0].score, 1);
     assert.equal(rows[0].prompt_version, PROMPT_VERSION);
     assert.equal(rows[0].messages[1].commentary, 'thinking aloud about [redacted]');
     assert.equal(rows[0].usage.cost_usd, 0.01);
     assert.equal(rows[0].model, 'claude-sonnet-5-5');
-    assert.equal(readFileSync(path.join(outDir, 'failures.jsonl'), 'utf8').split('\n').filter(Boolean).length, 2);
+    assert.equal(existsSync(path.join(outDir, 'failures.jsonl')), false);
   });
 });

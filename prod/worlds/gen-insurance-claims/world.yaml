@@ -10,10 +10,14 @@ meta:
     tick: 0s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -1130,9 +1134,10 @@ tasks:
             const extra = ctx.api('GET', '/claims?status=submitted').body.data.find((c) => !ids.has(c.id));
             ctx.api('POST', '/claims/' + extra.id + '/review', { adjuster_id: priya.id });
           }
+    alternatives: []
   confirm_high_severity_fraud_flag:
     difficulty: medium
-    instruction: Aisha Lindqvist has two claims under review, and each carries an open fraud flag. Confirm the fraud flag with high severity, with a note that states the finding, so that claim is denied for fraud. Leave her other claim and its flag as they are.
+    instruction: Aisha Lindqvist has two claims under review, and each carries an open fraud flag. Confirm the fraud flag with high severity, with a resolution note that contains the word 'forged', so that claim is denied for fraud. Leave her other claim and its flag as they are.
     grader: |-
       (ctx) => {
         const h = ctx.seed.list('policyholder', { where: { name: 'Aisha Lindqvist' } })[0];
@@ -1157,8 +1162,9 @@ tasks:
         ]);
         const endF = ctx.db.get('fraud_flag', hf.id);
         const endC = ctx.db.get('claim', hc.id);
-        const confirmed = endF.status === 'confirmed' && typeof endF.resolution_note === 'string' && endF.resolution_note.trim() !== '';
-        ctx.goal(0.4, 'the high severity flag is confirmed with a note', confirmed);
+        // The instruction asks for a note containing the word 'forged', so nonsense in the note scores below 1 (A-388).
+        const confirmed = endF.status === 'confirmed' && typeof endF.resolution_note === 'string' && /forged/i.test(endF.resolution_note);
+        ctx.goal(0.4, 'the high severity flag is confirmed with a note containing forged', confirmed);
         ctx.goal(0.4, 'its claim is denied for fraud', confirmed && endC.status === 'denied' && typeof endC.denial_reason === 'string' && endC.denial_reason.startsWith('fraud confirmed: '));
         const untouched = medium.length > 0 && medium.every((x) => ctx.db.get('fraud_flag', x.f.id).status === 'open' && ctx.db.get('claim', x.c.id).status === 'under_review');
         ctx.goal(0.2, 'the other claim and its medium flag are untouched', confirmed && untouched);
@@ -1188,7 +1194,7 @@ tasks:
           }
         }
         ctx.assert(target, 'no open high severity flag on an under-review claim');
-        const r = ctx.api('POST', '/fraud_flags/' + target.id + '/resolve', { outcome: 'confirmed', note: 'Repair invoice is dated before the incident and could not be explained' });
+        const r = ctx.api('POST', '/fraud_flags/' + target.id + '/resolve', { outcome: 'confirmed', note: 'Repair invoice is forged: it is dated before the incident' });
         ctx.assert(r.status === 200, 'resolve failed: ' + JSON.stringify(r.body));
       }
     decoys:
@@ -1237,6 +1243,7 @@ tasks:
               }
             }
           }
+    alternatives: []
   approve_and_pay_clean_claim:
     difficulty: medium
     instruction: Marcus Delgado has two claims under review. Approve his collision claim, which has no fraud flags, and then pay it out by bank transfer. Do not touch his other claims.
@@ -1353,6 +1360,7 @@ tasks:
               }
             }
           }
+    alternatives: []
   approve_unflagged_water_damage_claims:
     difficulty: hard
     instruction: Approve every claim that is under review and sits on a water_damage coverage, except those that have an open fraud flag. A claim whose flag was already cleared may be approved. Leave flagged claims under review and change nothing else.
@@ -1489,3 +1497,4 @@ tasks:
               ctx.api('POST', '/claims/' + c.id + '/approve', {});
             }
           }
+    alternatives: []

@@ -10,8 +10,10 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { claudeModelId } from '../worldgen/config.ts';
 
-export const SCHEMA_VERSION = 1;
-export const MANIFEST_VERSION = 1;
+/** 2 adds `outcome` (A-389). A version 1 record still parses, and reads as version 2 with its outcome derived. */
+export const SCHEMA_VERSION = 2;
+/** 2 puts every episode in dataset.jsonl with its outcome, and has no failures.jsonl (A-389). A version 1 export still validates. */
+export const MANIFEST_VERSION = 2;
 /** Bump when the solver's system prompt, tool schema or history rendering changes (solver.ts). */
 export const PROMPT_VERSION = 'solver-prompt-1';
 export const PROVIDER = 'anthropic';
@@ -100,7 +102,14 @@ export function redactor(secrets: readonly string[]): Redactor {
 // ---------------------------------------------------------------------------------------------
 // Episode record
 
-export const STOP_REASONS = ['done', 'turn_limit', 'budget_limit', 'time_limit', 'model_error', 'world_error', 'grade_error', 'interrupted'] as const;
+/**
+ * `model_error` is a model call that failed; `invalid_turn` is an answer the agent gave that is not a valid turn (A-389).
+ * `budget_limit` and `time_limit` are the episode's own limits; `run_budget_limit` and `run_time_limit` are a run's shared
+ * budget or deadline running out while the episode ran, which is not the agent's doing (A-396).
+ */
+export const STOP_REASONS = [
+  'done', 'turn_limit', 'budget_limit', 'time_limit', 'run_budget_limit', 'run_time_limit', 'model_error', 'invalid_turn', 'world_error', 'grade_error', 'interrupted',
+] as const;
 export type StopReason = (typeof STOP_REASONS)[number];
 
 const sha = z.string().regex(/^[0-9a-f]{64}$/, 'a lowercase hex sha-256');
@@ -179,8 +188,7 @@ function checkMessages(messages: readonly PublicMessage[], ctx: z.RefinementCtx)
   if (open !== null) bad(`tool call ${open} has no result`);
 }
 
-const episodeBase = z.strictObject({
-  schema_version: z.literal(SCHEMA_VERSION),
+const episodeShape = {
   episode_id: z.string().min(1),
   run_id: z.string().regex(RUN_ID),
   world_id: z.string().min(1),
@@ -206,9 +214,59 @@ const episodeBase = z.strictObject({
   /** A public, redacted explanation of a non-done stop. */
   error: z.string().nullable(),
   usage: usageSchema,
-});
+};
 
-export const episodeSchema = episodeBase.superRefine((ep, ctx) => {
+export const VERDICTS = ['success', 'partial', 'failure', 'infra'] as const;
+export type Verdict = (typeof VERDICTS)[number];
+/** Stops that say the machinery failed, not the agent: such a row is `infra`, whatever its score (A-389). */
+export const INFRA_STOPS: readonly StopReason[] = ['run_budget_limit', 'run_time_limit', 'model_error', 'world_error', 'grade_error', 'interrupted'];
+/** The failure cause of a cut by a run's shared limit, in the words of A-396. Every other stop is its own cause. */
+const RUN_LIMIT_CAUSES: Partial<Record<StopReason, string>> = { run_budget_limit: 'run budget', run_time_limit: 'run time' };
+
+/** What a training consumer reads off a row. It follows from the record, and the schema refuses one that does not. */
+const outcomeSchema = z.strictObject({
+  /** The engine's score, 0..1. 0 when grading did not happen. */
+  reward: z.number().min(0).max(1),
+  /**
+   * `success` is a complete success (isCompleteSuccess). `infra` is a row the machinery ended (INFRA_STOPS) or that was
+   * never graded, so it says nothing of the agent. Otherwise `partial` when reward is above 0, and `failure`.
+   */
+  verdict: z.enum(VERDICTS),
+  /** Why a row that is not a success ended (failureCauseOf), or null for a success. Public words only, never grader text. */
+  failure_cause: z.string().nullable(),
+  /** How many of the grader's goals were met and guards held, as the verifier counted them; null when the row was not graded. */
+  goals: z.strictObject({ met: nat, total: nat }).nullable(),
+  guards: z.strictObject({ held: nat, total: nat }).nullable(),
+});
+export type Outcome = z.output<typeof outcomeSchema>;
+/** The verifier's goal and guard counts for a graded row: integers only (A-389). */
+export type GradeCounts = { readonly goals: { readonly met: number; readonly total: number }; readonly guards: { readonly held: number; readonly total: number } };
+
+/** `{ <key>: n, total }` with two non-negative safe integers, n at most total, and no other key; null otherwise. */
+function countPair(v: unknown, key: 'met' | 'held'): { n: number; total: number } | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join(',') !== [key, 'total'].sort().join(',')) return null;
+  const n = (v as Record<string, unknown>)[key];
+  const total = (v as Record<string, unknown>)['total'];
+  return Number.isSafeInteger(n) && Number.isSafeInteger(total) && (n as number) >= 0 && (n as number) <= (total as number) ? { n: n as number, total: total as number } : null;
+}
+
+/**
+ * Untrusted goal and guard counts as GradeCounts, or null when either is not exactly its integer pair. Whatever a
+ * verifier answered, only these numbers reach a record, never a name (A-389).
+ */
+export function gradeCountsOf(goals: unknown, guards: unknown): GradeCounts | null {
+  const g = countPair(goals, 'met');
+  const h = countPair(guards, 'held');
+  return g === null || h === null ? null : { goals: { met: g.n, total: g.total }, guards: { held: h.n, total: h.total } };
+}
+
+/** The fields a row's verdict is read from, the same in every schema version. */
+type Graded = {
+  readonly stop_reason: StopReason; readonly score: number | null; readonly final_reply: string | null; readonly error: string | null;
+  readonly initial_state_hash: string | null; readonly final_state_hash: string | null; readonly usage: EpisodeUsage;
+};
+
+function checkEpisode(ep: z.output<z.ZodObject<typeof episodeShape>>, ctx: z.RefinementCtx): void {
   checkMessages(ep.messages, ctx);
   const add = (path: string, message: string): void => void ctx.addIssue({ code: 'custom', path: [path], message });
   const last = ep.messages[ep.messages.length - 1];
@@ -219,11 +277,26 @@ export const episodeSchema = episodeBase.superRefine((ep, ctx) => {
   }
   if (ep.stop_reason === 'done' && ep.final_reply === null) add('stop_reason', 'done needs a final reply');
   if (ep.stop_reason !== 'done' && ep.error === null) add('error', 'a stop other than done needs an error');
+}
+
+const episodeV1Schema = z.strictObject({ schema_version: z.literal(1), ...episodeShape }).superRefine(checkEpisode);
+export type EpisodeV1 = z.output<typeof episodeV1Schema>;
+
+export const episodeSchema = z.strictObject({ schema_version: z.literal(SCHEMA_VERSION), ...episodeShape, outcome: outcomeSchema }).superRefine((ep, ctx) => {
+  checkEpisode(ep, ctx);
+  const { goals, guards } = ep.outcome;
+  if ((goals === null) !== (guards === null)) ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'goals and guards are both counted or both null' });
+  if (ep.score === null && goals !== null) ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'an ungraded row has no counts' });
+  // The engine scores a run with a broken guard 0 (tasks.ts), so a row that says otherwise did not come from it.
+  if (guards !== null && guards.held < guards.total && ep.score !== 0) ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'a broken guard scores 0' });
+  if ((goals !== null && goals.met > goals.total) || (guards !== null && guards.held > guards.total)) ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'a count is above its total' });
+  const want = outcomeOf(ep, goals === null || guards === null ? null : { goals, guards });
+  if (canonicalJson(ep.outcome) !== canonicalJson(want)) ctx.addIssue({ code: 'custom', path: ['outcome'], message: `must be ${canonicalJson(want)}` });
 });
 export type Episode = z.output<typeof episodeSchema>;
 
-/** The rule for dataset.jsonl: stopped by finishing, engine score exactly 1, a non-blank reply, both hashes, and real, accounted spend. */
-export function isCompleteSuccess(ep: Episode): boolean {
+/** A complete success: stopped by finishing, engine score exactly 1, a non-blank reply, both hashes, and real, accounted spend. */
+export function isCompleteSuccess(ep: Graded): boolean {
   return (
     ep.stop_reason === 'done' &&
     ep.score === 1 &&
@@ -234,43 +307,108 @@ export function isCompleteSuccess(ep: Episode): boolean {
   );
 }
 
+/**
+ * Why a row that is not a complete success ended, or null for a success. A stop other than `done` is its stop reason.
+ * A `done` run the engine scored below 1 is `guard broken` when a guard did not hold, `<met> of <total> goals met` when
+ * a goal was missed, and `scored <n>` when the grader recorded neither (`scored none` when it was not graded). A full
+ * score that is still not a complete success is `error` or `incomplete record`. These are the studio's failure causes,
+ * and they name no goal or guard: those names are grader source (A-389).
+ */
+export function failureCauseOf(ep: Graded, counts: GradeCounts | null): string | null {
+  if (isCompleteSuccess(ep)) return null;
+  if (ep.stop_reason !== 'done') return RUN_LIMIT_CAUSES[ep.stop_reason] ?? ep.stop_reason;
+  if (ep.score === null) return 'scored none';
+  if (ep.score !== 1) {
+    if (counts !== null && counts.guards.held < counts.guards.total) return 'guard broken';
+    if (counts !== null && counts.goals.met < counts.goals.total) return `${counts.goals.met} of ${counts.goals.total} goals met`;
+    return `scored ${ep.score}`;
+  }
+  if (ep.error !== null) return 'error';
+  return 'incomplete record';
+}
+
+/** A row's outcome labels, from its record and the verifier's counts (null when it was not graded). */
+export function outcomeOf(ep: Graded, counts: GradeCounts | null): Outcome {
+  const reward = ep.score ?? 0;
+  const verdict: Verdict = isCompleteSuccess(ep) ? 'success'
+    : INFRA_STOPS.includes(ep.stop_reason) || ep.score === null ? 'infra'
+      : reward > 0 ? 'partial' : 'failure';
+  return { reward, verdict, failure_cause: failureCauseOf(ep, counts), goals: counts?.goals ?? null, guards: counts?.guards ?? null };
+}
+
 const describeIssue = (e: z.ZodError): string => {
   const i = e.issues[0];
   return i === undefined ? 'invalid' : `${i.path.join('.') || '(record)'}: ${i.message}`;
 };
 
-/** Parses an untrusted record, or throws a DatasetError naming `where` and the first problem. */
+/**
+ * Parses an untrusted record, or throws a DatasetError naming `where` and the first problem. A version 1 record reads
+ * as version 2, with its outcome derived, so old logs and exports keep loading.
+ */
 export function parseEpisode(raw: unknown, where: string): Episode {
-  const r = episodeSchema.safeParse(raw);
+  const old = typeof raw === 'object' && raw !== null && (raw as { schema_version?: unknown }).schema_version === 1;
+  const r = episodeSchema.safeParse(old ? upgrade(parseEpisodeV1(raw, where)) : raw);
   if (!r.success) throw new DatasetError(`${where}: not a valid episode record: ${describeIssue(r.error)}`);
   return r.data;
 }
+
+/** A version 1 record as it was written, for checking a version 1 export line for line. */
+export function parseEpisodeV1(raw: unknown, where: string): EpisodeV1 {
+  const r = episodeV1Schema.safeParse(raw);
+  if (!r.success) throw new DatasetError(`${where}: not a valid version 1 episode record: ${describeIssue(r.error)}`);
+  return r.data;
+}
+
+/** A version 1 record never had the verifier's counts, so they read as null. */
+const upgrade = (ep: EpisodeV1): unknown => ({ ...ep, schema_version: SCHEMA_VERSION, outcome: outcomeOf(ep, null) });
 
 // ---------------------------------------------------------------------------------------------
 // Manifest
 
 const fileEntry = z.strictObject({ path: z.string(), records: nat, bytes: nat, sha256: sha });
-export const manifestSchema = z.strictObject({
-  manifest_version: z.literal(MANIFEST_VERSION),
-  schema_version: z.literal(SCHEMA_VERSION),
+export type FileEntry = z.output<typeof fileEntry>;
+const manifestShape = {
   provider: z.literal(PROVIDER),
   model: claudeModelId,
   prompt_versions: z.array(z.string()),
   config_versions: z.array(z.string()),
   engine_commits: z.array(z.string()),
   run_ids: z.array(z.string()),
-  /** The filters the export was made with, or null for every saved episode. */
-  selection: z.strictObject({ run_ids: z.array(z.string()), task_ids: z.array(z.string()), episode_ids: z.array(z.string()) }).nullable(),
   /** The frozen world each episode ran against, as a path under the dataset directory and its hash. The file is private and is not part of the export. */
   worlds: z.array(z.strictObject({ world_id: z.string(), world_version: sha, artifact: z.strictObject({ path: z.string(), sha256: sha }) })),
+  grading_note: z.literal(GRADING_NOTE),
+};
+/** A version 1 export: complete successes in dataset.jsonl, everything else in failures.jsonl. */
+const manifestV1Schema = z.strictObject({
+  manifest_version: z.literal(1),
+  schema_version: z.literal(1),
+  ...manifestShape,
+  selection: z.strictObject({ run_ids: z.array(z.string()), task_ids: z.array(z.string()), episode_ids: z.array(z.string()) }).nullable(),
   counts: z.strictObject({ episodes: nat, accepted: nat, failed: nat, by_stop_reason: z.record(z.string(), nat) }),
   files: z.strictObject({ dataset: fileEntry, failures: fileEntry }),
-  grading_note: z.literal(GRADING_NOTE),
+});
+export type ManifestV1 = z.output<typeof manifestV1Schema>;
+/** Every episode in dataset.jsonl, counted by verdict, stop reason and failure cause. */
+export const manifestSchema = z.strictObject({
+  manifest_version: z.literal(MANIFEST_VERSION),
+  schema_version: z.literal(SCHEMA_VERSION),
+  ...manifestShape,
+  /** The filters the export was made with, or null for every saved episode. `successes_only` keeps the successes alone. */
+  selection: z.strictObject({ run_ids: z.array(z.string()), task_ids: z.array(z.string()), episode_ids: z.array(z.string()), successes_only: z.boolean() }).nullable(),
+  counts: z.strictObject({
+    episodes: nat,
+    by_verdict: z.strictObject({ success: nat, partial: nat, failure: nat, infra: nat }),
+    by_stop_reason: z.record(z.string(), nat),
+    by_failure_cause: z.record(z.string(), nat),
+  }),
+  files: z.strictObject({ dataset: fileEntry }),
 });
 export type Manifest = z.output<typeof manifestSchema>;
 
-export function parseManifest(raw: unknown, where: string): Manifest {
-  const r = manifestSchema.safeParse(raw);
+/** A manifest of either version, told apart by `manifest_version`. */
+export function parseManifest(raw: unknown, where: string): Manifest | ManifestV1 {
+  const old = typeof raw === 'object' && raw !== null && (raw as { manifest_version?: unknown }).manifest_version === 1;
+  const r = old ? manifestV1Schema.safeParse(raw) : manifestSchema.safeParse(raw);
   if (!r.success) throw new DatasetError(`${where}: not a valid manifest: ${describeIssue(r.error)}`);
   return r.data;
 }

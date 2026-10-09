@@ -1,0 +1,2540 @@
+format: 1
+meta:
+  name: gen_linear_backlog
+  description: A single-team issue tracker seeded from a real 123-issue Linear backlog (team key YOS, project WorldGen). Issues move through Backlog, In Progress, In Review, Done, Canceled and Duplicate. They carry a priority, a project, a milestone, labels, an optional parent and a completion time. Agents triage, move, relabel, re-milestone, close out and de-duplicate issues. Status changes go through actions that enforce the workflow rules and write an audit history. Two jobs auto-close parents and archive old done issues.
+  resembles: Linear-style issue tracker (Linear issues, projects, milestones and labels, exposed as a REST API)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-07T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  team:
+    description: The workspace team that owns issues and issue numbering. One row, key YOS. next_number is the counter the create_issue action uses.
+    idPrefix: team
+    fields:
+      key:
+        type: string
+        description: Short team key used in issue identifiers, such as YOS.
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 10
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      next_number:
+        type: int
+        description: Number the next created issue takes. Bumped only by create_issue.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 1
+        default: 1
+  project:
+    description: A project issues belong to. Issues with no project are allowed.
+    idPrefix: prj
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 120
+      status:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - planned
+          - started
+          - paused
+          - completed
+          - canceled
+        default: started
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  milestone:
+    description: A named delivery stage such as D1, R1 or Later. Many issues share one milestone. Two milestones share the code R1, so code is not unique. sort_order keeps the roadmap order.
+    idPrefix: mil
+    fields:
+      name:
+        type: string
+        description: "Full milestone name, such as 'D1: Engine core: format, check, store, CRUD, transactions, clock'."
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 200
+      code:
+        type: string
+        description: Text before the first colon in the name. Not unique.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 20
+      sort_order:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      project_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: project
+        onDelete: nullify
+  label:
+    description: A tag such as factory, kind:decision or area:infra. group is the part before ':' when there is one.
+    idPrefix: lbl
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 80
+      group:
+        type: string
+        description: Part of the name before ':', or null for a plain label.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 40
+  issue:
+    description: The core record. identifier is TEAM-number (YOS-1). Status, parent, duplicate link, completion and archive fields are readonly and change only through actions, jobs and seed. Plain PATCH edits to title, description, priority, project and milestone are accepted without writing history events (decision recorded by the model stage).
+    idPrefix: iss
+    fields:
+      identifier:
+        type: string
+        description: TEAM-number, such as YOS-91.
+        required: true
+        nullable: false
+        unique: true
+        readonly: true
+        maxLength: 30
+      number:
+        type: int
+        required: true
+        nullable: false
+        unique: true
+        readonly: true
+        min: 1
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 300
+      description:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      status:
+        type: state
+        description: Workflow status. Changed only by lifecycle actions.
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - backlog
+          - in_progress
+          - in_review
+          - done
+          - canceled
+          - duplicate
+        initial: backlog
+        transitions:
+          backlog:
+            - in_progress
+            - canceled
+            - duplicate
+          in_progress:
+            - backlog
+            - in_review
+            - done
+            - canceled
+            - duplicate
+          in_review:
+            - in_progress
+            - done
+            - canceled
+            - duplicate
+          done:
+            - in_progress
+          canceled:
+            - backlog
+          duplicate:
+            - backlog
+      priority:
+        type: enum
+        description: null means no priority.
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - urgent
+          - high
+          - medium
+          - low
+      team_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: team
+        onDelete: restrict
+      project_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: project
+        onDelete: nullify
+      milestone_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: milestone
+        onDelete: nullify
+      parent_id:
+        type: ref
+        description: Parent issue when this is a sub-issue. Set by set_parent.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: issue
+        onDelete: nullify
+      duplicate_of_id:
+        type: ref
+        description: Original issue when status is duplicate. Set by mark_duplicate.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: issue
+        onDelete: nullify
+      completed_at:
+        type: datetime
+        description: Set when the issue becomes done, canceled or duplicate. Cleared on reopen.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      archived_at:
+        type: datetime
+        description: Set by the auto_archive_done job.
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+  issue_label:
+    description: Join row attaching a label to an issue. Unique per (issue, label), enforced by the add_label action.
+    idPrefix: isl
+    fields:
+      issue_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: issue
+        onDelete: cascade
+      label_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: label
+        onDelete: cascade
+  comment:
+    description: A discussion note on an issue. Comments have no author.
+    idPrefix: cmt
+    fields:
+      issue_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: issue
+        onDelete: cascade
+      body:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+  issue_event:
+    description: Append-only history of what happened to an issue. Written by actions and jobs.
+    idPrefix: evt
+    fields:
+      issue_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: issue
+        onDelete: cascade
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - created
+          - status_changed
+          - priority_changed
+          - milestone_changed
+          - label_added
+          - label_removed
+          - parent_changed
+          - commented
+          - archived
+      from_value:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 300
+      to_value:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 300
+routes:
+  list_issues:
+    op: list
+    entity: issue
+    filters:
+      - status
+      - priority
+      - project_id
+      - milestone_id
+      - parent_id
+      - duplicate_of_id
+    search:
+      - title
+      - description
+      - identifier
+    sort:
+      - created_at
+      - updated_at
+      - completed_at
+      - number
+    pageSize: 25
+    method: GET
+    path: /issues
+    description: List issues with filters, search and cursor paging.
+  get_issue:
+    op: get
+    entity: issue
+    method: GET
+    path: /issues/{id}
+    description: Fetch one issue by engine id.
+  update_issue:
+    op: update
+    entity: issue
+    method: PATCH
+    path: /issues/{id}
+    description: Edit title, description, priority, project_id and milestone_id. Status, parent and completion fields are readonly. No history event is written for these edits.
+  list_sub_issues:
+    op: list
+    entity: issue
+    filters:
+      - status
+    search: []
+    sort:
+      - number
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /issues/{parent_id}/children
+    description: List the sub-issues of a parent issue.
+  list_issue_labels:
+    op: list
+    entity: issue_label
+    filters:
+      - label_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /issues/{issue_id}/labels
+    description: List the label attachments of an issue.
+  list_issue_comments:
+    op: list
+    entity: comment
+    filters: []
+    search:
+      - body
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /issues/{issue_id}/comments
+    description: List the comments on an issue.
+  create_comment:
+    op: create
+    entity: comment
+    method: POST
+    path: /issues/{issue_id}/comments
+    description: Add a comment to an issue.
+  update_comment:
+    op: update
+    entity: comment
+    method: PATCH
+    path: /comments/{id}
+    description: Edit a comment body.
+  delete_comment:
+    op: delete
+    entity: comment
+    method: DELETE
+    path: /comments/{id}
+    description: Delete a comment.
+  list_issue_events:
+    op: list
+    entity: issue_event
+    filters:
+      - kind
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /issues/{issue_id}/history
+    description: List the audit history of an issue.
+  list_projects:
+    op: list
+    entity: project
+    filters:
+      - status
+    search:
+      - name
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /projects
+    description: List projects.
+  get_project:
+    op: get
+    entity: project
+    method: GET
+    path: /projects/{id}
+    description: Fetch one project.
+  list_milestones:
+    op: list
+    entity: milestone
+    filters:
+      - project_id
+      - code
+    search:
+      - name
+    sort:
+      - sort_order
+    pageSize: 25
+    method: GET
+    path: /milestones
+    description: List milestones in roadmap order.
+  get_milestone:
+    op: get
+    entity: milestone
+    method: GET
+    path: /milestones/{id}
+    description: Fetch one milestone.
+  update_milestone:
+    op: update
+    entity: milestone
+    method: PATCH
+    path: /milestones/{id}
+    description: Rename or reorder a milestone.
+  list_labels:
+    op: list
+    entity: label
+    filters:
+      - group
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /labels
+    description: List labels.
+  get_label:
+    op: get
+    entity: label
+    method: GET
+    path: /labels/{id}
+    description: Fetch one label.
+  create_label:
+    op: create
+    entity: label
+    method: POST
+    path: /labels
+    description: Create a label. The name must be unique.
+  list_teams:
+    op: list
+    entity: team
+    filters: []
+    search: []
+    sort: []
+    pageSize: 25
+    method: GET
+    path: /teams
+    description: List teams.
+actions:
+  create_issue:
+    method: POST
+    path: /issues
+    description: Create an issue in backlog. Allocates the next TEAM-number from team.next_number and writes a created event.
+    input:
+      title:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 300
+      description:
+        type: text
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+      priority:
+        type: enum
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        values:
+          - urgent
+          - high
+          - medium
+          - low
+      project_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: project
+        onDelete: restrict
+      milestone_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: milestone
+        onDelete: restrict
+      parent_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: issue
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        if (b.title.trim() === '') ctx.fail(400, 'input.invalid', 'title must not be blank');
+        let team = ctx.db.list('team')[0];
+        if (!team) team = ctx.db.create('team', { key: 'YOS', name: 'YOS', next_number: 1 });
+        if (b.parent_id) {
+          const p = ctx.db.get('issue', b.parent_id);
+          if (!p) ctx.fail(422, 'unknown_parent', 'parent ' + b.parent_id + ' not found');
+          if (p.status === 'done') ctx.fail(409, 'parent_done', 'parent ' + p.identifier + ' is done');
+        }
+        let n = team.next_number;
+        while (ctx.db.list('issue', { where: { number: n } }).length > 0) n++;
+        const row = { identifier: team.key + '-' + n, number: n, title: b.title, team_id: team.id, status: 'backlog', completed_at: null };
+        for (const k of ['description', 'priority', 'project_id', 'milestone_id']) if (b[k] !== undefined) row[k] = b[k];
+        if (b.parent_id) row.parent_id = b.parent_id;
+        const issue = ctx.db.create('issue', row);
+        ctx.db.update('team', team.id, { next_number: n + 1 });
+        ctx.db.create('issue_event', { issue_id: issue.id, kind: 'created', from_value: null, to_value: issue.identifier });
+        return { status: 201, body: issue };
+      }
+  start_issue:
+    method: POST
+    path: /issues/{id}/start
+    description: Move a backlog issue to in_progress.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        if (t.status !== 'backlog') ctx.fail(409, 'invalid_state', 'issue ' + t.identifier + ' is ' + t.status + '. Only backlog issues can be started.');
+        const u = ctx.db.update('issue', id, { status: 'in_progress' });
+        ctx.db.create('issue_event', { issue_id: id, kind: 'status_changed', from_value: 'backlog', to_value: 'in_progress' });
+        return { status: 200, body: u };
+      }
+  request_review:
+    method: POST
+    path: /issues/{id}/review
+    description: Move an in_progress issue to in_review.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        if (t.status !== 'in_progress') ctx.fail(409, 'invalid_state', 'issue ' + t.identifier + ' is ' + t.status + '. Only in_progress issues can go to review.');
+        const u = ctx.db.update('issue', id, { status: 'in_review' });
+        ctx.db.create('issue_event', { issue_id: id, kind: 'status_changed', from_value: 'in_progress', to_value: 'in_review' });
+        return { status: 200, body: u };
+      }
+  complete_issue:
+    method: POST
+    path: /issues/{id}/complete
+    description: Complete an in_progress or in_review issue. Refused while a sub-issue is still open.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        if (t.status !== 'in_progress' && t.status !== 'in_review') ctx.fail(409, 'invalid_state', 'issue ' + t.identifier + ' is ' + t.status + '. Only in_progress and in_review issues can be completed.');
+        const open = ctx.db.list('issue', { where: { parent_id: id } }).filter((c) => c.status === 'backlog' || c.status === 'in_progress' || c.status === 'in_review');
+        if (open.length > 0) ctx.fail(409, 'open_sub_issues', 'issue ' + t.identifier + ' has ' + open.length + ' open sub-issues: ' + open.map((c) => c.identifier).join(', ') + '. Close them first.');
+        const u = ctx.db.update('issue', id, { status: 'done', completed_at: ctx.now() });
+        ctx.db.create('issue_event', { issue_id: id, kind: 'status_changed', from_value: t.status, to_value: 'done' });
+        return { status: 200, body: u };
+      }
+  cancel_issue:
+    method: POST
+    path: /issues/{id}/cancel
+    description: Cancel a backlog, in_progress or in_review issue. An optional reason becomes a comment.
+    input:
+      reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        if (t.status !== 'backlog' && t.status !== 'in_progress' && t.status !== 'in_review') ctx.fail(409, 'invalid_state', 'issue ' + t.identifier + ' is ' + t.status + '. Only open issues can be canceled.');
+        const u = ctx.db.update('issue', id, { status: 'canceled', completed_at: ctx.now() });
+        ctx.db.create('issue_event', { issue_id: id, kind: 'status_changed', from_value: t.status, to_value: 'canceled' });
+        const reason = ctx.body.reason;
+        if (typeof reason === 'string' && reason.trim() !== '') {
+          ctx.db.create('comment', { issue_id: id, body: reason });
+          ctx.db.create('issue_event', { issue_id: id, kind: 'commented', from_value: null, to_value: reason.slice(0, 300) });
+        }
+        return { status: 200, body: u };
+      }
+  mark_duplicate:
+    method: POST
+    path: /issues/{id}/duplicate
+    description: Mark an open issue as a duplicate of another issue that is not itself a duplicate.
+    input:
+      duplicate_of_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: issue
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        if (t.status !== 'backlog' && t.status !== 'in_progress' && t.status !== 'in_review') ctx.fail(409, 'invalid_state', 'issue ' + t.identifier + ' is ' + t.status + '. Only open issues can be marked duplicate.');
+        const oid = ctx.body.duplicate_of_id;
+        if (oid === id) ctx.fail(409, 'self_duplicate', 'an issue cannot duplicate itself');
+        const o = ctx.db.get('issue', oid);
+        if (o === null) ctx.fail(422, 'unknown_issue', 'issue ' + oid + ' not found');
+        if (o.status === 'duplicate') ctx.fail(409, 'original_is_duplicate', 'issue ' + o.identifier + ' is itself a duplicate. Point at the original.');
+        const u = ctx.db.update('issue', id, { status: 'duplicate', duplicate_of_id: oid, completed_at: ctx.now() });
+        ctx.db.create('issue_event', { issue_id: id, kind: 'status_changed', from_value: t.status, to_value: 'duplicate' });
+        return { status: 200, body: u };
+      }
+  reopen_issue:
+    method: POST
+    path: /issues/{id}/reopen
+    description: Reopen a done issue to in_progress, or a canceled or duplicate issue to backlog.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        if (t.status !== 'done' && t.status !== 'canceled' && t.status !== 'duplicate') ctx.fail(409, 'invalid_state', 'issue ' + t.identifier + ' is ' + t.status + '. Only done, canceled and duplicate issues can be reopened.');
+        const to = t.status === 'done' ? 'in_progress' : 'backlog';
+        const u = ctx.db.update('issue', id, { status: to, completed_at: null, duplicate_of_id: null, archived_at: null });
+        ctx.db.create('issue_event', { issue_id: id, kind: 'status_changed', from_value: t.status, to_value: to });
+        return { status: 200, body: u };
+      }
+  set_parent:
+    method: POST
+    path: /issues/{id}/parent
+    description: Set or clear the parent of an issue. No self-parenting, no cycles, no done parent.
+    input:
+      parent_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        entity: issue
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        const pid = ctx.body.parent_id === undefined ? null : ctx.body.parent_id;
+        const cur = t.parent_id === undefined ? null : t.parent_id;
+        if (pid === cur) ctx.fail(409, 'no_change', 'parent is already ' + (pid === null ? 'empty' : pid));
+        let toVal = null;
+        if (pid !== null) {
+          if (pid === id) ctx.fail(409, 'self_parent', 'an issue cannot be its own parent');
+          const p = ctx.db.get('issue', pid);
+          if (p === null) ctx.fail(422, 'unknown_parent', 'issue ' + pid + ' not found');
+          if (p.status === 'done') ctx.fail(409, 'parent_done', 'parent ' + p.identifier + ' is done');
+          let walk = p;
+          let guard = 0;
+          while (walk && walk.parent_id && guard < 1000) {
+            if (walk.parent_id === id) ctx.fail(409, 'parent_cycle', 'making ' + p.identifier + ' the parent would create a cycle');
+            walk = ctx.db.get('issue', walk.parent_id);
+            guard++;
+          }
+          toVal = p.identifier;
+        }
+        let fromVal = null;
+        if (cur !== null) { const o = ctx.db.get('issue', cur); fromVal = o ? o.identifier : cur; }
+        const u = ctx.db.update('issue', id, { parent_id: pid });
+        ctx.db.create('issue_event', { issue_id: id, kind: 'parent_changed', from_value: fromVal, to_value: toVal });
+        return { status: 200, body: u };
+      }
+  add_label:
+    method: POST
+    path: /issues/{id}/labels
+    description: Attach an existing label to an issue. 409 if already attached.
+    input:
+      label_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: label
+        onDelete: restrict
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        const lid = ctx.body.label_id;
+        const l = ctx.db.get('label', lid);
+        if (l === null) ctx.fail(422, 'unknown_label', 'label ' + lid + ' not found');
+        if (ctx.db.list('issue_label', { where: { issue_id: id, label_id: lid } }).length > 0) ctx.fail(409, 'already_attached', 'label ' + l.name + ' is already on ' + t.identifier);
+        const row = ctx.db.create('issue_label', { issue_id: id, label_id: lid });
+        ctx.db.create('issue_event', { issue_id: id, kind: 'label_added', from_value: null, to_value: l.name });
+        return { status: 201, body: row };
+      }
+  remove_label:
+    method: DELETE
+    path: /issues/{id}/labels/{label_id}
+    description: Detach a label from an issue. 404 if it is not attached.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const t = ctx.db.get('issue', id);
+        if (t === null) ctx.fail(404, 'not_found', 'issue ' + id + ' not found');
+        const lid = ctx.params.label_id;
+        const rows = ctx.db.list('issue_label', { where: { issue_id: id, label_id: lid } });
+        if (rows.length === 0) ctx.fail(404, 'not_attached', 'label ' + lid + ' is not on ' + t.identifier);
+        const l = ctx.db.get('label', lid);
+        ctx.db.delete('issue_label', rows[0].id);
+        ctx.db.create('issue_event', { issue_id: id, kind: 'label_removed', from_value: l ? l.name : lid, to_value: null });
+        return { status: 200, body: { issue_id: id, label_id: lid, removed: true } };
+      }
+jobs:
+  auto_close_parents:
+    description: Every hour. A parent in in_progress or in_review whose sub-issues are all closed, with at least one done, becomes done.
+    every: 1h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        const closed = ['done', 'canceled', 'duplicate'];
+        for (const status of ['in_progress', 'in_review']) {
+          for (const p of ctx.db.list('issue', { where: { status } })) {
+            const kids = ctx.db.list('issue', { where: { parent_id: p.id } });
+            if (kids.length === 0) continue;
+            if (!kids.every((k) => closed.includes(k.status))) continue;
+            if (!kids.some((k) => k.status === 'done')) continue;
+            ctx.db.update('issue', p.id, { status: 'done', completed_at: now });
+            ctx.db.create('issue_event', { issue_id: p.id, kind: 'status_changed', from_value: status, to_value: 'done' });
+          }
+        }
+      }
+  auto_archive_done:
+    description: Every day. Done issues completed more than 30 days ago get archived_at.
+    every: 1d
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const t of ctx.db.list('issue', { where: { status: 'done' } })) {
+          if (t.archived_at !== null && t.archived_at !== undefined) continue;
+          if (t.completed_at === null || t.completed_at === undefined) continue;
+          if (ctx.time.minutesBetween(t.completed_at, now) <= 30 * 1440) continue;
+          ctx.db.update('issue', t.id, { archived_at: now });
+          ctx.db.create('issue_event', { issue_id: t.id, kind: 'archived', from_value: null, to_value: now });
+        }
+      }
+fixtures:
+  linear_backlog:
+    - id: YOS-1
+      title: Get familiar with Linear
+      status: Canceled
+      priority: null
+      project: null
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-06T18:55:10.836Z
+      updated: 2026-10-06T23:18:05.592Z
+      completed: 2026-10-06T23:18:05.581Z
+    - id: YOS-2
+      title: Connect your tools
+      status: Canceled
+      priority: null
+      project: null
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-06T18:55:10.836Z
+      updated: 2026-10-06T23:18:06.697Z
+      completed: 2026-10-06T23:18:06.668Z
+    - id: YOS-3
+      title: Import your data
+      status: Canceled
+      priority: null
+      project: null
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-06T18:55:10.836Z
+      updated: 2026-10-06T23:18:07.608Z
+      completed: 2026-10-06T23:18:07.584Z
+    - id: YOS-4
+      title: Set up your teams
+      status: Canceled
+      priority: null
+      project: null
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-06T18:55:10.836Z
+      updated: 2026-10-06T23:18:08.710Z
+      completed: 2026-10-06T23:18:08.690Z
+    - id: YOS-5
+      title: "Decide: retire the Python engine (engine-v1) and the Python acceptance harness"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:decision; area:infra
+      parent: null
+      created: 2026-10-06T19:46:05.529Z
+      updated: 2026-10-07T01:06:23.978Z
+      completed: 2026-10-06T20:13:04.433Z
+    - id: YOS-6
+      title: "Architecture test part A: test dir, import boundaries, node:vm and SDK confinement"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:test; area:infra
+      parent: null
+      created: 2026-10-06T19:46:18.878Z
+      updated: 2026-10-07T01:06:22.874Z
+      completed: 2026-10-06T20:13:25.065Z
+    - id: YOS-7
+      title: "Architecture test part B: banned globals, brand minters, exhaustive switches"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:test; area:infra
+      parent: null
+      created: 2026-10-06T19:46:22.188Z
+      updated: 2026-10-07T01:06:14.523Z
+      completed: 2026-10-06T20:24:07.493Z
+    - id: YOS-8
+      title: "Engine clock: durations, ISO conversion, due-job ordering"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:46:27.150Z
+      updated: 2026-10-07T01:06:21.911Z
+      completed: 2026-10-06T20:13:44.003Z
+    - id: YOS-9
+      title: "FIELD_TYPES: validate, compare, parseQuery, inferFromCsv for every type"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:46:31.825Z
+      updated: 2026-10-07T01:06:21.008Z
+      completed: 2026-10-06T20:14:09.905Z
+    - id: YOS-10
+      title: Deterministic node:vm SnippetHost with call quota and SnippetFault
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:46:38.382Z
+      updated: 2026-10-07T01:06:10.803Z
+      completed: 2026-10-06T20:41:01.664Z
+    - id: YOS-11
+      title: "ctx registry contract test: every sig matches its interface member"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:test; area:engine
+      parent: null
+      created: 2026-10-06T19:46:43.508Z
+      updated: 2026-10-07T01:06:13.676Z
+      completed: 2026-10-06T20:30:21.699Z
+    - id: YOS-12
+      title: "World format helpers: emptyWorld, editJsonSchema, formatReference, fromZod"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:46:55.921Z
+      updated: 2026-10-07T01:06:20.138Z
+      completed: 2026-10-06T20:14:31.873Z
+    - id: YOS-13
+      title: "World IO: loadWorld, saveWorld with block scalars, applyEdit"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:00.784Z
+      updated: 2026-10-07T01:06:11.667Z
+      completed: 2026-10-06T20:34:13.364Z
+    - id: YOS-14
+      title: "Shared test world fixtures: minimalWorld, bareWorld, checkedForTest"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:test; area:infra
+      parent: null
+      created: 2026-10-06T19:47:06.292Z
+      updated: 2026-10-07T01:06:17.023Z
+      completed: 2026-10-06T20:20:23.817Z
+    - id: YOS-15
+      title: "Immutable store: transact with overlay, write enforcement, ids, state hash"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:13.681Z
+      updated: 2026-10-07T01:06:12.629Z
+      completed: 2026-10-06T20:30:45.016Z
+    - id: YOS-16
+      title: checkWorld layers schema, references and compile
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:18.959Z
+      updated: 2026-10-07T01:05:56.998Z
+      completed: 2026-10-06T20:50:00.550Z
+    - id: YOS-17
+      title: "WorldPlay check CLI: readable issues, JSON output and exit codes"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:23.437Z
+      updated: 2026-10-07T01:05:48.878Z
+      completed: 2026-10-06T21:19:17.748Z
+    - id: YOS-18
+      title: "Request handling: path matching, standard ops, filters, search, sort, cursor paging, envelopes"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:29.451Z
+      updated: 2026-10-07T01:05:59.769Z
+      completed: 2026-10-06T20:42:24.749Z
+    - id: YOS-19
+      title: "Runtime: call, dump, reset, log, one tick per successful call"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:43.925Z
+      updated: 2026-10-07T01:05:57.905Z
+      completed: 2026-10-06T20:46:20.288Z
+    - id: YOS-20
+      title: "Hand-built helpdesk world: meta, entities, routes"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D1: Engine core: format, check, store, CRUD, transactions, clock"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:46.283Z
+      updated: 2026-10-07T01:05:46.096Z
+      completed: 2026-10-06T21:21:31.031Z
+    - id: YOS-21
+      title: "Helpdesk world: escalate, resolve, reopen actions and the SLA breach job"
+      status: Done
+      priority: Urgent
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:51.564Z
+      updated: 2026-10-07T01:04:11.822Z
+      completed: 2026-10-06T23:19:43.688Z
+    - id: YOS-22
+      title: "Seed layer: run seed snippets in ref order into a deterministic starting state"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:47:57.159Z
+      updated: 2026-10-07T02:06:27.345Z
+      completed: 2026-10-06T21:12:29.640Z
+    - id: YOS-23
+      title: "Actions and jobs: handler ctx, input validation, job firing on clock advance, change origins"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:48:03.808Z
+      updated: 2026-10-07T01:05:53.174Z
+      completed: 2026-10-06T21:08:59.565Z
+    - id: YOS-24
+      title: "Check layer `tests`: run world test scripts through the public API"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:48:09.509Z
+      updated: 2026-10-07T01:05:44.203Z
+      completed: 2026-10-06T21:24:58.176Z
+    - id: YOS-25
+      title: "Grade and verify: grader ctx, solution scores 1, noop scores 0, TaskVerdict"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:48:16.351Z
+      updated: 2026-10-07T01:05:42.554Z
+      completed: 2026-10-06T21:41:29.471Z
+    - id: YOS-26
+      title: HTTP serve with separate admin port, and `world serve|verify|grade` CLI
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:48:28.591Z
+      updated: 2026-10-07T02:05:35.962Z
+      completed: 2026-10-06T23:05:16.403Z
+    - id: YOS-27
+      title: "Helpdesk world: realistic seed generators and workflow tests"
+      status: Done
+      priority: Urgent
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:48:34.276Z
+      updated: 2026-10-07T02:05:37.119Z
+      completed: 2026-10-06T23:19:43.794Z
+    - id: YOS-28
+      title: WorldGen config and JSONL event emitter
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:48:40.172Z
+      updated: 2026-10-07T01:05:01.819Z
+      completed: 2026-10-06T20:14:53.537Z
+    - id: YOS-29
+      title: Anthropic model client with forced tool use and cost accounting
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:48:43.885Z
+      updated: 2026-10-07T01:05:13.472Z
+      completed: 2026-10-06T20:28:18.791Z
+    - id: YOS-30
+      title: Plan coverage, plan.yaml, stage table `done` rules and stagesToRun
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:48:49.995Z
+      updated: 2026-10-07T01:04:55.602Z
+      completed: 2026-10-06T20:15:16.915Z
+    - id: YOS-31
+      title: "judge.blockingIssues: engine report plus plan coverage decides each stage"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:48:54.685Z
+      updated: 2026-10-07T01:05:58.887Z
+      completed: 2026-10-06T20:43:49.912Z
+    - id: YOS-32
+      title: "Repair policy: pure decide() over one ledger"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:49:00.132Z
+      updated: 2026-10-07T01:06:19.135Z
+      completed: 2026-10-06T20:15:38.090Z
+    - id: YOS-33
+      title: "Input: description kind, redaction, digestInput, CLI flag table"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:49:11.946Z
+      updated: 2026-10-07T01:05:43.387Z
+      completed: 2026-10-06T21:39:39.790Z
+    - id: YOS-34
+      title: "Thin WorldGen run loop: plan, stages, edit tool, engine judge, one repair (fake model)"
+      status: Done
+      priority: Urgent
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:49:25.136Z
+      updated: 2026-10-07T02:05:36.301Z
+      completed: 2026-10-06T23:19:43.282Z
+    - id: YOS-35
+      title: "WorldGen CLI: description to a checked world directory"
+      status: Done
+      priority: Urgent
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:49:26.392Z
+      updated: 2026-10-07T02:05:35.857Z
+      completed: 2026-10-06T23:25:30.413Z
+    - id: YOS-36
+      title: "Live smoke: thin WorldGen slice on one description with the real model"
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R1: Verified description to graded JSONL"
+      labels: factory; kind:test; area:eval
+      parent: null
+      created: 2026-10-06T19:49:28.035Z
+      updated: 2026-10-07T02:05:37.136Z
+      completed: null
+    - id: YOS-37
+      title: "Discriminating graders: decoys, anti-trivial decoys, solution prefixes"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:49:34.066Z
+      updated: 2026-10-07T01:05:34.140Z
+      completed: 2026-10-06T23:05:17.279Z
+    - id: YOS-38
+      title: "Semantic world diff: diffWorlds and DESTRUCTIVE changes"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:49:41.884Z
+      updated: 2026-10-07T01:06:15.366Z
+      completed: 2026-10-06T20:23:23.854Z
+    - id: YOS-39
+      title: "Helpdesk world: three graded tasks with decoys that verify green"
+      status: Done
+      priority: Urgent
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:49:45.376Z
+      updated: 2026-10-07T01:05:46.299Z
+      completed: 2026-10-06T23:19:43.597Z
+    - id: YOS-40
+      title: "Lints layer: paging rows, state mix, task count and spread, WorldStats"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T19:49:56.827Z
+      updated: 2026-10-07T01:04:20.505Z
+      completed: 2026-10-06T23:33:47.260Z
+    - id: YOS-41
+      title: Generate world-format documentation and reject stale output
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:docs
+      parent: null
+      created: 2026-10-06T19:50:12.559Z
+      updated: 2026-10-07T01:05:33.111Z
+      completed: 2026-10-06T23:05:19.504Z
+    - id: YOS-42
+      title: Engine acceptance suite and engine freeze
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:test; area:engine
+      parent: null
+      created: 2026-10-06T19:50:13.926Z
+      updated: 2026-10-07T02:05:20.987Z
+      completed: 2026-10-06T23:34:27.861Z
+    - id: YOS-43
+      title: REPORT.md rendered by code from plan, verdicts, delta and events
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D4: Full WorldGen stages, repair controls, budgets, FAILED path"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:50:15.435Z
+      updated: 2026-10-07T02:05:21.099Z
+      completed: 2026-10-06T23:19:43.268Z
+    - id: YOS-44
+      title: "Full repair loop: backtracking, stops with reasons, budgets, REPORT.md on every exit"
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:50:18.655Z
+      updated: 2026-10-07T02:05:27.074Z
+      completed: null
+    - id: YOS-45
+      title: Stage briefs and prompts tuned on real description runs, including an impossible prompt
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D4: Full WorldGen stages, repair controls, budgets, FAILED path"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:50:23.907Z
+      updated: 2026-10-07T01:04:00.731Z
+      completed: 2026-10-07T00:27:27.186Z
+    - id: YOS-46
+      title: "Preservation gate: preservationIssues for iterate mode"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D4: Full WorldGen stages, repair controls, budgets, FAILED path"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:50:29.262Z
+      updated: 2026-10-07T02:06:14.912Z
+      completed: 2026-10-06T23:05:21.434Z
+    - id: YOS-47
+      title: "Input: OpenAPI adapter with $ref resolution, --only narrowing, envelopes and observations"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D4: Full WorldGen stages, repair controls, budgets, FAILED path"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:50:44.659Z
+      updated: 2026-10-07T02:06:12.740Z
+      completed: 2026-10-06T23:34:40.444Z
+    - id: YOS-48
+      title: "Input: CSV adapter with type inference, keys and fixtures"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D4: Full WorldGen stages, repair controls, budgets, FAILED path"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:50:51.050Z
+      updated: 2026-10-07T02:06:12.927Z
+      completed: 2026-10-06T23:34:40.615Z
+    - id: YOS-49
+      title: "Input conformance: generated world follows the OpenAPI operations and uses CSV fixtures"
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:50:55.069Z
+      updated: 2026-10-07T02:06:12.942Z
+      completed: null
+    - id: YOS-50
+      title: "Eval input files: Stripe-like OpenAPI subset and orders/customers CSVs"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D5: OpenAPI and CSV ingest, stress runner"
+      labels: factory; kind:chore; area:eval
+      parent: null
+      created: 2026-10-06T19:50:59.784Z
+      updated: 2026-10-07T01:05:24.571Z
+      completed: 2026-10-06T23:34:40.520Z
+    - id: YOS-51
+      title: "Evaluation runner: suite inputs, execution and evidence summaries"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D6: Update mode, stress run 1"
+      labels: factory; kind:feature; area:eval
+      parent: null
+      created: 2026-10-06T19:56:52.010Z
+      updated: 2026-10-07T02:06:20.516Z
+      completed: 2026-10-06T23:05:22.408Z
+    - id: YOS-52
+      title: "Iterate mode: change request on an existing world through edits"
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T19:56:53.399Z
+      updated: 2026-10-07T02:06:18.339Z
+      completed: null
+    - id: YOS-53
+      title: "Stress run 1: full suite, triage, fix generic causes"
+      status: Backlog
+      priority: High
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: factory; kind:test; area:eval
+      parent: null
+      created: 2026-10-06T19:56:54.990Z
+      updated: 2026-10-07T02:06:20.606Z
+      completed: null
+    - id: YOS-54
+      title: "Stress run 2: tune cost and latency for the live run"
+      status: Backlog
+      priority: Medium
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: factory; kind:test; area:eval
+      parent: null
+      created: 2026-10-06T19:57:03.427Z
+      updated: 2026-10-07T02:06:21.285Z
+      completed: null
+    - id: YOS-55
+      title: Deliverable generated worlds in prod/worlds/gen-*
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: factory; kind:chore; area:eval
+      parent: null
+      created: 2026-10-06T19:57:09.948Z
+      updated: 2026-10-07T02:06:18.290Z
+      completed: null
+    - id: YOS-56
+      title: "prod/design.md: world format, engine guarantees, WorldGen loop"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D7: Stress run 2, tuning, docs, team worlds"
+      labels: factory; kind:chore; area:docs
+      parent: null
+      created: 2026-10-06T19:57:13.946Z
+      updated: 2026-10-07T02:06:22.829Z
+      completed: 2026-10-06T23:13:14.002Z
+    - id: YOS-57
+      title: README with one command each, demo script, and AGENTS.md path check
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D7: Stress run 2, tuning, docs, team worlds"
+      labels: factory; kind:chore; area:docs
+      parent: null
+      created: 2026-10-06T19:57:20.296Z
+      updated: 2026-10-07T02:06:22.744Z
+      completed: 2026-10-06T23:32:52.118Z
+    - id: YOS-58
+      title: Timed live-run rehearsal on sealed unseen prompts
+      status: Backlog
+      priority: High
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: factory; kind:test; area:eval
+      parent: null
+      created: 2026-10-06T19:57:24.800Z
+      updated: 2026-10-07T02:06:22.970Z
+      completed: null
+    - id: YOS-59
+      title: "Bound snippet memory: run the SnippetHost in a worker with resourceLimits"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:40:36.320Z
+      updated: 2026-10-07T02:06:28.911Z
+      completed: 2026-10-06T23:35:16.408Z
+    - id: YOS-60
+      title: "Fix repair-policy defects: backtrack ownership, attempt reset, accepted-over-budget"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T20:56:30.143Z
+      updated: 2026-10-07T01:06:19.292Z
+      completed: 2026-10-06T21:11:33.444Z
+    - id: YOS-61
+      title: Judge must never accept a world the engine rejects
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T20:56:33.294Z
+      updated: 2026-10-07T01:05:59.159Z
+      completed: 2026-10-06T21:10:38.806Z
+    - id: YOS-62
+      title: Plan coverage checks jobs; refusals parse
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T20:56:38.491Z
+      updated: 2026-10-07T01:04:54.338Z
+      completed: 2026-10-06T21:09:52.244Z
+    - id: YOS-63
+      title: Strict, non-negative price config with cache prices, merged per field
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T20:56:45.594Z
+      updated: 2026-10-07T01:05:03.121Z
+      completed: 2026-10-06T21:03:56.161Z
+    - id: YOS-64
+      title: Harden architecture tests against re-exports, lib bridges, model calls by other routes, brand forging, dead assertNever and wall-clock escapes
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D2: Workflows, grading, thin end-to-end WorldGen slice"
+      labels: factory; kind:feature; area:infra
+      parent: null
+      created: 2026-10-06T20:56:47.782Z
+      updated: 2026-10-07T01:06:23.017Z
+      completed: 2026-10-06T23:32:48.064Z
+    - id: YOS-65
+      title: Sandbox determinism and data-boundary fixes
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:56:52.429Z
+      updated: 2026-10-07T02:06:46.655Z
+      completed: null
+    - id: YOS-66
+      title: Clock rejects impossible dates, zero intervals and out-of-range durations
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:56:59.882Z
+      updated: 2026-10-07T01:06:22.085Z
+      completed: 2026-10-06T21:07:13.729Z
+    - id: YOS-67
+      title: "Destructive classification: narrowing is destructive, pure widening is not"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:57:03.239Z
+      updated: 2026-10-07T01:06:15.508Z
+      completed: 2026-10-06T21:08:06.492Z
+    - id: YOS-68
+      title: "Store: omitted optional fields and unique on datetimes"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:57:06.305Z
+      updated: 2026-10-07T02:06:27.076Z
+      completed: 2026-10-06T21:23:36.222Z
+    - id: YOS-69
+      title: Path params scope list/get/update/delete or the route is rejected
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:57:09.673Z
+      updated: 2026-10-07T02:06:27.190Z
+      completed: 2026-10-07T01:54:28.028Z
+    - id: YOS-70
+      title: Field definitions must be self-consistent
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:57:31.152Z
+      updated: 2026-10-07T02:06:27.264Z
+      completed: 2026-10-06T21:05:58.293Z
+    - id: YOS-71
+      title: "World edits: nested merge-patch for meta, stripped keys raise issues, YAML round-trip identity"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:57:33.170Z
+      updated: 2026-10-07T02:06:26.983Z
+      completed: 2026-10-06T23:29:55.834Z
+    - id: YOS-72
+      title: Check catches world definitions that can never work at runtime
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D3: Seed, full verify suite, golden helpdesk. Engine freeze"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T20:57:43.174Z
+      updated: 2026-10-07T02:06:27.427Z
+      completed: 2026-10-06T21:19:17.721Z
+    - id: YOS-73
+      title: "API fidelity primitives for real APIs (Stripe case): error fields, headers, idempotency, Stripe paging, unix time, nullable ref cycles"
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: factory; kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T21:00:50.729Z
+      updated: 2026-10-07T02:06:48.065Z
+      completed: null
+    - id: YOS-74
+      title: Historical Claude CLI transport, superseded by Sonnet SDK
+      status: Duplicate
+      priority: High
+      project: WorldGen
+      milestone: null
+      labels: kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T21:59:30.338Z
+      updated: 2026-10-07T01:04:59.521Z
+      completed: 2026-10-06T23:18:05.053Z
+    - id: YOS-75
+      title: Boat-only sandbox lifecycle for generation, task runs and dataset collection
+      status: In Review
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: kind:feature; area:infra
+      parent: null
+      created: 2026-10-06T22:00:34.686Z
+      updated: 2026-10-07T02:05:04.775Z
+      completed: null
+    - id: YOS-76
+      title: Serve a generated /openapi.json on the world port for the agent under test
+      status: Done
+      priority: Medium
+      project: WorldGen
+      milestone: null
+      labels: kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T22:00:43.314Z
+      updated: 2026-10-07T01:05:30.417Z
+      completed: 2026-10-06T23:05:23.187Z
+    - id: YOS-77
+      title: Check issues carry the YAML line of the offending node
+      status: Done
+      priority: Medium
+      project: WorldGen
+      milestone: null
+      labels: kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T22:01:15.567Z
+      updated: 2026-10-07T01:40:25.684Z
+      completed: 2026-10-07T01:40:25.671Z
+    - id: YOS-78
+      title: State dump carries its sha256 hash and world name
+      status: Done
+      priority: Low
+      project: WorldGen
+      milestone: null
+      labels: kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T22:01:19.264Z
+      updated: 2026-10-07T01:40:25.753Z
+      completed: 2026-10-07T01:40:25.730Z
+    - id: YOS-79
+      title: "Bug: redact perf test fails on 4-CPU machines (100KB snake_case run ~232ms)"
+      status: Done
+      priority: Medium
+      project: WorldGen
+      milestone: null
+      labels: area:worldgen; Bug
+      parent: null
+      created: 2026-10-06T22:02:51.781Z
+      updated: 2026-10-07T01:05:43.566Z
+      completed: 2026-10-06T22:32:22.701Z
+    - id: YOS-80
+      title: Import a τ-bench retail domain as a second hand-built world
+      status: Backlog
+      priority: Low
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: kind:feature; area:eval
+      parent: null
+      created: 2026-10-06T22:02:55.427Z
+      updated: 2026-10-07T02:06:31.756Z
+      completed: null
+    - id: YOS-81
+      title: "Explicit time by default: tick 0, durations per action, failed calls consume no time or IDs (L8)"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: null
+      labels: kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T22:10:11.014Z
+      updated: 2026-10-07T01:40:27.375Z
+      completed: 2026-10-07T01:40:27.359Z
+    - id: YOS-82
+      title: "Trace-aware grading: graders see the call trace; goals, state guards, history guards (L7)"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: null
+      labels: kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T22:10:13.934Z
+      updated: 2026-10-07T01:40:24.172Z
+      completed: 2026-10-07T01:40:24.160Z
+    - id: YOS-83
+      title: "Content-addressed provenance: WID/TID/AID/RID and run capsules (L11)"
+      status: In Progress
+      priority: Medium
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T22:10:15.879Z
+      updated: 2026-10-07T02:06:34.198Z
+      completed: null
+    - id: YOS-84
+      title: "Broken-world conformance corpus: each broken world asserts its exact issue"
+      status: Backlog
+      priority: Medium
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: kind:test; area:engine
+      parent: null
+      created: 2026-10-06T22:10:20.500Z
+      updated: 2026-10-07T02:07:08.511Z
+      completed: null
+    - id: YOS-85
+      title: Private verifier plane and handler isolation roadmap (L9, L10)
+      status: Backlog
+      priority: Low
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: kind:decision; area:engine
+      parent: null
+      created: 2026-10-06T22:10:24.240Z
+      updated: 2026-10-07T02:06:29.812Z
+      completed: null
+    - id: YOS-86
+      title: Historical local sandbox backends, superseded by Boat-only execution
+      status: Done
+      priority: Medium
+      project: WorldGen
+      milestone: null
+      labels: kind:feature; area:infra
+      parent: null
+      created: 2026-10-06T22:10:41.507Z
+      updated: 2026-10-07T01:05:15.322Z
+      completed: 2026-10-06T23:19:43.299Z
+    - id: YOS-87
+      title: Meter Anthropic and Boat spend by account with enforced cost caps
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: kind:feature; area:infra
+      parent: null
+      created: 2026-10-06T22:28:16.360Z
+      updated: 2026-10-07T02:05:33.213Z
+      completed: null
+    - id: YOS-88
+      title: "Bun adoption: tooling, CI and supported sandbox execution"
+      status: In Progress
+      priority: Urgent
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:04:59.655Z
+      updated: 2026-10-07T02:05:04.027Z
+      completed: null
+    - id: YOS-89
+      title: "E2E gate: one description → world that passes check + verify, on main"
+      status: In Progress
+      priority: Urgent
+      project: WorldGen
+      milestone: "R1: Verified description to graded JSONL"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:17:31.867Z
+      updated: 2026-10-07T02:06:15.063Z
+      completed: null
+    - id: YOS-90
+      title: "Track engine-followups PR #39: shared errorBody, reserved paths, reference/decoy 5xx codes"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-06T23:17:34.606Z
+      updated: 2026-10-07T01:54:28.825Z
+      completed: 2026-10-07T01:54:28.806Z
+    - id: YOS-91
+      title: Export graded Sonnet episodes and final replies as JSONL
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R1: Verified description to graded JSONL"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:17:39.039Z
+      updated: 2026-10-07T02:05:33.125Z
+      completed: null
+    - id: YOS-92
+      title: "Repo hygiene: close superseded draft PR #49 and prune merged/retired branches"
+      status: Duplicate
+      priority: Low
+      project: WorldGen
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-06T23:17:41.122Z
+      updated: 2026-10-07T01:04:37.920Z
+      completed: 2026-10-07T00:10:07.843Z
+    - id: YOS-93
+      title: Decide which engine changes may land after the D3 freeze, and in what order
+      status: Backlog
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: kind:decision; area:engine
+      parent: null
+      created: 2026-10-06T23:40:13.380Z
+      updated: 2026-10-07T02:05:26.935Z
+      completed: null
+    - id: YOS-94
+      title: Read/write and seed-realism lints that YOS-40 closed without shipping
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D5: OpenAPI and CSV ingest, stress runner"
+      labels: kind:feature; area:engine
+      parent: null
+      created: 2026-10-06T23:40:28.028Z
+      updated: 2026-10-07T02:06:20.594Z
+      completed: 2026-10-07T01:02:15.902Z
+    - id: YOS-95
+      title: CSV eval case from our own Linear backlog (A-54, testbed T1)
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: kind:test; area:eval
+      parent: null
+      created: 2026-10-06T23:40:42.749Z
+      updated: 2026-10-07T02:06:49.217Z
+      completed: null
+    - id: YOS-96
+      title: "Fidelity scorecard: score description-input worlds against a frozen reference of the real software (testbed T2)"
+      status: In Progress
+      priority: Medium
+      project: WorldGen
+      milestone: "R2: Inputs, iteration and world portfolio"
+      labels: kind:feature; area:eval
+      parent: null
+      created: 2026-10-06T23:40:47.194Z
+      updated: 2026-10-07T02:06:50.181Z
+      completed: null
+    - id: YOS-97
+      title: "No silent guessing: render plan open_questions in REPORT.md and require assumptions for description inputs"
+      status: Done
+      priority: Medium
+      project: WorldGen
+      milestone: "D4: Full WorldGen stages, repair controls, budgets, FAILED path"
+      labels: kind:feature; area:worldgen
+      parent: null
+      created: 2026-10-06T23:41:05.942Z
+      updated: 2026-10-07T01:04:55.856Z
+      completed: 2026-10-07T00:49:33.822Z
+    - id: YOS-98
+      title: Consolidate overlapping PRs and preserve unlanded work
+      status: Backlog
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: kind:chore; area:infra
+      parent: null
+      created: 2026-10-06T23:41:09.830Z
+      updated: 2026-10-07T02:05:25.682Z
+      completed: null
+    - id: YOS-99
+      title: "Release docs match main: a test that every documented command exists, and --out defaults to prod/worlds/gen-<slug>"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D8: Buffer, timed rehearsal, release"
+      labels: kind:test; area:docs
+      parent: null
+      created: 2026-10-06T23:41:18.676Z
+      updated: 2026-10-07T02:06:22.922Z
+      completed: 2026-10-07T00:24:46.299Z
+    - id: YOS-100
+      title: "Live run: intake the hiring team's prompts, build their worlds, report back"
+      status: Done
+      priority: High
+      project: WorldGen
+      milestone: "D8: Buffer, timed rehearsal, release"
+      labels: kind:chore; area:eval
+      parent: null
+      created: 2026-10-06T23:41:26.307Z
+      updated: 2026-10-07T01:03:29.080Z
+      completed: 2026-10-07T00:59:12.369Z
+    - id: YOS-101
+      title: Document Linear-only tracking and GitHub PR workflow
+      status: In Review
+      priority: Medium
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: kind:chore; area:docs
+      parent: null
+      created: 2026-10-06T23:48:28.633Z
+      updated: 2026-10-07T02:06:33.329Z
+      completed: null
+    - id: YOS-102
+      title: Qualify Airflow factory deployment and Bun sandbox for WorldGen
+      status: In Progress
+      priority: Medium
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: kind:chore; area:infra
+      parent: null
+      created: 2026-10-06T23:48:29.487Z
+      updated: 2026-10-07T02:06:35.189Z
+      completed: null
+    - id: YOS-103
+      title: Pilot a bounded WorldGen work order through the Airflow factory
+      status: Backlog
+      priority: Medium
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: kind:chore; area:infra
+      parent: null
+      created: 2026-10-06T23:48:30.260Z
+      updated: 2026-10-07T02:06:37.690Z
+      completed: null
+    - id: YOS-104
+      title: Design idempotent Linear work-order intake through the existing operations layer
+      status: In Review
+      priority: Medium
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: kind:feature; area:infra
+      parent: null
+      created: 2026-10-06T23:48:31.977Z
+      updated: 2026-10-07T02:06:38.944Z
+      completed: null
+    - id: YOS-105
+      title: "Qualify promoted main: full Bun gate and remaining integration"
+      status: In Progress
+      priority: Urgent
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:49:34.398Z
+      updated: 2026-10-07T02:06:20.112Z
+      completed: null
+    - id: YOS-106
+      title: Use Bun for WorldGen tooling, CI, and sandbox commands
+      status: Duplicate
+      priority: Urgent
+      project: WorldGen
+      milestone: null
+      labels: area:worldgen; Bug
+      parent: null
+      created: 2026-10-06T23:50:40.152Z
+      updated: 2026-10-07T01:03:44.108Z
+      completed: 2026-10-07T00:10:04.005Z
+    - id: YOS-107
+      title: "Verify pinned Sonnet client: Claude CLI default, SDK optional"
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:52:47.941Z
+      updated: 2026-10-07T02:05:04.214Z
+      completed: null
+    - id: YOS-108
+      title: "Test plan and evidence: Boat + Sonnet generation, replies and JSONL dataset"
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R1: Verified description to graded JSONL"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:53:36.893Z
+      updated: 2026-10-07T02:06:39.329Z
+      completed: null
+    - id: YOS-109
+      title: Historical red-team catalog typecheck failure, consolidated into stabilization
+      status: Duplicate
+      priority: Urgent
+      project: WorldGen
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-06T23:55:12.247Z
+      updated: 2026-10-07T01:04:58.147Z
+      completed: 2026-10-06T23:56:37.029Z
+    - id: YOS-110
+      title: Reject collateral field edits on a task's target row
+      status: In Review
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:58:58.673Z
+      updated: 2026-10-07T02:05:27.074Z
+      completed: null
+    - id: YOS-111
+      title: Plan coverage must compare route methods and paths, not only route IDs
+      status: In Review
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:58:59.967Z
+      updated: 2026-10-07T02:05:27.074Z
+      completed: null
+    - id: YOS-112
+      title: Protect acceptance tests from being weakened by workflow repairs
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-06T23:59:02.745Z
+      updated: 2026-10-07T02:06:03.508Z
+      completed: null
+    - id: YOS-113
+      title: "Spec call: does a world with zero tasks raise world.too_few_tasks?"
+      status: Backlog
+      priority: High
+      project: null
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-07T00:08:53.191Z
+      updated: 2026-10-07T00:09:59.549Z
+      completed: null
+    - id: YOS-114
+      title: Resolve cyclic-request crashes, nested deadlines and quota termination
+      status: In Progress
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-07T00:08:56.726Z
+      updated: 2026-10-07T02:05:23.623Z
+      completed: null
+    - id: YOS-115
+      title: "stabilize/main: architecture rule 19 and tsc errors in redteam-check.test.ts"
+      status: Done
+      priority: Urgent
+      project: null
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-07T00:09:15.485Z
+      updated: 2026-10-07T00:22:19.710Z
+      completed: 2026-10-07T00:09:36.179Z
+    - id: YOS-116
+      title: "Dockerfile: run worldplay serve in a container (Node 22 slim)"
+      status: Done
+      priority: High
+      project: null
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-07T00:28:00.747Z
+      updated: 2026-10-07T01:54:29.631Z
+      completed: 2026-10-07T01:54:29.614Z
+    - id: YOS-117
+      title: Always tear down dataset sandboxes when post-start logging fails
+      status: In Review
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: YOS-91
+      created: 2026-10-07T00:59:44.227Z
+      updated: 2026-10-07T02:05:27.074Z
+      completed: null
+    - id: YOS-118
+      title: Keep architecture diagrams and runtime ownership aligned with the integrated source
+      status: In Progress
+      priority: Medium
+      project: WorldGen
+      milestone: "Later: Fidelity and factory operations"
+      labels: null
+      parent: YOS-105
+      created: 2026-10-07T00:59:46.352Z
+      updated: 2026-10-07T02:06:40.069Z
+      completed: null
+    - id: YOS-119
+      title: "GitHub Actions queue congestion: release checks still waiting"
+      status: In Progress
+      priority: Urgent
+      project: null
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-07T01:16:25.049Z
+      updated: 2026-10-07T02:04:55.844Z
+      completed: null
+    - id: YOS-120
+      title: Make seed-cycle validation linear-space for large entity graphs
+      status: In Review
+      priority: Urgent
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-07T01:44:07.795Z
+      updated: 2026-10-07T02:05:27.074Z
+      completed: null
+    - id: YOS-121
+      title: Apply validated plan clock to generated world metadata
+      status: In Review
+      priority: High
+      project: WorldGen
+      milestone: "R1: Bun and runtime integration"
+      labels: null
+      parent: null
+      created: 2026-10-07T01:50:48.390Z
+      updated: 2026-10-07T02:05:27.074Z
+      completed: null
+    - id: YOS-122
+      title: Carry the planned world clock into generated metadata
+      status: Duplicate
+      priority: High
+      project: WorldGen
+      milestone: null
+      labels: null
+      parent: null
+      created: 2026-10-07T01:51:06.667Z
+      updated: 2026-10-07T01:51:28.731Z
+      completed: 2026-10-07T01:51:28.155Z
+    - id: YOS-123
+      title: Prevent nested sandbox timeout from deadlocking reply exchange
+      status: In Progress
+      priority: Urgent
+      project: WorldGen
+      milestone: null
+      labels: null
+      parent: YOS-114
+      created: 2026-10-07T02:01:08.969Z
+      updated: 2026-10-07T02:05:46.999Z
+      completed: null
+seed:
+  team: "(ctx) => [{ key: 'YOS', name: 'Yos', next_number: 124, created_at: '2026-10-06T18:55:10.836Z', updated_at: '2026-10-06T18:55:10.836Z' }]"
+  project: "(ctx) => [{ name: 'WorldGen', status: 'started', description: 'Build WorldGen: a factory that turns a description, OpenAPI spec or CSV into a graded, deterministic world for testing AI agents.', created_at: '2026-10-06T19:46:00.000Z', updated_at: '2026-10-06T19:46:00.000Z' }]"
+  milestone: |-
+    (ctx) => {
+      const prj = ctx.rows('project')[0];
+      const names = [];
+      for (const r of ctx.fixtures.linear_backlog) if (r.milestone && !names.includes(r.milestone)) names.push(r.milestone);
+      const rank = (n) => {
+        const c = n.split(':')[0];
+        if (/^D[0-9]+$/.test(c)) return parseInt(c.slice(1), 10);
+        if (c === 'R1') return 20;
+        if (c === 'R2') return 21;
+        return 30;
+      };
+      const sorted = names.map((n, i) => ({ n, i })).sort((a, b) => rank(a.n) - rank(b.n) || a.i - b.i);
+      return sorted.map((x, k) => ({ name: x.n, code: x.n.split(':')[0], sort_order: k, project_id: prj.id, created_at: '2026-10-06T19:46:00.000Z', updated_at: '2026-10-06T19:46:00.000Z' }));
+    }
+  label: |-
+    (ctx) => {
+      const names = [];
+      for (const r of ctx.fixtures.linear_backlog) {
+        if (!r.labels) continue;
+        for (const t of String(r.labels).split(';')) {
+          const n = t.trim();
+          if (n !== '' && !names.includes(n)) names.push(n);
+        }
+      }
+      return names.map((n) => ({ name: n, group: n.includes(':') ? n.split(':')[0] : null, created_at: '2026-10-06T19:46:00.000Z', updated_at: '2026-10-06T19:46:00.000Z' }));
+    }
+  issue: |-
+    (ctx) => {
+      const fx = ctx.fixtures.linear_backlog;
+      const team = ctx.rows('team')[0];
+      const prj = ctx.rows('project')[0];
+      const msByName = {};
+      for (const m of ctx.rows('milestone')) msByName[m.name] = m.id;
+      const idOf = {};
+      const pos = {};
+      fx.forEach((r, i) => { idOf[r.id] = 'iss_' + String(i + 1).padStart(4, '0'); pos[r.id] = i; });
+      const dupOf = { 'YOS-74': 'YOS-29', 'YOS-92': 'YOS-90', 'YOS-106': 'YOS-88', 'YOS-122': 'YOS-121' };
+      return fx.map((r, i) => {
+        const status = String(r.status).toLowerCase().replace(/ /g, '_');
+        const pr = r.priority ? String(r.priority).toLowerCase() : null;
+        const d = dupOf[r.id];
+        return {
+          identifier: r.id,
+          number: i + 1,
+          title: r.title,
+          description: null,
+          status,
+          priority: pr,
+          team_id: team.id,
+          project_id: r.project ? prj.id : null,
+          milestone_id: r.milestone ? msByName[r.milestone] : null,
+          parent_id: r.parent && pos[r.parent] < i ? idOf[r.parent] : null,
+          duplicate_of_id: status === 'duplicate' && d && pos[d] < i ? idOf[d] : null,
+          completed_at: r.completed || null,
+          archived_at: null,
+          created_at: r.created,
+          updated_at: r.updated,
+        };
+      });
+    }
+  issue_label: |-
+    (ctx) => {
+      const lid = {};
+      for (const l of ctx.rows('label')) lid[l.name] = l.id;
+      const out = [];
+      const fx = ctx.fixtures.linear_backlog;
+      ctx.rows('issue').forEach((iss, i) => {
+        const r = fx[i];
+        if (!r.labels) return;
+        for (const t of String(r.labels).split(';')) {
+          const n = t.trim();
+          if (n === '' || !lid[n]) continue;
+          out.push({ issue_id: iss.id, label_id: lid[n], created_at: iss.created_at, updated_at: iss.created_at });
+        }
+      });
+      return out;
+    }
+  comment: |-
+    (ctx) => {
+      const pools = {
+        backlog: ['Parking this until the engine work lands.', 'Needs a clearer acceptance test before we pick it up.', 'Blocked on the decision in the milestone notes.'],
+        in_progress: ['Branch is up, first pass of the tests is green.', 'Hit an edge case with nested transactions, investigating.', 'Pairing on this with the stress run results.'],
+        in_review: ['PR is open, waiting on review.', 'Addressed review comments, please take another look.'],
+        done: ['Merged to main, closing.', 'Verified against the check suite, all green.', 'Landed with tests. Follow-ups filed separately.'],
+        canceled: ['No longer needed, dropping this.', 'Out of scope for the current milestone.'],
+        duplicate: ['Closing as a duplicate of the newer ticket.', 'Superseded by the consolidated issue.'],
+      };
+      const out = [];
+      for (const iss of ctx.rows('issue')) {
+        if (iss.number < 5) continue;
+        if (ctx.rng() >= 0.5) continue;
+        const body = ctx.pick(pools[iss.status]);
+        let t = ctx.time.plus(iss.created_at, ctx.int(5, 120) + 'm');
+        if (ctx.time.minutesBetween(t, iss.updated_at) < 0) t = iss.updated_at;
+        out.push({ issue_id: iss.id, body, created_at: t, updated_at: t });
+      }
+      return out;
+    }
+  issue_event: |-
+    (ctx) => {
+      const out = [];
+      const labels = {};
+      for (const l of ctx.rows('label')) labels[l.id] = l.name;
+      const add = (t, mins) => (mins >= 1 ? ctx.time.plus(t, mins + 'm') : t);
+      const clamp = (t, iss) => (ctx.time.minutesBetween(t, iss.updated_at) < 0 ? iss.updated_at : t);
+      const mid = (a, b) => add(a, Math.floor(Math.max(0, ctx.time.minutesBetween(a, b)) / 2));
+      for (const iss of ctx.rows('issue')) {
+        const ev = (kind, at, from, to) => out.push({ at, row: { issue_id: iss.id, kind, from_value: from, to_value: to, created_at: at, updated_at: at } });
+        ev('created', iss.created_at, null, iss.identifier);
+        const end = iss.completed_at || iss.updated_at;
+        const m = mid(iss.created_at, end);
+        if (iss.status === 'in_progress') ev('status_changed', m, 'backlog', 'in_progress');
+        else if (iss.status === 'in_review') {
+          ev('status_changed', mid(iss.created_at, m), 'backlog', 'in_progress');
+          ev('status_changed', m, 'in_progress', 'in_review');
+        } else if (iss.status === 'done') {
+          ev('status_changed', mid(iss.created_at, m), 'backlog', 'in_progress');
+          ev('status_changed', end, 'in_progress', 'done');
+        } else if (iss.status === 'canceled' || iss.status === 'duplicate') {
+          ev('status_changed', end, 'backlog', iss.status);
+        }
+        if (iss.priority && ctx.rng() < 0.2) ev('priority_changed', clamp(add(iss.created_at, 3), iss), 'medium', iss.priority);
+      }
+      const byId = {};
+      for (const i of ctx.rows('issue')) byId[i.id] = i;
+      for (const il of ctx.rows('issue_label')) {
+        const iss = byId[il.issue_id];
+        const at = clamp(add(iss.created_at, 1), iss);
+        out.push({ at, row: { issue_id: iss.id, kind: 'label_added', from_value: null, to_value: labels[il.label_id], created_at: at, updated_at: at } });
+      }
+      out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      return out.map((e) => e.row);
+    }
+tests:
+  create_issue_allocates_number:
+    description: create_issue allocates sequential identifiers, starts in backlog, writes a created event and validates the parent.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { title: 'First workflow issue', priority: 'high' });
+        ctx.assert(a.status === 201, 'create returned ' + a.status + ' ' + JSON.stringify(a.body));
+        ctx.assert(a.body.status === 'backlog' && a.body.completed_at === null && a.body.priority === 'high', 'backlog, high: ' + JSON.stringify(a.body));
+        ctx.assert(/^[A-Z]+-[0-9]+$/.test(a.body.identifier), 'identifier shape ' + a.body.identifier);
+        const b = ctx.api('POST', '/issues', { title: 'Second workflow issue', parent_id: a.body.id });
+        ctx.assert(b.status === 201 && b.body.number === a.body.number + 1 && b.body.parent_id === a.body.id, 'second: ' + JSON.stringify(b.body));
+        const h = ctx.api('GET', '/issues/' + a.body.id + '/history').body.data;
+        ctx.assert(h.length === 1 && h[0].kind === 'created', 'created event: ' + JSON.stringify(h));
+        const blank = ctx.api('POST', '/issues', { title: '   ' });
+        ctx.assert(blank.status === 400, 'blank title: ' + blank.status);
+        const bad = ctx.api('POST', '/issues', { title: 'x', parent_id: 'iss_999999' });
+        ctx.assert(bad.status >= 400 && bad.status < 500, 'unknown parent: ' + bad.status);
+      }
+  status_lifecycle_actions:
+    description: start, review, complete and reopen move an issue along the lifecycle and refuse wrong source statuses.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { title: 'Lifecycle issue' }).body;
+        const early = ctx.api('POST', '/issues/' + a.id + '/review', {});
+        ctx.assert(early.status === 409 && early.body.error.code === 'invalid_state', 'review from backlog: ' + JSON.stringify(early));
+        const s = ctx.api('POST', '/issues/' + a.id + '/start', {});
+        ctx.assert(s.status === 200 && s.body.status === 'in_progress', 'start: ' + JSON.stringify(s));
+        const s2 = ctx.api('POST', '/issues/' + a.id + '/start', {});
+        ctx.assert(s2.status === 409, 'second start: ' + s2.status);
+        const r = ctx.api('POST', '/issues/' + a.id + '/review', {});
+        ctx.assert(r.status === 200 && r.body.status === 'in_review', 'review: ' + JSON.stringify(r));
+        const c = ctx.api('POST', '/issues/' + a.id + '/complete', {});
+        ctx.assert(c.status === 200 && c.body.status === 'done' && typeof c.body.completed_at === 'string', 'complete: ' + JSON.stringify(c));
+        const c2 = ctx.api('POST', '/issues/' + a.id + '/complete', {});
+        ctx.assert(c2.status === 409, 'second complete: ' + c2.status);
+        const re = ctx.api('POST', '/issues/' + a.id + '/reopen', {});
+        ctx.assert(re.status === 200 && re.body.status === 'in_progress' && re.body.completed_at === null, 'reopen done: ' + JSON.stringify(re));
+        const re2 = ctx.api('POST', '/issues/' + a.id + '/reopen', {});
+        ctx.assert(re2.status === 409, 'reopen in_progress: ' + re2.status);
+        const h = ctx.api('GET', '/issues/' + a.id + '/history?kind=status_changed').body.data;
+        ctx.assert(h.length === 4, 'four status events, got ' + h.length);
+        const miss = ctx.api('POST', '/issues/iss_999999/start', {});
+        ctx.assert(miss.status === 404, 'missing: ' + miss.status);
+      }
+  cancel_and_reopen:
+    description: cancel_issue sets completed_at, stores the reason as a comment, and reopen returns the issue to backlog.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { title: 'Stale idea' }).body;
+        const c = ctx.api('POST', '/issues/' + a.id + '/cancel', { reason: 'No longer needed' });
+        ctx.assert(c.status === 200 && c.body.status === 'canceled' && c.body.completed_at !== null, 'cancel: ' + JSON.stringify(c));
+        const cm = ctx.api('GET', '/issues/' + a.id + '/comments').body.data;
+        ctx.assert(cm.length === 1 && cm[0].body === 'No longer needed', 'reason comment: ' + JSON.stringify(cm));
+        const again = ctx.api('POST', '/issues/' + a.id + '/cancel', {});
+        ctx.assert(again.status === 409, 'cancel twice: ' + again.status);
+        const r = ctx.api('POST', '/issues/' + a.id + '/reopen', {});
+        ctx.assert(r.status === 200 && r.body.status === 'backlog' && r.body.completed_at === null, 'reopen: ' + JSON.stringify(r));
+        const b = ctx.api('POST', '/issues', { title: 'No reason' }).body;
+        ctx.assert(ctx.api('POST', '/issues/' + b.id + '/cancel', {}).status === 200, 'cancel without reason');
+        ctx.assert(ctx.api('GET', '/issues/' + b.id + '/comments').body.data.length === 0, 'no comment without reason');
+      }
+  complete_blocked_by_open_children:
+    description: A parent cannot be completed while a sub-issue is open and can once the children are closed.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/issues', { title: 'Epic' }).body;
+        const k1 = ctx.api('POST', '/issues', { title: 'Child one', parent_id: p.id }).body;
+        const k2 = ctx.api('POST', '/issues', { title: 'Child two', parent_id: p.id }).body;
+        ctx.api('POST', '/issues/' + p.id + '/start', {});
+        const blocked = ctx.api('POST', '/issues/' + p.id + '/complete', {});
+        ctx.assert(blocked.status === 409 && blocked.body.error.code === 'open_sub_issues', 'blocked: ' + JSON.stringify(blocked));
+        ctx.api('POST', '/issues/' + k1.id + '/start', {});
+        ctx.assert(ctx.api('POST', '/issues/' + k1.id + '/complete', {}).status === 200, 'complete child one');
+        const still = ctx.api('POST', '/issues/' + p.id + '/complete', {});
+        ctx.assert(still.status === 409, 'still blocked by child two: ' + still.status);
+        ctx.assert(ctx.api('POST', '/issues/' + k2.id + '/cancel', { reason: 'out of scope' }).status === 200, 'cancel child two');
+        const ok = ctx.api('POST', '/issues/' + p.id + '/complete', {});
+        ctx.assert(ok.status === 200 && ok.body.status === 'done', 'parent completes: ' + JSON.stringify(ok));
+        const kids = ctx.api('GET', '/issues/' + p.id + '/children').body.data;
+        ctx.assert(kids.length === 2, 'two children listed');
+      }
+  mark_duplicate_rules:
+    description: mark_duplicate links to the original, refuses self and duplicate originals, and reopen clears the link.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { title: 'Original bug', priority: 'high' }).body;
+        const b = ctx.api('POST', '/issues', { title: 'Original bug again' }).body;
+        const self = ctx.api('POST', '/issues/' + b.id + '/duplicate', { duplicate_of_id: b.id });
+        ctx.assert(self.status === 409, 'self: ' + self.status);
+        const d = ctx.api('POST', '/issues/' + b.id + '/duplicate', { duplicate_of_id: a.id });
+        ctx.assert(d.status === 200 && d.body.status === 'duplicate' && d.body.duplicate_of_id === a.id && d.body.completed_at !== null, 'duplicate: ' + JSON.stringify(d));
+        const after = ctx.api('GET', '/issues/' + a.id).body;
+        ctx.assert(after.status === 'backlog' && after.priority === 'high', 'original untouched: ' + JSON.stringify(after));
+        const c = ctx.api('POST', '/issues', { title: 'Third' }).body;
+        const bad = ctx.api('POST', '/issues/' + c.id + '/duplicate', { duplicate_of_id: b.id });
+        ctx.assert(bad.status === 409, 'original is duplicate: ' + bad.status);
+        const again = ctx.api('POST', '/issues/' + b.id + '/duplicate', { duplicate_of_id: a.id });
+        ctx.assert(again.status === 409, 'already duplicate: ' + again.status);
+        const r = ctx.api('POST', '/issues/' + b.id + '/reopen', {});
+        ctx.assert(r.status === 200 && r.body.status === 'backlog' && r.body.duplicate_of_id === null, 'reopen: ' + JSON.stringify(r));
+      }
+  set_parent_rules:
+    description: set_parent sets and clears parents and refuses self-parenting, cycles and done parents.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { title: 'Top' }).body;
+        const b = ctx.api('POST', '/issues', { title: 'Middle' }).body;
+        const s = ctx.api('POST', '/issues/' + b.id + '/parent', { parent_id: a.id });
+        ctx.assert(s.status === 200 && s.body.parent_id === a.id, 'set: ' + JSON.stringify(s));
+        ctx.assert(ctx.api('POST', '/issues/' + b.id + '/parent', { parent_id: a.id }).status === 409, 'no change');
+        ctx.assert(ctx.api('POST', '/issues/' + a.id + '/parent', { parent_id: a.id }).status === 409, 'self parent');
+        const cyc = ctx.api('POST', '/issues/' + a.id + '/parent', { parent_id: b.id });
+        ctx.assert(cyc.status === 409 && cyc.body.error.code === 'parent_cycle', 'cycle: ' + JSON.stringify(cyc));
+        const clr = ctx.api('POST', '/issues/' + b.id + '/parent', { parent_id: null });
+        ctx.assert(clr.status === 200 && clr.body.parent_id === null, 'clear: ' + JSON.stringify(clr));
+        const x = ctx.api('POST', '/issues', { title: 'Finished' }).body;
+        ctx.api('POST', '/issues/' + x.id + '/start', {});
+        ctx.api('POST', '/issues/' + x.id + '/complete', {});
+        const done = ctx.api('POST', '/issues/' + b.id + '/parent', { parent_id: x.id });
+        ctx.assert(done.status === 409 && done.body.error.code === 'parent_done', 'done parent: ' + JSON.stringify(done));
+        const h = ctx.api('GET', '/issues/' + b.id + '/history?kind=parent_changed').body.data;
+        ctx.assert(h.length === 2, 'two parent events, got ' + h.length);
+      }
+  label_attach_and_detach:
+    description: add_label attaches once, remove_label detaches, and both write history.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { title: 'Label me' }).body;
+        const l = ctx.api('POST', '/labels', { name: 'wf-test-label' });
+        ctx.assert(l.status === 201, 'create label: ' + JSON.stringify(l));
+        const add = ctx.api('POST', '/issues/' + a.id + '/labels', { label_id: l.body.id });
+        ctx.assert(add.status === 201 && add.body.label_id === l.body.id, 'add: ' + JSON.stringify(add));
+        const dup = ctx.api('POST', '/issues/' + a.id + '/labels', { label_id: l.body.id });
+        ctx.assert(dup.status === 409 && dup.body.error.code === 'already_attached', 'dup: ' + JSON.stringify(dup));
+        ctx.assert(ctx.api('GET', '/issues/' + a.id + '/labels').body.data.length === 1, 'one attachment');
+        const rm = ctx.api('DELETE', '/issues/' + a.id + '/labels/' + l.body.id);
+        ctx.assert(rm.status === 200, 'remove: ' + JSON.stringify(rm));
+        const rm2 = ctx.api('DELETE', '/issues/' + a.id + '/labels/' + l.body.id);
+        ctx.assert(rm2.status === 404, 'remove twice: ' + rm2.status);
+        ctx.assert(ctx.api('GET', '/issues/' + a.id + '/labels').body.data.length === 0, 'none attached');
+        const h = ctx.api('GET', '/issues/' + a.id + '/history').body.data.map((e) => e.kind);
+        ctx.assert(h.includes('label_added') && h.includes('label_removed'), 'label events: ' + h.join(','));
+      }
+  auto_close_parent_job:
+    description: auto_close_parents completes an in_progress parent once all children are closed and one is done.
+    script: |-
+      (ctx) => {
+        const p = ctx.api('POST', '/issues', { title: 'Auto parent' }).body;
+        const k = ctx.api('POST', '/issues', { title: 'Auto child', parent_id: p.id }).body;
+        ctx.api('POST', '/issues/' + p.id + '/start', {});
+        ctx.api('POST', '/issues/' + k.id + '/start', {});
+        ctx.advance('2h');
+        ctx.assert(ctx.api('GET', '/issues/' + p.id).body.status === 'in_progress', 'parent stays open while child is open');
+        ctx.api('POST', '/issues/' + k.id + '/complete', {});
+        const r = ctx.advance('1h');
+        ctx.assert(r.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(r.jobsFailed));
+        const after = ctx.api('GET', '/issues/' + p.id).body;
+        ctx.assert(after.status === 'done' && after.completed_at !== null, 'parent closed by job: ' + JSON.stringify(after));
+      }
+  auto_archive_job:
+    description: auto_archive_done archives done issues completed more than 30 days ago and leaves recent ones.
+    script: |-
+      (ctx) => {
+        const a = ctx.api('POST', '/issues', { title: 'Old done' }).body;
+        ctx.api('POST', '/issues/' + a.id + '/start', {});
+        ctx.api('POST', '/issues/' + a.id + '/complete', {});
+        ctx.advance('480h');
+        ctx.assert(ctx.api('GET', '/issues/' + a.id).body.archived_at === null, 'not archived after 20 days');
+        const b = ctx.api('POST', '/issues', { title: 'Newer done' }).body;
+        ctx.api('POST', '/issues/' + b.id + '/start', {});
+        ctx.api('POST', '/issues/' + b.id + '/complete', {});
+        const r = ctx.advance('288h');
+        ctx.assert(r.jobsFailed.length === 0, 'jobs failed: ' + JSON.stringify(r.jobsFailed));
+        const oldRow = ctx.api('GET', '/issues/' + a.id).body;
+        const newRow = ctx.api('GET', '/issues/' + b.id).body;
+        ctx.assert(typeof oldRow.archived_at === 'string', 'old archived: ' + JSON.stringify(oldRow));
+        ctx.assert(newRow.archived_at === null, 'newer not archived: ' + JSON.stringify(newRow));
+      }
+tasks:
+  start_the_welcome_issue:
+    difficulty: easy
+    instruction: Find the backlog issue about the timed live-run rehearsal on sealed unseen prompts and start work on it by moving it to In Progress. Change nothing else.
+    decoys: []
+    alternatives: []
+  cancel_stale_backlog_in_milestone:
+    difficulty: medium
+    instruction: "Clean up the backlog of the milestone 'Later: Fidelity and factory operations': cancel every issue in it that is still in Backlog and carries the label 'area:engine'. Give each cancellation a short reason that contains the word 'stale'. Leave all other issues alone, including issues in other statuses, in other milestones, or with other labels."
+    decoys: []
+    alternatives: []
+  close_out_epic_with_sub_issues:
+    difficulty: hard
+    instruction: Close out the epics. An epic is an issue that is still In Progress and has sub-issues. For every epic, first complete each of its open sub-issues, then complete the epic itself. Change nothing else.
+    decoys: []
+    alternatives: []
+  merge_duplicate_issues:
+    difficulty: hard
+    instruction: Several issues were closed as duplicates of another issue, but the labels on those duplicates were never carried over to the issues they duplicate. For every duplicate that has a recorded original, attach to the original any label the duplicate carries that the original is missing. Do not touch the duplicates themselves, do not remove any label, and change nothing else.
+    decoys: []
+    alternatives: []

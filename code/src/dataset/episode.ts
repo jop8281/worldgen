@@ -15,8 +15,8 @@
 import { z } from 'zod';
 import { traceOf, type CallRecord, type Difficulty, type OpenApiDocument, type StateDump, type TraceCall } from '#engine';
 import {
-  PROVIDER, SCHEMA_VERSION, hashState, parseEpisode,
-  type Episode, type EpisodeUsage, type PublicMessage, type PublicRequest, type Redactor, type StopReason,
+  PROVIDER, SCHEMA_VERSION, gradeCountsOf, hashState, outcomeOf, parseEpisode,
+  type Episode, type EpisodeUsage, type GradeCounts, type PublicMessage, type PublicRequest, type Redactor, type StopReason,
 } from './schema.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -47,8 +47,8 @@ export type EpisodeSubmission = {
   readonly state: StateDump;
 };
 
-/** The verifier's answer: a score, or a safe reason it refused to give one. */
-export type GradeResult = { readonly ok: true; readonly score: number } | { readonly ok: false; readonly reason: string };
+/** A grade: the score and the verifier's goal and guard counts (integers, A-389), or why it could not be graded. */
+export type GradeResult = ({ readonly ok: true; readonly score: number } & GradeCounts) | { readonly ok: false; readonly reason: string };
 export type EpisodeGrader = (submission: EpisodeSubmission) => Promise<GradeResult>;
 
 /** What the solver sees on every turn. `messages` is the public history so far; nothing else about the world is reachable from it. */
@@ -199,10 +199,15 @@ export type EpisodeInput = {
   readonly grade: EpisodeGrader;
   readonly nextTurn: NextTurn;
   readonly maxTurns: number;
-  /** Model spend left for the run, in USD, when this episode starts. */
+  /** Model spend this episode may use, in USD: its own budget, or what is left of a run's (limitScope). */
   readonly budgetLeftUsd: number;
-  /** Epoch ms after which the episode is cancelled. */
+  /** Epoch ms after which the episode is cancelled: its own deadline, or a run's (limitScope). */
   readonly deadline: number;
+  /**
+   * Whose budget and deadline these are: the episode's own (the default), or what is left of a run's shared ones. A cut
+   * by a run's is `run_budget_limit` or `run_time_limit`, which is infra, not the agent's failure (A-396).
+   */
+  readonly limitScope?: 'episode' | 'run';
   readonly now: () => number;
   readonly redact: Redactor;
   /** The operator's Ctrl-C. Aborting it cancels the pending call like the deadline does, and the episode stops as `interrupted`. */
@@ -254,6 +259,7 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
   let initialHash = null as string | null;
   let finalHash = null as string | null;
   let score = null as number | null;
+  let counts = null as GradeCounts | null;
   let ready = false;
 
   const fail = (reason: StopReason, why: string): void => {
@@ -268,8 +274,10 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
     usage.cache_write_tokens += u.cacheWriteTokens ?? 0;
     usage.cost_usd = Math.round((usage.cost_usd + costUsd) * 1e9) / 1e9;
   };
+  const runLimits = a.limitScope === 'run';
   const exhausted = (): { reason: StopReason; why: string } | null =>
-    usage.cost_usd >= a.budgetLeftUsd ? { reason: 'budget_limit', why: `the model budget is spent (${usage.cost_usd} USD of ${a.budgetLeftUsd} USD left at the start)` }
+    usage.cost_usd >= a.budgetLeftUsd
+      ? { reason: runLimits ? 'run_budget_limit' : 'budget_limit', why: `the ${runLimits ? "run's " : ''}model budget is spent (${usage.cost_usd} USD of ${a.budgetLeftUsd} USD left at the start)` }
       : a.interrupt?.aborted === true ? cancelled()
       : a.now() >= a.deadline ? cancelled()
       : null;
@@ -281,7 +289,8 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
   if (a.interrupt?.aborted === true) onInterrupt();
   a.interrupt?.addEventListener('abort', onInterrupt, { once: true });
   const cancelled = (): { reason: StopReason; why: string } =>
-    a.interrupt?.aborted === true ? { reason: 'interrupted', why: 'the operator interrupted the run' } : { reason: 'time_limit', why: 'the time limit passed' };
+    a.interrupt?.aborted === true ? { reason: 'interrupted', why: 'the operator interrupted the run' }
+      : runLimits ? { reason: 'run_time_limit', why: "the run's time limit passed" } : { reason: 'time_limit', why: 'the time limit passed' };
   try {
     const early = exhausted();
     if (early !== null) {
@@ -323,7 +332,7 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
       account(res.usage, res.costUsd);
       const parsed = decisionSchema.safeParse(res.decision);
       if (!parsed.success) {
-        fail('model_error', `the solver's answer is not a valid turn: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
+        fail('invalid_turn', `the solver's answer is not a valid turn: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
         break;
       }
       const decision = parsed.data;
@@ -380,9 +389,14 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
       if (!graded.ok) throw new Error(graded.reason);
       const s = graded.score;
       if (typeof s !== 'number' || !Number.isFinite(s) || s < 0 || s > 1) throw new Error(`the verifier returned the score ${String(s)}, not a number from 0 to 1`);
+      const c = gradeCountsOf(graded.goals, graded.guards);
+      if (c === null) throw new Error('the verifier returned goal or guard counts that are not two integer pairs');
+      if (c.guards.held < c.guards.total && s !== 0) throw new Error(`the verifier scored ${s} with a broken guard, which the engine scores 0`);
       score = s;
+      counts = c;
     } catch (e) {
       score = null;
+      counts = null;
       keepPrivate(step, e);
       const why = `grading failed at the ${step}; the details are in the private diagnostics`;
       if (stop === 'done') {
@@ -397,7 +411,7 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
   if (privateErrors.length > 0) artifacts.errors = privateErrors;
   usage.duration_ms = Math.max(0, a.now() - started);
   const usageRecord: EpisodeUsage = usage;
-  const record = a.redact.deep({
+  const core = a.redact.deep({
     schema_version: SCHEMA_VERSION,
     episode_id: `${a.runId}__${a.task.id}__${a.index}`,
     run_id: a.runId,
@@ -420,5 +434,6 @@ export async function runEpisode(a: EpisodeInput): Promise<EpisodeOutput> {
     error,
     usage: usageRecord,
   });
+  const record = { ...core, outcome: outcomeOf(core, counts) };
   return { episode: parseEpisode(record, record.episode_id), artifacts };
 }

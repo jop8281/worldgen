@@ -2,7 +2,7 @@
 
 A stateful car rental fleet. Branches hold vehicles. Customers reserve a vehicle for a pickup and due window. Agents pick up, return, cancel and close rentals. Damage claims move through review to approved, denied or settled. A daily job assesses a late fee on rentals returned after their due time, and a second daily job cancels no-show reservations. Most changes go through actions that keep the rental, vehicle and claim state machines consistent.
 
-- Revision: 1
+- Revision: 2
 - Verdict: proceed
 - Clock: starts 2026-10-06T09:00:00.000Z, tick 1s
 
@@ -97,14 +97,14 @@ None. The plan records no acceptance test.
 
 ## Tasks
 
-- `cancel_elena_reservation` (easy): Cancel the upcoming reservation of the customer Elena Voss because her trip was called off. The reason must be given. The vehicle and every other rental stay unchanged.
-  - Decoy idea: PATCH the rental status to cancelled, or cancel one of another customer's reservations, or leave out the reason.
+- `cancel_elena_reservation` (easy): Cancel the upcoming reservation of the customer Elena Voss because her trip was called off. The cancel reason must be given and must contain the word "trip". The vehicle and every other rental stay unchanged. The grader checks that rental.cancel_reason contains "trip".
+  - Decoy idea: PATCH the rental status to cancelled, or cancel one of another customer's reservations, or leave out the reason, or give a reason without the word trip such as bananas.
 - `return_tomas_reyes_suv` (medium): Tomas Reyes is at the counter returning his SUV after its due time. Check the rental in with an odometer reading of 48210 km. The late fee is left to the daily job. Do not touch his older closed rental.
   - Decoy idea: Return his older closed rental, record a wrong odometer, return it to the wrong state through PATCH, or try to add a late fee by hand.
 - `waive_priya_late_fee` (medium): Priya Natarajan has two late returns. Waive the late fee only on the rental returned most recently, with a reason of flight delay. Leave the older one charged.
   - Decoy idea: Waive the older rental's fee, waive both, or edit the late_fee field directly without a reason.
-- `triage_small_claims` (hard): Review the damage claims that are in under_review. Deny every one whose estimated cost is under $150 as minor wear and tear, with a reason. Approve every one at $150 or more at its full estimated cost. Do not settle anything or touch claims in any other status.
-  - Decoy idea: Read only the first page of claims, treat $150 as below the threshold, also act on open claims, approve at less than the estimate, or settle the approved claims.
+- `triage_small_claims` (hard): Review the damage claims that are in under_review. Deny every one whose estimated cost is under $150 as minor wear and tear, with a denial reason that contains the phrase "wear and tear". Approve every one at $150 or more at its full estimated cost. Do not settle anything or touch claims in any other status. The grader checks that each denied claim's denial_reason contains "wear and tear".
+  - Decoy idea: Read only the first page of claims, treat $150 as below the threshold, also act on open claims, approve at less than the estimate, settle the approved claims, or deny with a nonsense reason that omits wear and tear.
 
 ## Open questions
 
@@ -153,6 +153,8 @@ None. The plan records no acceptance test.
   - Why: The input does not describe one-way rentals. This is the simplest model that keeps fleet location current.
 - Routes use no auth, in a REST style with cursor pagination and a page size of 25.
   - Why: Matches the engine conventions. Authentication is not in the input.
+- The required keyword for cancel_reason is "trip" and for denial_reason is "wear and tear", both matched case-insensitively.
+  - Why: Each word comes from the task's own wording, so the instruction states what the text must contain and the grader can check it.
 
 ## Out of scope
 
@@ -173,4 +175,5 @@ None. The plan records no acceptance test.
 
 ## Changes
 
-None. The plan changes no existing item.
+- tasks.cancel_elena_reservation
+- tasks.triage_small_claims

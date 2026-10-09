@@ -8,7 +8,7 @@ import path from 'node:path';
 import YAML, { LineCounter, isMap, isNode, isScalar, isSeq, type Document } from 'yaml';
 import { z } from 'zod';
 import { createVmHost } from './sandbox.ts';
-import { check, type CheckReport, type CheckedWorld } from './check.ts';
+import { check, type CheckOptions, type CheckReport, type CheckedWorld } from './check.ts';
 import { runtime, type CallRecord, type DumpInput, type OriginJournal, type Runtime, type StateDump } from './api.ts';
 export { OP_SUCCESS_STATUS } from './api.ts';
 import { SECTIONS, worldEditSchema, worldSchema, type Section, type Task, type World, type WorldEdit } from './format.ts';
@@ -32,9 +32,9 @@ export { lowerRules } from './rules.ts';
 export type { Expression, Lowered, Step } from './rules.ts';
 export type { CheckIssue, IssueCode, IssuePath, IssueOwner, NonEmpty, SourceLine } from './issues.ts';
 export { CHECK_LAYERS, routeKey } from './check.ts';
-export type { CheckReport, CheckedWorld, CheckLayer, WorldStats } from './check.ts';
+export type { CheckOptions, CheckReport, CheckedWorld, CheckLayer, WorldStats } from './check.ts';
 export { proofOf, traceOf } from './tasks.ts';
-export type { TaskVerdict, TaskProof, GradedDump, GoalResult, GuardResult, MutantProbe } from './tasks.ts';
+export type { TaskVerdict, TaskProof, GradedDump, GoalResult, GuardResult, MutantProbe, CheckProbe } from './tasks.ts';
 export { publicWorldOf, taskPrivacy, privacySplit } from './split.ts';
 export type { TaskPrivacy } from './split.ts';
 export { VERIFIER_PROTOCOL, VERIFIER_LIMITS, VERIFIER_STOPS, verifierRequestSchema } from './verify.ts';
@@ -76,10 +76,11 @@ export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 /**
  * Check a world. The only path to a CheckedWorld. Pass the `lines` loadWorld returned with
  * `input` and every issue and warning also carries `file` and `line` (world.yaml, the line of the
- * node at its path or of the nearest ancestor the file has).
+ * node at its path or of the nearest ancestor the file has). `options.tolerate` reports those issue codes
+ * as warnings, so a world held back only by them still checks; only an iterate's old world uses it (A-395).
  */
-export function checkWorld(input: unknown, lines?: WorldLines): CheckReport {
-  const report = check(input, host);
+export function checkWorld(input: unknown, lines?: WorldLines, options?: CheckOptions): CheckReport {
+  const report = check(input, host, options);
   if (lines === undefined) return report;
   const at = (i: CheckIssue): CheckIssue =>
     i.path[0] === 'plan' || i.path[0] === 'input' ? i : atLine(i, { file: lines.file, line: lines.lineOf(i.path) });

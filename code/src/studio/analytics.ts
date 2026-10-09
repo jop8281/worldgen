@@ -25,21 +25,13 @@ export type EpisodeGroup = {
   /** costUsd over successes, or null when nothing succeeded. */
   readonly costPerSuccessUsd: number | null;
   readonly meanTurns: number;
-  /** Why runs that did not succeed ended: their stop reason, or `scored <n>` for a `done` run the engine scored below 1. */
+  /** Why runs that did not succeed ended: each row's `outcome.failure_cause` (failureCauseOf in the dataset schema, A-389). */
   readonly failures: Readonly<Record<string, number>>;
   readonly engineCommits: readonly string[];
   readonly worldVersions: readonly string[];
 };
 
 const round = (n: number, places: number): number => Math.round(n * 10 ** places) / 10 ** places;
-
-/** Why a run that is not a complete success ended. */
-function causeOf(e: Episode): string {
-  if (e.stop_reason !== 'done') return e.stop_reason;
-  if (e.score !== 1) return `scored ${e.score === null ? 'none' : e.score}`;
-  if (e.error !== null) return 'error';
-  return 'incomplete record';
-}
 
 /** Groups episodes by world, task and model, in that sort order. */
 export function summarizeEpisodes(episodes: readonly Episode[]): readonly EpisodeGroup[] {
@@ -54,9 +46,8 @@ export function summarizeEpisodes(episodes: readonly Episode[]): readonly Episod
     const costUsd = round(list.reduce((s, e) => s + e.usage.cost_usd, 0), 6);
     const failures: Record<string, number> = {};
     for (const e of list) {
-      if (isCompleteSuccess(e)) continue;
-      const cause = causeOf(e);
-      failures[cause] = (failures[cause] ?? 0) + 1;
+      const cause = e.outcome.failure_cause;
+      if (cause !== null) failures[cause] = (failures[cause] ?? 0) + 1;
     }
     return {
       world, task, model,

@@ -28,7 +28,7 @@ const AGENT_MODEL: Record<Agent, string | null> = { noop: null, sonnet: DEFAULT_
 export const USAGE = `usage: episode --world <dir> --task <id> --out <dir> --run-id <id> --engine-commit <sha> [options]
 Runs one agent episode of one proven task on this machine: the engine serves the world on loopback,
 the agent sees only the world port and the public OpenAPI document, and the engine grades the end
-state. Writes <out>/dataset.jsonl or failures.jsonl with manifest.json, reopens them, and prints
+state. Writes <out>/dataset.jsonl, the episode with its outcome, and manifest.json, reopens them, and prints
 one JSON line with the episode id, stop reason, score and spend.
   --world <dir>        a world directory the engine checks and proves
   --task <id>          the task to run

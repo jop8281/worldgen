@@ -36,8 +36,8 @@ Runs one solver episode per proven task of a checked world, in one Boat sandbox,
 claude-sonnet-5-5 through the logged-in Claude CLI by default. The sandbox serves and uploads
 the PUBLIC form of the world only; a separate verifier process (cli/verifier.ts), which holds
 the private world and no credential, replays each recorded trace and grades it (YOS-159).
-Writes <out>/dataset.jsonl (complete successes), failures.jsonl, manifest.json and REPORT.md,
-reopens and validates them, and always stops the sandbox.
+Writes <out>/dataset.jsonl (every episode, with its reward, verdict and failure cause), manifest.json
+and REPORT.md, reopens and validates them, and always stops the sandbox.
 
   --world <dir>          a world directory the engine checks and proves (for example ../prod/worlds/helpdesk)
   --out <dir>            where logs, the export and the private evidence go
@@ -49,6 +49,7 @@ reopens and validates them, and always stops the sandbox.
 
   --model <id>          the solver's model, default the config's (claude-sonnet-5-5); any Claude model with a known price
   --transport <kind>    claude-cli (default) or sdk; sdk needs ${DEFAULT_API_KEY_ENV}
+  --successes-only      export the complete successes alone, the view dataset.jsonl gave before A-389
 
 Needs ${BOAT_KEY_ENV} and ${ORG_ENV} (the one Boat organization this machine bills to, A-247) in the environment. Exit 0 only when every task has an
 accepted episode, the export reopened clean and the sandbox stop was confirmed; 3 when the
@@ -92,6 +93,7 @@ type Args = {
   readonly maxTurns: number; readonly budgetUsd: number; readonly maxMinutes: number;
   readonly transport?: Transport;
   readonly model?: string;
+  readonly successesOnly: boolean;
 };
 // dataset words its number and transport refusals its own way, and reads numbers stricter than options.ts does;
 // YOS-203 lists both for a decision before they move there.
@@ -109,7 +111,7 @@ function parse(argv: readonly string[]): Args | 'help' {
       allowPositionals: true,
       options: {
         world: { type: 'string' }, out: { type: 'string' }, 'run-id': { type: 'string' }, 'engine-commit': { type: 'string' },
-        transport: { type: 'string' }, model: { type: 'string' }, 'max-turns': { type: 'string' }, 'budget-usd': { type: 'string' }, 'max-minutes': { type: 'string' }, help: { type: 'boolean', short: 'h' },
+        transport: { type: 'string' }, model: { type: 'string' }, 'max-turns': { type: 'string' }, 'budget-usd': { type: 'string' }, 'max-minutes': { type: 'string' }, 'successes-only': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       },
     });
   } catch (e) {
@@ -131,6 +133,7 @@ function parse(argv: readonly string[]): Args | 'help' {
     maxTurns: positive('--max-turns', need('max-turns'), true),
     budgetUsd: positive('--budget-usd', need('budget-usd'), false),
     maxMinutes: positive('--max-minutes', need('max-minutes'), false),
+    successesOnly: p.values['successes-only'] === true,
   };
 }
 
@@ -170,7 +173,7 @@ function summary(r: PipelineResult, tasks: number): string[] {
     `dataset run ${r.runId}: ${r.status}`,
     `  accepted ${r.accepted} of ${tasks} task(s), failed or missing ${tasks - r.accepted}, model spend $${r.modelCostUsd.toFixed(4)}`,
     `  sandbox ${r.sandbox.id ?? 'not created'}: teardown ${r.sandbox.teardown}`,
-    ...(r.manifest === null ? ['  export: none'] : [`  export: ${path.join(r.paths.out, 'dataset.jsonl')} (${r.manifest.counts.accepted}), failures.jsonl (${r.manifest.counts.failed}), manifest.json`]),
+    ...(r.manifest === null ? ['  export: none'] : [`  export: ${path.join(r.paths.out, 'dataset.jsonl')} (${r.manifest.counts.episodes}: ${r.manifest.counts.by_verdict.success} success, ${r.manifest.counts.by_verdict.partial} partial, ${r.manifest.counts.by_verdict.failure} failure, ${r.manifest.counts.by_verdict.infra} infra), manifest.json`]),
     `  report: ${r.paths.report}`,
     `  diagnostics: ${r.paths.diagnostics}`,
     ...r.problems.map((p) => `  problem: ${p}`),
@@ -254,7 +257,7 @@ export async function main(argv: readonly string[], env: Env = process.env, deps
       result = await runPipeline(
         {
           worldDir: args.world, out: args.out, runId: args.runId, engineCommit: args.engineCommit, model: config.model,
-          maxTurns: args.maxTurns, budgetUsd: args.budgetUsd, maxMinutes: args.maxMinutes,
+          maxTurns: args.maxTurns, budgetUsd: args.budgetUsd, maxMinutes: args.maxMinutes, ...(args.successesOnly ? { successesOnly: true } : {}),
           secrets, sandboxName: sandboxName(`ds-${args.runId}`), ...(deps.port === undefined ? {} : { port: deps.port }),
         },
         {

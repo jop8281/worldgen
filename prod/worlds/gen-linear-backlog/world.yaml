@@ -10,10 +10,14 @@ meta:
     tick: 1s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -2544,9 +2548,10 @@ tasks:
             ((ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : (path.includes('?') ? '&' : '?') + 'cursor=' + cursor)); ctx.assert(r.status === 200, 'GET ' + path + ' failed'); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); return rows; }; const hits = pages('/issues?status=backlog').filter((i) => i.title === 'Timed live-run rehearsal on sealed unseen prompts'); ctx.assert(hits.length === 1, 'expected one backlog rehearsal issue, found ' + hits.length); const r = ctx.api('POST', '/issues/' + hits[0].id + '/start', {}); ctx.assert(r.status === 200, 'start failed: ' + JSON.stringify(r.body)); })(ctx);
             ctx.api('PATCH', '/issues/' + hit.id, { title: hit.title + ' (edited)' });
           }
+    alternatives: []
   cancel_stale_backlog_in_milestone:
     difficulty: medium
-    instruction: "Clean up the backlog of the milestone 'Later: Fidelity and factory operations': cancel every issue in it that is still in Backlog and carries the label 'area:engine'. Give each cancellation a short reason. Leave all other issues alone, including issues in other statuses, in other milestones, or with other labels."
+    instruction: "Clean up the backlog of the milestone 'Later: Fidelity and factory operations': cancel every issue in it that is still in Backlog and carries the label 'area:engine'. Give each cancellation a short reason that contains the word 'stale'. Leave all other issues alone, including issues in other statuses, in other milestones, or with other labels."
     grader: |-
       (ctx) => { const ms = ctx.seed.list('milestone', { where: { name: 'Later: Fidelity and factory operations' } })[0]; const lb = ctx.seed.list('label', { where: { name: 'area:engine' } })[0]; if (!ms || !lb) return 0; const tagged = new Set(ctx.seed.list('issue_label', { where: { label_id: lb.id } }).map((x) => x.issue_id)); const targets = ctx.seed.list('issue', { where: { milestone_id: ms.id, status: 'backlog' } }).filter((t) => tagged.has(t.id)); if (targets.length === 0) return 0; const ids = new Set(targets.map((t) => t.id)); const events = ctx.db.list('issue_event').filter((e) => ids.has(e.issue_id) && ctx.seed.get('issue_event', e.id) === null);
         const notes = ctx.db.list('comment').filter((c) => ids.has(c.issue_id) && ctx.seed.get('comment', c.id) === null);
@@ -2554,7 +2559,7 @@ tasks:
           ...targets.map((t) => ({ entity: 'issue', id: t.id, kind: 'updated', fields: ['status', 'completed_at'] })),
           ...events.map((e) => ({ entity: 'issue_event', id: e.id, kind: 'created', fields: ['issue_id', 'kind', 'from_value', 'to_value'] })),
           ...notes.map((c) => ({ entity: 'comment', id: c.id, kind: 'created', fields: ['issue_id', 'body'] })),
-        ]); const old = new Set(ctx.seed.list('comment').map((c) => c.id)); const canceled = targets.every((t) => { const e = ctx.db.get('issue', t.id); return e.status === 'canceled' && e.completed_at !== null; }); ctx.goal(0.7, 'every backlog area:engine issue in the milestone is canceled', canceled); const reasons = targets.every((t) => ctx.db.list('comment', { where: { issue_id: t.id } }).some((c) => !old.has(c.id) && c.body.trim() !== '')); ctx.goal(0.3, 'every cancellation carries a reason comment', canceled && reasons); return ctx.score(); }
+        ]); const canceled = targets.every((t) => { const e = ctx.db.get('issue', t.id); return e.status === 'canceled' && e.completed_at !== null; }); ctx.goal(0.7, 'every backlog area:engine issue in the milestone is canceled', canceled); const reasons = targets.every((t) => ctx.db.list('comment', { where: { issue_id: t.id } }).some((c) => ctx.seed.get('comment', c.id) === null && /stale/i.test(c.body))); ctx.goal(0.3, 'every cancellation carries a reason comment containing the word stale', canceled && reasons); return ctx.score(); }
     solution: "(ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : (path.includes('?') ? '&' : '?') + 'cursor=' + cursor)); ctx.assert(r.status === 200, 'GET ' + path + ' failed'); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); return rows; }; const ms = pages('/milestones').find((m) => m.name === 'Later: Fidelity and factory operations'); ctx.assert(ms, 'milestone not found'); const lb = pages('/labels').find((l) => l.name === 'area:engine'); ctx.assert(lb, 'label not found'); const backlog = pages('/issues?milestone_id=' + ms.id + '&status=backlog'); let n = 0; for (const t of backlog) { const labels = pages('/issues/' + t.id + '/labels'); if (!labels.some((l) => l.label_id === lb.id)) continue; const r = ctx.api('POST', '/issues/' + t.id + '/cancel', { reason: 'Stale backlog item, dropping it from the Later milestone' }); ctx.assert(r.status === 200, 'cancel ' + t.id + ' failed: ' + JSON.stringify(r.body)); n++; } ctx.assert(n > 0, 'no matching issues found'); }"
     decoys:
       - why: cancels every backlog issue in the milestone and ignores the label, so it also cancels the area:eval and area:infra ones
@@ -2575,6 +2580,7 @@ tasks:
             ((ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : (path.includes('?') ? '&' : '?') + 'cursor=' + cursor)); ctx.assert(r.status === 200, 'GET ' + path + ' failed'); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); return rows; }; const ms = pages('/milestones').find((m) => m.name === 'Later: Fidelity and factory operations'); ctx.assert(ms, 'milestone not found'); const lb = pages('/labels').find((l) => l.name === 'area:engine'); ctx.assert(lb, 'label not found'); const backlog = pages('/issues?milestone_id=' + ms.id + '&status=backlog'); let n = 0; for (const t of backlog) { const labels = pages('/issues/' + t.id + '/labels'); if (!labels.some((l) => l.label_id === lb.id)) continue; const r = ctx.api('POST', '/issues/' + t.id + '/cancel', { reason: 'Stale backlog item, dropping it from the Later milestone' }); ctx.assert(r.status === 200, 'cancel ' + t.id + ' failed: ' + JSON.stringify(r.body)); n++; } ctx.assert(n > 0, 'no matching issues found'); })(ctx);
             ctx.api('PATCH', '/issues/' + hit.id, { title: hit.title + ' (edited)' });
           }
+    alternatives: []
   close_out_epic_with_sub_issues:
     difficulty: hard
     instruction: Close out the epics. An epic is an issue that is still In Progress and has sub-issues. For every epic, first complete each of its open sub-issues, then complete the epic itself. Change nothing else.
@@ -2605,6 +2611,7 @@ tasks:
             ((ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : (path.includes('?') ? '&' : '?') + 'cursor=' + cursor)); ctx.assert(r.status === 200, 'GET ' + path + ' failed'); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); return rows; }; const issues = pages('/issues'); const byId = {}; const kids = {}; for (const i of issues) { byId[i.id] = i; if (i.parent_id) { if (!kids[i.parent_id]) kids[i.parent_id] = []; kids[i.parent_id].push(i); } } const parents = Object.keys(kids).filter((p) => byId[p].status === 'in_progress'); ctx.assert(parents.length > 0, 'no epics found'); for (const p of parents) { for (const k of kids[p]) { if (k.status === 'in_progress' || k.status === 'in_review') { const r = ctx.api('POST', '/issues/' + k.id + '/complete', {}); ctx.assert(r.status === 200, 'complete ' + k.id + ' failed: ' + JSON.stringify(r.body)); } else if (k.status === 'backlog') { const r = ctx.api('POST', '/issues/' + k.id + '/cancel', { reason: 'Out of scope for this epic' }); ctx.assert(r.status === 200, 'cancel ' + k.id + ' failed'); } } const r = ctx.api('POST', '/issues/' + p + '/complete', {}); ctx.assert(r.status === 200, 'complete epic ' + p + ' failed: ' + JSON.stringify(r.body)); } })(ctx);
             ctx.api('PATCH', '/issues/' + hit.id, { title: hit.title + ' (edited)' });
           }
+    alternatives: []
   merge_duplicate_issues:
     difficulty: hard
     instruction: Several issues were closed as duplicates of another issue, but the labels on those duplicates were never carried over to the issues they duplicate. For every duplicate that has a recorded original, attach to the original any label the duplicate carries that the original is missing. Do not touch the duplicates themselves, do not remove any label, and change nothing else.
@@ -2619,3 +2626,4 @@ tasks:
         script: "(ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : (path.includes('?') ? '&' : '?') + 'cursor=' + cursor)); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); return rows; }; const dups = pages('/issues?status=duplicate'); const src = dups.find((d) => d.identifier === 'YOS-106'); const wrong = dups.find((d) => d.identifier === 'YOS-122'); for (const l of pages('/issues/' + src.id + '/labels')) ctx.api('POST', '/issues/' + wrong.duplicate_of_id + '/labels', { label_id: l.label_id }); }"
       - why: attaches the labels to the original but also reopens the duplicate, changing an issue it should leave closed
         script: "(ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : (path.includes('?') ? '&' : '?') + 'cursor=' + cursor)); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null); return rows; }; const dup = pages('/issues?status=duplicate').find((d) => d.identifier === 'YOS-106'); for (const l of pages('/issues/' + dup.id + '/labels')) ctx.api('POST', '/issues/' + dup.duplicate_of_id + '/labels', { label_id: l.label_id }); ctx.api('POST', '/issues/' + dup.id + '/reopen', {}); }"
+    alternatives: []

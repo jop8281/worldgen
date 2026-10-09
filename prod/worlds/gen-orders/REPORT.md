@@ -33,6 +33,16 @@ Jobs (1):
 
 - `auto_cancel_unpaid`: every 1h
 
+## Changes
+
+- snippet_changed `tasks.cancel_stale_pending_with_gift_note.grader`
+- item_changed `tasks.cancel_stale_pending_with_gift_note.instruction`
+- snippet_changed `tasks.refund_delivered_big_orders_for_customer.grader`
+- item_changed `tasks.refund_delivered_big_orders_for_customer.instruction`
+- snippet_changed `tasks.refund_delivered_big_orders_for_customer.solution`
+- snippet_changed `tasks.ship_all_paid_large_orders.grader`
+- item_changed `tasks.ship_all_paid_large_orders.instruction`
+
 ## Assumed and why
 
 - clock.start is 2026-04-08T09:00:00Z and tick is 0s.
@@ -53,20 +63,8 @@ Jobs (1):
   - Why: Gives a time-driven rule. Old seeded pending orders will be cancelled the first time the clock advances, which only tests (not tasks) can trigger.
 - Acceptance tests create their own customers with emails ending @acceptance.example and orders through the API, and never read seed rows. The job test lists only workflow actions in its actions field; the job is exercised through ctx.advance.
   - Why: The workflow stage runs tests before any seed exists, and the actions field accepts only workflow action keys.
-
-## Fields not in the input
-
-9 fields match no column or property name in the input. WorldGen invented each one, or renamed an input field.
-
-- `customer.name`
-- `customer.email`
-- `customer.vip`
-- `order.delivered_at`
-- `order.cancelled_at`
-- `order.refunded_at`
-- `order.tracking_number`
-- `order_event.order_id`
-- `order_event.kind`
+- Required text: refund reason contains 'damaged', cancel reason contains 'stale', tracking numbers start with 'TRK-'.
+  - Why: The request asks for a keyword the instruction gives; these are simple, checkable and need no seed change.
 
 ## Questions asked of the input
 
@@ -82,6 +80,8 @@ Jobs (1):
   - Default answer: Yes, pending orders are auto-cancelled after 72 hours by an hourly job.
 - How should the clock behave?
   - Default answer: Start 2026-04-08T09:00:00Z, no per-call tick, time moves only on explicit advance.
+- Which keywords should the instructions require?
+  - Default answer: 'damaged' for refunds, 'stale' for cancels, and a 'TRK-' prefix for tracking numbers.
 
 ## Left out
 
@@ -98,14 +98,14 @@ Jobs (1):
 
 The engine check passed: 7 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-World id (WID): `wid_1c5930a8dd46e0e53a803a779af16cf46e776569a7a940a4a1401ca7218e231f`.
+World id (WID): `wid_190e785022e5cfc33efeade446189895e299f4ac4c9898832a093c27edb9005b`.
 
 | Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
 |---|---|---|---|---|---|---|---|
-| pay_oldest_pending_for_customer | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 5/7 | `tid_5c6cd939b00e68ce032b8be0ae757ba0ee308f38f3dd7710b6fcc2cc759cb57a` |
-| refund_delivered_big_orders_for_customer | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 4/7 | `tid_5f83e34e1d29f5f1c8f386cda7351e747d97cf4a57b8ecc2bb5e1f386345f3fb` |
-| cancel_stale_pending_with_gift_note | medium | 1.000 | 0.000 | 0.000, 0.000, 0.500 | 0.500 | legacy; mutants 4/7 | `tid_08ece26a13851fde5522cd1031ea02ccd42b55f1ce7354d24f50cca51293a4e7` |
-| ship_all_paid_large_orders | hard | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.333, 0.000, 0.000 | 0.667 | legacy; mutants 5/7 | `tid_f07c12341fd5bba6e5d752e317fa3d0dd2fab48eed28ca093eccc265ba847779` |
+| pay_oldest_pending_for_customer | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 6/8 | `tid_5c6cd939b00e68ce032b8be0ae757ba0ee308f38f3dd7710b6fcc2cc759cb57a` |
+| refund_delivered_big_orders_for_customer | medium | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 5/8 | `tid_b68bec6eb3b1ca3af162912d181470233a3366dc0eddff60f9b64414e625dafd` |
+| cancel_stale_pending_with_gift_note | medium | 1.000 | 0.000 | 0.000, 0.000, 0.500 | 0.500 | legacy; mutants 5/8 | `tid_7366b3930b29f2c508e525dc9803fc42995204fe3f0e05fac9bc04d6378b1649` |
+| ship_all_paid_large_orders | hard | 1.000 | 0.000 | 0.333, 0.000, 0.000, 0.333, 0.000, 0.000 | 0.667 | legacy; mutants 6/8 | `tid_a0c4e2c2309f7b8741ec390d06f10d864fd2cf156a5a825e0aeae3dcbe8a9298` |
 
 Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
@@ -140,15 +140,18 @@ From each reference solution's trace. A hard task must change more than one row 
 
 ## Run
 
-Mode: create from csv. Model: claude-sonnet-5-5. Budget: $3.00.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $3.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 2 | 3.16 | 0.5210 |
-| model | 1 | 0.34 | 0.1391 |
-| workflow | 1 | 0.27 | 0.1446 |
-| seed | 1 | 0.35 | 0.1534 |
-| tasks | 1 | 1.83 | 0.3084 |
-| Total | 6 | 5.94 | 1.2663 |
+| plan | 1 | 0.16 | 0.0721 |
+| tasks | 1 | 0.34 | 0.1989 |
+| Total | 2 | 0.50 | 0.2710 |
 
-Run total: 5.95 minutes, $1.2663.
+Skipped:
+
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures
+
+Run total: 0.53 minutes, $0.2710.

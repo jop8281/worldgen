@@ -81,7 +81,27 @@ const pressureItem = z.object({
   states: z.array(z.string()).optional().describe('entity.state values the task needs seeded rows in, such as ticket.pending; never a state only a workflow with a declared lifecycle names, since no state field holds it'),
   distractors: z.string().optional().describe('entity whose near-duplicate rows the reference must tell apart: a filtered list must return a row it leaves unchanged'),
 }).describe('what makes the task as hard as its label; the judge checks it against the reference trace and the seed (A-226, A-227)');
-const taskItem = z.object({ id: z.string(), difficulty: z.enum(['easy', 'medium', 'hard']), intent: z.string(), decoyIdea: z.string(), pressure: pressureItem.optional() });
+/** What a task is about beyond its difficulty, and what each kind means; the plan step and the tasks step are told (A-390). */
+export const TASK_KINDS = {
+  permissions: 'the world records who may act on a row, such as a role, an owner or an assignee, and an action checks it, so the task acts only where it is allowed and a decoy acts where it is not',
+  scarce_resource: 'a limited supply, such as seats, stock, rooms, slots or budget, that competing requests draw on, so the task allocates within capacity and a decoy overbooks or serves the wrong request',
+  two_actors: 'two parties act on the same records in turn, such as a requester and an approver, so the task makes both sides\' calls in order and a decoy makes only one side\'s',
+  irreversible: 'a step that cannot be undone, such as a refund, a cancellation or a deletion, so the task checks its preconditions before acting and a decoy acts on the wrong row or before checking',
+} as const;
+export type TaskKind = keyof typeof TASK_KINDS;
+const TASK_KIND_IDS = Object.keys(TASK_KINDS) as [TaskKind, ...TaskKind[]];
+/** Each kind with its meaning, for prompts and messages. */
+export const taskKindLines = (): string[] => TASK_KIND_IDS.map((k) => `${k}: ${TASK_KINDS[k]}`);
+/** The fewest distinct workflow actions a plan's multi-action hard task names (A-390). */
+export const HARD_TASK_ACTIONS = 2;
+
+const taskItem = z.object({
+  id: z.string(), difficulty: z.enum(['easy', 'medium', 'hard']),
+  kind: z.enum(TASK_KIND_IDS).optional().describe(`what the task is about beyond its difficulty, one of ${taskKindLines().join('; ')}`),
+  intent: z.string(),
+  actions: z.array(z.string()).optional().describe('the distinct workflow actions the reference solution calls through ctx.api, each declared in the actions of a workflow above'),
+  decoyIdea: z.string(), pressure: pressureItem.optional(),
+});
 
 /**
  * One object root (a model tool input_schema must be type object). A refusal owes no workflows
@@ -198,18 +218,45 @@ export function jobActionIssues(plan: Plan, ctx: z.RefinementCtx): void {
   });
 }
 
+const declaredActions = (plan: Plan): ReadonlySet<string> => new Set(plan.workflows.flatMap((w) => w.actions.map(actionKey)));
+/** A hard task naming at least HARD_TASK_ACTIONS distinct actions the plan declares. */
+const multiActionHard = (t: Plan['tasks'][number], known: ReadonlySet<string>): boolean =>
+  t.difficulty === 'hard' && new Set((t.actions ?? []).map(actionKey).filter((k) => known.has(k))).size >= HARD_TASK_ACTIONS;
+
+/**
+ * Task variety in a proposed plan (A-390). A task's actions must name workflow actions the plan declares. When `owed`,
+ * as on create, at least one hard task names two or more distinct actions its reference solution calls, and at least
+ * one task has a kind; an iterate plan instead keeps each existing task's kind and actions (`iteratePlanSchema`). Only
+ * the proposal schemas apply it, like jobActionIssues, so `parsePlanYaml` still loads a plan written before it.
+ */
+export function taskVarietyIssues(plan: Plan, ctx: z.RefinementCtx, owed: boolean): void {
+  const known = declaredActions(plan);
+  plan.tasks.forEach((t, ti) => (t.actions ?? []).forEach((a, ai) => {
+    const key = actionKey(a);
+    if (!known.has(key)) ctx.addIssue({ code: 'custom', path: ['tasks', ti, 'actions', ai], message: `task ${t.id} names ${key} in its actions, which no workflow declares in its actions` });
+  }));
+  if (!owed) return;
+  if (!plan.tasks.some((t) => multiActionHard(t, known))) {
+    ctx.addIssue({ code: 'custom', path: ['tasks'], message: `a plan to build needs at least one hard task whose actions name ${HARD_TASK_ACTIONS} or more distinct workflow actions its reference solution calls, such as one that assigns a row and then resolves it` });
+  }
+  if (!plan.tasks.some((t) => t.kind !== undefined)) {
+    ctx.addIssue({ code: 'custom', path: ['tasks'], message: `a plan to build needs at least one task with a kind, one of ${taskKindLines().join('; ')}` });
+  }
+}
+
 /**
  * planSchema plus the rules of a plan that builds a new world: its acceptance tests exist before
  * implementation and cover every workflow action, a description plan asks at least one open
  * question, every plan records at least one assumption (A-180), and every workflow entity whose
  * states a state field holds has a planned stateMix that the seed step is then judged against
  * (A-183). An entity whose every workflow declares a lifecycle has no state field to mix, so it owes
- * none (A-371). Refusals have no such rules.
+ * none (A-371). Its tasks owe the variety of `taskVarietyIssues` (A-390). Refusals have no such rules.
  */
 export function planSchemaFor(inputKind: InputKind) {
   return planSchema.superRefine((plan, ctx) => {
     if (plan.verdict.kind !== 'proceed') return;
     jobActionIssues(plan, ctx);
+    taskVarietyIssues(plan, ctx, true);
     if (plan.acceptanceTests.length === 0) {
       ctx.addIssue({ code: 'too_small', origin: 'array', minimum: 1, inclusive: true, path: ['acceptanceTests'], message: 'a plan to build needs acceptance tests before implementation begins' });
     }
@@ -451,7 +498,10 @@ export function renderPlanYaml(plan: Plan): string {
     acceptanceTests: plan.acceptanceTests.map((t) => ({ id: t.id, intent: t.intent, actions: t.actions, description: t.description, script: t.script })),
     routes: plan.routes.map((r) => ({ id: r.id, method: r.method, path: r.path, purpose: r.purpose })),
     seed: { rowsPerEntity: plan.seed.rowsPerEntity, mix: plan.seed.mix, ...(plan.seed.stateMix === undefined ? {} : { stateMix: plan.seed.stateMix }) },
-    tasks: plan.tasks.map((t) => ({ id: t.id, difficulty: t.difficulty, intent: t.intent, decoyIdea: t.decoyIdea, ...(t.pressure === undefined ? {} : { pressure: t.pressure }) })),
+    tasks: plan.tasks.map((t) => ({
+      id: t.id, difficulty: t.difficulty, ...(t.kind === undefined ? {} : { kind: t.kind }), intent: t.intent,
+      ...(t.actions === undefined ? {} : { actions: t.actions }), decoyIdea: t.decoyIdea, ...(t.pressure === undefined ? {} : { pressure: t.pressure }),
+    })),
     ...(plan.open_questions === undefined
       ? {}
       : { open_questions: plan.open_questions.map((q) => ({ question: q.question, default_answer: q.default_answer })) }),

@@ -1,3 +1,4 @@
+revision: 2
 software: 'Car rental fleet management system (Enterprise/Hertz-style rental ops backend): vehicles, customers, reservations and rentals, damage claims, late fees'
 summary: A stateful car rental fleet. Branches hold vehicles. Customers reserve a vehicle for a pickup and due window. Agents pick up, return, cancel and close rentals. Damage claims move through review to approved, denied or settled. A daily job assesses a late fee on rentals returned after their due time, and a second daily job cancels no-show reservations. Most changes go through actions that keep the rental, vehicle and claim state machines consistent.
 clock:
@@ -128,6 +129,7 @@ jobs:
   - name: expire_no_shows
     every: 1d
     rule: Cancel every reserved rental whose pickup_at is more than 24 hours before now, with cancel_reason no_show.
+acceptanceTests: []
 routes:
   - id: list_branches
     method: GET
@@ -252,8 +254,8 @@ seed:
 tasks:
   - id: cancel_elena_reservation
     difficulty: easy
-    intent: Cancel the upcoming reservation of the customer Elena Voss because her trip was called off. The reason must be given. The vehicle and every other rental stay unchanged.
-    decoyIdea: PATCH the rental status to cancelled, or cancel one of another customer's reservations, or leave out the reason.
+    intent: Cancel the upcoming reservation of the customer Elena Voss because her trip was called off. The cancel reason must be given and must contain the word "trip". The vehicle and every other rental stay unchanged. The grader checks that rental.cancel_reason contains "trip".
+    decoyIdea: PATCH the rental status to cancelled, or cancel one of another customer's reservations, or leave out the reason, or give a reason without the word trip such as bananas.
   - id: return_tomas_reyes_suv
     difficulty: medium
     intent: Tomas Reyes is at the counter returning his SUV after its due time. Check the rental in with an odometer reading of 48210 km. The late fee is left to the daily job. Do not touch his older closed rental.
@@ -264,8 +266,8 @@ tasks:
     decoyIdea: Waive the older rental's fee, waive both, or edit the late_fee field directly without a reason.
   - id: triage_small_claims
     difficulty: hard
-    intent: Review the damage claims that are in under_review. Deny every one whose estimated cost is under $150 as minor wear and tear, with a reason. Approve every one at $150 or more at its full estimated cost. Do not settle anything or touch claims in any other status.
-    decoyIdea: Read only the first page of claims, treat $150 as below the threshold, also act on open claims, approve at less than the estimate, or settle the approved claims.
+    intent: Review the damage claims that are in under_review. Deny every one whose estimated cost is under $150 as minor wear and tear, with a denial reason that contains the phrase "wear and tear". Approve every one at $150 or more at its full estimated cost. Do not settle anything or touch claims in any other status. The grader checks that each denied claim's denial_reason contains "wear and tear".
+    decoyIdea: Read only the first page of claims, treat $150 as below the threshold, also act on open claims, approve at less than the estimate, settle the approved claims, or deny with a nonsense reason that omits wear and tear.
 open_questions:
   - question: Which currency and unit should money use?
     default_answer: USD in integer cents.
@@ -310,6 +312,8 @@ assumptions:
     why: The input does not describe one-way rentals. This is the simplest model that keeps fleet location current.
   - decision: Routes use no auth, in a REST style with cursor pagination and a page size of 25.
     why: Matches the engine conventions. Authentication is not in the input.
+  - decision: The required keyword for cancel_reason is "trip" and for denial_reason is "wear and tear", both matched case-insensitively.
+    why: Each word comes from the task's own wording, so the instruction states what the text must contain and the grader can check it.
 outOfScope:
   - what: Payments, deposits, card holds, refunds and invoices
     why: The input needs charges recorded on the rental, not a payment processor.
@@ -325,4 +329,6 @@ outOfScope:
     why: No outbound channel exists in the engine.
   - what: Extending or modifying a rental after reservation
     why: Keeps the rental state machine small. Agents cancel and rebook.
-changes: []
+changes:
+  - tasks.cancel_elena_reservation
+  - tasks.triage_small_claims

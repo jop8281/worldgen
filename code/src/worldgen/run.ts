@@ -55,8 +55,11 @@ export type RunResult =
 
 export type RunDeps = {
   readonly model: Model;
-  /** The few-shot world rendered into every system prompt. Reading config.exampleWorld from disk is the caller's job. */
-  readonly exampleWorld: World;
+  /**
+   * The few-shot world rendered into every system prompt, or the config's list of them, of which the run renders the
+   * one `pickExample` takes for its input digest (A-390). Reading config.exampleWorld from disk is the caller's job.
+   */
+  readonly exampleWorld: World | readonly World[];
   /** Sees every event too. events.jsonl is always written; this is for a console view or a test. */
   readonly emit?: Emit;
   /** Wall clock in ms for event times, budgets and durations. Defaults to Date.now. */
@@ -216,6 +219,17 @@ function debtOf(report: CheckReport, world: CheckedWorld, plan: Plan, toRun: Rea
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * The few-shot world for an input: the entry its content digest picks, the first eight hex digits modulo the list
+ * length, so the same input always gets the same example and different inputs spread over the list (A-390).
+ */
+export function pickExample<T>(examples: readonly T[], digest: string): T {
+  const n = Number.parseInt(digest.slice(0, 8), 16);
+  const pick = examples[(Number.isNaN(n) ? 0 : n) % examples.length];
+  if (pick === undefined) throw new Error('no example world to pick from');
+  return pick;
+}
 
 /**
  * The system prompt for a step. The shared part (role, format reference, example world) comes
@@ -747,7 +761,9 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
   const systemFor = (step: StepId): string => {
     const hit = systems.get(step);
     if (hit !== undefined) return hit;
-    const text = systemPrompt(step, deps.exampleWorld, job.kind);
+    if (inputDigest === null) throw new Error(`the ${step} system prompt needs the input digest, which picks the example world`);
+    // concat flattens a list one level and wraps a single world, so both forms give the list to pick from.
+    const text = systemPrompt(step, pickExample(([] as World[]).concat(deps.exampleWorld), inputDigest), job.kind);
     systems.set(step, text);
     return text;
   };
@@ -976,6 +992,8 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
   let gate: Gate | null = null;
   /** Iterate only: the engine report on the world as it was before the run, the baseline for its debt. */
   let beforeReport: CheckReport | null = null;
+  /** Iterate only: the old world's failing issues it was admitted with, each owned by a stage that must rerun and clear it (A-395). */
+  let admitted: readonly CheckIssue[] = [];
   /** Create from an OpenAPI spec only: conformance to the spec at the last step. */
   let fidelity: Fidelity = UNCHECKED;
   let coverageDigest: InputDigest | undefined;
@@ -1000,10 +1018,25 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
   } else {
     const loaded = await loadWorld(outDir);
       if (!loaded.ok) return await stop({ kind: 'input_rejected', why: `${outDir} has no usable world.yaml: ${loaded.error[0].found}` });
-    const checkedOld = beforeDeadline(perfStarted + config.maxMinutes * 60_000, () => checkWorld(loaded.value, loaded.lines));
-      if (checkedOld === EXPIRED) return await stop({ kind: 'time_exhausted', minutes: config.maxMinutes });
+    const deadline = perfStarted + config.maxMinutes * 60_000;
+    const firstCheck = beforeDeadline(deadline, () => checkWorld(loaded.value, loaded.lines));
+      if (firstCheck === EXPIRED) return await stop({ kind: 'time_exhausted', minutes: config.maxMinutes });
+    let checkedOld: CheckReport = firstCheck;
+    if (!firstCheck.ok) {
+      // An old world held back only at the tasks layer by issues a stage owns is admitted, those issues tolerated, as
+      // work that stage must clear; the plan below must rerun it (A-395). Any other failure is refused as before.
+      const owed = firstCheck.issues.filter((i) => i.code !== 'layer.blocked');
+      if (firstCheck.reached === 'tasks' && owed.every((i) => ownerOf(i) !== 'plan')) {
+        const retried = beforeDeadline(deadline, () => checkWorld(loaded.value, loaded.lines, { tolerate: new Set(owed.map((i) => i.code)) }));
+          if (retried === EXPIRED) return await stop({ kind: 'time_exhausted', minutes: config.maxMinutes });
+        if (retried.ok) {
+          checkedOld = retried;
+          admitted = owed;
+        }
+      }
+    }
     if (!checkedOld.ok) {
-      const [first] = checkedOld.issues;
+      const [first] = firstCheck.ok ? checkedOld.issues : firstCheck.issues;
         return await stop({ kind: 'input_rejected', why: `the existing world does not pass the engine: ${first.code} at ${first.path.join('.')} (${first.found})` });
     }
     const existing = checkedOld.world;
@@ -1055,7 +1088,12 @@ export async function runWorldGen(job: Job, config: Config, deps: RunDeps): Prom
           };
         } else if (world !== null && before !== null) {
           const changed = changedSections(accepted, world);
+          const reruns: ReadonlySet<string> = new Set(stagesToRun(changed));
           toRun = new Set(stagesToRun(changed));
+          const unowned = admitted.find((i) => !reruns.has(ownerOf(i)));
+          if (unowned !== undefined) {
+              return await stop({ kind: 'input_rejected', why: `the existing world does not pass the engine, and the change plan does not rerun ${ownerOf(unowned)}, which owns ${unowned.code} at ${unowned.path.join('.')}` });
+          }
           if (gate !== null && beforeReport !== null) gate = { ...gate, debt: debtOf(beforeReport, before, oldPlan ?? accepted, toRun, coverageDigest) };
           // A plan-only revision (A-294) reaches no stage: every stage is then probed against the unchanged world below.
           if (toRun.size === 0 && !revisesPlanOnly(patchBase ?? oldPlan, accepted)) {

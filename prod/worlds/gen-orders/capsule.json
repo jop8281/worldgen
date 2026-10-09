@@ -1,64 +1,34 @@
 {
   "capsule": 1,
-  "runId": "run_20261007T150841Z_45dd3829",
-  "mode": "create",
+  "runId": "run_20261009T040341Z_c8e55344",
+  "mode": "iterate",
   "input": {
-    "kind": "csv",
-    "digest": "4afe706f0d69d369c46263323319c6d64f4fd6798114eb235078cf88c0d3ca5d",
+    "kind": "change_request",
+    "digest": "f8539bf9710003230c81b49217552720360bfaaa08a2dc85b2a2c5d151827db9",
     "source": {
-      "kind": "csv",
-      "paths": [
-        "eval/inputs/orders.csv"
-      ]
+      "kind": "change_request",
+      "before": "runs/run_20261009T040341Z_c8e55344/before"
     }
   },
-  "worldId": "wid_1c5930a8dd46e0e53a803a779af16cf46e776569a7a940a4a1401ca7218e231f",
+  "worldId": "wid_190e785022e5cfc33efeade446189895e299f4ac4c9898832a093c27edb9005b",
   "model": "claude-sonnet-5-5",
   "transport": "claude-cli",
   "attempts": [
     {
       "step": "plan",
       "n": 1,
-      "outcome": "invalid_output",
-      "ms": 139843,
-      "costUsd": 0.34799060000000004
-    },
-    {
-      "step": "plan",
-      "n": 2,
       "outcome": "accepted",
-      "ms": 49559,
-      "costUsd": 0.17296
-    },
-    {
-      "step": "model",
-      "n": 1,
-      "outcome": "accepted",
-      "ms": 20280,
-      "costUsd": 0.1390516
-    },
-    {
-      "step": "workflow",
-      "n": 1,
-      "outcome": "accepted",
-      "ms": 15981,
-      "costUsd": 0.1445758
-    },
-    {
-      "step": "seed",
-      "n": 1,
-      "outcome": "accepted",
-      "ms": 20869,
-      "costUsd": 0.1533576
+      "ms": 9586,
+      "costUsd": 0.0720678
     },
     {
       "step": "tasks",
       "n": 1,
       "outcome": "accepted",
-      "ms": 109949,
-      "costUsd": 0.3083806
+      "ms": 20339,
+      "costUsd": 0.19891920000000002
     }
   ],
-  "ms": 357089,
-  "costUsd": 1.2663162000000001
+  "ms": 31794,
+  "costUsd": 0.27098700000000003
 }

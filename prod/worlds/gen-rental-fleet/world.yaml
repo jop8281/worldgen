@@ -10,10 +10,14 @@ meta:
     tick: 1s
   api:
     list:
+      mode: cursor
       dataKey: data
       cursorKey: next_cursor
       limitParam: limit
       cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
     error:
       error:
         code: $code
@@ -815,14 +819,15 @@ tests:
 tasks:
   cancel_elena_reservation:
     difficulty: easy
-    instruction: Elena Voss has called off her trip. Cancel her upcoming reservation and give a reason for the cancellation. Do not change anything else.
-    grader: "(ctx) => { const el = ctx.seed.list('customer', { where: { name: 'Elena Voss' } })[0]; if (!el) return 0; const t = ctx.seed.list('rental', { where: { customer_id: el.id, status: 'reserved' } })[0]; if (!t) return 0; ctx.guard('only the target rental changed', ctx.changes().every((c) => c.entity === 'rental' && c.id === t.id)); ctx.guard('only cancel_rental wrote the target', ctx.trace().every((c) => c.routeId === 'cancel_rental' || !c.writes.some((w) => w.entity === 'rental' && w.id === t.id))); const end = ctx.db.get('rental', t.id); ctx.goal(0.6, 'reservation cancelled', end.status === 'cancelled'); ctx.goal(0.4, 'a cancel reason is stored', end.status === 'cancelled' && typeof end.cancel_reason === 'string' && end.cancel_reason.trim() !== ''); return ctx.score(); }"
+    instruction: Elena Voss has called off her trip. Cancel her upcoming reservation and give a reason for the cancellation that contains the word "trip". Do not change anything else.
+    grader: "(ctx) => { const el = ctx.seed.list('customer', { where: { name: 'Elena Voss' } })[0]; if (!el) return 0; const t = ctx.seed.list('rental', { where: { customer_id: el.id, status: 'reserved' } })[0]; if (!t) return 0; ctx.guard('only the target rental changed', ctx.changes().every((c) => c.entity === 'rental' && c.id === t.id)); ctx.guard('only cancel_rental wrote the target', ctx.trace().every((c) => c.routeId === 'cancel_rental' || !c.writes.some((w) => w.entity === 'rental' && w.id === t.id))); const end = ctx.db.get('rental', t.id); ctx.goal(0.6, 'reservation cancelled', end.status === 'cancelled'); ctx.goal(0.4, 'the cancel reason mentions the trip', end.status === 'cancelled' && typeof end.cancel_reason === 'string' && /trip/i.test(end.cancel_reason)); return ctx.score(); }"
     solution: "(ctx) => { const el = ctx.api('GET', '/customers?q=Elena').body.data.find((c) => c.name === 'Elena Voss'); ctx.assert(el, 'customer Elena Voss not found'); const rs = ctx.api('GET', '/customers/' + el.id + '/rentals?status=reserved').body.data; ctx.assert(rs.length === 1, 'expected one reserved rental, found ' + rs.length); const r = ctx.api('POST', '/rentals/' + rs[0].id + '/cancel', { reason: 'Trip called off' }); ctx.assert(r.status === 200, 'cancel failed: ' + JSON.stringify(r.body)); }"
     decoys:
       - why: cancels the first reserved rental in the list, which belongs to another customer, instead of Elena Voss's
         script: "(ctx) => { const el = ctx.api('GET', '/customers?q=Elena').body.data.find((c) => c.name === 'Elena Voss'); const other = ctx.api('GET', '/rentals?status=reserved&limit=50').body.data.find((r) => r.customer_id !== el.id); ctx.api('POST', '/rentals/' + other.id + '/cancel', { reason: 'Trip called off' }); }"
       - why: cancels Elena's reservation but also cancels another customer's reservation as collateral
         script: "(ctx) => { const el = ctx.api('GET', '/customers?q=Elena').body.data.find((c) => c.name === 'Elena Voss'); const all = ctx.api('GET', '/rentals?status=reserved&limit=50').body.data; for (const r of all.slice(0, 2)) ctx.api('POST', '/rentals/' + r.id + '/cancel', { reason: 'Trip called off' }); const mine = ctx.api('GET', '/customers/' + el.id + '/rentals?status=reserved').body.data; for (const r of mine) ctx.api('POST', '/rentals/' + r.id + '/cancel', { reason: 'Trip called off' }); }"
+    alternatives: []
   return_tomas_reyes_suv:
     difficulty: medium
     instruction: Tomas Reyes is at the counter returning his SUV, which is past its due time. Check his current rental in with an odometer reading of 48210 km. Do not charge or edit any late fee yourself, and do not touch his older rental.
@@ -835,6 +840,7 @@ tasks:
         script: "(ctx) => { const tm = ctx.api('GET', '/customers?q=Tomas').body.data.find((c) => c.name === 'Tomas Reyes'); const act = ctx.api('GET', '/customers/' + tm.id + '/rentals?status=active').body.data; ctx.api('PATCH', '/vehicles/' + act[0].vehicle_id, { status: 'available', odometer_km: 48210 }); }"
       - why: returns the right rental correctly, then also renames the make of the returned vehicle
         script: "(ctx) => { const tm = ctx.api('GET', '/customers?q=Tomas').body.data.find((c) => c.name === 'Tomas Reyes'); const act = ctx.api('GET', '/customers/' + tm.id + '/rentals?status=active').body.data; const r = ctx.api('POST', '/rentals/' + act[0].id + '/return', { odometer_in: 48210 }); ctx.assert(r.status === 200, 'return failed: ' + JSON.stringify(r.body)); const p = ctx.api('PATCH', '/vehicles/' + act[0].vehicle_id, { make: 'Toyota (edited)' }); ctx.assert(p.status === 200, 'patch failed: ' + JSON.stringify(p.body)); }"
+    alternatives: []
   waive_priya_late_fee:
     difficulty: medium
     instruction: Priya Natarajan has two rentals that were returned late and charged a late fee. Waive the late fee only on the one she returned most recently, with the reason 'flight delay'. Leave the other one charged.
@@ -847,10 +853,11 @@ tasks:
         script: "(ctx) => { const pr = ctx.api('GET', '/customers?q=Priya').body.data.find((c) => c.name === 'Priya Natarajan'); const rs = ctx.api('GET', '/customers/' + pr.id + '/rentals?status=returned').body.data; for (const r of rs) { if (r.late_fee_applied && r.late_fee > 0) ctx.api('POST', '/rentals/' + r.id + '/waive_late_fee', { reason: 'flight delay' }); } }"
       - why: waives the right rental but gives a reason other than flight delay
         script: "(ctx) => { const pr = ctx.api('GET', '/customers?q=Priya').body.data.find((c) => c.name === 'Priya Natarajan'); const rs = ctx.api('GET', '/customers/' + pr.id + '/rentals?status=returned&sort=-returned_at').body.data; const latest = rs.find((r) => r.late_fee_applied && r.late_fee > 0); ctx.api('POST', '/rentals/' + latest.id + '/waive_late_fee', { reason: 'customer goodwill' }); }"
+    alternatives: []
   triage_small_claims:
     difficulty: hard
-    instruction: Triage every damage claim that is currently under review. Deny each one whose estimated cost is under $150 as minor wear and tear, with a reason. Approve each one whose estimated cost is $150 or more at its full estimated cost. Do not settle anything and do not touch claims in any other status.
-    grader: "(ctx) => { const targets = ctx.seed.list('damage_claim', { where: { status: 'under_review' } }); if (targets.length === 0) return 0; const ids = new Set(targets.map((t) => t.id)); const vids = new Set(targets.map((t) => t.vehicle_id)); ctx.guardChanges('only the under_review claims were decided', targets.flatMap((t) => [{ entity: 'damage_claim', id: t.id, kind: 'updated', fields: t.estimated_cost < 15000 ? ['status', 'denial_reason', 'resolved_at'] : ['status', 'approved_amount', 'resolved_at'] }, ...(t.estimated_cost < 15000 ? [] : [{ entity: 'vehicle', id: t.vehicle_id, kind: 'updated', fields: ['status'] }])])); let done = 0; for (const t of targets) { const e = ctx.db.get('damage_claim', t.id); if (t.estimated_cost < 15000) { if (e.status === 'denied' && typeof e.denial_reason === 'string' && e.denial_reason.trim() !== '') done += 1; } else if (e.status === 'approved' && e.approved_amount === t.estimated_cost) { done += 1; } } return done / targets.length; }"
+    instruction: Triage every damage claim that is currently under review. Deny each one whose estimated cost is under $150 as minor wear and tear, with a denial reason that contains the phrase "wear and tear". Approve each one whose estimated cost is $150 or more at its full estimated cost. Do not settle anything and do not touch claims in any other status.
+    grader: "(ctx) => { const targets = ctx.seed.list('damage_claim', { where: { status: 'under_review' } }); if (targets.length === 0) return 0; const ids = new Set(targets.map((t) => t.id)); const vids = new Set(targets.map((t) => t.vehicle_id)); ctx.guardChanges('only the under_review claims were decided', targets.flatMap((t) => [{ entity: 'damage_claim', id: t.id, kind: 'updated', fields: t.estimated_cost < 15000 ? ['status', 'denial_reason', 'resolved_at'] : ['status', 'approved_amount', 'resolved_at'] }, ...(t.estimated_cost < 15000 ? [] : [{ entity: 'vehicle', id: t.vehicle_id, kind: 'updated', fields: ['status'] }])])); let done = 0; for (const t of targets) { const e = ctx.db.get('damage_claim', t.id); if (t.estimated_cost < 15000) { if (e.status === 'denied' && typeof e.denial_reason === 'string' && /wear and tear/i.test(e.denial_reason)) done += 1; } else if (e.status === 'approved' && e.approved_amount === t.estimated_cost) { done += 1; } } return done / targets.length; }"
     solution: "(ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : '&cursor=' + cursor)); ctx.assert(r.status === 200, 'GET ' + path + ' failed: ' + JSON.stringify(r.body)); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null && cursor !== undefined); return rows; }; const claims = pages('/damage_claims?status=under_review&limit=25'); ctx.assert(claims.length > 0, 'no under_review claims found'); for (const c of claims) { const r = c.estimated_cost < 15000 ? ctx.api('POST', '/damage_claims/' + c.id + '/deny', { reason: 'Minor wear and tear' }) : ctx.api('POST', '/damage_claims/' + c.id + '/approve', { approved_amount: c.estimated_cost }); ctx.assert(r.status === 200, 'triage of ' + c.id + ' failed: ' + JSON.stringify(r.body)); } }"
     decoys:
       - why: reads only the first page of under_review claims, so the claims on page 2 are never triaged
@@ -865,3 +872,4 @@ tasks:
         script: "(ctx) => { const claims = []; let cursor = null; do { const r = ctx.api('GET', '/damage_claims?status=under_review' + (cursor === null ? '' : '&cursor=' + cursor)); claims.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null && cursor !== undefined); for (const c of claims) { if (c.estimated_cost < 15000) ctx.api('POST', '/damage_claims/' + c.id + '/deny', { reason: 'Minor wear and tear' }); else { ctx.api('POST', '/damage_claims/' + c.id + '/approve', { approved_amount: c.estimated_cost }); ctx.api('POST', '/damage_claims/' + c.id + '/settle'); } } }"
       - why: triages every claim correctly, then also renames the make of one claimed vehicle
         script: "(ctx) => { const pages = (path) => { const rows = []; let cursor = null; do { const r = ctx.api('GET', path + (cursor === null ? '' : '&cursor=' + cursor)); rows.push(...r.body.data); cursor = r.body.next_cursor; } while (cursor !== null && cursor !== undefined); return rows; }; const claims = pages('/damage_claims?status=under_review&limit=25'); for (const c of claims) { const r = c.estimated_cost < 15000 ? ctx.api('POST', '/damage_claims/' + c.id + '/deny', { reason: 'Minor wear and tear' }) : ctx.api('POST', '/damage_claims/' + c.id + '/approve', { approved_amount: c.estimated_cost }); ctx.assert(r.status === 200, 'triage failed: ' + JSON.stringify(r.body)); } const p = ctx.api('PATCH', '/vehicles/' + claims[0].vehicle_id, { make: 'Chrysler (edited)' }); ctx.assert(p.status === 200, 'patch failed: ' + JSON.stringify(p.body)); }"
+    alternatives: []

@@ -220,8 +220,8 @@ describe('renderReport: a finished run', () => {
       '',
       '| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |',
       '|---|---|---|---|---|---|---|---|',
-      '| resolve_password_ticket | easy | 1.000 | 0.000 | none | n/a | legacy; mutants 5/7 | `tid_<sha256>` |',
-      '| escalate_acme | hard | 1.000 | 0.000 | 0.500, 0.250 | 0.750 | legacy; mutants 5/7 | `tid_<sha256>` |',
+      '| resolve_password_ticket | easy | 1.000 | 0.000 | none | n/a | legacy; mutants 6/8 | `tid_<sha256>` |',
+      '| escalate_acme | hard | 1.000 | 0.000 | 0.500, 0.250 | 0.750 | legacy; mutants 6/8 | `tid_<sha256>` |',
       '',
       "Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).",
       '',
@@ -234,7 +234,7 @@ describe('renderReport: a finished run', () => {
 
   it('renders the unmodified engine verdict of the easy task as one literal row', () => {
     const real = renderReport({ plan: PLAN, report: OK, events: [] });
-    assert.equal(masked(real).split('\n').includes('| resolve_password_ticket | easy | 1.000 | 0.000 | none | n/a | legacy; mutants 5/7 | `tid_<sha256>` |'), true);
+    assert.equal(masked(real).split('\n').includes('| resolve_password_ticket | easy | 1.000 | 0.000 | none | n/a | legacy; mutants 6/8 | `tid_<sha256>` |'), true);
     assert.equal(real.includes('| escalate_acme | hard | 1.000 | 0.000 |'), true);
   });
 
@@ -243,7 +243,7 @@ describe('renderReport: a finished run', () => {
     assert.ok(t);
     const world = { ...OK.world, tasks: { ...OK.world.tasks, resolve_password_ticket: { ...t, allows: [{ entity: 'ticket', kind: 'updated' as const, fields: ['status'] }] } } };
     const real = renderReport({ plan: PLAN, report: { ...OK, world } as typeof OK, events: [] });
-    assert.equal(masked(real).split('\n').some((l) => l.startsWith('| resolve_password_ticket | easy |') && l.includes('| declared (1); mutants 5/7 |')), true);
+    assert.equal(masked(real).split('\n').some((l) => l.startsWith('| resolve_password_ticket | easy |') && l.includes('| declared (1); mutants 6/8 |')), true);
   });
 
   it('names the world and each task by the engine content ids of the reported world', () => {

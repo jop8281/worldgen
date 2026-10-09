@@ -55,6 +55,11 @@ Jobs (2):
 - `auto_close_parents`: every 1h
 - `auto_archive_done`: every 1d
 
+## Changes
+
+- snippet_changed `tasks.cancel_stale_backlog_in_milestone.grader`
+- item_changed `tasks.cancel_stale_backlog_in_milestone.instruction`
+
 ## Assumed and why
 
 - clock.start is 2026-10-07T09:00:00.000Z and clock.tick is 1s.
@@ -89,6 +94,8 @@ Jobs (2):
   - Why: Linear auto-archives closed issues. The imported data spans only one day, so the job is quiet at the start and only tests move the clock.
 - The list envelope uses the engine defaults: data, next_cursor, limit and cursor. The error body is {error:{code,message}}.
   - Why: No source API spec was given, so nothing contradicts the defaults.
+- The required keyword in the cancel reason is 'stale', matching the task name, checked case-insensitively against the new comment.body on each target issue.
+  - Why: The request asks for a keyword the task already gives; the task id says stale backlog.
 
 ## Questions asked of the input
 
@@ -130,41 +137,66 @@ Jobs (2):
 
 The engine check passed: 9 world tests, 1 warning. Each row is one engine TaskVerdict.
 
-| Task | Difficulty | Solution | Noop | Decoys | Best prefix |
-|---|---|---|---|---|---|
-| start_the_welcome_issue | easy | 1.000 | 0.000 | 0.000, 0.000 | n/a |
-| cancel_stale_backlog_in_milestone | medium | 1.000 | 0.000 | 0.000, 0.000, 0.700, 0.000 | 0.000 |
-| close_out_epic_with_sub_issues | hard | 1.000 | 0.000 | 0.000, 0.000, 0.340, 0.000 | 0.670 |
-| merge_duplicate_issues | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000, 0.000 | 0.500 |
+World id (WID): `wid_8c3a7830d13af4f913c9385fc7ce71a376894dba0fdb5a614e945efdf7cc4641`.
+
+Paging exemptions:
+
+- `label` fits on one page (11 rows), but its rows come from the input's fixtures, so the input sets its size and no task is held to paging on it.
+
+| Task | Difficulty | Solution | Noop | Decoys | Best prefix | Collateral | TID |
+|---|---|---|---|---|---|---|---|
+| start_the_welcome_issue | easy | 1.000 | 0.000 | 0.000, 0.000, 0.000 | n/a | legacy; mutants 4/8 | `tid_c55d9106ad495942d57e7f2af02948b9207d7c6be1ec06585eada636cd479507` |
+| cancel_stale_backlog_in_milestone | medium | 1.000 | 0.000 | 0.000, 0.000, 0.700, 0.000, 0.000 | 0.000 | legacy; mutants 3/8 | `tid_8b4a65368d73ee80e91052b79ac3c5c3e7fddeb5054df624788b1d2ae433de9e` |
+| close_out_epic_with_sub_issues | hard | 1.000 | 0.000 | 0.000, 0.000, 0.340, 0.000, 0.000 | 0.670 | legacy; mutants 3/8 | `tid_f694082b959c015c6b7e1a0a5d7a16de8aa265c102fd454897f6d88f0673d21e` |
+| merge_duplicate_issues | hard | 1.000 | 0.000 | 0.500, 0.000, 0.000, 0.000 | 0.500 | legacy; mutants 5/8 | `tid_d9666d276e95e7e4ef50b9509afe20325a7ed3213dfb8bd50f58a7b4569c99d3` |
+
+Collateral: *declared (n)* means the task's `allows` contract is enforced by the engine (A-224); *legacy* means only its grader's own guards and the engine mutants judge it (YOS-156). *mutants k/7* is how many engine mutant kinds found something to probe; an unprobed kind is not a pass (A-222).
 
 Decoys:
 
 - `start_the_welcome_issue` 0.000: starts the Stress run 1 backlog issue, a different backlog issue, instead of the rehearsal one
 - `start_the_welcome_issue` 0.000: starts the right issue but then also sends it to review, so it ends in review instead of in progress
+- `start_the_welcome_issue` 0.000: starts the rehearsal issue correctly, then also edits its title
 - `cancel_stale_backlog_in_milestone` 0.000: cancels every backlog issue in the milestone and ignores the label, so it also cancels the area:eval and area:infra ones
 - `cancel_stale_backlog_in_milestone` 0.000: cancels every backlog issue with the area:engine label in any milestone, ignoring the milestone
 - `cancel_stale_backlog_in_milestone` 0.700: cancels the right issues but gives no reason, so no explanatory comment is left on them
 - `cancel_stale_backlog_in_milestone` 0.000: filters by milestone and label but ignores status, so it also cancels the in-progress issues that carry area:engine
+- `cancel_stale_backlog_in_milestone` 0.000: cancels every target correctly, then also edits the title of one of them
 - `close_out_epic_with_sub_issues` 0.000: completes the open sub-issues but never completes the epics themselves
 - `close_out_epic_with_sub_issues` 0.000: cancels the sub-issues to unblock the epics, which loses the in-flight work, then completes the epics
 - `close_out_epic_with_sub_issues` 0.340: closes out only the first epic it finds and stops, leaving the other two epics open
 - `close_out_epic_with_sub_issues` 0.000: tries to complete each epic first, gets 409 open_sub_issues and then completes only the sub-issues without retrying the epics
+- `close_out_epic_with_sub_issues` 0.000: closes out every epic correctly, then also edits the title of the first one
 - `merge_duplicate_issues` 0.500: copies only the Bug label and misses area:worldgen, so the merge is incomplete
 - `merge_duplicate_issues` 0.000: moves the labels instead of copying them: attaches them to the original and removes them from the duplicate
 - `merge_duplicate_issues` 0.000: attaches the labels to the original of a different duplicate pair (YOS-121, the original of YOS-122) instead of the real original
 - `merge_duplicate_issues` 0.000: attaches the labels to the original but also reopens the duplicate, changing an issue it should leave closed
 
+## Coverage
+
+From each reference solution's trace. A hard task must change more than one row or reach a row past the first list page, and a task's declared pressure must show in its trace or the seed.
+
+| Task | Difficulty | Rows changed | Later-page rows in | Distractor rows in | Checks |
+|---|---|---|---|---|---|
+| start_the_welcome_issue | easy | 2 | none | issue | none declared |
+| cancel_stale_backlog_in_milestone | medium | 8 | none | issue | none declared |
+| close_out_epic_with_sub_issues | hard | 12 | issue | none | hard: met |
+| merge_duplicate_issues | hard | 4 | none | none | hard: met |
+
 ## Run
 
-Mode: create from csv. Model: claude-sonnet-5-5. Budget: $5.00.
+Mode: iterate from change_request. Model: claude-sonnet-5-5. Budget: $3.00.
 
 | Step | Attempts | Minutes | $ |
 |---|---|---|---|
-| plan | 1 | 1.54 | 0.1421 |
-| model | 1 | 0.49 | 0.1740 |
-| workflow | 2 | 2.19 | 0.5992 |
-| seed | 3 | 1.36 | 0.7191 |
-| tasks | 1 | 2.70 | 0.4568 |
-| Total | 8 | 8.28 | 2.0912 |
+| plan | 1 | 0.08 | 0.0516 |
+| tasks | 1 | 0.20 | 0.2671 |
+| Total | 2 | 0.27 | 0.3188 |
 
-Run total: 8.58 minutes, $2.0912.
+Skipped:
+
+- `model`: no planned change reaches entities, routes, fixtures
+- `workflow`: no planned change reaches actions, jobs, entities, routes, tests
+- `seed`: no planned change reaches seed, entities, fixtures; it keeps 1 issue(s) the world had before this iterate: plan.seed_rows_short
+
+Run total: 0.49 minutes, $0.3188.

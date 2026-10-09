@@ -68,7 +68,8 @@ function taskMd(t: Task): string {
     ...(p.distractors === undefined ? [] : [`distractor rows of ${p.distractors}`]),
   ];
   return [
-    item(`\`${t.id}\` (${t.difficulty}): ${t.intent}`),
+    item(`\`${t.id}\` (${t.difficulty}${t.kind === undefined ? '' : `, ${t.kind}`}): ${t.intent}`),
+    ...(t.actions === undefined || t.actions.length === 0 ? [] : [item(`Actions: ${t.actions.map((a) => `\`${a}\``).join(', ')}`, 1)]),
     item(`Decoy idea: ${t.decoyIdea}`, 1),
     ...(pressure.length === 0 ? [] : [item(`Pressure: ${pressure.join('; ')}`, 1)]),
   ].join('\n');

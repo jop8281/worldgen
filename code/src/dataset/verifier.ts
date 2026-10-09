@@ -22,6 +22,7 @@ import {
 } from '#engine';
 import { isolatedEnv, lastLines, nodeRunner, type Runner, type RunResult } from '../sandboxes/backend.ts';
 import type { EpisodeGrader, EpisodeSubmission, GradeResult } from './episode.ts';
+import { gradeCountsOf } from './schema.ts';
 
 /** What a grader factory receives: the run's identities and the frozen private world's directory. No CheckedWorld, so a controller that never loaded the world can grade. */
 export type HeldWorld = {
@@ -101,7 +102,7 @@ export function engineGrader(held: HeldWorld): EpisodeGrader {
       seen,
     );
     if (ledger !== null) seen.add(ledger);
-    return verdict.stop === 'graded' ? { ok: true, score: verdict.score } : { ok: false, reason: reasonOf(verdict.stop) };
+    return verdict.stop === 'graded' ? { ok: true, score: verdict.score, goals: verdict.goals, guards: verdict.guards } : { ok: false, reason: reasonOf(verdict.stop) };
   };
 }
 
@@ -112,8 +113,8 @@ const CHILD_TIMEOUT_MS = 300_000;
 
 /**
  * The child's answer on stdout as a grade result, or null when it is not a verdict. Only the
- * bounded fields are read: a stop code and a score, so nothing a broken child could print
- * becomes an episode's reason.
+ * bounded fields are read: a stop code, a score and two integer pairs of goal and guard counts,
+ * so nothing a broken child could print becomes an episode's reason or label.
  */
 function verdictOf(text: string): GradeResult | null {
   let v: unknown;
@@ -122,10 +123,12 @@ function verdictOf(text: string): GradeResult | null {
   } catch {
     return null;
   }
-  const o = v as { task?: unknown; stop?: unknown; score?: unknown } | null;
+  const o = v as { task?: unknown; stop?: unknown; score?: unknown; goals?: unknown; guards?: unknown } | null;
   if (o === null || typeof o !== 'object' || typeof o.task !== 'string' || typeof o.stop !== 'string') return null;
   if (o.stop === 'graded') {
-    return typeof o.score === 'number' && Number.isFinite(o.score) && o.score >= 0 && o.score <= 1 ? { ok: true, score: o.score } : null;
+    const counts = gradeCountsOf(o.goals, o.guards);
+    const ok = typeof o.score === 'number' && Number.isFinite(o.score) && o.score >= 0 && o.score <= 1 && counts !== null;
+    return ok ? { ok: true, score: o.score as number, ...counts } : null;
   }
   const stop = REJECT_STOPS.find((s) => s === o.stop);
   return stop === undefined ? null : { ok: false, reason: reasonOf(stop) };

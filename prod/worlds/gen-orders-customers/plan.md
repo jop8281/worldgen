@@ -2,7 +2,7 @@
 
 A small storefront back office. Customers (18) place orders (72) that move through a payment and fulfilment lifecycle. Agents list and filter orders, then pay, ship, deliver, cancel or refund them. A nightly job cancels stale unpaid orders. Seed rows come from the two imported CSV fixtures, with ids and timestamps kept as given.
 
-- Revision: 1
+- Revision: 2
 - Verdict: proceed
 - Clock: starts 2026-04-08T09:00:00.000Z, tick 0s
 
@@ -65,8 +65,8 @@ None. The plan records no acceptance test.
 
 - `ship_ada_paid_order` (easy): Ship the one paid order of the customer Ada Lovelace (found by name, not id). It should become shipped, with shipped_at set, and nothing else changes. The seed must give Ada exactly one paid order.
   - Decoy idea: Mark it shipped with a plain PATCH (rejected, as status is readonly), or ship a paid order of a different customer with a similar name.
-- `cancel_customer_unpaid_orders` (medium): Cancel every pending order of the customer with a given email (a customer with 4 or more orders in mixed states). Orders in other statuses and other customers' pending orders stay untouched. The agent must look up the customer by email, list that customer's orders and filter by status.
-  - Decoy idea: Cancel all of that customer's orders including paid ones (the action refuses these, so partial), or cancel every pending order in the store, or list only the first page of /orders and miss some.
+- `cancel_customer_unpaid_orders` (medium): Cancel every pending order of the customer with a given email (a customer with 4 or more orders in mixed states). Each cancellation must pass a reason that contains the word 'unpaid', and the instruction says so. The grader checks that each cancelled order's note contains 'unpaid', so nonsense text scores below 1. Orders in other statuses and other customers' pending orders stay untouched. The agent must look up the customer by email, list that customer's orders and filter by status.
+  - Decoy idea: Cancel all of that customer's orders including paid ones (the action refuses these, so partial), or cancel every pending order in the store, or list only the first page of /orders and miss some, or cancel the right orders with a reason that does not mention 'unpaid'.
 - `refund_large_gb_pro_orders` (hard): Refund every delivered order over $100 (10000 cents) that belongs to a customer in country GB on the pro plan. Orders of other countries or plans, and orders under the limit, must not change. It needs a customer lookup with filters, then orders from all 3 pages. Seed anchors place targets on page 2 and 3, and one near-miss order sits at exactly 10000 cents.
   - Decoy idea: Read only page 1 of the orders and refund only those. Refund shipped orders as well as delivered ones. Treat 'over $100' as 'at least $100' and refund the 10000-cent order. Ignore the plan and refund every GB customer's orders.
 
@@ -115,6 +115,8 @@ None. The plan records no acceptance test.
   - Why: All seeded rows must be in the past. 72 orders then give 3 pages, so paging matters.
 - Customer lists use pageSize 10 (18 customers gives 2 pages). Customer sort and search are on name and email.
   - Why: With only 18 customers, a default 25 would never page.
+- The required cancel reason keyword is 'unpaid', matched case-insensitively in shop_order.note.
+  - Why: The task is about unpaid (pending) orders, so the word comes from the task itself and a free-text check can reject nonsense such as 'bananas'.
 
 ## Out of scope
 
@@ -131,4 +133,4 @@ None. The plan records no acceptance test.
 
 ## Changes
 
-None. The plan changes no existing item.
+- tasks.cancel_customer_unpaid_orders

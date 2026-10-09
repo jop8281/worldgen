@@ -92,7 +92,7 @@ The "WorldGen design doc" session filed a 22-item review on 2026-10-06. Each ite
 | 10 | A required body field is never read | **Implemented** as the warning `route.unused_required_input` (#76): a required action input whose name never appears in its handler. It is a warning, so it does not block a world. |
 | 11 | The collateral guard misfires | **Implemented.** `changes()` ignores engine timestamps and changes made by jobs (A-28). |
 | 12 | Grader naming | **Rejected.** `ctx.seed` really is the start state, because tasks start from seed, and `now()` is a function everywhere (A-18). |
-| 13 | Weak proofs | **Implemented.** Solution-prefix mutants, collateral mutants (A-156), non-trivial decoys and replay all run in `verifyTask`. |
+| 13 | Weak proofs | **Implemented, with coverage measured.** Solution-prefix mutants, collateral mutants (A-156), non-trivial decoys and replay all run in `verifyTask`. A-387 adds the undone-write mutant and A-388 the free-text swap. A-393 measures what they all reach: on the prod worlds they flip 275 of 299 grader checks, and 364 of 760 mutant slots find something to probe (`research/evidence/probe-coverage.md`). |
 | 14 | Determinism hazards in TypeScript | **Implemented.** The symbol ban, the sandbox allowlist, code-unit ordering instead of `localeCompare`, and the call quota. Replay in a fresh process is deferred. |
 | 15 | Nothing happens when time passes | **Implemented.** `jobs` fire on clock advance (A-17). |
 | 16 | Stall detection | **Implemented** as `no_progress`. A best-so-far measure is deferred. |
@@ -118,7 +118,7 @@ Each target from the design doc, with the evidence for its status. The numbers c
 | Enforce, atomic, deterministic, jobs on time | Met | `store.ts` `transact()`, `clock.ts`, the sandbox allowlist and replay. See section 2. |
 | Serve with a separate admin port and `/openapi.json` | Met | `engine/http.ts`. Admin binds loopback unless `--admin-host` is set (A-67). |
 | Dump with a hash, reset, log, clock, grade | Met | `GET /_world/state` returns `world` and `hash`, plus `POST /_world/reset`, `GET /_world/log`, `POST /_world/clock` and `POST /_world/grade/<task>`. |
-| Graders discriminate | Met | `worldplay verify`. Solution 1, noop 0, every decoy, strict prefix and collateral mutant below 1, and identical replay. Medium and hard tasks need decoys. |
+| Graders discriminate | Partial | `worldplay verify`. Solution 1, noop 0, every decoy, strict prefix and collateral mutant below 1, and identical replay. Medium and hard tasks need decoys. Coverage is measured, not total: the probes flip 275 of 299 grader checks on the prod worlds, and 396 of 760 mutant slots find nothing to probe (A-393, `research/evidence/probe-coverage.md`). |
 | Hand-built helpdesk with SLA tiers and on-call escalation | Met | `prod/worlds/helpdesk/`. Verify: easy, medium and hard tasks at solution 1.000 and noop 0.000. Best decoy 0.700, best prefix 0.857. |
 | WorldGen runnable with one command | Met | `bun run worldgen "<prompt>"`. Exit 0 with `world.yaml`, or exit 1 with no world and the reason in REPORT.md (A-39). |
 | Description, OpenAPI and CSV inputs | Met | `worldgen/input.ts`. The `run_started` event in each world's `runs/*/events.jsonl` records the input. Of the 23 generated worlds, 11 came from a description, 4 from an OpenAPI spec, 6 from CSV and 2 from an iterate run on an existing world. `gen-linear-backlog` has no `runs/`, so its CSV input comes from its REPORT.md. The table below lists each world. |

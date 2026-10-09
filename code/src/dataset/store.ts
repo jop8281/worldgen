@@ -4,12 +4,13 @@
  *
  * Layout under the output directory `out`:
  *   logs/<run_id>.episodes.jsonl        every episode of a run, success or not, appended as it ends
- *   dataset.jsonl, failures.jsonl       the export: complete successes, and everything else
+ *   dataset.jsonl                       the export: every episode with its outcome, or the successes alone (A-389)
  *   manifest.json                       counts, checksums, versions and the frozen world reference
  *   private/worlds/<hash>/world.yaml    the frozen world (graders and solutions): never exported
  *   private/episodes/<id>/              the engine's initial and final state and call log
  *   private/diagnostics/<run_id>/       what was collected from the sandbox
- * Everything public is the three export files. Everything under private/ stays out of them.
+ * Everything public is the two export files. Everything under private/ stays out of them. A version 1 export also had
+ * failures.jsonl, for everything that was not a complete success; it still validates, and a new export removes it.
  */
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -19,13 +20,14 @@ import { hostname } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
-  DatasetError, GRADING_NOTE, MANIFEST_VERSION, PROVIDER, SCHEMA_VERSION, canonicalJson, hashState, isCompleteSuccess, parseEpisode, parseManifest, sha256Hex,
-  type Episode, type Manifest, type Redactor,
+  DatasetError, GRADING_NOTE, MANIFEST_VERSION, PROVIDER, SCHEMA_VERSION, canonicalJson, hashState, isCompleteSuccess, parseEpisode, parseEpisodeV1,
+  parseManifest, sha256Hex, type Episode, type EpisodeV1, type FileEntry, type Manifest, type ManifestV1, type Redactor,
 } from './schema.ts';
 import { DEFAULT_MODEL } from '../worldgen/config.ts';
 import type { PrivateArtifacts } from './episode.ts';
 
 export const DATASET_FILE = 'dataset.jsonl';
+/** A version 1 export's second file. A new export removes it. */
 export const FAILURES_FILE = 'failures.jsonl';
 export const MANIFEST_FILE = 'manifest.json';
 const LOGS_DIR = 'logs';
@@ -61,7 +63,7 @@ const readOptional = (file: string): Promise<string | undefined> => readFile(fil
 });
 
 /** Parses a JSONL file line by line. A missing final newline, a blank line or a bad record is corruption. */
-function parseLines(text: string, where: string, parse: (raw: unknown, at: string) => Episode): Episode[] {
+function parseLines<T>(text: string, where: string, parse: (raw: unknown, at: string) => T): T[] {
   if (text === '') return [];
   if (!text.endsWith('\n')) throw new DatasetError(`${where}: the last line is incomplete`);
   return text.slice(0, -1).split('\n').map((line, i) => {
@@ -358,10 +360,13 @@ export type ExportOptions = {
   readonly runIds?: readonly string[];
   readonly taskIds?: readonly string[];
   readonly episodeIds?: readonly string[];
+  /** Export the complete successes alone, the view a version 1 dataset.jsonl gave. */
+  readonly successesOnly?: boolean;
 };
-export type ExportResult = { readonly manifest: Manifest; readonly accepted: readonly Episode[]; readonly failed: readonly Episode[] };
+export type ExportResult = { readonly manifest: Manifest; readonly episodes: readonly Episode[] };
 
-const byKey = (a: Episode, b: Episode): number => {
+type Keyed = { readonly run_id: string; readonly task_id: string; readonly episode_id: string };
+const byKey = (a: Keyed, b: Keyed): number => {
   const ka = [a.run_id, a.task_id, a.episode_id];
   const kb = [b.run_id, b.task_id, b.episode_id];
   for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return (ka[i] ?? '') < (kb[i] ?? '') ? -1 : 1;
@@ -369,6 +374,21 @@ const byKey = (a: Episode, b: Episode): number => {
 };
 const sorted = (xs: Iterable<string>): string[] => [...new Set(xs)].sort();
 const lines = (eps: readonly Episode[]): string => eps.map((e) => `${canonicalJson(e)}\n`).join('');
+/** How many of `keys` there are of each, in key order. */
+const tally = (keys: readonly string[]): Record<string, number> => {
+  const out: Record<string, number> = {};
+  for (const k of [...keys].sort()) out[k] = (out[k] ?? 0) + 1;
+  return out;
+};
+const countsOf = (eps: readonly Episode[]): Manifest['counts'] => {
+  const verdicts = tally(eps.map((e) => e.outcome.verdict));
+  return {
+    episodes: eps.length,
+    by_verdict: { success: verdicts['success'] ?? 0, partial: verdicts['partial'] ?? 0, failure: verdicts['failure'] ?? 0, infra: verdicts['infra'] ?? 0 },
+    by_stop_reason: tally(eps.map((e) => e.stop_reason)),
+    by_failure_cause: tally(eps.flatMap((e) => (e.outcome.failure_cause === null ? [] : [e.outcome.failure_cause]))),
+  };
+};
 
 /** Every episode in every saved log under `out`, deduplicated by id. Two different records with one id are a conflict. */
 async function loadSaved(out: string, redact: Redactor): Promise<Episode[]> {
@@ -416,10 +436,10 @@ async function exportClaimed(o: ExportOptions): Promise<ExportResult> {
     (o.runIds === undefined || o.runIds.includes(ep.run_id)) &&
     (o.taskIds === undefined || o.taskIds.includes(ep.task_id)) &&
     (o.episodeIds === undefined || o.episodeIds.includes(ep.episode_id));
-  const chosen = all.filter(keep).sort(byKey);
-  if (filtered && chosen.length === 0) throw new DatasetError('the run, task and episode filters match no saved episode');
-  const accepted = chosen.filter(isCompleteSuccess);
-  const failed = chosen.filter((e) => !isCompleteSuccess(e));
+  const matched = all.filter(keep).sort(byKey);
+  if (filtered && matched.length === 0) throw new DatasetError('the run, task and episode filters match no saved episode');
+  // A run that succeeded at nothing still exports, with no rows: only the id filters must match something.
+  const chosen = o.successesOnly === true ? matched.filter(isCompleteSuccess) : matched;
   // The manifest names one model (A-283): the one the episodes called. A noop episode called none, and an export with no model call keeps the default.
   const models = sorted(chosen.flatMap((e) => (e.model === null ? [] : [e.model])));
   if (models.length > 1) throw new DatasetError(`an export holds one model, and these episodes ran ${models.join(' and ')}: filter by run id`);
@@ -439,10 +459,7 @@ async function exportClaimed(o: ExportOptions): Promise<ExportResult> {
     refs.push({ ...w, artifact: { path: rel, sha256: sha } });
   }
 
-  const datasetText = lines(accepted);
-  const failuresText = lines(failed);
-  const byStop: Record<string, number> = {};
-  for (const ep of chosen) byStop[ep.stop_reason] = (byStop[ep.stop_reason] ?? 0) + 1;
+  const datasetText = lines(chosen);
   const manifest: Manifest = {
     manifest_version: MANIFEST_VERSION,
     schema_version: SCHEMA_VERSION,
@@ -452,32 +469,34 @@ async function exportClaimed(o: ExportOptions): Promise<ExportResult> {
     config_versions: sorted(chosen.map((e) => e.config_version)),
     engine_commits: sorted(chosen.map((e) => e.engine_commit)),
     run_ids: sorted(chosen.map((e) => e.run_id)),
-    selection: filtered ? { run_ids: sorted(o.runIds ?? []), task_ids: sorted(o.taskIds ?? []), episode_ids: sorted(o.episodeIds ?? []) } : null,
+    selection: filtered || o.successesOnly === true
+      ? { run_ids: sorted(o.runIds ?? []), task_ids: sorted(o.taskIds ?? []), episode_ids: sorted(o.episodeIds ?? []), successes_only: o.successesOnly === true }
+      : null,
     worlds: refs,
-    counts: { episodes: chosen.length, accepted: accepted.length, failed: failed.length, by_stop_reason: Object.fromEntries(Object.entries(byStop).sort(([a], [b]) => (a < b ? -1 : 1))) },
-    files: {
-      dataset: { path: DATASET_FILE, records: accepted.length, bytes: Buffer.byteLength(datasetText), sha256: sha256Hex(datasetText) },
-      failures: { path: FAILURES_FILE, records: failed.length, bytes: Buffer.byteLength(failuresText), sha256: sha256Hex(failuresText) },
-    },
+    counts: countsOf(chosen),
+    files: { dataset: { path: DATASET_FILE, records: chosen.length, bytes: Buffer.byteLength(datasetText), sha256: sha256Hex(datasetText) } },
     grading_note: GRADING_NOTE,
   };
   const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
-  for (const [what, text] of [[DATASET_FILE, datasetText], [FAILURES_FILE, failuresText], [MANIFEST_FILE, manifestText]] as const) o.redact.assertClean(what, text);
+  for (const [what, text] of [[DATASET_FILE, datasetText], [MANIFEST_FILE, manifestText]] as const) o.redact.assertClean(what, text);
 
   const tmp = path.join(o.out, '.export-tmp');
   await rm(tmp, { recursive: true, force: true });
   await mkdir(tmp, { recursive: true });
   try {
     await writeFile(path.join(tmp, DATASET_FILE), datasetText);
-    await writeFile(path.join(tmp, FAILURES_FILE), failuresText);
     await writeFile(path.join(tmp, MANIFEST_FILE), manifestText);
     await validateExport(tmp, { root: o.out, redact: o.redact });
-    for (const name of [DATASET_FILE, FAILURES_FILE, MANIFEST_FILE]) await rename(path.join(tmp, name), path.join(o.out, name));
+    await rename(path.join(tmp, DATASET_FILE), path.join(o.out, DATASET_FILE));
+    // A version 1 export's failures.jsonl would otherwise sit beside a dataset.jsonl that already holds its rows.
+    await rm(path.join(o.out, FAILURES_FILE), { force: true });
+    await rename(path.join(tmp, MANIFEST_FILE), path.join(o.out, MANIFEST_FILE));
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
   const reopened = await validateExport(o.out, { redact: o.redact });
-  return { manifest: reopened, accepted, failed };
+  if (reopened.manifest_version !== MANIFEST_VERSION) throw new DatasetError(`the export of ${o.out} reopened as manifest version ${reopened.manifest_version}`);
+  return { manifest: reopened, episodes: chosen };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -486,12 +505,14 @@ async function exportClaimed(o: ExportOptions): Promise<ExportResult> {
 /**
  * Reopens the written export in `dir` and checks it against its manifest and against the private
  * evidence under `root` (default `dir`): file sizes and hashes, one canonical valid record per
- * line in key order, successes complete and failures not, no id twice, counts, version lists, the
- * frozen world hashes, and the engine's state files for every accepted episode. Returns the
+ * line in key order, no id twice, counts, version lists, the frozen world hashes, and the engine's
+ * state files for every complete success. A version 2 export holds every episode in dataset.jsonl,
+ * or the successes alone when its selection says so. A version 1 export holds successes in
+ * dataset.jsonl and everything else in failures.jsonl, and is checked by its own rules. Returns the
  * manifest, or throws a DatasetError. A pass means the files are internally consistent; it does
  * not certify the replies' factual claims.
  */
-export async function validateExport(dir: string, opts: { readonly root?: string; readonly redact: Redactor }): Promise<Manifest> {
+export async function validateExport(dir: string, opts: { readonly root?: string; readonly redact: Redactor }): Promise<Manifest | ManifestV1> {
   const root = opts.root ?? dir;
   const manifestRaw = await readOptional(path.join(dir, MANIFEST_FILE));
   if (manifestRaw === undefined) throw new DatasetError(`${path.join(dir, MANIFEST_FILE)} does not exist`);
@@ -503,37 +524,60 @@ export async function validateExport(dir: string, opts: { readonly root?: string
     throw new DatasetError(`${MANIFEST_FILE}: not JSON: ${e instanceof Error ? e.message : String(e)}`);
   }
   const manifest = parseManifest(manifestJson, MANIFEST_FILE);
-
-  const read = async (entry: Manifest['files']['dataset'], expectSuccess: boolean): Promise<Episode[]> => {
-    const text = await readOptional(path.join(dir, entry.path));
-    if (text === undefined) throw new DatasetError(`${entry.path} does not exist`);
-    if (Buffer.byteLength(text) !== entry.bytes) throw new DatasetError(`${entry.path} has ${Buffer.byteLength(text)} bytes, the manifest says ${entry.bytes}`);
-    if (sha256Hex(text) !== entry.sha256) throw new DatasetError(`${entry.path} fails its checksum`);
-    opts.redact.assertClean(entry.path, text);
-    const eps = parseLines(text, entry.path, parseEpisode);
-    if (eps.length !== entry.records) throw new DatasetError(`${entry.path} has ${eps.length} records, the manifest says ${entry.records}`);
-    (text === '' ? [] : text.slice(0, -1).split('\n')).forEach((line, i) => {
-      if (line !== canonicalJson(eps[i])) throw new DatasetError(`${entry.path}:${i + 1}: record is not in canonical form`);
+  if (manifest.manifest_version === 1) {
+    const accepted = await readRows(dir, manifest.files.dataset, parseEpisodeV1, opts.redact);
+    const failed = await readRows(dir, manifest.files.failures, parseEpisodeV1, opts.redact);
+    for (const [rows, entry, success] of [[accepted, manifest.files.dataset, true], [failed, manifest.files.failures, false]] as const) {
+      rows.forEach((ep, i) => {
+        if (isCompleteSuccess(ep) !== success) {
+          throw new DatasetError(`${entry.path}:${i + 1}: episode ${ep.episode_id} ${success ? 'is not a complete success' : 'is a complete success and belongs in dataset.jsonl'}`);
+        }
+      });
+    }
+    const all = [...accepted, ...failed];
+    uniqueIds(all, 'an episode id appears twice across dataset.jsonl and failures.jsonl');
+    const want = { episodes: all.length, accepted: accepted.length, failed: failed.length, by_stop_reason: tally(all.map((e) => e.stop_reason)) };
+    if (canonicalJson(want) !== canonicalJson(manifest.counts)) throw new DatasetError('the manifest counts do not match the records');
+    await checkProvenance(manifest, all, accepted, root);
+    return manifest;
+  }
+  const rows = await readRows(dir, manifest.files.dataset, parseEpisode, opts.redact);
+  uniqueIds(rows, 'an episode id appears twice in dataset.jsonl');
+  if (manifest.selection?.successes_only === true) {
+    rows.forEach((ep, i) => {
+      if (!isCompleteSuccess(ep)) throw new DatasetError(`${manifest.files.dataset.path}:${i + 1}: episode ${ep.episode_id} is not a success, and this export keeps successes only`);
     });
-    eps.forEach((ep, i) => {
-      if (isCompleteSuccess(ep) !== expectSuccess) {
-        throw new DatasetError(`${entry.path}:${i + 1}: episode ${ep.episode_id} ${expectSuccess ? 'is not a complete success' : 'is a complete success and belongs in dataset.jsonl'}`);
-      }
-      const prev = eps[i - 1];
-      if (prev !== undefined && byKey(prev, ep) >= 0) throw new DatasetError(`${entry.path}:${i + 1}: records are not in run, task, episode order`);
-    });
-    return eps;
-  };
-  const accepted = await read(manifest.files.dataset, true);
-  const failed = await read(manifest.files.failures, false);
+  }
+  if (canonicalJson(countsOf(rows)) !== canonicalJson(manifest.counts)) throw new DatasetError('the manifest counts do not match the records');
+  await checkProvenance(manifest, rows, rows.filter(isCompleteSuccess), root);
+  return manifest;
+}
 
-  const ids = [...accepted, ...failed].map((e) => e.episode_id);
-  if (new Set(ids).size !== ids.length) throw new DatasetError('an episode id appears twice across dataset.jsonl and failures.jsonl');
-  const all = [...accepted, ...failed];
-  const stops: Record<string, number> = {};
-  for (const ep of all) stops[ep.stop_reason] = (stops[ep.stop_reason] ?? 0) + 1;
-  const wantCounts = { episodes: all.length, accepted: accepted.length, failed: failed.length, by_stop_reason: stops };
-  if (canonicalJson(wantCounts) !== canonicalJson(manifest.counts)) throw new DatasetError('the manifest counts do not match the records');
+/** The records of one export file, checked against its manifest entry: bytes, checksum, no secret, count, canonical lines in key order. */
+async function readRows<T extends Keyed>(dir: string, entry: FileEntry, parse: (raw: unknown, at: string) => T, redact: Redactor): Promise<T[]> {
+  const text = await readOptional(path.join(dir, entry.path));
+  if (text === undefined) throw new DatasetError(`${entry.path} does not exist`);
+  if (Buffer.byteLength(text) !== entry.bytes) throw new DatasetError(`${entry.path} has ${Buffer.byteLength(text)} bytes, the manifest says ${entry.bytes}`);
+  if (sha256Hex(text) !== entry.sha256) throw new DatasetError(`${entry.path} fails its checksum`);
+  redact.assertClean(entry.path, text);
+  const eps = parseLines(text, entry.path, parse);
+  if (eps.length !== entry.records) throw new DatasetError(`${entry.path} has ${eps.length} records, the manifest says ${entry.records}`);
+  (text === '' ? [] : text.slice(0, -1).split('\n')).forEach((line, i) => {
+    if (line !== canonicalJson(eps[i])) throw new DatasetError(`${entry.path}:${i + 1}: record is not in canonical form`);
+  });
+  eps.forEach((ep, i) => {
+    const prev = eps[i - 1];
+    if (prev !== undefined && byKey(prev, ep) >= 0) throw new DatasetError(`${entry.path}:${i + 1}: records are not in run, task, episode order`);
+  });
+  return eps;
+}
+
+function uniqueIds(rows: readonly Keyed[], message: string): void {
+  if (new Set(rows.map((e) => e.episode_id)).size !== rows.length) throw new DatasetError(message);
+}
+
+/** The version lists and world references against the records, and the private state files of every complete success. */
+async function checkProvenance(manifest: Manifest | ManifestV1, all: readonly (Episode | EpisodeV1)[], successes: readonly (Episode | EpisodeV1)[], root: string): Promise<void> {
   const sameList = (name: string, have: readonly string[], want: readonly string[]): void => {
     if (canonicalJson(have) !== canonicalJson(sorted(want))) throw new DatasetError(`the manifest ${name} do not match the records`);
   };
@@ -547,7 +591,7 @@ export async function validateExport(dir: string, opts: { readonly root?: string
     if ((await artifactHash(root, w.artifact.path)) !== w.artifact.sha256) throw new DatasetError(`the frozen world ${w.artifact.path} fails its checksum`);
     if (all.some((e) => e.world_version === w.world_version && e.world_id !== w.world_id)) throw new DatasetError(`world ${w.world_version} is named inconsistently`);
   }
-  for (const ep of accepted) {
+  for (const ep of successes) {
     for (const [name, want] of [['initial.json', ep.initial_state_hash], ['final.json', ep.final_state_hash]] as const) {
       const text = await readOptional(path.join(episodeDir(root, ep.episode_id), name));
       if (text === undefined) throw new DatasetError(`episode ${ep.episode_id}: private ${name} is missing`);
@@ -560,5 +604,4 @@ export async function validateExport(dir: string, opts: { readonly root?: string
       if (hashState(dump) !== want) throw new DatasetError(`episode ${ep.episode_id}: private ${name} does not match the recorded state hash`);
     }
   }
-  return manifest;
 }
