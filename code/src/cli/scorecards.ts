@@ -1,17 +1,20 @@
 /**
  * `bun run scorecards` (YOS-262, A-402): regenerates prod/scorecards.md from committed files only, with no model call
- * and no network. Reading and wiring; the scorecards are in scorecards/cards.ts.
+ * and no network. Reading and wiring; the scorecards are in scorecards/cards.ts. No logic.
  *
  * Exit codes: 0 written, 1 a source could not be read, 2 bad usage.
  */
 import { existsSync } from 'node:fs';
-import { lstat, readdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { checkWorld, loadWorld } from '#engine';
 import { parseManifest } from '../dataset/schema.ts';
-import { renderScorecards, suiteFor, type DifficultyInput, type ExportInput, type GraderWorld, type RunInput, type ScorecardInputs } from '../scorecards/cards.ts';
+import {
+  graderTaskOf, renderScorecards, runParts, suiteFor,
+  type DifficultyInput, type ExportInput, type GraderWorld, type RunInput, type ScorecardInputs,
+} from '../scorecards/cards.ts';
 import { CASE_ID, parseSuite, type Suite } from '../worldgen/eval.ts';
 import { readEvalEvidence } from './eval-analysis-files.ts';
 
@@ -21,63 +24,61 @@ const DEFAULT_OUT = path.join(REPO_DIR, 'prod/scorecards.md');
 export const USAGE = `usage: bun run scorecards [--out <file>]
 Regenerates the four scorecards (YOS-262, A-402) from committed files only, with no model call and no network, and
 writes them to <file> (default ../prod/scorecards.md):
-  generator   each eval/runs/<run>/ with case files, scored as bun scripts/analyze-eval.ts scores it against the
-              eval/*.yaml suite that holds its cases
+  generator   each eval/runs/<run>/ with case files, directly or in lane folders, scored as
+              bun scripts/analyze-eval.ts scores it against the eval/*.yaml suite that holds its cases
   fidelity    the fidelity events those runs recorded, against the 0.80 floor (A-258)
   grader      the engine's check of every world in prod/worlds, which worldplay verify runs
   agent       eval/difficulty/*/difficulty.json and each eval/dataset/<export>/<world>/manifest.json
 Exit codes: 0 written, 1 a source could not be read, 2 bad usage.
 `;
 
-const rel = (p: string): string => path.relative(REPO_DIR, p).split(path.sep).join('/');
-/** The real subdirectories of dir, sorted; none when dir is absent. */
-async function dirs(dir: string): Promise<string[]> {
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const e of (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name).sort()) {
-    if (!(await lstat(path.join(dir, e))).isSymbolicLink()) out.push(e);
-  }
-  return out;
-}
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** Each eval/*.yaml suite, by repo-relative path. A suite file that does not parse stops the run. */
-async function suites(repo: string): Promise<Map<string, Suite>> {
-  const evalDir = path.join(repo, 'eval');
-  const out = new Map<string, Suite>();
-  for (const name of (await readdir(evalDir)).filter((n) => n.endsWith('.yaml')).sort()) {
-    const parsed = parseSuite(await readFile(path.join(evalDir, name), 'utf8'));
-    if (!parsed.ok) throw new Error(`eval/${name} is not a suite: ${parsed.errors[0]}`);
-    out.set(`eval/${name}`, parsed.suite);
-  }
-  return out;
+/** Reads the repository at repo. Symlinked and hidden folders are skipped: committed evidence is never a link, and `.attempts` is history. */
+function reader(repo: string) {
+  const rel = (p: string): string => path.relative(repo, p).split(path.sep).join('/');
+  const dirs = async (dir: string): Promise<string[]> =>
+    existsSync(dir) ? (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory() && !d.isSymbolicLink() && !d.name.startsWith('.')).map((d) => d.name).sort() : [];
+  const caseIds = async (dir: string): Promise<string[]> => (await dirs(dir)).filter((id) => CASE_ID.test(id) && existsSync(path.join(dir, id, 'case.json')));
+  return { rel, dirs, caseIds };
 }
 
 async function gatherRuns(repo: string): Promise<Pick<ScorecardInputs, 'runs' | 'unmatchedRuns' | 'otherRuns'>> {
-  const all = await suites(repo);
-  const runsDir = path.join(repo, 'eval/runs');
+  const { rel, dirs, caseIds } = reader(repo);
+  const suites = new Map<string, Suite>();
+  for (const name of (await readdir(path.join(repo, 'eval'))).filter((n) => n.endsWith('.yaml')).sort()) {
+    const parsed = parseSuite(await readFile(path.join(repo, 'eval', name), 'utf8'));
+    if (!parsed.ok) throw new Error(`eval/${name} is not a suite: ${parsed.errors[0]}`);
+    suites.set(`eval/${name}`, parsed.suite);
+  }
+  const suiteIds = [...suites].map(([file, s]) => ({ file, ids: s.cases.map((c) => c.id) }));
   const runs: RunInput[] = [];
   const unmatchedRuns: string[] = [];
   const otherRuns: string[] = [];
-  for (const name of await dirs(runsDir)) {
-    const dir = path.join(runsDir, name);
-    const ids = (await dirs(dir)).filter((id) => CASE_ID.test(id) && existsSync(path.join(dir, id, 'case.json')));
-    if (ids.length === 0) {
-      otherRuns.push(rel(dir));
-      continue;
+  for (const name of await dirs(path.join(repo, 'eval/runs'))) {
+    const dir = path.join(repo, 'eval/runs', name);
+    const subs = await Promise.all((await dirs(dir)).map(async (sub) => ({ name: sub, ids: await caseIds(path.join(dir, sub)) })));
+    const found = runParts(rel(dir), await caseIds(dir), subs);
+    if (found.length === 0) otherRuns.push(rel(dir));
+    for (const r of found) {
+      const parts = await Promise.all(r.parts.map(async (p) => ({ part: p, ids: await caseIds(path.join(repo, p)) })));
+      const file = suiteFor(parts.flatMap((p) => p.ids), suiteIds);
+      if (file === null) {
+        unmatchedRuns.push(r.run);
+        continue;
+      }
+      const suite = suites.get(file)!;
+      const cases = suite.cases.map((c) => ({ id: c.id, expect: c.expect, ...(c.change === undefined ? {} : { change: c.change }) }));
+      const evidence = (await Promise.all(parts.map(async ({ part }) =>
+        (await readEvalEvidence(path.join(repo, part), cases)).map((e) => ({ ...e, source: `${part}/${e.source}` }))))).flat();
+      runs.push({ run: r.run, suite: suite.name, suiteFile: file, cases, evidence });
     }
-    const file = suiteFor(ids, [...all].map(([f, suite]) => ({ file: f, ids: suite.cases.map((c) => c.id) })));
-    if (file === null) {
-      unmatchedRuns.push(rel(dir));
-      continue;
-    }
-    const suite = all.get(file)!;
-    const cases = suite.cases.map((c) => ({ id: c.id, expect: c.expect, ...(c.change === undefined ? {} : { change: c.change }) }));
-    runs.push({ run: rel(dir), suite: suite.name, suiteFile: file, cases, evidence: await readEvalEvidence(dir, cases) });
   }
   return { runs, unmatchedRuns, otherRuns };
 }
 
 async function gatherWorlds(repo: string): Promise<GraderWorld[]> {
+  const { rel, dirs } = reader(repo);
   const root = path.join(repo, 'prod/worlds');
   const out: GraderWorld[] = [];
   for (const name of await dirs(root)) {
@@ -86,7 +87,7 @@ async function gatherWorlds(repo: string): Promise<GraderWorld[]> {
     const source = rel(path.join(dir, 'world.yaml'));
     const loaded = await loadWorld(dir);
     if (!loaded.ok) {
-      out.push({ world: name, source, refused: loaded.error[0].found });
+      out.push({ world: name, source, refused: `does not load: ${loaded.error[0].found.replaceAll(`${repo}${path.sep}`, '')}` });
       continue;
     }
     const report = checkWorld(loaded.value, loaded.lines);
@@ -94,31 +95,28 @@ async function gatherWorlds(repo: string): Promise<GraderWorld[]> {
       out.push({ world: name, source, refused: `${report.issues[0].code} at ${report.issues[0].path.join('.')}` });
       continue;
     }
-    out.push({
-      world: name, source,
-      tasks: Object.values(report.verdicts).map((v) => ({
-        task: v.taskId, decoys: v.decoys.map((d) => d.score), alternatives: report.world.tasks[v.taskId]?.alternatives.length ?? 0,
-        solutionWrites: v.solutionWrites, checks: v.checks.length, flipped: v.checks.filter((c) => c.flippedBy.length > 0).length,
-        slots: v.collateral.length, probed: v.collateral.filter((m) => m.call !== null).length,
-      })),
-    });
+    out.push({ world: name, source, tasks: Object.values(report.verdicts).map((v) => graderTaskOf(v, report.world.tasks[v.taskId]?.alternatives.length ?? 0)) });
   }
   return out;
 }
 
 async function gatherAgent(repo: string): Promise<Pick<ScorecardInputs, 'difficulty' | 'exports'>> {
+  const { rel, dirs } = reader(repo);
   const difficulty: DifficultyInput[] = [];
-  const difficultyDir = path.join(repo, 'eval/difficulty');
-  for (const name of await dirs(difficultyDir)) {
-    const file = path.join(difficultyDir, name, 'difficulty.json');
+  for (const name of await dirs(path.join(repo, 'eval/difficulty'))) {
+    const file = path.join(repo, 'eval/difficulty', name, 'difficulty.json');
     if (existsSync(file)) difficulty.push({ source: rel(file), text: await readFile(file, 'utf8') });
   }
   const exports: ExportInput[] = [];
-  const datasetDir = path.join(repo, 'eval/dataset');
-  for (const name of await dirs(datasetDir)) {
-    for (const world of await dirs(path.join(datasetDir, name))) {
-      const file = path.join(datasetDir, name, world, 'manifest.json');
-      if (existsSync(file)) exports.push({ source: rel(file), manifest: parseManifest(JSON.parse(await readFile(file, 'utf8')), rel(file)) });
+  for (const name of await dirs(path.join(repo, 'eval/dataset'))) {
+    for (const world of await dirs(path.join(repo, 'eval/dataset', name))) {
+      const file = path.join(repo, 'eval/dataset', name, world, 'manifest.json');
+      if (!existsSync(file)) continue;
+      try {
+        exports.push({ source: rel(file), manifest: parseManifest(JSON.parse(await readFile(file, 'utf8')), rel(file)) });
+      } catch (e) {
+        exports.push({ source: rel(file), error: messageOf(e) });
+      }
     }
   }
   return { difficulty, exports };
@@ -141,13 +139,13 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
     out = path.resolve(p.values.out ?? DEFAULT_OUT);
   } catch (e) {
-    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n${USAGE}`);
+    process.stderr.write(`${messageOf(e)}\n${USAGE}`);
     return 2;
   }
   try {
     await writeFile(out, renderScorecards(await gatherScorecards()));
   } catch (e) {
-    process.stderr.write(`scorecards: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.stderr.write(`scorecards: ${messageOf(e)}\n`);
     return 1;
   }
   process.stdout.write(`wrote ${out}\n`);

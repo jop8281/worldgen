@@ -6,54 +6,69 @@ Four separate scorecards (YOS-262, A-402). Each has its own denominator and its 
 
 ## 1. Generator: does WorldGen build a world the engine accepts?
 
-One row per eval run under `eval/runs/` that keeps its case files, scored as `bun scripts/analyze-eval.ts <suite> <run>` scores it, against the suite file that holds its cases. The denominator is the cases the run ran. A pass is a success or an expected refusal. A targeted rerun runs only some of its suite, so its rate is over those cases, not the suite. The Run and Suite columns name the files each row is computed from. p50 and p95 are nearest-rank over the cases with a measured time. Times and costs are client-side estimates, not invoices.
+One row per eval run under `eval/runs/` that keeps its case files, scored as `bun scripts/analyze-eval.ts <suite> <run>` scores it, against the suite file that holds its cases. The Run and Suite columns name the files each row is computed from. A run whose cases sit in parallel lane folders is one row; the arms of an A/B are one row each.
+
+The denominator is every case of the suite (A-341), so a targeted rerun's rate counts the cases it did not run as not passed; Cases run shows how many it ran. A pass is a success, an `expect: done` case that ended done and passed verify, or an expected refusal, an impossible case that stopped `input_rejected` (A-384). p50 and p95 are nearest-rank over the cases with a measured time. Times and costs are client-side estimates, not invoices.
 
 | Run | Suite | Cases run | Passed | Pass rate | Success | Expected refusal | Product failure | Infra failure | p50 min | p95 min | Cost USD |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
 | `eval/runs/2026-10-07-live-segment` | live-segment (`eval/live-segment.yaml`) | 3 of 3 | 2 | 66.7% | 2 | 0 | 1 | 0 | 7.5 | 8.0 | 4.74 |
+| `eval/runs/2026-10-07-plan-effort-ab/high` | stress (`eval/suite.yaml`) | 3 of 29 | 0 | 0.0% | 0 | 0 | 3 | 0 | 9.8 | 11.8 | 4.32 |
+| `eval/runs/2026-10-07-plan-effort-ab/medium` | stress (`eval/suite.yaml`) | 3 of 29 | 0 | 0.0% | 0 | 0 | 3 | 0 | 9.8 | 11.8 | 3.86 |
+| `eval/runs/2026-10-07-plan-effort-ab2/high` | stress (`eval/suite.yaml`) | 5 of 29 | 4 | 13.8% | 4 | 0 | 1 | 0 | 9.3 | 10.4 | 7.02 |
+| `eval/runs/2026-10-07-plan-effort-ab2/medium` | stress (`eval/suite.yaml`) | 5 of 29 | 5 | 17.2% | 5 | 0 | 0 | 0 | 4.5 | 5.0 | 4.14 |
+| `eval/runs/2026-10-07-stress-2` | stress (`eval/suite.yaml`) | 29 of 29 | 22 | 75.9% | 19 | 3 | 7 | 0 | 6.4 | 8.9 | 31.92 |
+| `eval/runs/2026-10-07-stress-3` | stress (`eval/suite.yaml`) | 29 of 29 | 10 | 34.5% | 9 | 1 | 1 | 18 | 0.0 | 8.2 | 17.02 |
 | `eval/runs/2026-10-08-stress-4` | stress (`eval/suite.yaml`) | 29 of 29 | 23 | 79.3% | 20 | 3 | 6 | 0 | 5.1 | 10.3 | 26.71 |
-| `eval/runs/2026-10-08-stress-5` | stress (`eval/suite.yaml`) | 6 of 29 | 5 | 83.3% | 5 | 0 | 1 | 0 | 5.0 | 6.3 | 6.96 |
+| `eval/runs/2026-10-08-stress-5` | stress (`eval/suite.yaml`) | 6 of 29 | 5 | 17.2% | 5 | 0 | 1 | 0 | 5.0 | 6.3 | 6.96 |
 | `eval/runs/2026-10-08-stress-6` | stress (`eval/suite.yaml`) | 29 of 29 | 27 | 93.1% | 24 | 3 | 2 | 0 | 4.5 | 8.2 | 25.32 |
-| `eval/runs/2026-10-08-stress-7-targeted` | stress (`eval/suite.yaml`) | 5 of 29 | 5 | 100.0% | 5 | 0 | 0 | 0 | 5.1 | 7.1 | 5.74 |
+| `eval/runs/2026-10-08-stress-7-targeted` | stress (`eval/suite.yaml`) | 5 of 29 | 5 | 17.2% | 5 | 0 | 0 | 0 | 5.1 | 7.1 | 5.74 |
 
 - `eval/runs/2026-10-07-live-segment` also holds `giftcards-openapi-rerun2`, which `eval/live-segment.yaml` does not list, so it is not scored.
-- 12 other folders under `eval/runs/` keep no case files, so analyze-eval cannot score them: `eval/runs/2026-10-06-boat-sonnet-baseline`, `eval/runs/2026-10-07-plan-effort-ab`, `eval/runs/2026-10-07-plan-effort-ab2`, `eval/runs/2026-10-07-rehearsal-stabilize`, `eval/runs/2026-10-07-stress-2`, `eval/runs/2026-10-07-stress-3`, `eval/runs/2026-10-07-yos156-allows`, `eval/runs/2026-10-07-yos226-reserve`, `eval/runs/2026-10-08-handin-smoke`, `eval/runs/2026-10-08-rollback-drill`, `eval/runs/2026-10-08-rollback-drill-2`, `eval/runs/stress-1b`.
+- `eval/runs/2026-10-07-stress-2` has a measured cost for 28 of its 29 cases run.
+- 8 other folders under `eval/runs/` keep no case files, directly or one folder down, so analyze-eval cannot score them: `eval/runs/2026-10-06-boat-sonnet-baseline`, `eval/runs/2026-10-07-rehearsal-stabilize`, `eval/runs/2026-10-07-yos156-allows`, `eval/runs/2026-10-07-yos226-reserve`, `eval/runs/2026-10-08-handin-smoke`, `eval/runs/2026-10-08-rollback-drill`, `eval/runs/2026-10-08-rollback-drill-2`, `eval/runs/stress-1b`.
 
-Limits: a generator pass says the engine accepted the world and verify passed. It says nothing about fidelity, grader strength or whether an agent can solve the tasks.
+Limits: a success says the engine accepted the world and verify passed, and an expected refusal that WorldGen turned down an impossible prompt. Neither says anything about fidelity, grader strength or whether an agent can solve the tasks. Every run is scored against the suite file as it is now, so a case whose expectation has changed since the run reads as invalid, an infra failure.
 
 ## 2. Environment fidelity: does a world resemble the software it names?
 
-A description case with a frozen reference in `eval/fidelity/` (`helpdesk-sla`, `linear-description`, `retail-tau2-known`) is scored at its run's last step by `fidelityScore()` against the 0.80 floor (A-258), and the run records the score as a `fidelity` event in the case's `events.jsonl`. The denominator is the recorded scores: 7 of 7 are at or above the floor.
+A description case with a frozen reference in `eval/fidelity/` (`helpdesk-sla`, `linear-description`, `retail-tau2-known`) is gated at its run's last step by `fidelityScore()` against the 0.80 floor (A-258): a world below the floor is sent back for repair, never saved. A finished create run records its check as a `fidelity` event in the case's `events.jsonl`, so every recorded score is at or above the floor by construction. What varies is the score, and whether the run got that far. The denominator is each run of a referenced case, in the runs that record fidelity events at all: 7 of 7 recorded a score.
 
-| Run | Case | Reference | Score | Floor | At or above the floor | Source |
-|---|---|---|--:|--:|---|---|
-| `eval/runs/2026-10-08-stress-4` | helpdesk-sla | helpdesk-sla | 0.9577 | 0.8 | yes | `eval/runs/2026-10-08-stress-4/helpdesk-sla/events.jsonl` |
-| `eval/runs/2026-10-08-stress-4` | linear-description | linear-description | 0.9634 | 0.8 | yes | `eval/runs/2026-10-08-stress-4/linear-description/events.jsonl` |
-| `eval/runs/2026-10-08-stress-4` | retail-tau2-known | retail-tau2-known | 0.8919 | 0.8 | yes | `eval/runs/2026-10-08-stress-4/retail-tau2-known/events.jsonl` |
-| `eval/runs/2026-10-08-stress-6` | helpdesk-sla | helpdesk-sla | 0.9577 | 0.8 | yes | `eval/runs/2026-10-08-stress-6/helpdesk-sla/events.jsonl` |
-| `eval/runs/2026-10-08-stress-6` | linear-description | linear-description | 0.9634 | 0.8 | yes | `eval/runs/2026-10-08-stress-6/linear-description/events.jsonl` |
-| `eval/runs/2026-10-08-stress-6` | retail-tau2-known | retail-tau2-known | 0.9865 | 0.8 | yes | `eval/runs/2026-10-08-stress-6/retail-tau2-known/events.jsonl` |
-| `eval/runs/2026-10-08-stress-7-targeted` | helpdesk-sla | helpdesk-sla | 0.9577 | 0.8 | yes | `eval/runs/2026-10-08-stress-7-targeted/helpdesk-sla/events.jsonl` |
+| Run | Case | Reference | Score | Floor | Source |
+|---|---|---|--:|--:|---|
+| `eval/runs/2026-10-08-stress-4` | helpdesk-sla | helpdesk-sla | 0.9577 | 0.8 | `eval/runs/2026-10-08-stress-4/helpdesk-sla/events.jsonl` |
+| `eval/runs/2026-10-08-stress-4` | linear-description | linear-description | 0.9634 | 0.8 | `eval/runs/2026-10-08-stress-4/linear-description/events.jsonl` |
+| `eval/runs/2026-10-08-stress-4` | retail-tau2-known | retail-tau2-known | 0.8919 | 0.8 | `eval/runs/2026-10-08-stress-4/retail-tau2-known/events.jsonl` |
+| `eval/runs/2026-10-08-stress-6` | helpdesk-sla | helpdesk-sla | 0.9577 | 0.8 | `eval/runs/2026-10-08-stress-6/helpdesk-sla/events.jsonl` |
+| `eval/runs/2026-10-08-stress-6` | linear-description | linear-description | 0.9634 | 0.8 | `eval/runs/2026-10-08-stress-6/linear-description/events.jsonl` |
+| `eval/runs/2026-10-08-stress-6` | retail-tau2-known | retail-tau2-known | 0.9865 | 0.8 | `eval/runs/2026-10-08-stress-6/retail-tau2-known/events.jsonl` |
+| `eval/runs/2026-10-08-stress-7-targeted` | helpdesk-sla | helpdesk-sla | 0.9577 | 0.8 | `eval/runs/2026-10-08-stress-7-targeted/helpdesk-sla/events.jsonl` |
 
-How every case of each run was checked, from the same `fidelity` events:
+How every suite case of each run was checked, from the same `fidelity` events. An OpenAPI check means the world passed the gate against its source spec: paths, request shapes and error codes within the chosen scope. It records no score.
 
 | Run | Against a reference | Against the OpenAPI source spec | No reference, unchecked | No fidelity event | Source |
 |---|--:|--:|--:|--:|---|
-| `eval/runs/2026-10-07-live-segment` | 0 | 0 | 0 | 4 | `eval/runs/2026-10-07-live-segment/*/events.jsonl` |
-| `eval/runs/2026-10-08-stress-4` | 3 | 4 | 13 | 9 | `eval/runs/2026-10-08-stress-4/*/events.jsonl` |
-| `eval/runs/2026-10-08-stress-5` | 0 | 2 | 3 | 1 | `eval/runs/2026-10-08-stress-5/*/events.jsonl` |
-| `eval/runs/2026-10-08-stress-6` | 3 | 6 | 15 | 5 | `eval/runs/2026-10-08-stress-6/*/events.jsonl` |
-| `eval/runs/2026-10-08-stress-7-targeted` | 1 | 2 | 2 | 0 | `eval/runs/2026-10-08-stress-7-targeted/*/events.jsonl` |
+| `eval/runs/2026-10-07-live-segment` | 0 | 0 | 0 | 3 | `eval/runs/2026-10-07-live-segment/**/events.jsonl` |
+| `eval/runs/2026-10-07-plan-effort-ab/high` | 0 | 0 | 0 | 3 | `eval/runs/2026-10-07-plan-effort-ab/high/**/events.jsonl` |
+| `eval/runs/2026-10-07-plan-effort-ab/medium` | 0 | 0 | 0 | 3 | `eval/runs/2026-10-07-plan-effort-ab/medium/**/events.jsonl` |
+| `eval/runs/2026-10-07-plan-effort-ab2/high` | 0 | 0 | 0 | 5 | `eval/runs/2026-10-07-plan-effort-ab2/high/**/events.jsonl` |
+| `eval/runs/2026-10-07-plan-effort-ab2/medium` | 0 | 0 | 0 | 5 | `eval/runs/2026-10-07-plan-effort-ab2/medium/**/events.jsonl` |
+| `eval/runs/2026-10-07-stress-2` | 0 | 0 | 0 | 29 | `eval/runs/2026-10-07-stress-2/**/events.jsonl` |
+| `eval/runs/2026-10-07-stress-3` | 0 | 0 | 0 | 29 | `eval/runs/2026-10-07-stress-3/**/events.jsonl` |
+| `eval/runs/2026-10-08-stress-4` | 3 | 4 | 13 | 9 | `eval/runs/2026-10-08-stress-4/**/events.jsonl` |
+| `eval/runs/2026-10-08-stress-5` | 0 | 2 | 3 | 1 | `eval/runs/2026-10-08-stress-5/**/events.jsonl` |
+| `eval/runs/2026-10-08-stress-6` | 3 | 6 | 15 | 5 | `eval/runs/2026-10-08-stress-6/**/events.jsonl` |
+| `eval/runs/2026-10-08-stress-7-targeted` | 1 | 2 | 2 | 0 | `eval/runs/2026-10-08-stress-7-targeted/**/events.jsonl` |
 
-Limits: the references cover only the cases named above, so every other description world is unchecked. An OpenAPI check compares paths, request shapes and error codes within the chosen scope with the source spec (`worldplay openapi`); the event records that it ran, not a score. A run that stopped before its last step records no fidelity event.
+Limits: the references cover only the cases named above, so every other description world is unchecked, and a case that recorded `unchecked` ran before its reference existed. A run records no fidelity event when it stopped before saving a world, when it was an impossible case WorldGen refused, or when it predates the event. A change case's check describes its world before the change: an iterate records none.
 
 ## 3. Grader: does each grader tell the right end state from a wrong one?
 
-Every world in `prod/worlds/`, checked by the engine's `checkWorld`, which `bun run worldplay verify` runs. The denominator is the 95 tasks of the 25 worlds that pass check. A world passes only when, on every task, the reference solution scores 1, doing nothing scores 0, every decoy scores below 1, every alternative solution scores 1, and the replay is deterministic, so those controls hold for each task counted here. The highest decoy score, rounded down, is 0.9117.
+Every world in `prod/worlds/`, checked by the engine's `checkWorld`, which `bun run worldplay verify` runs. The denominator is the 95 tasks of the 25 worlds that pass check. A world passes only when, on every task, the reference solution scores 1, doing nothing scores 0, every decoy scores below 1, every alternative solution scores 1, and the replay is deterministic, so those controls hold for each task counted here. The highest decoy score, cut to 4 decimals, is 0.9117, on clear_dr_patel_calendar_for_leave in `prod/worlds/gen-clinic-appointments/world.yaml`.
 
 - **Decoys** are shortcut solutions that must score below 1. **Alternatives** are other correct solutions that must score 1 (A-199).
 - **One-write solutions** make one successful writing call; `worldplay verify` prints `prefix -` for them.
-- **Checks flipped** counts the grader checks (goals, guards or a returned score) that some probe turned from met to unmet: a strict prefix of the solution, a decoy, an engine mutant or a free-text swap (A-393). [research/evidence/probe-coverage.md](../research/evidence/probe-coverage.md) lists the checks no probe flips.
+- **Checks flipped** counts the grader checks (goals, guards or a returned score) that some probe turned from met to unmet: a strict prefix of the solution, a decoy, an engine mutant or a free-text swap (A-393). [research/evidence/probe-coverage.md](../research/evidence/probe-coverage.md) lists the checks no probe flipped, as of the commit it names.
 - **Mutant slots probed** counts the engine mutant kinds that found a change to probe on each task.
 
 | World | Tasks | Decoys, all below 1 | Alternatives, all at 1 | One-write solutions | Checks flipped | Mutant slots probed | Source |
@@ -91,11 +106,11 @@ Limits: an unflipped check is unprobed, not proven weak, and a flipped one is pr
 
 ## 4. Agent: how often does an agent solve a task?
 
-Graded agent episodes: an episode passes when the engine scores its final state 1. Two sources, each with its own denominator.
+Graded agent episodes, from two sources, each with its own denominator.
 
 ### Measured difficulty
 
-From `bun run difficulty` runs in `eval/difficulty/` (A-391). The denominator is a cell's trials: graded episodes that stopped done or at their turn, budget or time limit. The measured tier is easy at a pass rate of 2/3 or more, medium at 1/3 or more and hard below; the interval is Wilson 95%.
+From `bun run difficulty` runs in `eval/difficulty/` (A-391). A pass is an engine score of 1. The denominator is a cell's trials: graded episodes that stopped done, at their turn, budget or time limit, or on an invalid turn; a model error, a refusal, a world or grade error, an interruption and a run-wide cut are not trials. The measured tier is easy at a pass rate of 2/3 or more, medium at 1/3 or more and hard below; the interval is Wilson 95%.
 
 `eval/difficulty/2026-10-09-pilot/difficulty.json`: run `j163-pilot`, models claude-sonnet-5-5, 3 episodes per task per model, 18 episodes, charged $2.187461 of $13.96, stop complete. The labeled tier agrees with the measured one in 2 of 6 measured cells.
 
@@ -110,17 +125,17 @@ From `bun run difficulty` runs in `eval/difficulty/` (A-391). The denominator is
 
 ### Dataset exports
 
-From the `manifest.json` of each export folder in `eval/dataset/` (YOS-91). The denominator is the episodes an export holds. A schema-2 export counts every episode by verdict: success, partial, failure or infra (A-389, A-396). A schema-1 export counts only the complete successes and the rest.
+From the `manifest.json` of each export folder in `eval/dataset/` (YOS-91). The denominator is the episodes an export holds. A success is a complete success: stopped done, an engine score of exactly 1, a non-blank final reply, both state hashes and fully accounted spend. A schema-2 export counts every episode by verdict: success, partial, failure or infra (A-389, A-396). A schema-1 export counts only the successes and the rest.
 
-| Export folder | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success | Source |
-|---|--:|---|--:|--:|--:|--:|--:|--:|---|
-| `eval/dataset/2026-10-07/gen-insurance-claims/` | 1 | claude-sonnet-5-5 | 8 | 8 | - | - | - | 0 | `eval/dataset/2026-10-07/gen-insurance-claims/manifest.json` |
-| `eval/dataset/2026-10-07/gen-library-loans/` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 | `eval/dataset/2026-10-07/gen-library-loans/manifest.json` |
-| `eval/dataset/2026-10-07/gen-orders/` | 1 | claude-sonnet-5-5 | 4 | 4 | - | - | - | 0 | `eval/dataset/2026-10-07/gen-orders/manifest.json` |
-| `eval/dataset/2026-10-07/gen-repair-desk/` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 | `eval/dataset/2026-10-07/gen-repair-desk/manifest.json` |
-| `eval/dataset/2026-10-07/gen-stripe-charges/` | 1 | claude-sonnet-5-5 | 8 | 8 | - | - | - | 0 | `eval/dataset/2026-10-07/gen-stripe-charges/manifest.json` |
-| `eval/dataset/2026-10-07/helpdesk/` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 | `eval/dataset/2026-10-07/helpdesk/manifest.json` |
-| **Total** |  |  | 38 | 38 |  |  |  | 0 | `eval/dataset/` |
+| Export manifest | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success |
+|---|--:|---|--:|--:|--:|--:|--:|--:|
+| `eval/dataset/2026-10-07/gen-insurance-claims/manifest.json` | 1 | claude-sonnet-5-5 | 8 | 8 | - | - | - | 0 |
+| `eval/dataset/2026-10-07/gen-library-loans/manifest.json` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 |
+| `eval/dataset/2026-10-07/gen-orders/manifest.json` | 1 | claude-sonnet-5-5 | 4 | 4 | - | - | - | 0 |
+| `eval/dataset/2026-10-07/gen-repair-desk/manifest.json` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 |
+| `eval/dataset/2026-10-07/gen-stripe-charges/manifest.json` | 1 | claude-sonnet-5-5 | 8 | 8 | - | - | - | 0 |
+| `eval/dataset/2026-10-07/helpdesk/manifest.json` | 1 | claude-sonnet-5-5 | 6 | 6 | - | - | - | 0 |
+| **Total** |  |  | 38 | 38 |  |  |  | 0 |
 
 No schema-2 export is committed yet, so no partial, failure or infra count is shown: the committed exports predate A-389.
 

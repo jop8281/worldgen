@@ -4,17 +4,19 @@
  * Pure: cli/scorecards.ts reads the files and the engine's verdicts and hands them in.
  */
 import { z } from 'zod';
+import type { TaskVerdict } from '#engine';
 import type { Manifest, ManifestV1 } from '../dataset/schema.ts';
 import type { Outcome } from '../worldgen/eval.ts';
 import { analyzeEvalOutcomes, type EvalEvidence, type ExpectedEvalCase } from '../worldgen/eval-outcomes.ts';
-
-/** A-258's FIDELITY_FLOOR, as each recorded fidelity event also carries it. */
-const FIDELITY_FLOOR = 0.8;
+import { FIDELITY_FLOOR } from '../worldgen/fidelity.ts';
 
 // ---------------------------------------------------------------------------------------------
 // Inputs. Every path is relative to the repository root, with forward slashes.
 
-/** One eval run: its directory, the suite whose cases it ran, and the case evidence found there. */
+/**
+ * One eval run: its directory, the suite whose cases it ran, and the case evidence found there. Each evidence's
+ * `source` is its case.json's path, so a run whose cases sit in lane folders keeps each case's own path.
+ */
 export type RunInput = {
   readonly run: string;
   readonly suite: string;
@@ -39,13 +41,13 @@ export type GraderWorld = { readonly world: string; readonly source: string } & 
   | { readonly refused: string }
 );
 export type DifficultyInput = { readonly source: string; readonly text: string };
-export type ExportInput = { readonly source: string; readonly manifest: Manifest | ManifestV1 };
+export type ExportInput = { readonly source: string } & ({ readonly manifest: Manifest | ManifestV1 } | { readonly error: string });
 
 export type ScorecardInputs = {
   readonly runs: readonly RunInput[];
-  /** Run directories with case files that no suite file holds, and so are not scored. */
+  /** Run directories with case files that no suite file holds, or that two hold equally, and so are not scored. */
   readonly unmatchedRuns: readonly string[];
-  /** Run directories with no case files: older formats and drills. */
+  /** Run directories with no case files, directly or one folder down: older formats and drills. */
   readonly otherRuns: readonly string[];
   /** The case ids with a frozen reference in eval/fidelity/. */
   readonly references: readonly string[];
@@ -64,17 +66,39 @@ const pct = (n: number, of: number): string => (of === 0 ? '-' : `${((100 * n) /
 const minutes = (ms: number | null): string => (ms === null ? '-' : (ms / 60_000).toFixed(1));
 const usd = (v: number | null): string => (v === null ? '-' : v.toFixed(2));
 const ratio = (n: number, of: number): string => `${n}/${of} (${pct(n, of)})`;
+const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
+/** x cut, not rounded, to 4 decimals, so a score just below 1 never reads as 1. */
+const cut4 = (x: number): string => String(Math.floor(Math.round(x * 1e6) / 100) / 1e4);
+
+// ---------------------------------------------------------------------------------------------
+// Which runs, against which suite
+
+/**
+ * The runs a folder under eval/runs holds: itself when its case folders sit directly in it; one run made of all its
+ * lane folders when those hold disjoint cases (parallel lanes of one run); one run per folder when they overlap (the
+ * arms of an A/B); none when no case folder is found.
+ */
+export function runParts(run: string, direct: readonly string[], subs: readonly { readonly name: string; readonly ids: readonly string[] }[]): { readonly run: string; readonly parts: readonly string[] }[] {
+  if (direct.length > 0) return [{ run, parts: [run] }];
+  const lanes = subs.filter((s) => s.ids.length > 0);
+  if (lanes.length === 0) return [];
+  const ids = lanes.flatMap((s) => s.ids);
+  if (new Set(ids).size === ids.length) return [{ run, parts: lanes.map((s) => `${run}/${s.name}`) }];
+  return lanes.map((s) => ({ run: `${run}/${s.name}`, parts: [`${run}/${s.name}`] }));
+}
+
+/**
+ * The suite file that holds the most of a run's case ids; on a tie, the smaller suite, which fits the run more
+ * closely. Null when none holds any, or when two hold as many and are the same size.
+ */
+export function suiteFor(ids: readonly string[], suites: readonly { readonly file: string; readonly ids: readonly string[] }[]): string | null {
+  const scored = suites.map((s) => ({ file: s.file, n: ids.filter((id) => s.ids.includes(id)).length, size: s.ids.length })).sort((a, b) => b.n - a.n || a.size - b.size);
+  const [best, next] = scored;
+  return best === undefined || best.n === 0 || (next !== undefined && next.n === best.n && next.size === best.size) ? null : best.file;
+}
 
 // ---------------------------------------------------------------------------------------------
 // 1. Generator
-
-/** The suite file that holds the most of a run's case ids, or null when none holds any or two hold as many. */
-export function suiteFor(ids: readonly string[], suites: readonly { readonly file: string; readonly ids: readonly string[] }[]): string | null {
-  const scored = suites.map((s) => ({ file: s.file, n: ids.filter((id) => s.ids.includes(id)).length })).sort((a, b) => b.n - a.n);
-  const [best, next] = scored;
-  return best === undefined || best.n === 0 || (next !== undefined && next.n === best.n) ? null : best.file;
-}
-
 
 export type GeneratorRow = {
   readonly run: string;
@@ -106,28 +130,32 @@ export function generatorRow(i: RunInput): GeneratorRow {
 
 function generatorCard(inputs: ScorecardInputs): string[] {
   const rows = inputs.runs.map(generatorRow);
-  const notes = rows.flatMap((r) => [
-    ...(r.unexpected.length === 0 ? [] : [`- ${code(r.run)} also holds ${r.unexpected.map(code).join(', ')}, which ${code(r.suiteFile)} does not list, so ${r.unexpected.length === 1 ? 'it is' : 'they are'} not scored.`]),
-    ...(r.usdCases === r.ran ? [] : [`- ${code(r.run)} has a measured cost for ${r.usdCases} of its ${r.ran} cases.`]),
-  ]);
+  const notes = [
+    ...rows.flatMap((r) => [
+      ...(r.unexpected.length === 0 ? [] : [`- ${code(r.run)} also holds ${r.unexpected.map(code).join(', ')}, which ${code(r.suiteFile)} does not list, so ${plural(r.unexpected.length, 'it is', 'they are')} not scored.`]),
+      ...(r.usdCases === r.ran ? [] : [`- ${code(r.run)} has a measured cost for ${r.usdCases} of its ${r.ran} cases run.`]),
+    ]),
+    ...(inputs.unmatchedRuns.length === 0 ? [] : [`- ${inputs.unmatchedRuns.map(code).join(', ')}: no one suite file holds ${plural(inputs.unmatchedRuns.length, 'its', 'their')} cases, so ${plural(inputs.unmatchedRuns.length, 'it is', 'they are')} not scored.`]),
+    ...(inputs.otherRuns.length === 0 ? [] : [`- ${inputs.otherRuns.length} other ${plural(inputs.otherRuns.length, 'folder', 'folders')} under \`eval/runs/\` keep no case files, directly or one folder down, so analyze-eval cannot score them: ${inputs.otherRuns.map(code).join(', ')}.`]),
+  ];
   return [
     '## 1. Generator: does WorldGen build a world the engine accepts?',
     '',
-    'One row per eval run under `eval/runs/` that keeps its case files, scored as `bun scripts/analyze-eval.ts <suite> <run>` scores it, against the suite file that holds its cases. The denominator is the cases the run ran. A pass is a success or an expected refusal. A targeted rerun runs only some of its suite, so its rate is over those cases, not the suite. The Run and Suite columns name the files each row is computed from. p50 and p95 are nearest-rank over the cases with a measured time. Times and costs are client-side estimates, not invoices.',
+    'One row per eval run under `eval/runs/` that keeps its case files, scored as `bun scripts/analyze-eval.ts <suite> <run>` scores it, against the suite file that holds its cases. The Run and Suite columns name the files each row is computed from. A run whose cases sit in parallel lane folders is one row; the arms of an A/B are one row each.',
+    '',
+    'The denominator is every case of the suite (A-341), so a targeted rerun\'s rate counts the cases it did not run as not passed; Cases run shows how many it ran. A pass is a success, an `expect: done` case that ended done and passed verify, or an expected refusal, an impossible case that stopped `input_rejected` (A-384). p50 and p95 are nearest-rank over the cases with a measured time. Times and costs are client-side estimates, not invoices.',
     '',
     '| Run | Suite | Cases run | Passed | Pass rate | Success | Expected refusal | Product failure | Infra failure | p50 min | p95 min | Cost USD |',
     '|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|',
     ...rows.map((r) => row([
-      code(r.run), `${r.suite} (${code(r.suiteFile)})`, `${r.ran} of ${r.suiteSize}`, r.passed, pct(r.passed, r.ran),
+      code(r.run), `${r.suite} (${code(r.suiteFile)})`, `${r.ran} of ${r.suiteSize}`, r.passed, pct(r.passed, r.suiteSize),
       r.outcomes.success, r.outcomes['expected refusal'], r.outcomes['product failure'], r.outcomes['infra failure'],
       minutes(r.p50Ms), minutes(r.p95Ms), usd(r.usd),
     ])),
     '',
     ...notes,
-    ...(inputs.unmatchedRuns.length === 0 ? [] : [`- No suite file holds the cases of ${inputs.unmatchedRuns.map(code).join(', ')}, so ${inputs.unmatchedRuns.length === 1 ? 'it is' : 'they are'} not scored.`]),
-    ...(inputs.otherRuns.length === 0 ? [] : [`- ${inputs.otherRuns.length} other folders under \`eval/runs/\` keep no case files, so analyze-eval cannot score them: ${inputs.otherRuns.map(code).join(', ')}.`]),
-    ...(notes.length + inputs.unmatchedRuns.length + inputs.otherRuns.length === 0 ? [] : ['']),
-    `Limits: a generator pass says the engine accepted the world and verify passed. It says nothing about fidelity, grader strength or whether an agent can solve the tasks.`,
+    ...(notes.length === 0 ? [] : ['']),
+    'Limits: a success says the engine accepted the world and verify passed, and an expected refusal that WorldGen turned down an impossible prompt. Neither says anything about fidelity, grader strength or whether an agent can solve the tasks. Every run is scored against the suite file as it is now, so a case whose expectation has changed since the run reads as invalid, an infra failure.',
   ];
 }
 
@@ -157,22 +185,30 @@ export function fidelityChecks(log: string | null | undefined): FidelityCheck[] 
   });
 }
 
+/** A run's evidence for the cases its suite holds. run.ts records fidelity on a finished create run only, so only the create log counts. */
+const suiteEvidence = (run: RunInput): EvalEvidence[] => run.evidence.filter((e) => run.cases.some((c) => c.id === e.id));
+const eventsOf = (e: EvalEvidence): string => e.source.replace(/case\.json$/, 'events.jsonl');
+
 export type FidelityRow = { readonly run: string; readonly caseId: string; readonly source: string; readonly reference: string; readonly score: number | null; readonly floor: number };
 
-/** A row per reference score a run recorded, and one with no score for a referenced case that recorded none. */
+/**
+ * A row per reference score a run recorded, and one with no score for a referenced case that recorded no fidelity
+ * event at all. A run where no case recorded one predates the event, so it gives no rows.
+ */
 export function fidelityRows(run: RunInput, references: readonly string[]): FidelityRow[] {
-  return [...run.evidence].sort((a, b) => a.id.localeCompare(b.id)).flatMap((e): FidelityRow[] => {
-    const scored = (['create', 'change'] as const).flatMap((phase) =>
-      fidelityChecks(e.logs[phase]).flatMap((c) =>
-        c.kind === 'reference' ? [{ run: run.run, caseId: e.id, source: `${run.run}/${e.id}/${phase === 'create' ? '' : 'change/'}events.jsonl`, reference: c.reference, score: c.score, floor: c.floor }] : []));
-    if (scored.length > 0 || !references.includes(e.id)) return scored;
-    return [{ run: run.run, caseId: e.id, source: `${run.run}/${e.id}/events.jsonl`, reference: e.id, score: null, floor: FIDELITY_FLOOR }];
+  const evidence = suiteEvidence(run);
+  if (!evidence.some((e) => fidelityChecks(e.logs.create).length > 0)) return [];
+  return evidence.flatMap((e): FidelityRow[] => {
+    const checks = fidelityChecks(e.logs.create);
+    const scored = checks.flatMap((c) => (c.kind === 'reference' ? [{ run: run.run, caseId: e.id, source: eventsOf(e), reference: c.reference, score: c.score, floor: c.floor }] : []));
+    if (checks.length > 0 || !references.includes(e.id)) return scored;
+    return [{ run: run.run, caseId: e.id, source: eventsOf(e), reference: e.id, score: null, floor: FIDELITY_FLOOR }];
   });
 }
 
-/** How each case of a run was checked for fidelity: by kind, and the cases that recorded no check. */
+/** How each suite case of a run was checked for fidelity: by kind, and the cases that recorded no check. */
 export function fidelityKinds(run: RunInput): { readonly reference: number; readonly openapi: number; readonly unchecked: number; readonly none: number } {
-  const kinds = run.evidence.map((e) => [...fidelityChecks(e.logs.create), ...fidelityChecks(e.logs.change)].map((c) => c.kind));
+  const kinds = suiteEvidence(run).map((e) => fidelityChecks(e.logs.create).map((c) => c.kind));
   return {
     reference: kinds.filter((k) => k.includes('reference')).length,
     openapi: kinds.filter((k) => k.includes('openapi')).length,
@@ -183,32 +219,40 @@ export function fidelityKinds(run: RunInput): { readonly reference: number; read
 
 function fidelityCard(inputs: ScorecardInputs): string[] {
   const rows = inputs.runs.flatMap((r) => fidelityRows(r, inputs.references));
-  const scored = rows.filter((r) => r.score !== null);
-  const above = scored.filter((r) => r.score! >= r.floor).length;
+  const scored = rows.filter((r) => r.score !== null).length;
   return [
     '## 2. Environment fidelity: does a world resemble the software it names?',
     '',
-    `A description case with a frozen reference in \`eval/fidelity/\` (${inputs.references.map(code).join(', ')}) is scored at its run's last step by \`fidelityScore()\` against the ${FIDELITY_FLOOR.toFixed(2)} floor (A-258), and the run records the score as a \`fidelity\` event in the case's \`events.jsonl\`. The denominator is the recorded scores: ${above} of ${scored.length} are at or above the floor.`,
+    `A description case with a frozen reference in \`eval/fidelity/\` (${inputs.references.map(code).join(', ')}) is gated at its run's last step by \`fidelityScore()\` against the ${FIDELITY_FLOOR.toFixed(2)} floor (A-258): a world below the floor is sent back for repair, never saved. A finished create run records its check as a \`fidelity\` event in the case's \`events.jsonl\`, so every recorded score is at or above the floor by construction. What varies is the score, and whether the run got that far. The denominator is each run of a referenced case, in the runs that record fidelity events at all: ${scored} of ${rows.length} recorded a score.`,
     '',
-    '| Run | Case | Reference | Score | Floor | At or above the floor | Source |',
-    '|---|---|---|--:|--:|---|---|',
-    ...rows.map((r) => row([code(r.run), r.caseId, r.reference, r.score === null ? 'none recorded' : r.score, r.floor, r.score === null ? '-' : r.score >= r.floor ? 'yes' : 'no', code(r.source)])),
+    '| Run | Case | Reference | Score | Floor | Source |',
+    '|---|---|---|--:|--:|---|',
+    ...rows.map((r) => row([code(r.run), r.caseId, r.reference, r.score === null ? 'none recorded' : r.score, r.floor, code(r.source)])),
     '',
-    'How every case of each run was checked, from the same `fidelity` events:',
+    'How every suite case of each run was checked, from the same `fidelity` events. An OpenAPI check means the world passed the gate against its source spec: paths, request shapes and error codes within the chosen scope. It records no score.',
     '',
     '| Run | Against a reference | Against the OpenAPI source spec | No reference, unchecked | No fidelity event | Source |',
     '|---|--:|--:|--:|--:|---|',
     ...inputs.runs.map((r) => {
       const k = fidelityKinds(r);
-      return row([code(r.run), k.reference, k.openapi, k.unchecked, k.none, code(`${r.run}/*/events.jsonl`)]);
+      return row([code(r.run), k.reference, k.openapi, k.unchecked, k.none, code(`${r.run}/**/events.jsonl`)]);
     }),
     '',
-    'Limits: the references cover only the cases named above, so every other description world is unchecked. An OpenAPI check compares paths, request shapes and error codes within the chosen scope with the source spec (`worldplay openapi`); the event records that it ran, not a score. A run that stopped before its last step records no fidelity event.',
+    'Limits: the references cover only the cases named above, so every other description world is unchecked, and a case that recorded `unchecked` ran before its reference existed. A run records no fidelity event when it stopped before saving a world, when it was an impossible case WorldGen refused, or when it predates the event. A change case\'s check describes its world before the change: an iterate records none.',
   ];
 }
 
 // ---------------------------------------------------------------------------------------------
 // 3. Grader
+
+/** What the grader card reads off a verdict: decoy scores, writes, and the checks and mutant slots the probes reached (A-393). */
+export function graderTaskOf(v: Pick<TaskVerdict, 'taskId' | 'decoys' | 'solutionWrites' | 'checks' | 'collateral'>, alternatives: number): GraderTask {
+  return {
+    task: v.taskId, decoys: v.decoys.map((d) => d.score), alternatives, solutionWrites: v.solutionWrites,
+    checks: v.checks.length, flipped: v.checks.filter((c) => c.flippedBy.length > 0).length,
+    slots: v.collateral.length, probed: v.collateral.filter((m) => m.call !== null).length,
+  };
+}
 
 type GraderTotals = { readonly tasks: number; readonly decoys: number; readonly alternatives: number; readonly oneWrite: number; readonly checks: number; readonly flipped: number; readonly slots: number; readonly probed: number };
 
@@ -226,16 +270,16 @@ function graderCard(inputs: ScorecardInputs): string[] {
   const all = graderTotals(verified.flatMap((w) => w.tasks));
   const line = (label: string, t: GraderTotals, source: string): string =>
     row([label, t.tasks, t.decoys, t.alternatives, t.oneWrite, ratio(t.flipped, t.checks), ratio(t.probed, t.slots), source]);
-  // Rounded down, so a decoy just below 1 never reads as 1.
-  const decoyTop = Math.floor(verified.flatMap((w) => w.tasks.flatMap((t) => t.decoys)).reduce((m, s) => Math.max(m, s), 0) * 1e4) / 1e4;
+  const decoys = verified.flatMap((w) => w.tasks.flatMap((t) => t.decoys.map((score) => ({ score, world: w, task: t.task }))));
+  const top = decoys.reduce<(typeof decoys)[number] | null>((m, d) => (m === null || d.score > m.score ? d : m), null);
   return [
     '## 3. Grader: does each grader tell the right end state from a wrong one?',
     '',
-    `Every world in \`prod/worlds/\`, checked by the engine's \`checkWorld\`, which \`bun run worldplay verify\` runs. The denominator is the ${all.tasks} tasks of the ${verified.length} worlds that pass check. A world passes only when, on every task, the reference solution scores 1, doing nothing scores 0, every decoy scores below 1, every alternative solution scores 1, and the replay is deterministic, so those controls hold for each task counted here. The highest decoy score, rounded down, is ${decoyTop}.`,
+    `Every world in \`prod/worlds/\`, checked by the engine's \`checkWorld\`, which \`bun run worldplay verify\` runs. The denominator is the ${all.tasks} tasks of the ${verified.length} worlds that pass check. A world passes only when, on every task, the reference solution scores 1, doing nothing scores 0, every decoy scores below 1, every alternative solution scores 1, and the replay is deterministic, so those controls hold for each task counted here.${top === null ? '' : ` The highest decoy score, cut to 4 decimals, is ${cut4(top.score)}, on ${top.task} in ${code(top.world.source)}.`}`,
     '',
     '- **Decoys** are shortcut solutions that must score below 1. **Alternatives** are other correct solutions that must score 1 (A-199).',
     '- **One-write solutions** make one successful writing call; `worldplay verify` prints `prefix -` for them.',
-    '- **Checks flipped** counts the grader checks (goals, guards or a returned score) that some probe turned from met to unmet: a strict prefix of the solution, a decoy, an engine mutant or a free-text swap (A-393). [research/evidence/probe-coverage.md](../research/evidence/probe-coverage.md) lists the checks no probe flips.',
+    '- **Checks flipped** counts the grader checks (goals, guards or a returned score) that some probe turned from met to unmet: a strict prefix of the solution, a decoy, an engine mutant or a free-text swap (A-393). [research/evidence/probe-coverage.md](../research/evidence/probe-coverage.md) lists the checks no probe flipped, as of the commit it names.',
     '- **Mutant slots probed** counts the engine mutant kinds that found a change to probe on each task.',
     '',
     '| World | Tasks | Decoys, all below 1 | Alternatives, all at 1 | One-write solutions | Checks flipped | Mutant slots probed | Source |',
@@ -291,11 +335,11 @@ function agentCard(inputs: ScorecardInputs): string[] {
   const out = [
     '## 4. Agent: how often does an agent solve a task?',
     '',
-    'Graded agent episodes: an episode passes when the engine scores its final state 1. Two sources, each with its own denominator.',
+    'Graded agent episodes, from two sources, each with its own denominator.',
     '',
     '### Measured difficulty',
     '',
-    'From `bun run difficulty` runs in `eval/difficulty/` (A-391). The denominator is a cell\'s trials: graded episodes that stopped done or at their turn, budget or time limit. The measured tier is easy at a pass rate of 2/3 or more, medium at 1/3 or more and hard below; the interval is Wilson 95%.',
+    'From `bun run difficulty` runs in `eval/difficulty/` (A-391). A pass is an engine score of 1. The denominator is a cell\'s trials: graded episodes that stopped done, at their turn, budget or time limit, or on an invalid turn; a model error, a refusal, a world or grade error, an interruption and a run-wide cut are not trials. The measured tier is easy at a pass rate of 2/3 or more, medium at 1/3 or more and hard below; the interval is Wilson 95%.',
     '',
   ];
   if (inputs.difficulty.length === 0) out.push('No difficulty run is committed.', '');
@@ -320,25 +364,29 @@ function agentCard(inputs: ScorecardInputs): string[] {
       '',
     );
   }
-  const v2 = inputs.exports.filter((e) => e.manifest.manifest_version !== 1);
-  const total = (es: readonly ExportInput[], f: (c: ReturnType<typeof exportCounts>) => number): number => es.reduce((n, e) => n + f(exportCounts(e.manifest)), 0);
+  const read = inputs.exports.flatMap((e) => ('manifest' in e ? [e] : []));
+  const v2 = read.filter((e) => e.manifest.manifest_version !== 1);
+  const successesOnly = v2.filter((e) => e.manifest.manifest_version !== 1 && e.manifest.selection?.successes_only === true);
+  const total = (es: typeof read, f: (c: ReturnType<typeof exportCounts>) => number): number => es.reduce((n, e) => n + f(exportCounts(e.manifest)), 0);
+  const dash = (n: number | null): string | number => n ?? '-';
   out.push(
     '### Dataset exports',
     '',
-    'From the `manifest.json` of each export folder in `eval/dataset/` (YOS-91). The denominator is the episodes an export holds. A schema-2 export counts every episode by verdict: success, partial, failure or infra (A-389, A-396). A schema-1 export counts only the complete successes and the rest.',
+    'From the `manifest.json` of each export folder in `eval/dataset/` (YOS-91). The denominator is the episodes an export holds. A success is a complete success: stopped done, an engine score of exactly 1, a non-blank final reply, both state hashes and fully accounted spend. A schema-2 export counts every episode by verdict: success, partial, failure or infra (A-389, A-396). A schema-1 export counts only the successes and the rest.',
     '',
-    '| Export folder | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success | Source |',
-    '|---|--:|---|--:|--:|--:|--:|--:|--:|---|',
+    '| Export manifest | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success |',
+    '|---|--:|---|--:|--:|--:|--:|--:|--:|',
     ...inputs.exports.map((e) => {
+      if (!('manifest' in e)) return row([code(e.source), '-', '-', '-', '-', '-', '-', '-', `unreadable: ${e.error}`]);
       const c = exportCounts(e.manifest);
-      const dash = (n: number | null): string | number => n ?? '-';
-      return row([code(e.source.replace(/\/manifest\.json$/, '/')), e.manifest.schema_version, e.manifest.model, c.episodes, c.success, dash(c.partial), dash(c.failure), dash(c.infra), c.notSuccess, code(e.source)]);
+      return row([code(e.source), e.manifest.schema_version, e.manifest.model, c.episodes, c.success, dash(c.partial), dash(c.failure), dash(c.infra), c.notSuccess]);
     }),
-    row(['**Total**', '', '', total(inputs.exports, (c) => c.episodes), total(inputs.exports, (c) => c.success), '', '', '', total(inputs.exports, (c) => c.notSuccess), code('eval/dataset/')]),
+    row(['**Total**', '', '', total(read, (c) => c.episodes), total(read, (c) => c.success), '', '', '', total(read, (c) => c.notSuccess)]),
     '',
     v2.length === 0
       ? 'No schema-2 export is committed yet, so no partial, failure or infra count is shown: the committed exports predate A-389.'
-      : `${v2.length} schema-2 export folder${v2.length === 1 ? ' holds' : 's hold'} ${total(v2, (c) => c.episodes)} episodes: ${total(v2, (c) => c.success)} success, ${total(v2, (c) => c.partial ?? 0)} partial, ${total(v2, (c) => c.failure ?? 0)} failure, ${total(v2, (c) => c.infra ?? 0)} infra.`,
+      : `${v2.length} schema-2 export ${plural(v2.length, 'folder holds', 'folders hold')} ${total(v2, (c) => c.episodes)} episodes: ${total(v2, (c) => c.success)} success, ${total(v2, (c) => c.partial ?? 0)} partial, ${total(v2, (c) => c.failure ?? 0)} failure, ${total(v2, (c) => c.infra ?? 0)} infra.`,
+    ...(successesOnly.length === 0 ? [] : ['', `${successesOnly.map((e) => code(e.source)).join(', ')} ${plural(successesOnly.length, 'was', 'were')} exported with successes only, so ${plural(successesOnly.length, 'its', 'their')} zero partial, failure and infra counts say nothing was kept, not that nothing failed.`]),
     '',
     'Limits: few tasks, few episodes and few models; a 3-of-3 cell cannot tell easy from medium. The engine score certifies the final world state, not the agent\'s final reply. An export holds the runs someone chose to export, so its success share is not a sample of all tasks.',
   );
