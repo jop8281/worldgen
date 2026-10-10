@@ -1,0 +1,11 @@
+{
+  "status": "incomplete",
+  "sandbox": {
+    "id": "bx_pqq3rvxz",
+    "teardown": "confirmed"
+  },
+  "problems": [],
+  "accepted": 2,
+  "failed": 2,
+  "modelCostUsd": 0.7947313
+}

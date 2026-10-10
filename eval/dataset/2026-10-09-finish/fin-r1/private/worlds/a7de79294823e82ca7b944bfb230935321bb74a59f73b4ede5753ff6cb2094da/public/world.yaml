@@ -1,0 +1,839 @@
+format: 1
+meta:
+  name: gen_rental_fleet
+  description: A stateful car rental fleet. Branches hold vehicles. Customers reserve a vehicle for a pickup and due window. Agents pick up, return, cancel and close rentals. Damage claims move through review to approved, denied or settled. A daily job assesses a late fee on rentals returned after their due time, and a second daily job cancels no-show reservations. Most changes go through actions that keep the rental, vehicle and claim state machines consistent.
+  resembles: "Car rental fleet management system (Enterprise/Hertz-style rental ops backend): vehicles, customers, reservations and rentals, damage claims, late fees"
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-06T09:00:00.000Z
+    tick: 1s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  branch:
+    description: A rental location where vehicles are based and picked up, identified by a short code.
+    idPrefix: brn
+    fields:
+      code:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 10
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      city:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+  vehicle:
+    description: A car in the fleet. Belongs to a home branch. rented is set only by pickup_rental and cleared only by return_rental.
+    idPrefix: veh
+    fields:
+      plate:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 15
+      make:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+      model:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 60
+      vehicle_class:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - economy
+          - compact
+          - suv
+          - luxury
+          - van
+      daily_rate:
+        type: money
+        description: Daily rental rate in USD cents.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        states:
+          - available
+          - rented
+          - maintenance
+          - retired
+        initial: available
+        transitions:
+          available:
+            - rented
+            - maintenance
+            - retired
+          rented:
+            - available
+            - maintenance
+          maintenance:
+            - available
+            - retired
+          retired: []
+      branch_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: branch
+        onDelete: restrict
+      odometer_km:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+  customer:
+    description: A driver who rents cars. The blocked flag stops new reservations.
+    idPrefix: cus
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        format: email
+      license_number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 30
+      phone:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 30
+      blocked:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        default: false
+  rental:
+    description: A reservation that becomes a rental. Created only by the reserve_rental action. All money in USD cents.
+    idPrefix: rnt
+    fields:
+      customer_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: customer
+        onDelete: restrict
+      vehicle_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: vehicle
+        onDelete: restrict
+      pickup_branch_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: branch
+        onDelete: restrict
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - reserved
+          - active
+          - returned
+          - closed
+          - cancelled
+        initial: reserved
+        transitions:
+          reserved:
+            - active
+            - cancelled
+          active:
+            - returned
+          returned:
+            - closed
+          closed: []
+          cancelled: []
+      pickup_at:
+        type: datetime
+        description: Scheduled pickup time.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      due_at:
+        type: datetime
+        description: Scheduled return time.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      picked_up_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      returned_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      daily_rate:
+        type: money
+        description: Snapshot of the vehicle daily rate at reservation.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      base_charge:
+        type: money
+        description: Daily rate times days in the window, rounded up, minimum 1.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+      late_fee:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+      late_fee_applied:
+        type: bool
+        description: True once the late fee assessment job has processed this rental.
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      late_fee_waived:
+        type: bool
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      late_fee_waive_reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      damage_charge:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+        default: 0
+      odometer_out:
+        type: int
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        min: 0
+      odometer_in:
+        type: int
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        min: 0
+      cancel_reason:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        maxLength: 300
+  damage_claim:
+    description: A damage report against a rental and its vehicle, reviewed to an approved amount or denied, then settled onto the rental damage charge. Created by file_damage_claim.
+    idPrefix: clm
+    fields:
+      rental_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: rental
+        onDelete: restrict
+      vehicle_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: vehicle
+        onDelete: restrict
+      description:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      estimated_cost:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        currency: USD
+        min: 1
+      approved_amount:
+        type: money
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        currency: USD
+        min: 1
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - open
+          - under_review
+          - approved
+          - denied
+          - settled
+        initial: open
+        transitions:
+          open:
+            - under_review
+            - denied
+          under_review:
+            - approved
+            - denied
+          approved:
+            - settled
+          denied: []
+          settled: []
+      filed_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      resolved_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      denial_reason:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_branches:
+    op: list
+    entity: branch
+    filters:
+      - city
+    search:
+      - name
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /branches
+  get_branch:
+    op: get
+    entity: branch
+    method: GET
+    path: /branches/{id}
+  list_vehicles:
+    op: list
+    entity: vehicle
+    filters:
+      - status
+      - vehicle_class
+      - branch_id
+    search:
+      - plate
+      - make
+      - model
+    sort:
+      - daily_rate
+      - odometer_km
+    pageSize: 25
+    method: GET
+    path: /vehicles
+  get_vehicle:
+    op: get
+    entity: vehicle
+    method: GET
+    path: /vehicles/{id}
+  create_vehicle:
+    op: create
+    entity: vehicle
+    method: POST
+    path: /vehicles
+  update_vehicle:
+    op: update
+    entity: vehicle
+    method: PATCH
+    path: /vehicles/{id}
+  list_customers:
+    op: list
+    entity: customer
+    filters:
+      - blocked
+    search:
+      - name
+      - email
+      - license_number
+    sort:
+      - name
+    pageSize: 25
+    method: GET
+    path: /customers
+  get_customer:
+    op: get
+    entity: customer
+    method: GET
+    path: /customers/{id}
+  create_customer:
+    op: create
+    entity: customer
+    method: POST
+    path: /customers
+  update_customer:
+    op: update
+    entity: customer
+    method: PATCH
+    path: /customers/{id}
+  list_rentals:
+    op: list
+    entity: rental
+    filters:
+      - status
+      - customer_id
+      - vehicle_id
+      - pickup_branch_id
+      - late_fee_applied
+    search: []
+    sort:
+      - pickup_at
+      - due_at
+      - returned_at
+    pageSize: 25
+    method: GET
+    path: /rentals
+  get_rental:
+    op: get
+    entity: rental
+    method: GET
+    path: /rentals/{id}
+  list_customer_rentals:
+    op: list
+    entity: rental
+    filters:
+      - status
+      - vehicle_id
+    search: []
+    sort:
+      - pickup_at
+      - due_at
+      - returned_at
+    pageSize: 25
+    method: GET
+    path: /customers/{customer_id}/rentals
+  list_vehicle_rentals:
+    op: list
+    entity: rental
+    filters:
+      - status
+      - customer_id
+    search: []
+    sort:
+      - pickup_at
+      - due_at
+      - returned_at
+    pageSize: 25
+    method: GET
+    path: /vehicles/{vehicle_id}/rentals
+  list_damage_claims:
+    op: list
+    entity: damage_claim
+    filters:
+      - status
+      - rental_id
+      - vehicle_id
+    search: []
+    sort:
+      - estimated_cost
+      - filed_at
+    pageSize: 25
+    method: GET
+    path: /damage_claims
+  get_damage_claim:
+    op: get
+    entity: damage_claim
+    method: GET
+    path: /damage_claims/{id}
+  list_rental_damage_claims:
+    op: list
+    entity: damage_claim
+    filters:
+      - status
+    search: []
+    sort:
+      - estimated_cost
+      - filed_at
+    pageSize: 25
+    method: GET
+    path: /rentals/{rental_id}/damage_claims
+actions:
+  create_branch:
+    method: POST
+    path: /branches
+    description: Open a new rental branch. Branches have no standard create route, so this action adds one.
+    input:
+      code:
+        type: string
+        description: Short unique branch code.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 10
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      city:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 80
+    handler: "(ctx) => { const b = ctx.body; const code = b.code.trim(); if (code === '') ctx.fail(400, 'input.invalid', 'code must not be blank'); const dup = ctx.db.list('branch', { where: { code } }); if (dup.length > 0) ctx.fail(409, 'duplicate_code', 'branch code ' + code + ' already exists'); const row = ctx.db.create('branch', { code, name: b.name, city: b.city }); return { status: 201, body: row }; }"
+  reserve_rental:
+    method: POST
+    path: /rentals
+    description: Reserve an available vehicle for a non-blocked customer between pickup_at and due_at. Snapshots the daily rate and sets base_charge to the daily rate times the days in the window, rounded up, minimum 1.
+    input:
+      customer_id:
+        type: ref
+        description: The driver. Must not be blocked.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: customer
+        onDelete: restrict
+      vehicle_id:
+        type: ref
+        description: The vehicle. Must be available with no overlapping reserved or active rental.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: vehicle
+        onDelete: restrict
+      pickup_at:
+        type: datetime
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      due_at:
+        type: datetime
+        description: Must be after pickup_at.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const b = ctx.body; const customer = ctx.db.get('customer', b.customer_id); if (customer === null) ctx.fail(404, 'not_found', 'customer ' + b.customer_id + ' not found'); const vehicle = ctx.db.get('vehicle', b.vehicle_id); if (vehicle === null) ctx.fail(404, 'not_found', 'vehicle ' + b.vehicle_id + ' not found'); const minutes = ctx.time.minutesBetween(b.pickup_at, b.due_at); if (minutes <= 0) ctx.fail(422, 'invalid_window', 'due_at must be after pickup_at'); if (customer.blocked) ctx.fail(409, 'customer_blocked', 'customer ' + customer.id + ' is blocked and cannot reserve vehicles'); if (vehicle.status !== 'available') ctx.fail(409, 'vehicle_unavailable', 'vehicle ' + vehicle.id + ' is ' + vehicle.status + '. Only available vehicles can be reserved.'); const clash = ctx.db.list('rental', { where: { vehicle_id: vehicle.id } }).find((r) => (r.status === 'reserved' || r.status === 'active') && ctx.time.minutesBetween(r.pickup_at, b.due_at) > 0 && ctx.time.minutesBetween(b.pickup_at, r.due_at) > 0); if (clash) ctx.fail(409, 'vehicle_overlap', 'vehicle ' + vehicle.id + ' already has rental ' + clash.id + ' (' + clash.status + ') overlapping that window'); const days = Math.max(1, Math.ceil(minutes / 1440)); const rental = ctx.db.create('rental', { customer_id: customer.id, vehicle_id: vehicle.id, pickup_branch_id: vehicle.branch_id, status: 'reserved', pickup_at: b.pickup_at, due_at: b.due_at, daily_rate: vehicle.daily_rate, base_charge: days * vehicle.daily_rate, late_fee: 0, late_fee_applied: false, late_fee_waived: false, damage_charge: 0 }); return { status: 201, body: rental }; }"
+  pickup_rental:
+    method: POST
+    path: /rentals/{id}/pickup
+    description: Hand over the keys. A reserved rental becomes active, the vehicle becomes rented and odometer_out is recorded.
+    input:
+      odometer_out:
+        type: int
+        description: Odometer reading at pickup. Not below the vehicle odometer.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+    handler: "(ctx) => { const id = ctx.params.id; const r = ctx.db.get('rental', id); if (r === null) ctx.fail(404, 'not_found', 'rental ' + id + ' not found'); if (r.status !== 'reserved') ctx.fail(409, 'invalid_state', 'rental ' + id + ' is ' + r.status + '. Only reserved rentals can be picked up.'); const v = ctx.db.get('vehicle', r.vehicle_id); if (v.status !== 'available') ctx.fail(409, 'vehicle_unavailable', 'vehicle ' + v.id + ' is ' + v.status + ' and cannot be handed over'); if (ctx.body.odometer_out < v.odometer_km) ctx.fail(422, 'odometer_invalid', 'odometer_out ' + ctx.body.odometer_out + ' is below the vehicle odometer ' + v.odometer_km); const updated = ctx.db.update('rental', id, { status: 'active', picked_up_at: ctx.now(), odometer_out: ctx.body.odometer_out }); ctx.db.update('vehicle', v.id, { status: 'rented' }); return { status: 200, body: updated }; }"
+  return_rental:
+    method: POST
+    path: /rentals/{id}/return
+    description: Check the vehicle back in. An active rental becomes returned, returned_at is stamped with engine time, the vehicle odometer is updated and the vehicle becomes available at the return branch. No late fee is charged here, the daily job assesses it.
+    input:
+      odometer_in:
+        type: int
+        description: Odometer reading at return. Not below odometer_out.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      branch_id:
+        type: ref
+        description: Return branch. Defaults to the vehicle's current branch.
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        entity: branch
+        onDelete: restrict
+    handler: "(ctx) => { const id = ctx.params.id; const r = ctx.db.get('rental', id); if (r === null) ctx.fail(404, 'not_found', 'rental ' + id + ' not found'); if (r.status !== 'active') ctx.fail(409, 'invalid_state', 'rental ' + id + ' is ' + r.status + '. Only active rentals can be returned.'); const odo = ctx.body.odometer_in; if (r.odometer_out !== null && odo < r.odometer_out) ctx.fail(422, 'odometer_invalid', 'odometer_in ' + odo + ' is below odometer_out ' + r.odometer_out); const v = ctx.db.get('vehicle', r.vehicle_id); let branchId = v.branch_id; if (ctx.body.branch_id !== undefined && ctx.body.branch_id !== null) { const br = ctx.db.get('branch', ctx.body.branch_id); if (br === null) ctx.fail(404, 'not_found', 'branch ' + ctx.body.branch_id + ' not found'); branchId = br.id; } const updated = ctx.db.update('rental', id, { status: 'returned', returned_at: ctx.now(), odometer_in: odo }); const vpatch = { odometer_km: odo, branch_id: branchId }; if (v.status === 'rented') vpatch.status = 'available'; ctx.db.update('vehicle', v.id, vpatch); return { status: 200, body: updated }; }"
+  cancel_rental:
+    method: POST
+    path: /rentals/{id}/cancel
+    description: Cancel a reserved rental with a reason. The vehicle is left as it is.
+    input:
+      reason:
+        type: string
+        description: Why the reservation is cancelled.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 300
+    handler: "(ctx) => { const id = ctx.params.id; const r = ctx.db.get('rental', id); if (r === null) ctx.fail(404, 'not_found', 'rental ' + id + ' not found'); if (r.status !== 'reserved') ctx.fail(409, 'invalid_state', 'rental ' + id + ' is ' + r.status + '. Only reserved rentals can be cancelled.'); const reason = ctx.body.reason.trim(); if (reason === '') ctx.fail(400, 'input.invalid', 'Invalid input for cancel_rental: reason expected a non-blank string, found \"\"'); const updated = ctx.db.update('rental', id, { status: 'cancelled', cancel_reason: reason }); return { status: 200, body: updated }; }"
+  close_rental:
+    method: POST
+    path: /rentals/{id}/close
+    description: Close a returned rental. Refused with 409 late_fee_pending when the rental was late and its fee is not assessed yet, and with 409 claim_pending while a damage claim is open or under review.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const r = ctx.db.get('rental', id); if (r === null) ctx.fail(404, 'not_found', 'rental ' + id + ' not found'); if (r.status !== 'returned') ctx.fail(409, 'invalid_state', 'rental ' + id + ' is ' + r.status + '. Only returned rentals can be closed.'); const late = r.returned_at !== null && ctx.time.minutesBetween(r.due_at, r.returned_at) > 60; if (late && !r.late_fee_applied) ctx.fail(409, 'late_fee_pending', 'rental ' + id + ' was returned late and its late fee has not been assessed yet. Try again after the daily late fee job.'); const pending = ctx.db.list('damage_claim', { where: { rental_id: id } }).filter((c) => c.status === 'open' || c.status === 'under_review'); if (pending.length > 0) ctx.fail(409, 'claim_pending', 'rental ' + id + ' has damage claim ' + pending[0].id + ' still ' + pending[0].status + '. Resolve it first.'); const updated = ctx.db.update('rental', id, { status: 'closed' }); return { status: 200, body: updated }; }"
+  waive_late_fee:
+    method: POST
+    path: /rentals/{id}/waive_late_fee
+    description: Waive an assessed, non-zero late fee. Sets late_fee to 0, late_fee_waived to true and stores the reason. The daily job never re-adds it.
+    input:
+      reason:
+        type: text
+        description: Why the fee is waived.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const id = ctx.params.id; const r = ctx.db.get('rental', id); if (r === null) ctx.fail(404, 'not_found', 'rental ' + id + ' not found'); if (!r.late_fee_applied) ctx.fail(409, 'late_fee_not_assessed', 'rental ' + id + ' has no assessed late fee yet'); if (r.late_fee === 0) ctx.fail(409, 'no_late_fee', 'rental ' + id + ' has no late fee to waive'); const reason = ctx.body.reason.trim(); if (reason === '') ctx.fail(400, 'input.invalid', 'Invalid input for waive_late_fee: reason expected a non-blank text, found \"\"'); const updated = ctx.db.update('rental', id, { late_fee: 0, late_fee_waived: true, late_fee_waive_reason: reason }); return { status: 200, body: updated }; }"
+  file_damage_claim:
+    method: POST
+    path: /damage_claims
+    description: File a damage claim against an active, returned or closed rental. vehicle_id is copied from the rental and filed_at is set to now. The claim starts open.
+    input:
+      rental_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: rental
+        onDelete: restrict
+      description:
+        type: text
+        description: What was damaged.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+      estimated_cost:
+        type: money
+        description: Estimated repair cost in USD cents. Above 0.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 1
+    handler: "(ctx) => { const r = ctx.db.get('rental', ctx.body.rental_id); if (r === null) ctx.fail(404, 'not_found', 'rental ' + ctx.body.rental_id + ' not found'); if (r.status !== 'active' && r.status !== 'returned' && r.status !== 'closed') ctx.fail(409, 'invalid_state', 'rental ' + r.id + ' is ' + r.status + '. Claims can be filed only against active, returned or closed rentals.'); if (ctx.body.estimated_cost <= 0) ctx.fail(422, 'invalid_estimate', 'estimated_cost must be above 0'); const desc = ctx.body.description.trim(); if (desc === '') ctx.fail(400, 'input.invalid', 'Invalid input for file_damage_claim: description expected a non-blank text, found \"\"'); const claim = ctx.db.create('damage_claim', { rental_id: r.id, vehicle_id: r.vehicle_id, description: desc, estimated_cost: ctx.body.estimated_cost, status: 'open', filed_at: ctx.now() }); return { status: 201, body: claim }; }"
+  review_claim:
+    method: POST
+    path: /damage_claims/{id}/review
+    description: Move an open claim to under_review.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const c = ctx.db.get('damage_claim', id); if (c === null) ctx.fail(404, 'not_found', 'claim ' + id + ' not found'); if (c.status !== 'open') ctx.fail(409, 'invalid_state', 'claim ' + id + ' is ' + c.status + '. Only open claims can be reviewed.'); const updated = ctx.db.update('damage_claim', id, { status: 'under_review' }); return { status: 200, body: updated }; }"
+  approve_claim:
+    method: POST
+    path: /damage_claims/{id}/approve
+    description: Approve an under_review claim at an approved_amount between 1 and the estimate. Sets resolved_at. An available vehicle moves to maintenance, a rented one stays rented until returned.
+    input:
+      approved_amount:
+        type: money
+        description: Approved amount in USD cents, at most estimated_cost.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 1
+    handler: "(ctx) => { const id = ctx.params.id; const c = ctx.db.get('damage_claim', id); if (c === null) ctx.fail(404, 'not_found', 'claim ' + id + ' not found'); if (c.status !== 'under_review') ctx.fail(409, 'invalid_state', 'claim ' + id + ' is ' + c.status + '. Only under_review claims can be approved.'); const amt = ctx.body.approved_amount; if (amt < 1 || amt > c.estimated_cost) ctx.fail(422, 'invalid_amount', 'approved_amount must be between 1 and the estimated cost ' + c.estimated_cost); const updated = ctx.db.update('damage_claim', id, { status: 'approved', approved_amount: amt, resolved_at: ctx.now() }); const v = ctx.db.get('vehicle', c.vehicle_id); if (v !== null && v.status === 'available') ctx.db.update('vehicle', v.id, { status: 'maintenance' }); return { status: 200, body: updated }; }"
+  deny_claim:
+    method: POST
+    path: /damage_claims/{id}/deny
+    description: Deny an open or under_review claim with a reason. Stores denial_reason and sets resolved_at.
+    input:
+      reason:
+        type: text
+        description: Why the claim is denied.
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: "(ctx) => { const id = ctx.params.id; const c = ctx.db.get('damage_claim', id); if (c === null) ctx.fail(404, 'not_found', 'claim ' + id + ' not found'); if (c.status !== 'open' && c.status !== 'under_review') ctx.fail(409, 'invalid_state', 'claim ' + id + ' is ' + c.status + '. Only open or under_review claims can be denied.'); const reason = ctx.body.reason.trim(); if (reason === '') ctx.fail(400, 'input.invalid', 'Invalid input for deny_claim: reason expected a non-blank text, found \"\"'); const updated = ctx.db.update('damage_claim', id, { status: 'denied', denial_reason: reason, resolved_at: ctx.now() }); return { status: 200, body: updated }; }"
+  settle_claim:
+    method: POST
+    path: /damage_claims/{id}/settle
+    description: Settle an approved claim by adding its approved_amount to the rental damage_charge. Refused with 409 when the rental is cancelled.
+    input: {}
+    handler: "(ctx) => { const id = ctx.params.id; const c = ctx.db.get('damage_claim', id); if (c === null) ctx.fail(404, 'not_found', 'claim ' + id + ' not found'); if (c.status !== 'approved') ctx.fail(409, 'invalid_state', 'claim ' + id + ' is ' + c.status + '. Only approved claims can be settled.'); const r = ctx.db.get('rental', c.rental_id); if (r.status === 'cancelled') ctx.fail(409, 'rental_cancelled', 'rental ' + r.id + ' is cancelled, so its claim cannot be settled'); ctx.db.update('rental', r.id, { damage_charge: r.damage_charge + c.approved_amount }); const updated = ctx.db.update('damage_claim', id, { status: 'settled' }); return { status: 200, body: updated }; }"
+jobs:
+  late_fee_assessment:
+    description: "Every day. For each returned rental not yet assessed: if it came back more than 60 minutes after due_at, set late_fee to ceil(minutes_late / 1440) days times 150% of the daily rate. Mark late_fee_applied either way so nothing is charged twice. Waived rentals are skipped."
+    every: 1d
+    run: "(ctx) => { for (const r of ctx.db.list('rental', { where: { status: 'returned', late_fee_applied: false } })) { if (r.late_fee_waived) continue; let fee = 0; if (r.returned_at !== null) { const late = ctx.time.minutesBetween(r.due_at, r.returned_at); if (late > 60) fee = Math.round(Math.ceil(late / 1440) * r.daily_rate * 3 / 2); } ctx.db.update('rental', r.id, { late_fee: fee, late_fee_applied: true }); } }"
+  expire_no_shows:
+    description: Every day. Cancel every reserved rental whose pickup_at is more than 24 hours in the past, with cancel_reason no_show.
+    every: 1d
+    run: "(ctx) => { const now = ctx.now(); for (const r of ctx.db.list('rental', { where: { status: 'reserved' } })) { if (ctx.time.minutesBetween(r.pickup_at, now) > 1440) ctx.db.update('rental', r.id, { status: 'cancelled', cancel_reason: 'no_show' }); } }"
+fixtures: {}
+seed:
+  branch: "(ctx) => [['SEA','Seattle Downtown','Seattle'],['PDX','Portland Airport','Portland'],['DEN','Denver International','Denver'],['AUS','Austin Bergstrom','Austin'],['CHI','Chicago O\\'Hare','Chicago'],['BOS','Boston Logan','Boston']].map(([code,name,city]) => ({ code, name, city, created_at: '2025-11-03T09:00:00.000Z', updated_at: '2025-11-03T09:00:00.000Z' }))"
+  customer: (ctx) => { const BASE='2026-01-01T00:00:00.000Z'; const X=ctx.time.minutesBetween(BASE, ctx.now()); const iso=(a)=> a===X?BASE:ctx.time.plus(BASE,(X-a)+'m'); const firsts=['James','Maria','Chen','Aisha','Liam','Sofia','Noah','Yuki','Omar','Hannah','Lucas','Fatima','Ethan','Grace','Mateo','Ingrid','Raj','Chloe','Diego','Nora','Samuel','Leila','Oliver','Mei','Andre','Zoe','Kofi','Clara','Felix','Anika']; const lasts=['Anderson','Brooks','Castillo','Dubois','Evans','Fischer','Garcia','Hughes','Ito','Jensen','Kowalski','Lindqvist','Moreno','Nguyen','Okafor','Patel','Quinn','Rossi','Schmidt','Tanaka','Underwood','Vargas','Walsh','Xu','Yilmaz','Zimmer','Bennett','Cooper','Delgado','Ellis']; const anchors=[['Elena Voss','elena.voss@example.com','D1000001'],['Tomas Reyes','tomas.reyes@example.com','D1000002'],['Priya Natarajan','priya.natarajan@example.com','D1000003']]; const blocked=[10,33,57,81]; const rows=[]; for (let i=0;i<90;i++) { const a=iso(330000+(i*593)%60000); if (i<3) { rows.push({ name:anchors[i][0], email:anchors[i][1], license_number:anchors[i][2], phone:'555-01'+(10+i), blocked:false, created_at:a, updated_at:a }); continue; } const f=firsts[i%30]; const l=lasts[(i*7+3)%30]; rows.push({ name:f+' '+l, email:(f+'.'+l+i).toLowerCase()+'@example.com', license_number:'D'+(2000000+i*7919), phone:'555-'+(1000+(i*37)%9000), blocked:blocked.includes(i), created_at:a, updated_at:a }); } return rows; }
+  vehicle: "(ctx) => { const BASE='2026-01-01T00:00:00.000Z'; const X=ctx.time.minutesBetween(BASE, ctx.now()); const iso=(a)=> a===X?BASE:ctx.time.plus(BASE,(X-a)+'m'); const branches=ctx.rows('branch'); const classes=['suv','economy','compact','luxury','van']; const models={ suv:[['Toyota','RAV4'],['Ford','Explorer'],['Honda','CR-V'],['Chevrolet','Tahoe']], economy:[['Toyota','Yaris'],['Nissan','Versa'],['Kia','Rio'],['Hyundai','Accent']], compact:[['Toyota','Corolla'],['Honda','Civic'],['Mazda','Mazda3'],['Volkswagen','Jetta']], luxury:[['BMW','5 Series'],['Mercedes-Benz','E-Class'],['Audi','A6'],['Cadillac','CT5']], van:[['Chrysler','Pacifica'],['Dodge','Grand Caravan'],['Ford','Transit'],['Kia','Carnival']] }; const base={ economy:3900, compact:4500, suv:7200, luxury:14500, van:8900 }; const rows=[]; for (let i=0;i<60;i++) { const cls=classes[i%5]; const m=models[cls][Math.floor(i/5)%4]; const status=i<15?'rented':i<45?'available':i<54?'maintenance':'retired'; const t=iso(300000+(i*997)%50000); rows.push({ plate:'FLT-'+(1000+i*13), make:m[0], model:m[1], vehicle_class:cls, daily_rate:base[cls]+((i*131)%8)*100, status, branch_id:branches[i%6].id, odometer_km: i===0?47850:8000+(i*7919)%90000, created_at:t, updated_at:t }); } return rows; }"
+  rental: "(ctx) => { const BASE='2026-01-01T00:00:00.000Z'; const X=ctx.time.minutesBetween(BASE, ctx.now()); const iso=(a)=> a===X?BASE:ctx.time.plus(BASE,(X-a)+'m'); const planClaims=(n)=>{ const order=[]; for (const [s,c] of [['open',10],['under_review',28],['approved',8],['denied',6],['settled',8]]) for (let i=0;i<c;i++) order.push(s); const vals=[4500,7500,9900,14999,18000,22500,35000,48000,62000,89900,125000,210000,300000]; const seen={}; const out=[]; for (let k=0;k<60;k++) { const status=order[(k*17)%60]; const j=seen[status]||0; seen[status]=j+1; let est; if (status==='under_review') { est = j===0?15000 : j%3===1 ? 4000+(j*1370)%10000 : j%3===2 ? 15050+(j*9137)%280000 : 20000+(j*13337)%280000; } else est=vals[(k*5)%vals.length]; const appr=(status==='approved'||status==='settled')?Math.max(1,Math.floor(est*0.8)):null; out.push({k,status,est,appr,ri:(k*7+3)%n}); } return out; }; const veh=ctx.rows('vehicle'); const cus=ctx.rows('customer'); const pool=cus.filter((c,i)=>i>=3&&!c.blocked); const hist=cus.slice(3); const pc=(n)=>pool[(n*7+n%5)%pool.length].id; const hc=(n)=>hist[(n*11+3)%hist.length].id; const reasons=['Trip called off','Found a cheaper rate','Flight cancelled','Changed travel dates','no_show','Vehicle no longer needed']; const rows=[]; const vv=()=>(rows.length*7+3)%60; const add=(o)=>{ const n=rows.length; const v=veh[o.vi]; const rate=v.daily_rate; const days=Math.max(1,Math.ceil((o.p-o.d)/1440)); const hasRet=o.r!==undefined; const late=hasRet?o.d-o.r:0; let applied=false; let fee=0; if (o.status==='closed'||(o.status==='returned'&&o.r>=1440)) { applied=true; if (late>60) fee=Math.round(Math.ceil(late/1440)*rate*3/2); } const pu=(o.status==='active'||hasRet)?o.p-15:undefined; let out=null; let inn=null; if (o.status==='active') out=o.out; else if (hasRet) { out=Math.max(0,v.odometer_km-4000-(n*977)%3000); inn=out+100+(n*313)%900; } const created=(o.p>0?o.p:0)+600+(n*389)%3000; const times=[created]; if (pu!==undefined) times.push(pu); if (hasRet) times.push(o.status==='closed'?o.r-300:applied?o.r-700:o.r); if (o.upd!==undefined) times.push(o.upd); const updated=Math.max(0,Math.min(...times)); rows.push({ customer_id:o.c, vehicle_id:v.id, pickup_branch_id:v.branch_id, status:o.status, pickup_at:iso(o.p), due_at:iso(o.d), picked_up_at:pu!==undefined?iso(pu):null, returned_at:hasRet?iso(o.r):null, daily_rate:rate, base_charge:days*rate, late_fee:fee, late_fee_applied:applied, late_fee_waived:false, late_fee_waive_reason:null, damage_charge:0, odometer_out:out, odometer_in:inn, cancel_reason:o.reason!==undefined?o.reason:null, created_at:iso(created), updated_at:iso(updated) }); }; add({c:cus[0].id,vi:15,status:'reserved',p:-4320,d:-7200}); add({c:cus[1].id,vi:0,status:'active',p:8640,d:1500,out:veh[0].odometer_km}); add({c:cus[1].id,vi:20,status:'closed',p:60000,d:56000,r:56500}); add({c:cus[2].id,vi:22,status:'returned',p:7000,d:4000,r:2600}); add({c:cus[2].id,vi:23,status:'returned',p:24000,d:17000,r:14800}); for (let k=0;k<25;k++) { const p=k<18?-(600+(k*2713)%12000):60+(k*131)%1200; add({c:pc(k),vi:16+k,status:'reserved',p,d:p-1440*(1+k%5)}); } for (let k=0;k<14;k++) { const p=1640+((k*3)%9)*1440; const d=k<5?300+k*700:-(1000+k*500); add({c:pc(k+30),vi:1+k,status:'active',p,d,out:veh[1+k].odometer_km}); } for (let k=0;k<6;k++) { const r=60+k*200; const d=k<4?r+200+k*900:r-30; add({c:hc(rows.length),vi:vv(),status:'returned',p:Math.max(d,r)+1440*(1+k%6),d,r}); } for (let k=0;k<34;k++) { const r=1500+(k*4241)%30000; const d=k%3===0?r+300+(k*617)%4000:r-(120+(k*53)%1000); add({c:hc(rows.length),vi:vv(),status:'returned',p:Math.max(d,r)+1440*(1+k%6),d,r}); } for (let k=0;k<72;k++) { const r=1500+(k*9973)%200000; const d=k%5===0?r+200+(k*617)%5000:r-(120+(k*53)%1000); add({c:hc(rows.length),vi:vv(),status:'closed',p:Math.max(d,r)+1440*(1+k%6),d,r}); } for (let k=0;k<14;k++) { const p=2880+(k*13007)%150000; const reason=reasons[k%6]; add({c:hc(rows.length),vi:vv(),status:'cancelled',p,d:p-1440*(1+k%4),reason,upd:reason==='no_show'?Math.max(0,p-1500):p+200}); } const elig=[]; rows.forEach((r,i)=>{ if (r.status==='returned'||r.status==='closed') elig.push(i); }); for (const p of planClaims(elig.length)) { if (p.status==='settled') rows[elig[p.ri]].damage_charge=p.appr; } return rows; }"
+  damage_claim: "(ctx) => { const BASE='2026-01-01T00:00:00.000Z'; const X=ctx.time.minutesBetween(BASE, ctx.now()); const iso=(a)=> a===X?BASE:ctx.time.plus(BASE,(X-a)+'m'); const planClaims=(n)=>{ const order=[]; for (const [s,c] of [['open',10],['under_review',28],['approved',8],['denied',6],['settled',8]]) for (let i=0;i<c;i++) order.push(s); const vals=[4500,7500,9900,14999,18000,22500,35000,48000,62000,89900,125000,210000,300000]; const seen={}; const out=[]; for (let k=0;k<60;k++) { const status=order[(k*17)%60]; const j=seen[status]||0; seen[status]=j+1; let est; if (status==='under_review') { est = j===0?15000 : j%3===1 ? 4000+(j*1370)%10000 : j%3===2 ? 15050+(j*9137)%280000 : 20000+(j*13337)%280000; } else est=vals[(k*5)%vals.length]; const appr=(status==='approved'||status==='settled')?Math.max(1,Math.floor(est*0.8)):null; out.push({k,status,est,appr,ri:(k*7+3)%n}); } return out; }; const descs=['Dent on rear bumper','Scratched driver side door','Cracked windshield from road debris','Curb rash on front right wheel','Torn rear seat upholstery','Broken side mirror','Hail damage on roof and hood','Interior stain on carpet','Cracked tail light','Door ding in parking lot']; const denials=['Pre-existing damage noted at pickup','Minor wear and tear','Damage not attributable to the rental']; const elig=ctx.rows('rental').filter((r)=>r.status==='returned'||r.status==='closed'); const out=[]; for (const p of planClaims(elig.length)) { const r=elig[p.ri]; const rA=X-ctx.time.minutesBetween(BASE,r.returned_at); const f=Math.floor(rA/2); const open=p.status==='open'||p.status==='under_review'; const done=open?null:Math.floor(f/2); out.push({ f, row:{ rental_id:r.id, vehicle_id:r.vehicle_id, description:descs[p.k%descs.length], estimated_cost:p.est, approved_amount:p.appr, status:p.status, filed_at:iso(f), resolved_at:open?null:iso(done), denial_reason:p.status==='denied'?denials[p.k%3]:null, created_at:iso(f), updated_at:iso(open?f:done) } }); } out.sort((a,b)=>b.f-a.f); return out.map((o)=>o.row); }"
+tests:
+  reserve_rental_rules:
+    description: reserve_rental snapshots the rate, charges days rounded up, and refuses a bad window, an overlap, a blocked customer and an unavailable vehicle. Back to back windows are allowed. Also exercises create_branch.
+    script: "(ctx) => { const S='2026-10-06T09:00:00.000Z'; const ok=(r,m)=>ctx.assert(r.status>=200&&r.status<300,m+': '+r.status+' '+JSON.stringify(r.body)); const setup=(tag,rate)=>{const b=ctx.api('POST','/branches',{code:'T'+tag,name:'Test Branch '+tag,city:'Testville'});ok(b,'create branch');const v=ctx.api('POST','/vehicles',{plate:'TST-'+tag,make:'Toyota',model:'Corolla',vehicle_class:'compact',daily_rate:rate,branch_id:b.body.id,odometer_km:1000});ok(v,'create vehicle');const c=ctx.api('POST','/customers',{name:'Test Driver '+tag,email:'driver'+tag.toLowerCase()+'@test.example',license_number:'LIC-T-'+tag});ok(c,'create customer');return {b:b.body,v:v.body,c:c.body};}; const reserve=(s,p,d)=>ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:s.v.id,pickup_at:p,due_at:d}); const s=setup('R1',5000); const dup=ctx.api('POST','/branches',{code:'TR1',name:'Dup',city:'X'}); ctx.assert(dup.status===409&&dup.body.error.code==='duplicate_code','duplicate branch code: '+JSON.stringify(dup)); const bad=reserve(s,'2026-10-10T09:00:00.000Z','2026-10-10T09:00:00.000Z'); ctx.assert(bad.status===422&&bad.body.error.code==='invalid_window','bad window: '+JSON.stringify(bad)); const r=reserve(s,'2026-10-10T09:00:00.000Z','2026-10-12T10:00:00.000Z'); ctx.assert(r.status===201,'reserve: '+JSON.stringify(r)); ctx.assert(r.body.status==='reserved'&&r.body.daily_rate===5000&&r.body.base_charge===15000&&r.body.pickup_branch_id===s.b.id&&r.body.late_fee===0&&r.body.late_fee_applied===false&&r.body.damage_charge===0,'rental fields: '+JSON.stringify(r.body)); const clash=reserve(s,'2026-10-11T09:00:00.000Z','2026-10-13T09:00:00.000Z'); ctx.assert(clash.status===409&&clash.body.error.code==='vehicle_overlap','overlap: '+JSON.stringify(clash)); const next=reserve(s,'2026-10-12T10:00:00.000Z','2026-10-13T10:00:00.000Z'); ctx.assert(next.status===201&&next.body.base_charge===5000,'back to back: '+JSON.stringify(next)); ok(ctx.api('PATCH','/customers/'+s.c.id,{blocked:true}),'block customer'); const blocked=reserve(s,'2026-11-01T09:00:00.000Z','2026-11-02T09:00:00.000Z'); ctx.assert(blocked.status===409&&blocked.body.error.code==='customer_blocked','blocked: '+JSON.stringify(blocked)); ok(ctx.api('PATCH','/customers/'+s.c.id,{blocked:false}),'unblock customer'); const v2=ctx.api('POST','/vehicles',{plate:'TST-R1M',make:'Ford',model:'Focus',vehicle_class:'compact',daily_rate:4000,branch_id:s.b.id,odometer_km:500}); ok(v2,'create vehicle 2'); ok(ctx.api('PATCH','/vehicles/'+v2.body.id,{status:'maintenance'}),'maintenance'); const un=ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:v2.body.id,pickup_at:'2026-11-01T09:00:00.000Z',due_at:'2026-11-02T09:00:00.000Z'}); ctx.assert(un.status===409&&un.body.error.code==='vehicle_unavailable','unavailable: '+JSON.stringify(un)); const ghost=ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:'veh_9999',pickup_at:'2026-11-01T09:00:00.000Z',due_at:'2026-11-02T09:00:00.000Z'}); ctx.assert(ghost.status>=400&&ghost.status<500,'unknown vehicle: '+ghost.status); const hist=ctx.api('GET','/vehicles/'+s.v.id+'/rentals'); ctx.assert(hist.body.data.length===2,'two rentals on the vehicle, got '+hist.body.data.length); }"
+  pickup_and_return_flow:
+    description: pickup_rental makes the rental active and the vehicle rented. return_rental stamps returned_at, updates the odometer and moves the vehicle to the return branch as available. Both refuse bad odometer readings and wrong states.
+    script: "(ctx) => { const S='2026-10-06T09:00:00.000Z'; const ok=(r,m)=>ctx.assert(r.status>=200&&r.status<300,m+': '+r.status+' '+JSON.stringify(r.body)); const setup=(tag,rate)=>{const b=ctx.api('POST','/branches',{code:'T'+tag,name:'Test Branch '+tag,city:'Testville'});ok(b,'create branch');const v=ctx.api('POST','/vehicles',{plate:'TST-'+tag,make:'Toyota',model:'Corolla',vehicle_class:'compact',daily_rate:rate,branch_id:b.body.id,odometer_km:1000});ok(v,'create vehicle');const c=ctx.api('POST','/customers',{name:'Test Driver '+tag,email:'driver'+tag.toLowerCase()+'@test.example',license_number:'LIC-T-'+tag});ok(c,'create customer');return {b:b.body,v:v.body,c:c.body};}; const reserve=(s,p,d)=>ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:s.v.id,pickup_at:p,due_at:d}); const act=(path,body)=>ctx.api('POST',path,body||{}); const s=setup('P1',8000); const b2=ctx.api('POST','/branches',{code:'TP1B',name:'Second Test Branch',city:'Elsewhere'}); ok(b2,'create branch 2'); const r=reserve(s,'2026-10-07T09:00:00.000Z','2026-10-08T09:00:00.000Z'); ok(r,'reserve'); const id=r.body.id; const noreturn=act('/rentals/'+id+'/return',{odometer_in:1100}); ctx.assert(noreturn.status===409&&noreturn.body.error.code==='invalid_state','return of reserved rental: '+JSON.stringify(noreturn)); const low=act('/rentals/'+id+'/pickup',{odometer_out:900}); ctx.assert(low.status===422&&low.body.error.code==='odometer_invalid','pickup low odometer: '+JSON.stringify(low)); const pk=act('/rentals/'+id+'/pickup',{odometer_out:1010}); ctx.assert(pk.status===200&&pk.body.status==='active'&&pk.body.odometer_out===1010&&pk.body.picked_up_at!==null,'pickup: '+JSON.stringify(pk)); const veh=ctx.api('GET','/vehicles/'+s.v.id).body; ctx.assert(veh.status==='rented','vehicle rented, got '+veh.status); const again=act('/rentals/'+id+'/pickup',{odometer_out:1010}); ctx.assert(again.status===409&&again.body.error.code==='invalid_state','second pickup: '+JSON.stringify(again)); const lowin=act('/rentals/'+id+'/return',{odometer_in:1005}); ctx.assert(lowin.status===422&&lowin.body.error.code==='odometer_invalid','return low odometer: '+JSON.stringify(lowin)); const at=ctx.now(); const ret=act('/rentals/'+id+'/return',{odometer_in:1250,branch_id:b2.body.id}); ctx.assert(ret.status===200&&ret.body.status==='returned'&&ret.body.odometer_in===1250&&ret.body.returned_at!==null&&ret.body.late_fee===0&&ret.body.late_fee_applied===false,'return: '+JSON.stringify(ret)); ctx.assert(ret.body.returned_at===at,'returned_at is call time '+at+', got '+ret.body.returned_at); const after=ctx.api('GET','/vehicles/'+s.v.id).body; ctx.assert(after.status==='available'&&after.odometer_km===1250&&after.branch_id===b2.body.id,'vehicle checked in: '+JSON.stringify(after)); const twice=act('/rentals/'+id+'/return',{odometer_in:1300}); ctx.assert(twice.status===409&&twice.body.error.code==='invalid_state','second return: '+JSON.stringify(twice)); const missing=act('/rentals/rnt_9999/pickup',{odometer_out:1}); ctx.assert(missing.status===404&&missing.body.error.code==='not_found','missing rental: '+JSON.stringify(missing)); }"
+  cancel_rental_rules:
+    description: cancel_rental needs a reserved rental and a non-blank reason, stores cancel_reason, leaves the vehicle alone and frees the window. Active and cancelled rentals cannot be cancelled.
+    script: "(ctx) => { const S='2026-10-06T09:00:00.000Z'; const ok=(r,m)=>ctx.assert(r.status>=200&&r.status<300,m+': '+r.status+' '+JSON.stringify(r.body)); const setup=(tag,rate)=>{const b=ctx.api('POST','/branches',{code:'T'+tag,name:'Test Branch '+tag,city:'Testville'});ok(b,'create branch');const v=ctx.api('POST','/vehicles',{plate:'TST-'+tag,make:'Toyota',model:'Corolla',vehicle_class:'compact',daily_rate:rate,branch_id:b.body.id,odometer_km:1000});ok(v,'create vehicle');const c=ctx.api('POST','/customers',{name:'Test Driver '+tag,email:'driver'+tag.toLowerCase()+'@test.example',license_number:'LIC-T-'+tag});ok(c,'create customer');return {b:b.body,v:v.body,c:c.body};}; const reserve=(s,p,d)=>ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:s.v.id,pickup_at:p,due_at:d}); const act=(path,body)=>ctx.api('POST',path,body||{}); const s=setup('C1',6000); const r=reserve(s,'2026-10-20T09:00:00.000Z','2026-10-22T09:00:00.000Z'); ok(r,'reserve'); const id=r.body.id; const none=act('/rentals/'+id+'/cancel',{}); ctx.assert(none.status===400&&none.body.error.code==='input.invalid','missing reason: '+JSON.stringify(none)); const blank=act('/rentals/'+id+'/cancel',{reason:'   '}); ctx.assert(blank.status===400&&blank.body.error.code==='input.invalid','blank reason: '+JSON.stringify(blank)); const c=act('/rentals/'+id+'/cancel',{reason:'trip called off'}); ctx.assert(c.status===200&&c.body.status==='cancelled'&&c.body.cancel_reason==='trip called off','cancel: '+JSON.stringify(c)); const veh=ctx.api('GET','/vehicles/'+s.v.id).body; ctx.assert(veh.status==='available','vehicle unchanged, got '+veh.status); const again=act('/rentals/'+id+'/cancel',{reason:'again'}); ctx.assert(again.status===409&&again.body.error.code==='invalid_state','second cancel: '+JSON.stringify(again)); const rebook=reserve(s,'2026-10-20T09:00:00.000Z','2026-10-22T09:00:00.000Z'); ctx.assert(rebook.status===201,'window is free again: '+JSON.stringify(rebook)); const r2=reserve(s,'2026-10-07T09:00:00.000Z','2026-10-08T09:00:00.000Z'); ok(r2,'reserve 2'); ok(act('/rentals/'+r2.body.id+'/pickup',{odometer_out:1000}),'pickup'); const act2=act('/rentals/'+r2.body.id+'/cancel',{reason:'too late'}); ctx.assert(act2.status===409&&act2.body.error.code==='invalid_state','cancel active: '+JSON.stringify(act2)); }"
+  late_fee_assess_waive_close:
+    description: A rental returned 36h late cannot be closed or waived until the daily job assesses ceil(days) x 150% of the rate. The job never charges twice. waive_late_fee zeroes it and records the reason, and then the rental can be closed.
+    script: "(ctx) => { const S='2026-10-06T09:00:00.000Z'; const ok=(r,m)=>ctx.assert(r.status>=200&&r.status<300,m+': '+r.status+' '+JSON.stringify(r.body)); const setup=(tag,rate)=>{const b=ctx.api('POST','/branches',{code:'T'+tag,name:'Test Branch '+tag,city:'Testville'});ok(b,'create branch');const v=ctx.api('POST','/vehicles',{plate:'TST-'+tag,make:'Toyota',model:'Corolla',vehicle_class:'compact',daily_rate:rate,branch_id:b.body.id,odometer_km:1000});ok(v,'create vehicle');const c=ctx.api('POST','/customers',{name:'Test Driver '+tag,email:'driver'+tag.toLowerCase()+'@test.example',license_number:'LIC-T-'+tag});ok(c,'create customer');return {b:b.body,v:v.body,c:c.body};}; const reserve=(s,p,d)=>ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:s.v.id,pickup_at:p,due_at:d}); const act=(path,body)=>ctx.api('POST',path,body||{}); const s=setup('L1',10000); const r=reserve(s,S,'2026-10-07T09:00:00.000Z'); ok(r,'reserve'); const id=r.body.id; ok(act('/rentals/'+id+'/pickup',{odometer_out:1000}),'pickup'); const a1=ctx.advance('60h'); ctx.assert(a1.jobsFailed.length===0,'jobs failed: '+JSON.stringify(a1.jobsFailed)); ok(act('/rentals/'+id+'/return',{odometer_in:1300}),'return'); const early=act('/rentals/'+id+'/waive_late_fee',{reason:'flight delay'}); ctx.assert(early.status===409&&early.body.error.code==='late_fee_not_assessed','waive before assessment: '+JSON.stringify(early)); const pend=act('/rentals/'+id+'/close'); ctx.assert(pend.status===409&&pend.body.error.code==='late_fee_pending','close before assessment: '+JSON.stringify(pend)); const a2=ctx.advance('1d'); ctx.assert(a2.jobsFailed.length===0,'jobs failed: '+JSON.stringify(a2.jobsFailed)); ctx.assert(a2.jobsFired.includes('late_fee_assessment'),'late_fee_assessment fired: '+JSON.stringify(a2.jobsFired)); const after=ctx.api('GET','/rentals/'+id).body; ctx.assert(after.late_fee_applied===true&&after.late_fee===30000,'late fee 2 days x 150% x 10000 = 30000, got '+JSON.stringify(after)); ctx.advance('2d'); const still=ctx.api('GET','/rentals/'+id).body; ctx.assert(still.late_fee===30000,'not charged twice, got '+still.late_fee); const blank=act('/rentals/'+id+'/waive_late_fee',{reason:'  '}); ctx.assert(blank.status===400&&blank.body.error.code==='input.invalid','blank waive reason: '+JSON.stringify(blank)); const w=act('/rentals/'+id+'/waive_late_fee',{reason:'flight delay'}); ctx.assert(w.status===200&&w.body.late_fee===0&&w.body.late_fee_waived===true&&w.body.late_fee_waive_reason==='flight delay','waive: '+JSON.stringify(w)); const w2=act('/rentals/'+id+'/waive_late_fee',{reason:'again'}); ctx.assert(w2.status===409&&w2.body.error.code==='no_late_fee','second waive: '+JSON.stringify(w2)); ctx.advance('2d'); const kept=ctx.api('GET','/rentals/'+id).body; ctx.assert(kept.late_fee===0&&kept.late_fee_waived===true,'waived fee stays zero: '+JSON.stringify(kept)); const cl=act('/rentals/'+id+'/close'); ctx.assert(cl.status===200&&cl.body.status==='closed','close: '+JSON.stringify(cl)); const cl2=act('/rentals/'+id+'/close'); ctx.assert(cl2.status===409&&cl2.body.error.code==='invalid_state','close twice: '+JSON.stringify(cl2)); }"
+  grace_period_no_fee:
+    description: A rental returned less than 60 minutes after due_at is inside the grace period. The job marks it assessed with a zero fee, and there is nothing to waive.
+    script: "(ctx) => { const S='2026-10-06T09:00:00.000Z'; const ok=(r,m)=>ctx.assert(r.status>=200&&r.status<300,m+': '+r.status+' '+JSON.stringify(r.body)); const setup=(tag,rate)=>{const b=ctx.api('POST','/branches',{code:'T'+tag,name:'Test Branch '+tag,city:'Testville'});ok(b,'create branch');const v=ctx.api('POST','/vehicles',{plate:'TST-'+tag,make:'Toyota',model:'Corolla',vehicle_class:'compact',daily_rate:rate,branch_id:b.body.id,odometer_km:1000});ok(v,'create vehicle');const c=ctx.api('POST','/customers',{name:'Test Driver '+tag,email:'driver'+tag.toLowerCase()+'@test.example',license_number:'LIC-T-'+tag});ok(c,'create customer');return {b:b.body,v:v.body,c:c.body};}; const reserve=(s,p,d)=>ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:s.v.id,pickup_at:p,due_at:d}); const act=(path,body)=>ctx.api('POST',path,body||{}); const s=setup('G1',7000); const r=reserve(s,S,'2026-10-06T10:00:00.000Z'); ok(r,'reserve'); const id=r.body.id; ok(act('/rentals/'+id+'/pickup',{odometer_out:1000}),'pickup'); ctx.advance('90m'); ok(act('/rentals/'+id+'/return',{odometer_in:1040}),'return'); const a=ctx.advance('1d'); ctx.assert(a.jobsFailed.length===0,'jobs failed: '+JSON.stringify(a.jobsFailed)); const after=ctx.api('GET','/rentals/'+id).body; ctx.assert(after.late_fee_applied===true&&after.late_fee===0,'assessed with no fee: '+JSON.stringify(after)); const w=act('/rentals/'+id+'/waive_late_fee',{reason:'none due'}); ctx.assert(w.status===409&&w.body.error.code==='no_late_fee','nothing to waive: '+JSON.stringify(w)); const cl=act('/rentals/'+id+'/close'); ctx.assert(cl.status===200&&cl.body.status==='closed','close: '+JSON.stringify(cl)); }"
+  expire_no_shows_job:
+    description: The daily job cancels reserved rentals more than 24h past pickup_at with cancel_reason no_show, and leaves later reservations alone.
+    script: "(ctx) => { const S='2026-10-06T09:00:00.000Z'; const ok=(r,m)=>ctx.assert(r.status>=200&&r.status<300,m+': '+r.status+' '+JSON.stringify(r.body)); const setup=(tag,rate)=>{const b=ctx.api('POST','/branches',{code:'T'+tag,name:'Test Branch '+tag,city:'Testville'});ok(b,'create branch');const v=ctx.api('POST','/vehicles',{plate:'TST-'+tag,make:'Toyota',model:'Corolla',vehicle_class:'compact',daily_rate:rate,branch_id:b.body.id,odometer_km:1000});ok(v,'create vehicle');const c=ctx.api('POST','/customers',{name:'Test Driver '+tag,email:'driver'+tag.toLowerCase()+'@test.example',license_number:'LIC-T-'+tag});ok(c,'create customer');return {b:b.body,v:v.body,c:c.body};}; const reserve=(s,p,d)=>ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:s.v.id,pickup_at:p,due_at:d}); const s=setup('N1',4000); const r1=reserve(s,'2026-10-06T10:00:00.000Z','2026-10-07T10:00:00.000Z'); ok(r1,'reserve 1'); const r2=reserve(s,'2026-10-20T09:00:00.000Z','2026-10-21T09:00:00.000Z'); ok(r2,'reserve 2'); const a=ctx.advance('3d'); ctx.assert(a.jobsFailed.length===0,'jobs failed: '+JSON.stringify(a.jobsFailed)); ctx.assert(a.jobsFired.includes('expire_no_shows'),'expire_no_shows fired: '+JSON.stringify(a.jobsFired)); const n1=ctx.api('GET','/rentals/'+r1.body.id).body; ctx.assert(n1.status==='cancelled'&&n1.cancel_reason==='no_show','no show cancelled: '+JSON.stringify(n1)); const n2=ctx.api('GET','/rentals/'+r2.body.id).body; ctx.assert(n2.status==='reserved'&&n2.cancel_reason===null,'future reservation kept: '+JSON.stringify(n2)); const veh=ctx.api('GET','/vehicles/'+s.v.id).body; ctx.assert(veh.status==='available','vehicle still available, got '+veh.status); }"
+  damage_claim_review_flow:
+    description: file_damage_claim, review_claim, approve_claim, deny_claim and settle_claim follow the review pipeline. Approval caps at the estimate and moves an available vehicle to maintenance. Settling adds to damage_charge. A pending claim blocks close_rental.
+    script: "(ctx) => { const S='2026-10-06T09:00:00.000Z'; const ok=(r,m)=>ctx.assert(r.status>=200&&r.status<300,m+': '+r.status+' '+JSON.stringify(r.body)); const setup=(tag,rate)=>{const b=ctx.api('POST','/branches',{code:'T'+tag,name:'Test Branch '+tag,city:'Testville'});ok(b,'create branch');const v=ctx.api('POST','/vehicles',{plate:'TST-'+tag,make:'Toyota',model:'Corolla',vehicle_class:'compact',daily_rate:rate,branch_id:b.body.id,odometer_km:1000});ok(v,'create vehicle');const c=ctx.api('POST','/customers',{name:'Test Driver '+tag,email:'driver'+tag.toLowerCase()+'@test.example',license_number:'LIC-T-'+tag});ok(c,'create customer');return {b:b.body,v:v.body,c:c.body};}; const reserve=(s,p,d)=>ctx.api('POST','/rentals',{customer_id:s.c.id,vehicle_id:s.v.id,pickup_at:p,due_at:d}); const act=(path,body)=>ctx.api('POST',path,body||{}); const file=(rid,cost)=>ctx.api('POST','/damage_claims',{rental_id:rid,description:'Dent on rear door',estimated_cost:cost}); const s=setup('CL1',6000); const r=reserve(s,'2026-10-07T09:00:00.000Z','2026-10-09T09:00:00.000Z'); ok(r,'reserve'); const rid=r.body.id; const early=file(rid,20000); ctx.assert(early.status===409&&early.body.error.code==='invalid_state','claim on reserved rental: '+JSON.stringify(early)); ok(act('/rentals/'+rid+'/pickup',{odometer_out:1000}),'pickup'); ok(act('/rentals/'+rid+'/return',{odometer_in:1100}),'return'); const zero=file(rid,0); ctx.assert(zero.status>=400&&zero.status<500,'zero estimate refused: '+zero.status); const c1=file(rid,20000); ctx.assert(c1.status===201&&c1.body.status==='open'&&c1.body.vehicle_id===s.v.id&&c1.body.rental_id===rid&&c1.body.filed_at!==null&&c1.body.approved_amount===null,'file: '+JSON.stringify(c1)); const id1=c1.body.id; const pre=act('/damage_claims/'+id1+'/approve',{approved_amount:15000}); ctx.assert(pre.status===409&&pre.body.error.code==='invalid_state','approve before review: '+JSON.stringify(pre)); const rv=act('/damage_claims/'+id1+'/review'); ctx.assert(rv.status===200&&rv.body.status==='under_review','review: '+JSON.stringify(rv)); const rv2=act('/damage_claims/'+id1+'/review'); ctx.assert(rv2.status===409&&rv2.body.error.code==='invalid_state','review twice: '+JSON.stringify(rv2)); const big=act('/damage_claims/'+id1+'/approve',{approved_amount:25000}); ctx.assert(big.status===422&&big.body.error.code==='invalid_amount','approve above estimate: '+JSON.stringify(big)); const ap=act('/damage_claims/'+id1+'/approve',{approved_amount:15000}); ctx.assert(ap.status===200&&ap.body.status==='approved'&&ap.body.approved_amount===15000&&ap.body.resolved_at!==null,'approve: '+JSON.stringify(ap)); const veh=ctx.api('GET','/vehicles/'+s.v.id).body; ctx.assert(veh.status==='maintenance','vehicle in maintenance, got '+veh.status); const dn=act('/damage_claims/'+id1+'/deny',{reason:'changed mind'}); ctx.assert(dn.status===409&&dn.body.error.code==='invalid_state','deny approved: '+JSON.stringify(dn)); const st=act('/damage_claims/'+id1+'/settle'); ctx.assert(st.status===200&&st.body.status==='settled','settle: '+JSON.stringify(st)); const rent=ctx.api('GET','/rentals/'+rid).body; ctx.assert(rent.damage_charge===15000,'damage_charge 15000, got '+rent.damage_charge); const st2=act('/damage_claims/'+id1+'/settle'); ctx.assert(st2.status===409&&st2.body.error.code==='invalid_state','settle twice: '+JSON.stringify(st2)); const c2=file(rid,5000); ok(c2,'file 2'); const id2=c2.body.id; const blank=act('/damage_claims/'+id2+'/deny',{reason:'   '}); ctx.assert(blank.status===400&&blank.body.error.code==='input.invalid','blank deny reason: '+JSON.stringify(blank)); const d2=act('/damage_claims/'+id2+'/deny',{reason:'minor wear and tear'}); ctx.assert(d2.status===200&&d2.body.status==='denied'&&d2.body.denial_reason==='minor wear and tear'&&d2.body.resolved_at!==null,'deny open claim: '+JSON.stringify(d2)); const ap2=act('/damage_claims/'+id2+'/approve',{approved_amount:100}); ctx.assert(ap2.status===409,'approve denied: '+JSON.stringify(ap2)); const c3=file(rid,8000); ok(c3,'file 3'); const id3=c3.body.id; const cl1=act('/rentals/'+rid+'/close'); ctx.assert(cl1.status===409&&cl1.body.error.code==='claim_pending','close with open claim: '+JSON.stringify(cl1)); ok(act('/damage_claims/'+id3+'/review'),'review 3'); const cl2=act('/rentals/'+rid+'/close'); ctx.assert(cl2.status===409&&cl2.body.error.code==='claim_pending','close with claim under review: '+JSON.stringify(cl2)); const d3=act('/damage_claims/'+id3+'/deny',{reason:'pre-existing damage'}); ctx.assert(d3.status===200&&d3.body.status==='denied','deny under_review: '+JSON.stringify(d3)); const cl3=act('/rentals/'+rid+'/close'); ctx.assert(cl3.status===200&&cl3.body.status==='closed','close: '+JSON.stringify(cl3)); const c4=file(rid,3000); ctx.assert(c4.status===201,'claim on closed rental: '+JSON.stringify(c4)); const list=ctx.api('GET','/rentals/'+rid+'/damage_claims'); ctx.assert(list.body.data.length===4,'four claims on the rental, got '+list.body.data.length); const miss=act('/damage_claims/clm_9999/review'); ctx.assert(miss.status===404&&miss.body.error.code==='not_found','missing claim: '+JSON.stringify(miss)); }"
+tasks:
+  cancel_elena_reservation:
+    difficulty: easy
+    instruction: Elena Voss has called off her trip. Cancel her upcoming reservation and give a reason for the cancellation that contains the word "trip". Do not change anything else.
+    decoys: []
+    alternatives: []
+  return_tomas_reyes_suv:
+    difficulty: medium
+    instruction: Tomas Reyes is at the counter returning his SUV, which is past its due time. Check his current rental in with an odometer reading of 48210 km. Do not charge or edit any late fee yourself, and do not touch his older rental.
+    decoys: []
+    alternatives: []
+  waive_priya_late_fee:
+    difficulty: medium
+    instruction: Priya Natarajan has two rentals that were returned late and charged a late fee. Waive the late fee only on the one she returned most recently, with the reason 'flight delay'. Leave the other one charged.
+    decoys: []
+    alternatives: []
+  triage_small_claims:
+    difficulty: hard
+    instruction: Triage every damage claim that is currently under review. Deny each one whose estimated cost is under $150 as minor wear and tear, with a denial reason that contains the phrase "wear and tear". Approve each one whose estimated cost is $150 or more at its full estimated cost. Do not settle anything and do not touch claims in any other status.
+    decoys: []
+    alternatives: []

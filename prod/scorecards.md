@@ -143,6 +143,7 @@ From the `manifest.json` of each export folder in `eval/dataset/`, one per world
 | Manifests | World folders | Schema | Model | Episodes | Success | Partial | Failure | Infra | Not a success |
 |---|--:|---|---|--:|--:|--:|--:|--:|--:|
 | `eval/dataset/2026-10-07/*/manifest.json` | 6 | 1 | claude-sonnet-5-5 | 38 | 38 | - | - | - | 0 |
+| `eval/dataset/2026-10-09-finish/*/manifest.json` | 5 | 2 | claude-haiku-5-5, claude-sonnet-5-5 | 20 | 15 | 4 | 1 | 0 | 5 |
 | `eval/dataset/2026-10-09-sweep/p1/*/manifest.json` | 25 | 2 | claude-haiku-5-5 | 95 | 89 | 4 | 2 | 0 | 6 |
 | `eval/dataset/2026-10-09-sweep/p2/*/manifest.json` | 25 | 2 | claude-haiku-5-5 | 95 | 89 | 4 | 2 | 0 | 6 |
 | `eval/dataset/2026-10-09-sweep/p3/*/manifest.json` | 25 | 2 | claude-haiku-5-5 | 95 | 89 | 3 | 2 | 1 | 6 |
@@ -152,8 +153,8 @@ From the `manifest.json` of each export folder in `eval/dataset/`, one per world
 | `eval/dataset/2026-10-09-sweep/t1/*/manifest.json` | 2 | 2 | claude-sonnet-5-5 | 8 | 5 | 0 | 0 | 3 | 3 |
 | `eval/dataset/2026-10-09-sweep/t2/*/manifest.json` | 2 | 2 | claude-sonnet-5-5 | 8 | 2 | 1 | 0 | 5 | 6 |
 | `eval/dataset/2026-10-09-sweep/t3/*/manifest.json` | 2 | 2 | claude-sonnet-5-5 | 8 | 2 | 1 | 1 | 4 | 6 |
-| **Total** | 99 |  |  | 395 | 346 |  |  |  | 49 |
+| **Total** | 104 |  |  | 415 | 361 |  |  |  | 54 |
 
-Schema-2 manifests, in 9 folders, count 357 episodes: 308 success, 13 partial, 10 failure, 26 infra.
+Schema-2 manifests, in 10 folders, count 377 episodes: 323 success, 17 partial, 11 failure, 26 infra.
 
 Limits: few tasks, few episodes and few models; a 3-of-3 cell cannot tell easy from medium. The engine score certifies the final world state, not the agent's final reply. An export holds the runs someone chose to export, so its success share is not a sample of all tasks.
