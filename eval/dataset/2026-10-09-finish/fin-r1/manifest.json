@@ -1,0 +1,54 @@
+{
+  "manifest_version": 2,
+  "schema_version": 2,
+  "provider": "anthropic",
+  "model": "claude-sonnet-5-5",
+  "prompt_versions": [
+    "solver-prompt-1"
+  ],
+  "config_versions": [
+    "cfg-9fe943a8582e"
+  ],
+  "engine_commits": [
+    "aa553a91"
+  ],
+  "run_ids": [
+    "fin-r1"
+  ],
+  "selection": null,
+  "worlds": [
+    {
+      "world_id": "gen_rental_fleet",
+      "world_version": "a7de79294823e82ca7b944bfb230935321bb74a59f73b4ede5753ff6cb2094da",
+      "artifact": {
+        "path": "private/worlds/a7de79294823e82ca7b944bfb230935321bb74a59f73b4ede5753ff6cb2094da/world.yaml",
+        "sha256": "a7de79294823e82ca7b944bfb230935321bb74a59f73b4ede5753ff6cb2094da"
+      }
+    }
+  ],
+  "counts": {
+    "episodes": 4,
+    "by_verdict": {
+      "success": 3,
+      "partial": 1,
+      "failure": 0,
+      "infra": 0
+    },
+    "by_stop_reason": {
+      "done": 3,
+      "turn_limit": 1
+    },
+    "by_failure_cause": {
+      "turn_limit": 1
+    }
+  },
+  "files": {
+    "dataset": {
+      "path": "dataset.jsonl",
+      "records": 4,
+      "bytes": 44607,
+      "sha256": "0f46a5beacfdac37cd4c0136ceaffb35253d4ae935edef251a5ea20d8c80d632"
+    }
+  },
+  "grading_note": "The engine score certifies the final world state only. It does not independently certify that the final reply is factually correct."
+}

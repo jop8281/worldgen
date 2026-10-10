@@ -1,0 +1,1338 @@
+format: 1
+meta:
+  name: gen_warehouse_inventory
+  description: A single-warehouse inventory system. SKUs are stocked in bins (stock_level rows, one per SKU and bin). Every change to stock is written to an append-only stock_movement ledger by an action, and stock can never go below zero. Purchase orders to suppliers move draft -> submitted -> partially_received -> received (or cancelled). Goods are received one PO line and one bin at a time, so a PO is received into bins in several partial shipments. Receiving is refused when it would exceed the ordered quantity, overfill a bin, or target an inactive or quarantine bin. Agents also issue stock, run cycle-count adjustments and transfer stock between bins. A job flags overdue purchase orders.
+  resembles: Warehouse inventory / WMS-style stock ledger with purchase-order receiving (in the spirit of Odoo Inventory, NetSuite Inventory and Fishbowl)
+  source: worldgen
+  seed: 0
+  clock:
+    start: 2026-10-06T09:00:00.000Z
+    tick: 0s
+  api:
+    list:
+      mode: cursor
+      dataKey: data
+      cursorKey: next_cursor
+      limitParam: limit
+      cursorParam: cursor
+      hasMoreKey: has_more
+      startingAfterParam: starting_after
+      endingBeforeParam: ending_before
+    error:
+      error:
+        code: $code
+        message: $message
+entities:
+  supplier:
+    description: A vendor that purchase orders are placed with.
+    idPrefix: sup
+    fields:
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 120
+      email:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        format: email
+      active:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  sku:
+    description: "A stock keeping unit: a distinct item the warehouse holds. reorder_point is the minimum desired quantity in pick bins."
+    idPrefix: sku
+    fields:
+      code:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 40
+      name:
+        type: string
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        maxLength: 160
+      unit_cost:
+        type: money
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+      reorder_point:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+        default: 0
+      active:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  bin:
+    description: A storage location. capacity is the maximum total units across all SKUs in the bin. Quarantine and inactive bins cannot receive stock.
+    idPrefix: bin
+    fields:
+      code:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 40
+      zone:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        values:
+          - receiving
+          - pick
+          - bulk
+          - quarantine
+      capacity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      active:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        default: true
+  purchase_order:
+    description: An order to a supplier. Status moves only through actions. overdue is set by a job.
+    idPrefix: po
+    fields:
+      number:
+        type: string
+        required: true
+        nullable: false
+        unique: true
+        readonly: false
+        maxLength: 40
+      supplier_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: supplier
+        onDelete: restrict
+      status:
+        type: state
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        states:
+          - draft
+          - submitted
+          - partially_received
+          - received
+          - cancelled
+        initial: draft
+        transitions:
+          draft:
+            - submitted
+            - cancelled
+          submitted:
+            - partially_received
+            - received
+            - cancelled
+          partially_received:
+            - received
+          received: []
+          cancelled: []
+      expected_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+      submitted_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      received_at:
+        type: datetime
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+      overdue:
+        type: bool
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        default: false
+      note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+  purchase_order_line:
+    description: One SKU on a purchase order. received_qty grows with each partial receipt and never exceeds ordered_qty.
+    idPrefix: pol
+    fields:
+      purchase_order_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: purchase_order
+        onDelete: cascade
+      sku_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: sku
+        onDelete: restrict
+      ordered_qty:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 1
+      received_qty:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+      unit_cost:
+        type: money
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        currency: USD
+        min: 0
+  stock_level:
+    description: Current on-hand quantity of one SKU in one bin. Changed only by actions. Rows with quantity 0 are kept.
+    idPrefix: stk
+    fields:
+      sku_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: sku
+        onDelete: restrict
+      bin_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: bin
+        onDelete: restrict
+      quantity:
+        type: int
+        required: false
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+        default: 0
+  stock_movement:
+    description: Append-only ledger row written by every stock action. quantity_delta is signed and balance_after is the bin quantity after the movement.
+    idPrefix: mov
+    fields:
+      sku_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: sku
+        onDelete: restrict
+      bin_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        entity: bin
+        onDelete: restrict
+      kind:
+        type: enum
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        values:
+          - receipt
+          - issue
+          - adjustment
+          - transfer_in
+          - transfer_out
+      quantity_delta:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+      balance_after:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: true
+        min: 0
+      purchase_order_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: purchase_order
+        onDelete: restrict
+      purchase_order_line_id:
+        type: ref
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        entity: purchase_order_line
+        onDelete: restrict
+      reference:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+        maxLength: 200
+      note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: true
+routes:
+  list_suppliers:
+    op: list
+    entity: supplier
+    filters:
+      - active
+    search:
+      - name
+    sort:
+      - name
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /suppliers
+  get_supplier:
+    op: get
+    entity: supplier
+    method: GET
+    path: /suppliers/{id}
+  create_supplier:
+    op: create
+    entity: supplier
+    method: POST
+    path: /suppliers
+  update_supplier:
+    op: update
+    entity: supplier
+    method: PATCH
+    path: /suppliers/{id}
+  list_skus:
+    op: list
+    entity: sku
+    filters:
+      - active
+      - code
+    search:
+      - code
+      - name
+    sort:
+      - code
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /skus
+  get_sku:
+    op: get
+    entity: sku
+    method: GET
+    path: /skus/{id}
+  create_sku:
+    op: create
+    entity: sku
+    method: POST
+    path: /skus
+  update_sku:
+    op: update
+    entity: sku
+    method: PATCH
+    path: /skus/{id}
+  list_bins:
+    op: list
+    entity: bin
+    filters:
+      - zone
+      - active
+      - code
+    search:
+      - code
+    sort:
+      - code
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /bins
+  get_bin:
+    op: get
+    entity: bin
+    method: GET
+    path: /bins/{id}
+  create_bin:
+    op: create
+    entity: bin
+    method: POST
+    path: /bins
+  update_bin:
+    op: update
+    entity: bin
+    method: PATCH
+    path: /bins/{id}
+  list_stock_levels:
+    op: list
+    entity: stock_level
+    filters:
+      - sku_id
+      - bin_id
+    search: []
+    sort:
+      - created_at
+      - quantity
+    pageSize: 25
+    method: GET
+    path: /stock_levels
+  get_stock_level:
+    op: get
+    entity: stock_level
+    method: GET
+    path: /stock_levels/{id}
+  list_stock_movements:
+    op: list
+    entity: stock_movement
+    filters:
+      - sku_id
+      - bin_id
+      - kind
+      - purchase_order_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /stock_movements
+  get_stock_movement:
+    op: get
+    entity: stock_movement
+    method: GET
+    path: /stock_movements/{id}
+  list_purchase_orders:
+    op: list
+    entity: purchase_order
+    filters:
+      - status
+      - supplier_id
+      - overdue
+    search:
+      - number
+    sort:
+      - created_at
+      - expected_at
+    pageSize: 25
+    method: GET
+    path: /purchase_orders
+  get_purchase_order:
+    op: get
+    entity: purchase_order
+    method: GET
+    path: /purchase_orders/{id}
+  create_purchase_order:
+    op: create
+    entity: purchase_order
+    method: POST
+    path: /purchase_orders
+  update_purchase_order:
+    op: update
+    entity: purchase_order
+    method: PATCH
+    path: /purchase_orders/{id}
+  list_purchase_order_lines:
+    op: list
+    entity: purchase_order_line
+    filters:
+      - sku_id
+    search: []
+    sort:
+      - created_at
+    pageSize: 25
+    method: GET
+    path: /purchase_orders/{purchase_order_id}/lines
+actions:
+  add_po_line:
+    method: POST
+    path: /purchase_orders/{id}/add_line
+    description: Add a line to a draft PO. One line per SKU.
+    input:
+      sku_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: sku
+        onDelete: restrict
+      ordered_qty:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      unit_cost:
+        type: money
+        required: false
+        nullable: false
+        unique: false
+        readonly: false
+        currency: USD
+        min: 0
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const po = ctx.db.get('purchase_order', id);
+        if (po === null) ctx.fail(404, 'not_found', 'purchase order ' + id + ' not found');
+        if (po.status !== 'draft') ctx.fail(409, 'invalid_state', 'purchase order ' + id + ' is ' + po.status + '. Lines can only be added while draft.');
+        const sku = ctx.db.get('sku', ctx.body.sku_id);
+        if (sku === null) ctx.fail(404, 'unknown_sku', 'sku ' + ctx.body.sku_id + ' not found');
+        if (!sku.active) ctx.fail(409, 'sku_inactive', 'sku ' + sku.code + ' is inactive');
+        const dup = ctx.db.list('purchase_order_line', { where: { purchase_order_id: id, sku_id: sku.id } });
+        if (dup.length > 0) ctx.fail(409, 'duplicate_sku', 'purchase order ' + id + ' already has a line for sku ' + sku.code);
+        const cost = ctx.body.unit_cost === undefined || ctx.body.unit_cost === null ? sku.unit_cost : ctx.body.unit_cost;
+        const line = ctx.db.create('purchase_order_line', { purchase_order_id: id, sku_id: sku.id, ordered_qty: ctx.body.ordered_qty, received_qty: 0, unit_cost: cost });
+        return { status: 201, body: line };
+      }
+  submit_purchase_order:
+    method: POST
+    path: /purchase_orders/{id}/submit
+    description: Submit a draft PO that has at least one line.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const po = ctx.db.get('purchase_order', id);
+        if (po === null) ctx.fail(404, 'not_found', 'purchase order ' + id + ' not found');
+        if (po.status !== 'draft') ctx.fail(409, 'invalid_state', 'purchase order ' + id + ' is ' + po.status + '. Only draft POs can be submitted.');
+        const lines = ctx.db.list('purchase_order_line', { where: { purchase_order_id: id } });
+        if (lines.length === 0) ctx.fail(409, 'no_lines', 'purchase order ' + id + ' has no lines');
+        const updated = ctx.db.update('purchase_order', id, { status: 'submitted', submitted_at: ctx.now() });
+        return { status: 200, body: updated };
+      }
+  receive_purchase_order:
+    method: POST
+    path: /purchase_orders/{id}/receive
+    description: Receive one shipment of one PO line into one bin.
+    input:
+      line_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: purchase_order_line
+        onDelete: restrict
+      bin_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: bin
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      note:
+        type: text
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const po = ctx.db.get('purchase_order', id);
+        if (po === null) ctx.fail(404, 'not_found', 'purchase order ' + id + ' not found');
+        if (po.status !== 'submitted' && po.status !== 'partially_received') ctx.fail(409, 'invalid_state', 'purchase order ' + id + ' is ' + po.status + '. Only submitted or partially received POs can receive goods.');
+        const line = ctx.db.get('purchase_order_line', ctx.body.line_id);
+        if (line === null) ctx.fail(404, 'unknown_line', 'line ' + ctx.body.line_id + ' not found');
+        if (line.purchase_order_id !== id) ctx.fail(409, 'line_mismatch', 'line ' + line.id + ' does not belong to purchase order ' + id);
+        const bin = ctx.db.get('bin', ctx.body.bin_id);
+        if (bin === null) ctx.fail(404, 'unknown_bin', 'bin ' + ctx.body.bin_id + ' not found');
+        if (!bin.active || bin.zone === 'quarantine') ctx.fail(409, 'bin_not_receivable', 'bin ' + bin.code + ' cannot receive stock (inactive or quarantine).');
+        const q = ctx.body.quantity;
+        const remaining = line.ordered_qty - line.received_qty;
+        if (q > remaining) ctx.fail(409, 'over_receipt', 'only ' + remaining + ' units remain on line ' + line.id + ', cannot receive ' + q);
+        const levels = ctx.db.list('stock_level', { where: { bin_id: bin.id } });
+        let total = 0;
+        for (const l of levels) total += l.quantity;
+        if (total + q > bin.capacity) ctx.fail(409, 'bin_capacity_exceeded', 'bin ' + bin.code + ' holds ' + total + ' of ' + bin.capacity + ' units, cannot add ' + q);
+        const existing = levels.find((l) => l.sku_id === line.sku_id);
+        let level;
+        if (existing) level = ctx.db.update('stock_level', existing.id, { quantity: existing.quantity + q });
+        else level = ctx.db.create('stock_level', { sku_id: line.sku_id, bin_id: bin.id, quantity: q });
+        const note = ctx.body.note === undefined ? null : ctx.body.note;
+        const movement = ctx.db.create('stock_movement', { sku_id: line.sku_id, bin_id: bin.id, kind: 'receipt', quantity_delta: q, balance_after: level.quantity, purchase_order_id: id, purchase_order_line_id: line.id, reference: po.number, note });
+        const newLine = ctx.db.update('purchase_order_line', line.id, { received_qty: line.received_qty + q });
+        const all = ctx.db.list('purchase_order_line', { where: { purchase_order_id: id } });
+        const done = all.every((l) => l.received_qty >= l.ordered_qty);
+        let patch;
+        if (done) patch = { status: 'received', received_at: ctx.now() };
+        else if (po.status === 'submitted') patch = { status: 'partially_received' };
+        else patch = null;
+        const newPo = patch === null ? po : ctx.db.update('purchase_order', id, patch);
+        return { status: 200, body: { purchase_order: newPo, line: newLine, stock_level: level, movement } };
+      }
+  cancel_purchase_order:
+    method: POST
+    path: /purchase_orders/{id}/cancel
+    description: Cancel a draft or submitted PO with no receipts.
+    input: {}
+    handler: |-
+      (ctx) => {
+        const id = ctx.params.id;
+        const po = ctx.db.get('purchase_order', id);
+        if (po === null) ctx.fail(404, 'not_found', 'purchase order ' + id + ' not found');
+        if (po.status !== 'draft' && po.status !== 'submitted') ctx.fail(409, 'invalid_state', 'purchase order ' + id + ' is ' + po.status + ' and cannot be cancelled.');
+        const lines = ctx.db.list('purchase_order_line', { where: { purchase_order_id: id } });
+        if (lines.some((l) => l.received_qty > 0)) ctx.fail(409, 'invalid_state', 'purchase order ' + id + ' already has receipts.');
+        const updated = ctx.db.update('purchase_order', id, { status: 'cancelled' });
+        return { status: 200, body: updated };
+      }
+  issue_stock:
+    method: POST
+    path: /stock/issue
+    description: Remove stock of a SKU from a bin.
+    input:
+      sku_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: sku
+        onDelete: restrict
+      bin_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: bin
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+      reference:
+        type: string
+        required: false
+        nullable: true
+        unique: false
+        readonly: false
+        maxLength: 200
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        const level = ctx.db.list('stock_level', { where: { sku_id: b.sku_id, bin_id: b.bin_id } })[0];
+        const have = level ? level.quantity : 0;
+        if (have < b.quantity) ctx.fail(409, 'insufficient_stock', 'bin holds ' + have + ' units, cannot issue ' + b.quantity);
+        const updated = ctx.db.update('stock_level', level.id, { quantity: have - b.quantity });
+        const reference = b.reference === undefined ? null : b.reference;
+        const movement = ctx.db.create('stock_movement', { sku_id: b.sku_id, bin_id: b.bin_id, kind: 'issue', quantity_delta: -b.quantity, balance_after: updated.quantity, reference });
+        return { status: 200, body: { stock_level: updated, movement } };
+      }
+  adjust_stock:
+    method: POST
+    path: /stock/adjust
+    description: "Cycle count: set the exact quantity of a SKU in a bin."
+    input:
+      sku_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: sku
+        onDelete: restrict
+      bin_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: bin
+        onDelete: restrict
+      new_quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 0
+      reason:
+        type: text
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        const reason = b.reason.trim();
+        if (reason === '') ctx.fail(400, 'input.invalid', 'Invalid input for adjust_stock: reason expected a non-blank text, found ""');
+        const bin = ctx.db.get('bin', b.bin_id);
+        const levels = ctx.db.list('stock_level', { where: { bin_id: b.bin_id } });
+        const level = levels.find((l) => l.sku_id === b.sku_id);
+        const current = level ? level.quantity : 0;
+        const delta = b.new_quantity - current;
+        if (delta === 0) ctx.fail(409, 'no_change', 'quantity is already ' + current);
+        if (delta > 0) {
+          let total = 0;
+          for (const l of levels) total += l.quantity;
+          if (total + delta > bin.capacity) ctx.fail(409, 'bin_capacity_exceeded', 'bin ' + bin.code + ' holds ' + total + ' of ' + bin.capacity + ' units, cannot add ' + delta);
+        }
+        let updated;
+        if (level) updated = ctx.db.update('stock_level', level.id, { quantity: b.new_quantity });
+        else updated = ctx.db.create('stock_level', { sku_id: b.sku_id, bin_id: b.bin_id, quantity: b.new_quantity });
+        const movement = ctx.db.create('stock_movement', { sku_id: b.sku_id, bin_id: b.bin_id, kind: 'adjustment', quantity_delta: delta, balance_after: updated.quantity, reference: 'cycle count', note: reason });
+        return { status: 200, body: { stock_level: updated, movement } };
+      }
+  transfer_stock:
+    method: POST
+    path: /stock/transfer
+    description: Move stock of a SKU between two bins.
+    input:
+      sku_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: sku
+        onDelete: restrict
+      from_bin_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: bin
+        onDelete: restrict
+      to_bin_id:
+        type: ref
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        entity: bin
+        onDelete: restrict
+      quantity:
+        type: int
+        required: true
+        nullable: false
+        unique: false
+        readonly: false
+        min: 1
+    handler: |-
+      (ctx) => {
+        const b = ctx.body;
+        if (b.from_bin_id === b.to_bin_id) ctx.fail(422, 'same_bin', 'source and destination bin are the same');
+        const src = ctx.db.list('stock_level', { where: { sku_id: b.sku_id, bin_id: b.from_bin_id } })[0];
+        const have = src ? src.quantity : 0;
+        if (have < b.quantity) ctx.fail(409, 'insufficient_stock', 'source bin holds ' + have + ' units, cannot transfer ' + b.quantity);
+        const dest = ctx.db.get('bin', b.to_bin_id);
+        if (!dest.active || dest.zone === 'quarantine') ctx.fail(409, 'bin_not_receivable', 'bin ' + dest.code + ' cannot receive stock (inactive or quarantine).');
+        const destLevels = ctx.db.list('stock_level', { where: { bin_id: dest.id } });
+        let total = 0;
+        for (const l of destLevels) total += l.quantity;
+        if (total + b.quantity > dest.capacity) ctx.fail(409, 'bin_capacity_exceeded', 'bin ' + dest.code + ' holds ' + total + ' of ' + dest.capacity + ' units, cannot add ' + b.quantity);
+        const from = ctx.db.update('stock_level', src.id, { quantity: have - b.quantity });
+        const existing = destLevels.find((l) => l.sku_id === b.sku_id);
+        let to;
+        if (existing) to = ctx.db.update('stock_level', existing.id, { quantity: existing.quantity + b.quantity });
+        else to = ctx.db.create('stock_level', { sku_id: b.sku_id, bin_id: dest.id, quantity: b.quantity });
+        ctx.db.create('stock_movement', { sku_id: b.sku_id, bin_id: b.from_bin_id, kind: 'transfer_out', quantity_delta: -b.quantity, balance_after: from.quantity, reference: 'transfer to ' + dest.code });
+        ctx.db.create('stock_movement', { sku_id: b.sku_id, bin_id: dest.id, kind: 'transfer_in', quantity_delta: b.quantity, balance_after: to.quantity, reference: 'transfer from ' + b.from_bin_id });
+        return { status: 200, body: { from_stock_level: from, to_stock_level: to } };
+      }
+jobs:
+  overdue_purchase_orders:
+    description: Every 6 hours, flag submitted and partially received POs whose expected_at has passed as overdue.
+    every: 6h
+    run: |-
+      (ctx) => {
+        const now = ctx.now();
+        for (const status of ['submitted', 'partially_received']) {
+          for (const po of ctx.db.list('purchase_order', { where: { status } })) {
+            if (po.overdue) continue;
+            if (po.expected_at === null || po.expected_at === undefined) continue;
+            if (ctx.time.minutesBetween(po.expected_at, now) < 0) continue;
+            ctx.db.update('purchase_order', po.id, { overdue: true });
+          }
+        }
+      }
+fixtures: {}
+seed:
+  supplier: |-
+    (ctx) => {
+      const rows = [
+        ['Harbor Fasteners', true], ['Northgate Industrial', true], ['Northgate Industries', true],
+        ['Pacific Bearing Co.', true], ['Summit Gasket & Seal', true], ['Ironclad Hardware Wholesale', true],
+        ['Lakeline Springs', true], ['Redstone Metals', true], ['Crestview Packaging', true],
+        ['Orion Tool Supply', true], ['Beacon Industrial Fasteners', true], ['Meridian Components', false],
+      ];
+      return rows.map(([name, active], i) => {
+        const t = ctx.time.plus('2024-02-05T09:00:00.000Z', (i * 41 + 7) + 'd');
+        return { name, email: 'sales@' + name.toLowerCase().replace(/[^a-z0-9]+/g, '') + '.example', active, created_at: t, updated_at: t };
+      });
+    }
+  sku: |-
+    (ctx) => {
+      const types = [['BLT', 'Hex bolt'], ['NUT', 'Hex nut'], ['WSH', 'Flat washer'], ['SCR', 'Machine screw'], ['BRK', 'Mounting bracket'], ['GSK', 'Rubber gasket'], ['BRG', 'Ball bearing'], ['PIN', 'Dowel pin']];
+      const sizes = ['M4-10', 'M5-16', 'M6-20', 'M6-30', 'M8-25', 'M8-40', 'M10-30', 'M10-50', 'M12-40', 'M12-60'];
+      const inactive = [13, 27, 48, 71];
+      const rows = [];
+      let i = 0;
+      for (const [pre, label] of types) {
+        for (const size of sizes) {
+          const t = ctx.time.plus('2025-01-10T09:00:00.000Z', ctx.int(0, 200) + 'd');
+          rows.push({
+            code: pre + '-' + size,
+            name: label + ' ' + size.replace('-', ' x '),
+            unit_cost: 15 + ctx.int(0, 900),
+            reorder_point: i === 5 ? 25 : ctx.int(20, 120),
+            active: !inactive.includes(i),
+            created_at: t, updated_at: t,
+          });
+          i++;
+        }
+      }
+      return rows;
+    }
+  bin: |-
+    (ctx) => {
+      const rows = [];
+      const t = '2024-03-04T09:00:00.000Z';
+      const p = (n) => (n < 10 ? '0' + n : '' + n);
+      for (let i = 1; i <= 4; i++) rows.push({ code: 'R-' + p(i), zone: 'receiving', capacity: 5000, active: true, created_at: t, updated_at: t });
+      for (let r = 1; r <= 4; r++) for (let c = 1; c <= 4; c++) rows.push({ code: 'A-' + p(r) + '-' + p(c), zone: 'pick', capacity: 2000, active: true, created_at: t, updated_at: t });
+      let k = 0;
+      for (let r = 1; r <= 3; r++) for (let c = 1; c <= 4; c++) { rows.push({ code: 'B-' + p(r) + '-' + p(c), zone: 'bulk', capacity: 10000, active: k < 10, created_at: t, updated_at: t }); k++; }
+      for (let i = 1; i <= 4; i++) rows.push({ code: 'Q-' + p(i), zone: 'quarantine', capacity: 400, active: true, created_at: t, updated_at: t });
+      return rows;
+    }
+  purchase_order: |-
+    (ctx) => {
+      const S = '2026-10-06T09:00:00.000Z';
+      const back = (h) => ctx.time.minus(S, h + 'h');
+      const sups = ctx.rows('supplier');
+      const sid = (n) => sups.find((s) => s.name === n).id;
+      const H = sid('Harbor Fasteners');
+      const N = sid('Northgate Industrial');
+      const N2 = sid('Northgate Industries');
+      const specs = [
+        { sup: H, status: 'partially_received' },
+        { sup: H, status: 'received' },
+        { sup: N, status: 'submitted' },
+        { sup: N, status: 'submitted', overdue: true },
+        { sup: N, status: 'submitted' },
+        { sup: N, status: 'partially_received' },
+        { sup: N, status: 'draft' },
+        { sup: N2, status: 'submitted' },
+      ];
+      const rest = [];
+      const add = (s, n) => { for (let i = 0; i < n; i++) rest.push(s); };
+      add('draft', 5); add('submitted', 10); add('partially_received', 8); add('received', 11); add('cancelled', 3);
+      for (let i = rest.length - 1; i > 0; i--) {
+        const j = ctx.int(0, i);
+        const x = rest[i]; rest[i] = rest[j]; rest[j] = x;
+      }
+      let od = 0;
+      for (const st of rest) {
+        const sp = { sup: sups[ctx.int(2, sups.length - 1)].id, status: st };
+        if (st === 'submitted' && od < 3) { sp.overdue = true; od++; }
+        specs.push(sp);
+      }
+      const notes = ['Dock appointment booked for the morning', 'Supplier confirmed a partial shipment', 'Expedite requested by purchasing', 'Net 30 terms, ship to receiving'];
+      return specs.map((sp, i) => {
+        const st = sp.status;
+        const age = st === 'draft' ? ctx.int(1, 20) : st === 'submitted' ? (sp.overdue ? ctx.int(10, 40) : ctx.int(3, 40)) : st === 'cancelled' ? ctx.int(5, 50) : ctx.int(8, 60);
+        const created = back(age * 24 + ctx.int(0, 10));
+        const submitted = st === 'draft' ? null : ctx.time.plus(created, '24h');
+        let expected;
+        if (sp.overdue) expected = back(ctx.int(1, 8) * 24);
+        else if (st === 'received') expected = ctx.time.plus(submitted, '144h');
+        else expected = ctx.time.plus(S, ctx.int(24, 720) + 'h');
+        let updated = created;
+        let received = null;
+        if (st === 'submitted') updated = submitted;
+        else if (st === 'partially_received') updated = ctx.time.plus(submitted, '132h');
+        else if (st === 'received') { received = ctx.time.plus(submitted, '132h'); updated = received; }
+        else if (st === 'cancelled') updated = ctx.time.plus(submitted, '20h');
+        return {
+          number: 'PO-2026-' + (1001 + i),
+          supplier_id: sp.sup,
+          status: st,
+          expected_at: expected,
+          submitted_at: submitted,
+          received_at: received,
+          overdue: !!sp.overdue,
+          note: i % 3 === 0 ? notes[i % 4] : null,
+          created_at: created,
+          updated_at: updated,
+        };
+      });
+    }
+  purchase_order_line: |-
+    (ctx) => {
+      const pos = ctx.rows('purchase_order');
+      const skus = ctx.rows('sku');
+      const bad = [13, 27, 48, 71];
+      const out = [];
+      pos.forEach((po, i) => {
+        const n = i === 0 ? 3 : i < 8 ? 2 : (i % 4) + 1;
+        const mod = i < 2 ? 40 : 80;
+        for (let k = 0; k < n; k++) {
+          let si = (i * 7 + k * 11 + 3) % mod;
+          if (bad.includes(si)) si += 1;
+          const sku = skus[si];
+          const ordered = ctx.int(40, 300);
+          let rcv = 0;
+          if (po.status === 'received') rcv = ordered;
+          else if (po.status === 'partially_received') {
+            if (n === 1) rcv = Math.floor(ordered * 0.4);
+            else rcv = k % 3 === 0 ? ordered : k % 3 === 1 ? Math.floor(ordered * 0.4) : 0;
+          }
+          out.push({ purchase_order_id: po.id, sku_id: sku.id, ordered_qty: ordered, received_qty: rcv, unit_cost: sku.unit_cost, created_at: po.created_at, updated_at: po.updated_at });
+        }
+      });
+      return out;
+    }
+  stock_level: |-
+    (ctx) => {
+      const S = '2026-10-06T09:00:00.000Z';
+      const receiptsOf = () => {
+        const pos = ctx.rows('purchase_order');
+        const lines = ctx.rows('purchase_order_line');
+        const bins = ctx.rows('bin');
+        const rb = [0, 1, 2, 3, 20, 21, 22, 23, 24, 25, 26, 27].map((i) => bins[i]);
+        const poById = {};
+        pos.forEach((p) => { poById[p.id] = p; });
+        const seen = {};
+        const out = [];
+        lines.forEach((l, j) => {
+          const p = poById[l.purchase_order_id];
+          const pos_ = seen[p.id] || 0;
+          seen[p.id] = pos_ + 1;
+          if (l.received_qty === 0) return;
+          const split = l.received_qty >= 20 && j % 2 === 0;
+          const q1 = split ? Math.ceil(l.received_qty * 0.6) : l.received_qty;
+          const at = (k) => ctx.time.plus(p.submitted_at, ((2 + 3 * k) * 24 + pos_) + 'h');
+          out.push({ line: l, po: p, sku_id: l.sku_id, bin: rb[(j * 5 + 1) % 12].id, qty: q1, at: at(0) });
+          if (split) out.push({ line: l, po: p, sku_id: l.sku_id, bin: rb[(j * 7 + 4) % 12].id, qty: l.received_qty - q1, at: at(1) });
+        });
+        return out;
+      };
+      const rec = receiptsOf();
+      const skus = ctx.rows('sku');
+      const bins = ctx.rows('bin');
+      const pairs = {};
+      const order = [];
+      for (const r of rec) {
+        const k = r.sku_id + '|' + r.bin;
+        if (!pairs[k]) { pairs[k] = { sku_id: r.sku_id, bin_id: r.bin, R: 0, first: r.at, last: r.at }; order.push(k); }
+        const p = pairs[k];
+        p.R += r.qty;
+        if (r.at < p.first) p.first = r.at;
+        if (r.at > p.last) p.last = r.at;
+      }
+      const out = [];
+      let idx = 0;
+      for (const k of order) {
+        const p = pairs[k];
+        const issued = idx % 4 === 1 ? Math.floor(p.R / 4) : 0;
+        out.push({ sku_id: p.sku_id, bin_id: p.bin_id, quantity: p.R - issued, created_at: p.first, updated_at: issued > 0 ? ctx.time.plus(p.last, '6h') : p.last });
+        idx++;
+      }
+      const add = (sku, bin, q) => {
+        const created = ctx.time.minus(S, (ctx.int(20, 120) * 24) + 'h');
+        const x = (idx % 4 === 0 || q === 0) ? 5 + (idx * 7) % 30 : 0;
+        out.push({ sku_id: sku.id, bin_id: bin.id, quantity: q, created_at: created, updated_at: x > 0 ? ctx.time.plus(created, '72h') : created });
+        idx++;
+      };
+      for (let i = 0; i < 80; i++) {
+        const cat = i % 8;
+        const rp = skus[i].reorder_point;
+        if (cat !== 6) {
+          const pickIdx = i === 5 ? 9 : i % 16;
+          let q;
+          if (i === 5) q = 37;
+          else if (cat <= 3) q = rp - ctx.int(3, Math.floor(rp * 0.7));
+          else if (cat === 7) q = 0;
+          else if (cat === 4) q = rp;
+          else q = rp + ctx.int(5, 60);
+          add(skus[i], bins[4 + pickIdx], q);
+          if (i % 5 === 0) add(skus[i], bins[4 + (pickIdx + 7) % 16], rp + ctx.int(5, 60));
+          if (cat <= 3 || cat === 7) add(skus[i], bins[28 + (i % 2)], rp + ctx.int(80, 200));
+        }
+      }
+      for (let j = 0; j < 6; j++) add(skus[(j * 13 + 2) % 80], bins[32 + (j % 4)], 8 + j * 4);
+      for (let j = 0; j < 4; j++) add(skus[(j * 17 + 9) % 80], bins[30 + (j % 2)], 12 + j * 9);
+      return out;
+    }
+  stock_movement: |-
+    (ctx) => {
+      const receiptsOf = () => {
+        const pos = ctx.rows('purchase_order');
+        const lines = ctx.rows('purchase_order_line');
+        const bins = ctx.rows('bin');
+        const rb = [0, 1, 2, 3, 20, 21, 22, 23, 24, 25, 26, 27].map((i) => bins[i]);
+        const poById = {};
+        pos.forEach((p) => { poById[p.id] = p; });
+        const seen = {};
+        const out = [];
+        lines.forEach((l, j) => {
+          const p = poById[l.purchase_order_id];
+          const pos_ = seen[p.id] || 0;
+          seen[p.id] = pos_ + 1;
+          if (l.received_qty === 0) return;
+          const split = l.received_qty >= 20 && j % 2 === 0;
+          const q1 = split ? Math.ceil(l.received_qty * 0.6) : l.received_qty;
+          const at = (k) => ctx.time.plus(p.submitted_at, ((2 + 3 * k) * 24 + pos_) + 'h');
+          out.push({ line: l, po: p, sku_id: l.sku_id, bin: rb[(j * 5 + 1) % 12].id, qty: q1, at: at(0) });
+          if (split) out.push({ line: l, po: p, sku_id: l.sku_id, bin: rb[(j * 7 + 4) % 12].id, qty: l.received_qty - q1, at: at(1) });
+        });
+        return out;
+      };
+      const rec = receiptsOf();
+      const levels = ctx.rows('stock_level');
+      const byPair = {};
+      rec.forEach((r) => { const k = r.sku_id + '|' + r.bin; (byPair[k] = byPair[k] || []).push(r); });
+      const ev = [];
+      let n = 0;
+      const push = (at, row) => { ev.push({ at, n: n++, row }); };
+      levels.forEach((lv, idx) => {
+        const k = lv.sku_id + '|' + lv.bin_id;
+        const rs = byPair[k];
+        if (rs) {
+          const sorted = rs.map((r, i) => ({ r, i })).sort((a, b) => (a.r.at < b.r.at ? -1 : a.r.at > b.r.at ? 1 : a.i - b.i)).map((x) => x.r);
+          let bal = 0;
+          let last = sorted[0].at;
+          for (const r of sorted) {
+            bal += r.qty;
+            last = r.at;
+            push(r.at, { sku_id: lv.sku_id, bin_id: lv.bin_id, kind: 'receipt', quantity_delta: r.qty, balance_after: bal, purchase_order_id: r.po.id, purchase_order_line_id: r.line.id, reference: r.po.number, note: null });
+          }
+          const net = lv.quantity - bal;
+          if (net < 0) push(ctx.time.plus(last, '6h'), { sku_id: lv.sku_id, bin_id: lv.bin_id, kind: 'issue', quantity_delta: net, balance_after: lv.quantity, purchase_order_id: null, purchase_order_line_id: null, reference: 'SO-' + (4000 + idx), note: null });
+        } else {
+          const x = (idx % 4 === 0 || lv.quantity === 0) ? 5 + (idx * 7) % 30 : 0;
+          push(lv.created_at, { sku_id: lv.sku_id, bin_id: lv.bin_id, kind: 'adjustment', quantity_delta: lv.quantity + x, balance_after: lv.quantity + x, purchase_order_id: null, purchase_order_line_id: null, reference: 'cycle count', note: 'Opening count' });
+          if (x > 0) push(ctx.time.plus(lv.created_at, '72h'), { sku_id: lv.sku_id, bin_id: lv.bin_id, kind: 'issue', quantity_delta: -x, balance_after: lv.quantity, purchase_order_id: null, purchase_order_line_id: null, reference: 'SO-' + (4000 + idx), note: null });
+        }
+      });
+      ev.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.n - b.n));
+      return ev.map((e) => ({ ...e.row, created_at: e.at, updated_at: e.at }));
+    }
+tests:
+  partial_receipt_flow:
+    description: Create a supplier, SKU, two bins and a PO with one line of 100. Submit. Receive 40 into bin 1, which makes the PO partially_received. Receive 60 into bin 2, which makes it received. Stock levels and receipt movements match. Receiving again is 409 invalid_state.
+    script: |-
+      (ctx) => {
+        const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+        const mk = (path, body, m) => { const r = ctx.api('POST', path, body); ok(r, m); return r.body; };
+        const sup = mk('/suppliers', { name: 'Test Supplier A', email: 'a@supplier.example' }, 'supplier');
+        const sku = mk('/skus', { code: 'T-1001', name: 'Widget', unit_cost: 250, reorder_point: 10 }, 'sku');
+        const b1 = mk('/bins', { code: 'T-A-01', zone: 'bulk', capacity: 1000 }, 'bin1');
+        const b2 = mk('/bins', { code: 'T-A-02', zone: 'bulk', capacity: 1000 }, 'bin2');
+        const po = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-1001', expected_at: '2026-10-20T00:00:00.000Z' }, 'po');
+        ctx.assert(po.status === 'draft', 'new PO is draft, got ' + po.status);
+        const line = mk('/purchase_orders/' + po.id + '/add_line', { sku_id: sku.id, ordered_qty: 100, unit_cost: 250 }, 'add_line');
+        ctx.assert(line.received_qty === 0 && line.ordered_qty === 100, 'line starts unreceived, got ' + JSON.stringify(line));
+        const sub = mk('/purchase_orders/' + po.id + '/submit', {}, 'submit');
+        ctx.assert(sub.status === 'submitted' && sub.submitted_at !== null, 'PO submitted with submitted_at, got ' + JSON.stringify(sub));
+        const r1 = mk('/purchase_orders/' + po.id + '/receive', { line_id: line.id, bin_id: b1.id, quantity: 40, note: 'first pallet' }, 'receive 1');
+        ctx.assert(r1.purchase_order.status === 'partially_received', 'partially_received after first receipt, got ' + r1.purchase_order.status);
+        ctx.assert(r1.line.received_qty === 40, 'line received_qty 40, got ' + r1.line.received_qty);
+        ctx.assert(r1.stock_level.quantity === 40 && r1.stock_level.bin_id === b1.id, 'stock level 40 in bin 1, got ' + JSON.stringify(r1.stock_level));
+        ctx.assert(r1.movement.kind === 'receipt' && r1.movement.quantity_delta === 40 && r1.movement.balance_after === 40 && r1.movement.purchase_order_id === po.id, 'receipt movement, got ' + JSON.stringify(r1.movement));
+        const r2 = mk('/purchase_orders/' + po.id + '/receive', { line_id: line.id, bin_id: b2.id, quantity: 60 }, 'receive 2');
+        ctx.assert(r2.purchase_order.status === 'received' && r2.purchase_order.received_at !== null, 'received with received_at, got ' + JSON.stringify(r2.purchase_order));
+        ctx.assert(r2.line.received_qty === 100, 'line fully received, got ' + r2.line.received_qty);
+        const levels = ctx.api('GET', '/stock_levels?sku_id=' + sku.id).body.data;
+        ctx.assert(levels.length === 2 && levels.reduce((a, l) => a + l.quantity, 0) === 100, 'two levels totalling 100, got ' + JSON.stringify(levels));
+        const moves = ctx.api('GET', '/stock_movements?purchase_order_id=' + po.id).body.data;
+        ctx.assert(moves.length === 2 && moves.every((m) => m.kind === 'receipt'), 'two receipt movements, got ' + moves.length);
+        const again = ctx.api('POST', '/purchase_orders/' + po.id + '/receive', { line_id: line.id, bin_id: b1.id, quantity: 1 });
+        ctx.assert(again.status === 409 && again.body.error.code === 'invalid_state', 'receive on received PO: ' + JSON.stringify(again));
+      }
+  over_receipt_and_line_mismatch_refused:
+    description: Receive 101 on a 100-unit line gives 409 over_receipt and leaves the line, PO and stock untouched. Quantity 0 is 400. A line from another PO is 409 line_mismatch. Receiving 60, then 41, is also over_receipt.
+    script: |-
+      (ctx) => {
+        const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+        const mk = (path, body, m) => { const r = ctx.api('POST', path, body); ok(r, m); return r.body; };
+        const sup = mk('/suppliers', { name: 'Test Supplier B', email: 'b@supplier.example' }, 'supplier');
+        const sku = mk('/skus', { code: 'T-2001', name: 'Gasket', unit_cost: 90, reorder_point: 5 }, 'sku');
+        const bin = mk('/bins', { code: 'T-B-01', zone: 'bulk', capacity: 1000 }, 'bin');
+        const po1 = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-2001', expected_at: '2026-10-20T00:00:00.000Z' }, 'po1');
+        const po2 = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-2002', expected_at: '2026-10-20T00:00:00.000Z' }, 'po2');
+        const l1 = mk('/purchase_orders/' + po1.id + '/add_line', { sku_id: sku.id, ordered_qty: 100 }, 'line1');
+        const l2 = mk('/purchase_orders/' + po2.id + '/add_line', { sku_id: sku.id, ordered_qty: 10 }, 'line2');
+        mk('/purchase_orders/' + po1.id + '/submit', {}, 'submit1');
+        mk('/purchase_orders/' + po2.id + '/submit', {}, 'submit2');
+        const over = ctx.api('POST', '/purchase_orders/' + po1.id + '/receive', { line_id: l1.id, bin_id: bin.id, quantity: 101 });
+        ctx.assert(over.status === 409 && over.body.error.code === 'over_receipt', 'over receipt: ' + JSON.stringify(over));
+        const zero = ctx.api('POST', '/purchase_orders/' + po1.id + '/receive', { line_id: l1.id, bin_id: bin.id, quantity: 0 });
+        ctx.assert(zero.status === 400 && zero.body.error.code === 'input.invalid', 'zero quantity: ' + JSON.stringify(zero));
+        const mismatch = ctx.api('POST', '/purchase_orders/' + po1.id + '/receive', { line_id: l2.id, bin_id: bin.id, quantity: 5 });
+        ctx.assert(mismatch.status === 409 && mismatch.body.error.code === 'line_mismatch', 'line mismatch: ' + JSON.stringify(mismatch));
+        ctx.assert(ctx.api('GET', '/stock_levels?sku_id=' + sku.id).body.data.length === 0, 'refused receipts created no stock');
+        ctx.assert(ctx.api('GET', '/stock_movements?sku_id=' + sku.id).body.data.length === 0, 'refused receipts wrote no movement');
+        const po = ctx.api('GET', '/purchase_orders/' + po1.id).body;
+        ctx.assert(po.status === 'submitted', 'PO still submitted, got ' + po.status);
+        mk('/purchase_orders/' + po1.id + '/receive', { line_id: l1.id, bin_id: bin.id, quantity: 60 }, 'receive 60');
+        const over2 = ctx.api('POST', '/purchase_orders/' + po1.id + '/receive', { line_id: l1.id, bin_id: bin.id, quantity: 41 });
+        ctx.assert(over2.status === 409 && over2.body.error.code === 'over_receipt', 'second over receipt: ' + JSON.stringify(over2));
+        const line = ctx.api('GET', '/purchase_orders/' + po1.id + '/lines').body.data.find((l) => l.id === l1.id);
+        ctx.assert(line.received_qty === 60, 'line stays at 60, got ' + line.received_qty);
+      }
+  issue_never_goes_negative:
+    description: Receive 30 units, then issue 31 (409 insufficient_stock, stock unchanged), issue 30 (stock 0, issue movement with delta -30), issue 1 more (409). An issue from a bin that holds none is 409.
+    script: |-
+      (ctx) => {
+        const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+        const mk = (path, body, m) => { const r = ctx.api('POST', path, body); ok(r, m); return r.body; };
+        const sup = mk('/suppliers', { name: 'Test Supplier C', email: 'c@supplier.example' }, 'supplier');
+        const sku = mk('/skus', { code: 'T-3001', name: 'Bracket', unit_cost: 400, reorder_point: 5 }, 'sku');
+        const bin = mk('/bins', { code: 'T-C-01', zone: 'pick', capacity: 500 }, 'bin');
+        const other = mk('/bins', { code: 'T-C-02', zone: 'pick', capacity: 500 }, 'other bin');
+        const po = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-3001', expected_at: '2026-10-20T00:00:00.000Z' }, 'po');
+        const line = mk('/purchase_orders/' + po.id + '/add_line', { sku_id: sku.id, ordered_qty: 30 }, 'line');
+        mk('/purchase_orders/' + po.id + '/submit', {}, 'submit');
+        mk('/purchase_orders/' + po.id + '/receive', { line_id: line.id, bin_id: bin.id, quantity: 30 }, 'receive');
+        const tooMany = ctx.api('POST', '/stock/issue', { sku_id: sku.id, bin_id: bin.id, quantity: 31, reference: 'order 1' });
+        ctx.assert(tooMany.status === 409 && tooMany.body.error.code === 'insufficient_stock', 'issue 31 of 30: ' + JSON.stringify(tooMany));
+        const lvl = ctx.api('GET', '/stock_levels?sku_id=' + sku.id + '&bin_id=' + bin.id).body.data[0];
+        ctx.assert(lvl.quantity === 30, 'stock unchanged at 30, got ' + lvl.quantity);
+        const all = mk('/stock/issue', { sku_id: sku.id, bin_id: bin.id, quantity: 30, reference: 'order 2' }, 'issue 30');
+        ctx.assert(all.stock_level.quantity === 0, 'stock now 0, got ' + JSON.stringify(all.stock_level));
+        ctx.assert(all.movement.kind === 'issue' && all.movement.quantity_delta === -30 && all.movement.balance_after === 0 && all.movement.reference === 'order 2', 'issue movement, got ' + JSON.stringify(all.movement));
+        const more = ctx.api('POST', '/stock/issue', { sku_id: sku.id, bin_id: bin.id, quantity: 1, reference: 'order 3' });
+        ctx.assert(more.status === 409 && more.body.error.code === 'insufficient_stock', 'issue from empty: ' + JSON.stringify(more));
+        const none = ctx.api('POST', '/stock/issue', { sku_id: sku.id, bin_id: other.id, quantity: 1, reference: 'order 4' });
+        ctx.assert(none.status === 409 && none.body.error.code === 'insufficient_stock', 'issue from a bin without stock: ' + JSON.stringify(none));
+        const bad = ctx.api('POST', '/stock/issue', { sku_id: sku.id, bin_id: bin.id, quantity: -5, reference: 'order 5' });
+        ctx.assert(bad.status === 400, 'negative quantity is invalid input, got ' + bad.status);
+        ctx.assert(ctx.api('GET', '/stock_movements?sku_id=' + sku.id).body.data.length === 2, 'ledger holds only the receipt and the one successful issue');
+      }
+  transfer_and_adjust_keep_ledger_consistent:
+    description: Receive 50 into bin 1, transfer 20 to bin 2, refuse a 31-unit transfer (409) and a same-bin transfer (422 same_bin), adjust bin 2 to 5 (delta -15), refuse an adjust with no reason or no change. Sum of movement deltas equals the sum of stock levels (35).
+    script: |-
+      (ctx) => {
+        const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+        const mk = (path, body, m) => { const r = ctx.api('POST', path, body); ok(r, m); return r.body; };
+        const sup = mk('/suppliers', { name: 'Test Supplier D', email: 'd@supplier.example' }, 'supplier');
+        const sku = mk('/skus', { code: 'T-4001', name: 'Hinge', unit_cost: 120, reorder_point: 8 }, 'sku');
+        const b1 = mk('/bins', { code: 'T-D-01', zone: 'bulk', capacity: 1000 }, 'bin1');
+        const b2 = mk('/bins', { code: 'T-D-02', zone: 'pick', capacity: 1000 }, 'bin2');
+        const po = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-4001', expected_at: '2026-10-20T00:00:00.000Z' }, 'po');
+        const line = mk('/purchase_orders/' + po.id + '/add_line', { sku_id: sku.id, ordered_qty: 50 }, 'line');
+        mk('/purchase_orders/' + po.id + '/submit', {}, 'submit');
+        mk('/purchase_orders/' + po.id + '/receive', { line_id: line.id, bin_id: b1.id, quantity: 50 }, 'receive');
+        const t = mk('/stock/transfer', { sku_id: sku.id, from_bin_id: b1.id, to_bin_id: b2.id, quantity: 20 }, 'transfer 20');
+        ctx.assert(t.from_stock_level.quantity === 30 && t.to_stock_level.quantity === 20, 'after transfer 30 and 20, got ' + JSON.stringify(t));
+        const tooMuch = ctx.api('POST', '/stock/transfer', { sku_id: sku.id, from_bin_id: b1.id, to_bin_id: b2.id, quantity: 31 });
+        ctx.assert(tooMuch.status === 409 && tooMuch.body.error.code === 'insufficient_stock', 'transfer 31 of 30: ' + JSON.stringify(tooMuch));
+        const same = ctx.api('POST', '/stock/transfer', { sku_id: sku.id, from_bin_id: b1.id, to_bin_id: b1.id, quantity: 1 });
+        ctx.assert(same.status === 422 && same.body.error.code === 'same_bin', 'same bin: ' + JSON.stringify(same));
+        const a = mk('/stock/adjust', { sku_id: sku.id, bin_id: b2.id, new_quantity: 5, reason: 'cycle count' }, 'adjust');
+        ctx.assert(a.stock_level.quantity === 5, 'adjusted to 5, got ' + JSON.stringify(a.stock_level));
+        ctx.assert(a.movement.kind === 'adjustment' && a.movement.quantity_delta === -15 && a.movement.balance_after === 5, 'adjustment movement, got ' + JSON.stringify(a.movement));
+        const noReason = ctx.api('POST', '/stock/adjust', { sku_id: sku.id, bin_id: b2.id, new_quantity: 6 });
+        ctx.assert(noReason.status === 400 && noReason.body.error.code === 'input.invalid', 'adjust without reason: ' + JSON.stringify(noReason));
+        const noChange = ctx.api('POST', '/stock/adjust', { sku_id: sku.id, bin_id: b2.id, new_quantity: 5, reason: 'recount' });
+        ctx.assert(noChange.status === 409 && noChange.body.error.code === 'no_change', 'adjust to same quantity: ' + JSON.stringify(noChange));
+        const moves = ctx.api('GET', '/stock_movements?sku_id=' + sku.id).body.data;
+        const kinds = moves.map((m) => m.kind).sort().join(',');
+        ctx.assert(kinds === 'adjustment,receipt,transfer_in,transfer_out', 'one movement per successful stock change, got ' + kinds);
+        const levels = ctx.api('GET', '/stock_levels?sku_id=' + sku.id).body.data;
+        const deltaSum = moves.reduce((s, m) => s + m.quantity_delta, 0);
+        const levelSum = levels.reduce((s, l) => s + l.quantity, 0);
+        ctx.assert(deltaSum === 35 && levelSum === 35, 'ledger deltas ' + deltaSum + ' equal stock total ' + levelSum + ' equal 35');
+      }
+  po_lifecycle_refusals:
+    description: Submit with no lines is 409 no_lines. add_line after submit, receive on a draft or cancelled PO, a second cancel and a cancel after a partial receipt are all 409 invalid_state. A submitted PO with no receipts can be cancelled. Adding a SKU twice to a PO is refused.
+    script: |-
+      (ctx) => {
+        const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+        const mk = (path, body, m) => { const r = ctx.api('POST', path, body); ok(r, m); return r.body; };
+        const code = (r, s, c, m) => ctx.assert(r.status === s && r.body.error && r.body.error.code === c, m + ': ' + JSON.stringify(r));
+        const sup = mk('/suppliers', { name: 'Test Supplier E', email: 'e@supplier.example' }, 'supplier');
+        const sku = mk('/skus', { code: 'T-5001', name: 'Spring', unit_cost: 60, reorder_point: 5 }, 'sku');
+        const bin = mk('/bins', { code: 'T-E-01', zone: 'bulk', capacity: 1000 }, 'bin');
+        const empty = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-5001', expected_at: '2026-10-20T00:00:00.000Z' }, 'empty po');
+        code(ctx.api('POST', '/purchase_orders/' + empty.id + '/submit', {}), 409, 'no_lines', 'submit without lines');
+        const draft = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-5002', expected_at: '2026-10-20T00:00:00.000Z' }, 'draft po');
+        const dl = mk('/purchase_orders/' + draft.id + '/add_line', { sku_id: sku.id, ordered_qty: 10 }, 'draft line');
+        const dup = ctx.api('POST', '/purchase_orders/' + draft.id + '/add_line', { sku_id: sku.id, ordered_qty: 5 });
+        ctx.assert(dup.status >= 400 && dup.status < 500, 'second line for the same SKU is refused, got ' + dup.status);
+        code(ctx.api('POST', '/purchase_orders/' + draft.id + '/receive', { line_id: dl.id, bin_id: bin.id, quantity: 1 }), 409, 'invalid_state', 'receive on draft');
+        mk('/purchase_orders/' + draft.id + '/submit', {}, 'submit');
+        code(ctx.api('POST', '/purchase_orders/' + draft.id + '/add_line', { sku_id: sku.id, ordered_qty: 1 }), 409, 'invalid_state', 'add_line after submit');
+        const cancelled = mk('/purchase_orders/' + draft.id + '/cancel', {}, 'cancel submitted');
+        ctx.assert(cancelled.status === 'cancelled', 'status cancelled, got ' + cancelled.status);
+        code(ctx.api('POST', '/purchase_orders/' + draft.id + '/receive', { line_id: dl.id, bin_id: bin.id, quantity: 1 }), 409, 'invalid_state', 'receive on cancelled');
+        code(ctx.api('POST', '/purchase_orders/' + draft.id + '/cancel', {}), 409, 'invalid_state', 'cancel twice');
+        const started = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-5003', expected_at: '2026-10-20T00:00:00.000Z' }, 'started po');
+        const sl = mk('/purchase_orders/' + started.id + '/add_line', { sku_id: sku.id, ordered_qty: 100 }, 'started line');
+        mk('/purchase_orders/' + started.id + '/submit', {}, 'submit started');
+        mk('/purchase_orders/' + started.id + '/receive', { line_id: sl.id, bin_id: bin.id, quantity: 10 }, 'partial receive');
+        code(ctx.api('POST', '/purchase_orders/' + started.id + '/cancel', {}), 409, 'invalid_state', 'cancel after partial receipt');
+        ctx.assert(ctx.api('GET', '/purchase_orders/' + started.id).body.status === 'partially_received', 'PO stays partially_received');
+      }
+  bin_capacity_and_quarantine:
+    description: A bin of capacity 50 refuses a receipt of 60 (409 bin_capacity_exceeded) and accepts 50, then a further unit is refused. A quarantine bin and a deactivated bin give 409 bin_not_receivable. Transfer into a full bin is refused.
+    script: |-
+      (ctx) => {
+        const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+        const mk = (path, body, m) => { const r = ctx.api('POST', path, body); ok(r, m); return r.body; };
+        const code = (r, s, c, m) => ctx.assert(r.status === s && r.body.error && r.body.error.code === c, m + ': ' + JSON.stringify(r));
+        const sup = mk('/suppliers', { name: 'Test Supplier F', email: 'f@supplier.example' }, 'supplier');
+        const sku = mk('/skus', { code: 'T-6001', name: 'Bolt', unit_cost: 15, reorder_point: 5 }, 'sku');
+        const small = mk('/bins', { code: 'T-F-01', zone: 'pick', capacity: 50 }, 'small bin');
+        const big = mk('/bins', { code: 'T-F-02', zone: 'bulk', capacity: 1000 }, 'big bin');
+        const quar = mk('/bins', { code: 'T-F-03', zone: 'quarantine', capacity: 1000 }, 'quarantine bin');
+        const dead = mk('/bins', { code: 'T-F-04', zone: 'bulk', capacity: 1000 }, 'bin to deactivate');
+        const upd = ctx.api('PATCH', '/bins/' + dead.id, { active: false });
+        ok(upd, 'deactivate bin');
+        const po = mk('/purchase_orders', { supplier_id: sup.id, number: 'PO-T-6001', expected_at: '2026-10-20T00:00:00.000Z' }, 'po');
+        const line = mk('/purchase_orders/' + po.id + '/add_line', { sku_id: sku.id, ordered_qty: 200 }, 'line');
+        mk('/purchase_orders/' + po.id + '/submit', {}, 'submit');
+        const recv = (bin, q) => ctx.api('POST', '/purchase_orders/' + po.id + '/receive', { line_id: line.id, bin_id: bin.id, quantity: q });
+        code(recv(small, 60), 409, 'bin_capacity_exceeded', 'receive 60 into capacity 50');
+        ctx.assert(ctx.api('GET', '/stock_levels?bin_id=' + small.id).body.data.length === 0, 'refused receipt created no stock');
+        ok(recv(small, 50), 'receive 50 into capacity 50');
+        code(recv(small, 1), 409, 'bin_capacity_exceeded', 'receive into full bin');
+        code(recv(quar, 10), 409, 'bin_not_receivable', 'receive into quarantine');
+        code(recv(dead, 10), 409, 'bin_not_receivable', 'receive into inactive bin');
+        ok(recv(big, 20), 'receive 20 into big bin');
+        code(ctx.api('POST', '/stock/transfer', { sku_id: sku.id, from_bin_id: big.id, to_bin_id: small.id, quantity: 1 }), 409, 'bin_capacity_exceeded', 'transfer into full bin');
+        code(ctx.api('POST', '/stock/transfer', { sku_id: sku.id, from_bin_id: big.id, to_bin_id: quar.id, quantity: 1 }), 409, 'bin_not_receivable', 'transfer into quarantine');
+        const line2 = ctx.api('GET', '/purchase_orders/' + po.id + '/lines').body.data[0];
+        ctx.assert(line2.received_qty === 70, 'only the two successful receipts count, got ' + line2.received_qty);
+      }
+  overdue_job_flags_open_pos:
+    description: "Four POs expect delivery on 2026-10-07: one submitted, one partially received, one received, one draft. After advancing one day the first two are overdue and the others are not. Before the advance none are."
+    script: |-
+      (ctx) => {
+        const ok = (r, m) => ctx.assert(r.status >= 200 && r.status < 300, m + ': ' + r.status + ' ' + JSON.stringify(r.body));
+        const mk = (path, body, m) => { const r = ctx.api('POST', path, body); ok(r, m); return r.body; };
+        const sup = mk('/suppliers', { name: 'Test Supplier G', email: 'g@supplier.example' }, 'supplier');
+        const sku = mk('/skus', { code: 'T-7001', name: 'Washer', unit_cost: 5, reorder_point: 5 }, 'sku');
+        const bin = mk('/bins', { code: 'T-G-01', zone: 'bulk', capacity: 5000 }, 'bin');
+        const mkpo = (n, submit, recvQty) => {
+          const po = mk('/purchase_orders', { supplier_id: sup.id, number: n, expected_at: '2026-10-07T00:00:00.000Z' }, 'po ' + n);
+          const line = mk('/purchase_orders/' + po.id + '/add_line', { sku_id: sku.id, ordered_qty: 100 }, 'line ' + n);
+          if (submit) mk('/purchase_orders/' + po.id + '/submit', {}, 'submit ' + n);
+          if (recvQty > 0) mk('/purchase_orders/' + po.id + '/receive', { line_id: line.id, bin_id: bin.id, quantity: recvQty }, 'receive ' + n);
+          return po.id;
+        };
+        const submitted = mkpo('PO-T-7001', true, 0);
+        const partial = mkpo('PO-T-7002', true, 40);
+        const received = mkpo('PO-T-7003', true, 100);
+        const draft = mkpo('PO-T-7004', false, 0);
+        const flag = (id) => ctx.api('GET', '/purchase_orders/' + id).body.overdue;
+        ctx.assert([submitted, partial, received, draft].every((id) => flag(id) === false), 'nothing is overdue before expected_at');
+        const res = ctx.advance('1d');
+        ctx.assert(res.jobsFailed.length === 0, 'no job failed, got ' + JSON.stringify(res.jobsFailed));
+        ctx.assert(flag(submitted) === true, 'submitted PO past expected_at is overdue');
+        ctx.assert(flag(partial) === true, 'partially received PO past expected_at is overdue');
+        ctx.assert(flag(received) === false, 'received PO is not overdue');
+        ctx.assert(flag(draft) === false, 'draft PO is not overdue');
+        const overdue = ctx.api('GET', '/purchase_orders?overdue=true').body.data.map((p) => p.id);
+        ctx.assert(overdue.includes(submitted) && overdue.includes(partial) && !overdue.includes(received) && !overdue.includes(draft), 'overdue filter lists the right POs');
+      }
+tasks:
+  cycle_count_adjustment:
+    difficulty: easy
+    instruction: A cycle count found exactly 12 units of the SKU with code BLT-M8-40 in bin A-03-02. Correct the system stock for that SKU in that bin to 12 with a stock adjustment, using the reason 'cycle count'. Change nothing else.
+    decoys: []
+    alternatives: []
+  receive_rest_of_harbor_po:
+    difficulty: medium
+    instruction: The supplier Harbor Fasteners has delivered everything that is still outstanding on its partially received purchase order. Receive every outstanding unit on all of its lines into bin R-01, so that the order ends up fully received. Receive only what remains on each line, and change nothing else.
+    decoys: []
+    alternatives: []
+  cancel_unstarted_northgate_pos:
+    difficulty: medium
+    instruction: Cancel every submitted purchase order of the supplier Northgate Industrial (not the similarly named Northgate Industries) that has not received any goods yet. Leave its draft and partially received orders, and every other supplier's orders, exactly as they are.
+    decoys: []
+    alternatives: []
+  restock_pick_bins:
+    difficulty: hard
+    instruction: Restock the pick bins for the bracket and gasket families. For every active SKU whose code starts with BRK- or GSK- that has a stock level in a pick-zone bin below its reorder_point, transfer stock from a bulk-zone bin that holds that SKU into that pick bin. Transfer exactly the shortfall (the reorder_point minus the pick bin's current quantity), so the pick bin ends exactly at its reorder_point. Skip inactive SKUs and pick bins that are already at or above the reorder point. Do not touch any other stock.
+    decoys: []
+    alternatives: []

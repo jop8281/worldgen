@@ -1,0 +1,11 @@
+{
+  "status": "accepted",
+  "sandbox": {
+    "id": "bx_mccv9uhw",
+    "teardown": "confirmed"
+  },
+  "problems": [],
+  "accepted": 4,
+  "failed": 0,
+  "modelCostUsd": 0.08319816
+}
